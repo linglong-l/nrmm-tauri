@@ -1,0 +1,19 @@
+;revision_4
+;dynamic
+;e.g: group_1
+namespace = modmanageragl\{group_x}
+
+[Constants]
+persist global $active_slot = 0
+;dynamic
+;e.g: group_1 that means group_id = 1
+global $group_id = {x}
+
+;KEYS
+[KeyMod]
+condition = $group_id == $\modmanageragl\group_manager\active_group_id
+key = VK_CLEAR VK_RETURN
+run = CommandListMod
+
+[CommandListMod]
+$active_slot = cursor_screen_x

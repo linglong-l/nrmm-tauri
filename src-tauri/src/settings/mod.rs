@@ -1,0 +1,447 @@
+//! 用户设置持久化模块。
+//!
+//! 定义 [`Settings`] 结构及其加载/保存逻辑。设置以 JSON 格式持久化在
+//! 应用数据目录下的 `settings.json` 中。为避免写入过程中因崩溃导致文件损坏，
+//! 保存时采用“写入临时文件 → 原子重命名”的策略。
+//!
+//! ## 字段默认值
+//! 所有字段均通过 `#[serde(default = "...")]` 绑定独立的默认值函数，确保：
+//! - 文件缺失时整体回退到默认值；
+//! - 文件中字段缺失时单字段回退到默认值，向后兼容旧配置。
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use log::{error, warn};
+use serde::{Deserialize, Serialize};
+
+use crate::process::TargetGame;
+
+/// 设置文件名（最终落盘文件）。
+const SETTINGS_FILE_NAME: &str = "settings.json";
+
+/// 设置临时文件名。
+///
+/// 保存流程：先写入此临时文件，再原子重命名为 [`SETTINGS_FILE_NAME`]，
+/// 避免写入中途崩溃导致主文件损坏。
+const SETTINGS_TMP_FILE_NAME: &str = "settings.json.tmp";
+
+/// 用户设置集合。
+///
+/// 通过 serde 序列化为 JSON 持久化。每个字段都配置了独立的默认值函数，
+/// 在反序列化时若字段缺失会自动回填默认值。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Settings {
+    /// 键盘热键标识（如 `"altW"`）。`"none"` 表示禁用。
+    #[serde(default = "default_hotkey_keyboard")]
+    pub hotkey_keyboard: String,
+
+    /// 手柄热键标识（如 `"none"`）。当前预留，默认禁用。
+    #[serde(default = "default_hotkey_gamepad")]
+    pub hotkey_gamepad: String,
+
+    /// 鸣潮（Wuthering Waves）目标进程名，用于进程匹配。
+    #[serde(default = "default_target_process_wuwa")]
+    pub target_process_wuwa: String,
+
+    /// 原神（Genshin Impact）目标进程名。
+    #[serde(default = "default_target_process_genshin")]
+    pub target_process_genshin: String,
+
+    /// 崩坏：星穹铁道（Honkai: Star Rail）目标进程名。
+    #[serde(default = "default_target_process_hsr")]
+    pub target_process_hsr: String,
+
+    /// 绝区零（Zenless Zone Zero）目标进程名。
+    #[serde(default = "default_target_process_zzz")]
+    pub target_process_zzz: String,
+
+    /// 明日方舟：终末地（Arknights: Endfield）目标进程名。
+    #[serde(default = "default_target_process_endfield")]
+    pub target_process_endfield: String,
+
+    /// 鸣潮 Mods 目录路径。空字符串表示未配置。
+    #[serde(default = "default_mods_path_wuwa")]
+    pub mods_path_wuwa: String,
+
+    /// 原神 Mods 目录路径。
+    #[serde(default = "default_mods_path_genshin")]
+    pub mods_path_genshin: String,
+
+    /// 星穹铁道 Mods 目录路径。
+    #[serde(default = "default_mods_path_hsr")]
+    pub mods_path_hsr: String,
+
+    /// 绝区零 Mods 目录路径。
+    #[serde(default = "default_mods_path_zzz")]
+    pub mods_path_zzz: String,
+
+    /// 终末地 Mods 目录路径。
+    #[serde(default = "default_mods_path_endfield")]
+    pub mods_path_endfield: String,
+
+    /// UI 整体缩放比例（1.0 = 100%）。
+    #[serde(default = "default_overall_scale")]
+    pub overall_scale: f64,
+
+    /// 背景透明度（0.0 ~ 1.0，越小越透明）。
+    #[serde(default = "default_bg_transparency")]
+    pub bg_transparency: f64,
+
+    /// 布局模式编号（由前端定义具体含义）。
+    #[serde(default = "default_layout_mode")]
+    pub layout_mode: i32,
+
+    /// 界面语言代码（如 `"en"`、`"zh"`）。
+    #[serde(default = "default_language")]
+    pub language: String,
+
+    /// 主题名称（如 `"light"`、`"dark"`）。
+    #[serde(default = "default_theme")]
+    pub theme: String,
+
+    /// 是否自动为分组生成图标。
+    #[serde(default = "default_is_auto_generate_folder_icon")]
+    pub is_auto_generate_folder_icon: bool,
+
+    /// 是否在显示窗口时自动置顶。
+    #[serde(default = "default_is_auto_pin_window")]
+    pub is_auto_pin_window: bool,
+
+    /// 在游戏外按下热键时是否仍然显示菜单。
+    /// `false` 时游戏外热键不触发任何动作。
+    #[serde(default = "default_show_menu_when_toggling_outside_game")]
+    pub show_menu_when_toggling_outside_game: bool,
+
+    /// 是否启用按键模拟绑定（用于在游戏内模拟按键）。
+    #[serde(default = "default_keybind_simulate_keypress")]
+    pub keybind_simulate_keypress: bool,
+
+    /// 分组排序方法编号（由前端定义具体含义）。
+    #[serde(default = "default_sort_group_method")]
+    pub sort_group_method: i32,
+
+    /// 上次保存的窗口宽度（逻辑像素）。
+    #[serde(default = "default_saved_window_width")]
+    pub saved_window_width: i32,
+
+    /// 上次保存的窗口高度（逻辑像素）。
+    #[serde(default = "default_saved_window_height")]
+    pub saved_window_height: i32,
+
+    /// 上次保存的窗口左上角 X 坐标（逻辑像素）。
+    /// `None` 表示从未保存过，启动时窗口将居中。
+    #[serde(default)]
+    pub saved_window_x: Option<i32>,
+
+    /// 上次保存的窗口左上角 Y 坐标（逻辑像素）。
+    /// `None` 表示从未保存过，启动时窗口将居中。
+    #[serde(default)]
+    pub saved_window_y: Option<i32>,
+
+    /// 当前选中的目标游戏。用于决定加载哪个游戏的 Mods 与配置。
+    #[serde(default = "default_target_game")]
+    pub target_game: TargetGame,
+}
+
+// ===== 各字段默认值函数 =====
+// 独立函数而非闭包，便于在 serde 属性与 Default impl 中复用。
+
+/// 默认键盘热键：`Alt+W`。
+fn default_hotkey_keyboard() -> String {
+    "altW".to_string()
+}
+
+/// 默认手柄热键：禁用。
+fn default_hotkey_gamepad() -> String {
+    "none".to_string()
+}
+
+/// 默认鸣潮进程名。
+fn default_target_process_wuwa() -> String {
+    "Wuthering Waves.exe".to_string()
+}
+
+/// 默认原神进程名。
+fn default_target_process_genshin() -> String {
+    "GenshinImpact.exe".to_string()
+}
+
+/// 默认星铁进程名。
+fn default_target_process_hsr() -> String {
+    "StarRail.exe".to_string()
+}
+
+/// 默认绝区零进程名。
+fn default_target_process_zzz() -> String {
+    "ZenlessZoneZero.exe".to_string()
+}
+
+/// 默认终末地进程名。
+fn default_target_process_endfield() -> String {
+    "Endfield-Win64-Shipping.exe".to_string()
+}
+
+/// 默认鸣潮 Mods 路径：空字符串（未配置）。
+fn default_mods_path_wuwa() -> String {
+    String::new()
+}
+
+/// 默认原神 Mods 路径：空字符串。
+fn default_mods_path_genshin() -> String {
+    String::new()
+}
+
+/// 默认星铁 Mods 路径：空字符串。
+fn default_mods_path_hsr() -> String {
+    String::new()
+}
+
+/// 默认绝区零 Mods 路径：空字符串。
+fn default_mods_path_zzz() -> String {
+    String::new()
+}
+
+/// 默认终末地 Mods 路径：空字符串。
+fn default_mods_path_endfield() -> String {
+    String::new()
+}
+
+/// 默认整体缩放：1.0（100%）。
+fn default_overall_scale() -> f64 {
+    1.0
+}
+
+/// 默认背景透明度：0.85。
+fn default_bg_transparency() -> f64 {
+    0.85
+}
+
+/// 默认布局模式：0。
+fn default_layout_mode() -> i32 {
+    0
+}
+
+/// 默认语言：英语。
+fn default_language() -> String {
+    "en".to_string()
+}
+
+/// 默认主题：浅色。
+fn default_theme() -> String {
+    "light".to_string()
+}
+
+/// 默认开启自动生成分组图标。
+fn default_is_auto_generate_folder_icon() -> bool {
+    true
+}
+
+/// 默认开启自动置顶窗口。
+fn default_is_auto_pin_window() -> bool {
+    true
+}
+
+/// 默认在游戏外按热键时不显示菜单。
+fn default_show_menu_when_toggling_outside_game() -> bool {
+    false
+}
+
+/// 默认关闭按键模拟绑定。
+fn default_keybind_simulate_keypress() -> bool {
+    false
+}
+
+/// 默认分组排序方法：0。
+fn default_sort_group_method() -> i32 {
+    0
+}
+
+/// 默认窗口宽度：800 逻辑像素。
+fn default_saved_window_width() -> i32 {
+    800
+}
+
+/// 默认窗口高度：600 逻辑像素。
+fn default_saved_window_height() -> i32 {
+    600
+}
+
+/// 默认目标游戏：鸣潮。
+fn default_target_game() -> TargetGame {
+    TargetGame::WutheringWaves
+}
+
+impl Settings {
+    /// 构造默认设置（等价于 [`Settings::default`]）。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 拼接设置文件的完整路径。
+    ///
+    /// # 参数
+    /// - `app_data_dir`：应用数据目录。
+    ///
+    /// # 返回值
+    /// 返回 `<app_data_dir>/settings.json` 的路径。
+    pub fn settings_file_path(app_data_dir: &Path) -> PathBuf {
+        app_data_dir.join(SETTINGS_FILE_NAME)
+    }
+
+    /// 从应用数据目录同步加载设置。
+    ///
+    /// # 业务逻辑
+    /// 1. 若设置文件不存在，直接返回默认值（首次启动场景）；
+    /// 2. 若读取成功但解析失败（配置损坏），记录警告并回退到默认值；
+    /// 3. 若读取失败（IO 错误），记录错误并回退到默认值。
+    ///
+    /// # 参数
+    /// - `app_data_dir`：应用数据目录。
+    ///
+    /// # 返回值
+    /// 始终返回一个有效的 [`Settings`]（可能是默认值），不会返回错误。
+    pub fn load(app_data_dir: &Path) -> Self {
+        let path = Self::settings_file_path(app_data_dir);
+
+        // 文件不存在视为首次启动，直接使用默认值
+        if !path.exists() {
+            log::info!("Settings file not found at {:?}, using defaults", path);
+            return Self::default();
+        }
+
+        match fs::read_to_string(&path) {
+            Ok(content) => match serde_json::from_str::<Settings>(&content) {
+                Ok(settings) => {
+                    log::info!("Settings loaded successfully from {:?}", path);
+                    settings
+                }
+                Err(e) => {
+                    // 解析失败：配置文件损坏，回退默认值以保证应用可用
+                    warn!("Failed to parse settings file {:?}: {}. Using defaults.", path, e);
+                    Self::default()
+                }
+            },
+            Err(e) => {
+                // 读取失败：IO 错误（权限/磁盘等），回退默认值
+                error!("Failed to read settings file {:?}: {}. Using defaults.", path, e);
+                Self::default()
+            }
+        }
+    }
+
+    /// 同步保存设置到应用数据目录。
+    ///
+    /// # 业务逻辑（原子写入）
+    /// 1. 确保应用数据目录存在（不存在则创建）；
+    /// 2. 序列化为美化后的 JSON；
+    /// 3. 写入临时文件 `settings.json.tmp`；
+    /// 4. 将临时文件重命名为 `settings.json`（在大多数文件系统上是原子操作）。
+    ///
+    /// 这样即使写入过程中崩溃，主设置文件也不会被部分写入破坏。
+    ///
+    /// # 参数
+    /// - `app_data_dir`：应用数据目录。
+    ///
+    /// # 返回值
+    /// 成功返回 `Ok(())`，任一步骤失败返回封装后的错误。
+    pub fn save(&self, app_data_dir: &Path) -> Result<()> {
+        // 确保目录存在，避免后续写入失败
+        fs::create_dir_all(app_data_dir)
+            .with_context(|| format!("Failed to create app data dir: {:?}", app_data_dir))?;
+
+        let path = app_data_dir.join(SETTINGS_FILE_NAME);
+        let tmp_path = app_data_dir.join(SETTINGS_TMP_FILE_NAME);
+
+        // 使用 pretty 格式以便用户阅读与手动编辑
+        let json = serde_json::to_string_pretty(self)
+            .context("Failed to serialize settings")?;
+
+        // 先写临时文件，确保内容完整后再替换主文件
+        fs::write(&tmp_path, json)
+            .with_context(|| format!("Failed to write temporary settings file: {:?}", tmp_path))?;
+
+        // 原子重命名：替换主文件
+        fs::rename(&tmp_path, &path)
+            .with_context(|| format!("Failed to rename temp file to settings file: {:?}", path))?;
+
+        log::debug!("Settings saved to {:?}", path);
+        Ok(())
+    }
+
+    /// 将当前设置重置为默认值（原地替换）。
+    pub fn reset_to_default(&mut self) {
+        *self = Self::default();
+    }
+
+    /// 异步加载设置。
+    ///
+    /// 通过 `tokio::task::spawn_blocking` 在阻塞线程池中执行同步 [`Settings::load`]，
+    /// 避免阻塞异步运行时。
+    ///
+    /// # 参数
+    /// - `app_data_dir`：应用数据目录。
+    ///
+    /// # 返回值
+    /// 返回加载后的 [`Settings`]；若线程 join 失败则返回默认值。
+    pub async fn load_async(app_data_dir: &Path) -> Self {
+        let app_data_dir = app_data_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || Self::load(&app_data_dir))
+            .await
+            .unwrap_or_default()
+    }
+
+    /// 异步保存设置。
+    ///
+    /// 通过 `tokio::task::spawn_blocking` 在阻塞线程池中执行同步 [`Settings::save`]，
+    /// 避免阻塞异步运行时。
+    ///
+    /// # 参数
+    /// - `app_data_dir`：应用数据目录。
+    ///
+    /// # 返回值
+    /// 成功返回 `Ok(())`；若线程 join 失败，将 join 错误转换为 `Err`。
+    pub async fn save_async(&self, app_data_dir: &Path) -> Result<()> {
+        let self_clone = self.clone();
+        let app_data_dir = app_data_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || self_clone.save(&app_data_dir))
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("Task join error: {}", e)))
+    }
+}
+
+impl Default for Settings {
+    /// 默认设置构造器，调用各字段的默认值函数填充字段。
+    fn default() -> Self {
+        Self {
+            hotkey_keyboard: default_hotkey_keyboard(),
+            hotkey_gamepad: default_hotkey_gamepad(),
+            target_process_wuwa: default_target_process_wuwa(),
+            target_process_genshin: default_target_process_genshin(),
+            target_process_hsr: default_target_process_hsr(),
+            target_process_zzz: default_target_process_zzz(),
+            target_process_endfield: default_target_process_endfield(),
+            mods_path_wuwa: default_mods_path_wuwa(),
+            mods_path_genshin: default_mods_path_genshin(),
+            mods_path_hsr: default_mods_path_hsr(),
+            mods_path_zzz: default_mods_path_zzz(),
+            mods_path_endfield: default_mods_path_endfield(),
+            overall_scale: default_overall_scale(),
+            bg_transparency: default_bg_transparency(),
+            layout_mode: default_layout_mode(),
+            language: default_language(),
+            theme: default_theme(),
+            is_auto_generate_folder_icon: default_is_auto_generate_folder_icon(),
+            is_auto_pin_window: default_is_auto_pin_window(),
+            show_menu_when_toggling_outside_game: default_show_menu_when_toggling_outside_game(),
+            keybind_simulate_keypress: default_keybind_simulate_keypress(),
+            sort_group_method: default_sort_group_method(),
+            saved_window_width: default_saved_window_width(),
+            saved_window_height: default_saved_window_height(),
+            saved_window_x: None,
+            saved_window_y: None,
+            target_game: default_target_game(),
+        }
+    }
+}
