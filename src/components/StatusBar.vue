@@ -97,7 +97,7 @@ const version = '0.1.0';
           - :class 当 isHotkeyEnabled 为 true 时添加 'status-enabled' 类（绿色高亮）
       -->
       <span class="status-item">
-        <span class="status-label">Hotkey:</span>
+        <span class="status-label">{{ t('Hotkey:') }}</span>
         <span class="status-value" :class="{ 'status-enabled': hotkeyStore.isHotkeyEnabled }">
           {{ hotkeyStatus }}
         </span>

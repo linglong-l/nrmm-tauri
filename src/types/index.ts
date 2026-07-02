@@ -44,6 +44,12 @@ export interface ModGroupData {
   realIndex: number;
   /** 该分组中上一次选中的 Mod 索引（用于切换后恢复选中状态） */
   previousSelectedModOnGroup: number;
+  /** 嵌套子分组列表（树形结构，# 目录下的子 # 目录） */
+  children: ModGroupData[];
+  /** 是否为树节点（# 开头的目录） */
+  isTreeNode: boolean;
+  /** 是否为虚拟分类节点（如 "Group" 主分类，无真实文件路径，仅作容器） */
+  isVirtual: boolean;
 }
 
 /**
@@ -134,12 +140,12 @@ export enum ModsPathStatus {
 
 /**
  * 界面布局模式枚举，控制 Mod 列表的展示方式。
- * Auto 模式会根据窗口尺寸自动在 Carousel 与 Grid 间切换。
+ * Auto 模式会根据窗口尺寸自动在 List 与 Grid 间切换。
  */
 export enum LayoutMode {
-  /** 自动布局，依据窗口尺寸自动选择 Carousel 或 Grid */
+  /** 自动布局，依据窗口尺寸自动选择 List 或 Grid */
   Auto = 0,
-  /** 轮播布局，单行展示，左右切换 */
+  /** 行列布局，横向行排列+纵向滚动（原 Carousel，保留枚举值兼容已存储设置） */
   Carousel = 1,
   /** 网格布局，多行多列展示 */
   Grid = 2

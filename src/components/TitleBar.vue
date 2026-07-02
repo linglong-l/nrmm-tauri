@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * TitleBar.vue - 自定义窗口标题栏组件
+ * TitleBar.vue - 自定义窗口标题栏组件（跨平台版本）
  *
  * 作用：
  *  - 替换操作系统默认标题栏，提供应用图标、应用名与三个窗口控制按钮：
@@ -8,17 +8,51 @@
  *  - 通过 data-tauri-drag-region 属性使整个标题栏可拖拽移动窗口。
  *  - 关闭按钮实际执行 hide() 而非 destroy()，使应用驻留托盘以便热键唤起。
  *
+ * 跨平台支持：
+ *  - Windows/Linux：控制按钮在右侧
+ *  - macOS：控制按钮在左侧（交通灯风格布局）
+ *  - 自动检测当前平台并调整布局
+ *
  * 业务逻辑：
  *  - 最大化状态由 isMaximized 本地维护，仅用于图标切换的视觉反馈（实际窗口状态以 Tauri 为准）。
  */
-import { ref } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { ElButton } from 'element-plus';
 import { Minus, Close, Crop } from '@element-plus/icons-vue';
 
-// 当前窗口是否处于最大化状态（用于切换按钮图标/tooltip）
+type Platform = 'windows' | 'macos' | 'linux' | 'unknown';
+
+const platform = ref<Platform>('unknown');
+
+const isMacOS = computed(() => platform.value === 'macos');
+
 const isMaximized = ref(false);
 
-/** 最小化窗口；失败时静默忽略 */
+onMounted(async () => {
+  try {
+    const os = detectPlatform();
+    platform.value = os;
+  } catch {
+    platform.value = 'unknown';
+  }
+});
+
+function detectPlatform(): Platform {
+  const userAgent = navigator.userAgent.toLowerCase();
+  const platform = navigator.platform?.toLowerCase() || '';
+
+  if (platform.includes('mac') || userAgent.includes('mac')) {
+    return 'macos';
+  }
+  if (platform.includes('win') || userAgent.includes('win')) {
+    return 'windows';
+  }
+  if (platform.includes('linux') || userAgent.includes('linux')) {
+    return 'linux';
+  }
+  return 'unknown';
+}
+
 async function minimize() {
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -28,10 +62,6 @@ async function minimize() {
   }
 }
 
-/**
- * 切换窗口最大化/还原状态。
- * 业务逻辑：先查询当前是否最大化，再决定调用 maximize 还是 unmaximize。
- */
 async function toggleMaximize() {
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -48,10 +78,6 @@ async function toggleMaximize() {
   }
 }
 
-/**
- * 关闭按钮：实际为隐藏窗口，使应用驻留系统托盘，便于通过热键重新唤起。
- * 失败时静默忽略。
- */
 async function close() {
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -64,14 +90,41 @@ async function close() {
 
 <template>
   <!-- 标题栏：data-tauri-drag-region 使该区域可拖拽移动窗口 -->
-  <div class="title-bar" data-tauri-drag-region>
-    <!-- 左侧：应用图标与名称 -->
+  <div class="title-bar" :class="{ 'title-bar-macos': isMacOS }" data-tauri-drag-region>
+    <!-- macOS：控制按钮在左侧（交通灯风格） -->
+    <div v-if="isMacOS" class="title-bar-left title-bar-controls" data-tauri-drag-region>
+      <ElButton
+        class="title-bar-btn close-btn"
+        :icon="Close"
+        circle
+        size="small"
+        text
+        @click.stop="close"
+      />
+      <ElButton
+        class="title-bar-btn"
+        :icon="Minus"
+        circle
+        size="small"
+        text
+        @click.stop="minimize"
+      />
+      <ElButton
+        class="title-bar-btn"
+        :icon="Crop"
+        circle
+        size="small"
+        text
+        @click.stop="toggleMaximize"
+      />
+    </div>
+    <!-- 左侧：应用图标与名称（macOS 下在控制按钮右侧） -->
     <div class="title-bar-left" data-tauri-drag-region>
       <img src="/tauri.svg" class="app-icon" alt="app icon" />
       <span class="app-title">XXMI-NRMM</span>
     </div>
-    <!-- 右侧：窗口控制按钮（最小化 / 最大化 / 关闭） -->
-    <div class="title-bar-right">
+    <!-- 右侧：窗口控制按钮（Windows/Linux 风格） -->
+    <div v-if="!isMacOS" class="title-bar-right">
       <ElButton
         class="title-bar-btn"
         :icon="Minus"
@@ -113,12 +166,22 @@ async function close() {
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
+.title-bar-macos {
+  padding: 0 16px;
+}
+
 .title-bar-left {
   display: flex;
   align-items: center;
   gap: 8px;
   flex: 1;
   height: 100%;
+}
+
+.title-bar-macos .title-bar-left.title-bar-controls {
+  flex: 0;
+  min-width: auto;
+  margin-right: 12px;
 }
 
 .app-icon {
@@ -130,6 +193,10 @@ async function close() {
   font-size: 12px;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.5);
+}
+
+.title-bar-macos .app-title {
+  margin-left: 0;
 }
 
 .title-bar-right {
@@ -156,6 +223,44 @@ async function close() {
 
 .close-btn:hover {
   background-color: rgba(239, 68, 68, 0.9) !important;
+  color: white !important;
+}
+
+.title-bar-macos .title-bar-controls .title-bar-btn {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  padding: 0;
+}
+
+.title-bar-macos .title-bar-controls .title-bar-btn :deep(.el-icon) {
+  font-size: 8px;
+}
+
+.title-bar-macos .title-bar-controls .close-btn {
+  color: rgba(255, 95, 86, 0.85);
+}
+
+.title-bar-macos .title-bar-controls .close-btn:hover {
+  background-color: rgba(255, 95, 86, 0.9) !important;
+  color: white !important;
+}
+
+.title-bar-macos .title-bar-controls .title-bar-btn:nth-child(2) {
+  color: rgba(255, 189, 46, 0.85);
+}
+
+.title-bar-macos .title-bar-controls .title-bar-btn:nth-child(2):hover {
+  background-color: rgba(255, 189, 46, 0.9) !important;
+  color: white !important;
+}
+
+.title-bar-macos .title-bar-controls .title-bar-btn:nth-child(3) {
+  color: rgba(39, 201, 63, 0.85);
+}
+
+.title-bar-macos .title-bar-controls .title-bar-btn:nth-child(3):hover {
+  background-color: rgba(39, 201, 63, 0.9) !important;
   color: white !important;
 }
 </style>

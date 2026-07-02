@@ -213,7 +213,7 @@ impl KeypressSimulator {
         #[cfg(not(windows))]
         {
             let _ = vk_code;
-            anyhow::bail!("Keypress simulation is only supported on Windows");
+            anyhow::bail!("按键模拟仅支持 Windows 平台");
         }
         Ok(())
     }
@@ -234,7 +234,7 @@ impl KeypressSimulator {
         #[cfg(not(windows))]
         {
             let _ = vk_code;
-            anyhow::bail!("Keypress simulation is only supported on Windows");
+            anyhow::bail!("按键模拟仅支持 Windows 平台");
         }
         Ok(())
     }
@@ -311,7 +311,7 @@ impl KeypressSimulator {
         {
             let _ = dx;
             let _ = dy;
-            anyhow::bail!("Mouse simulation is only supported on Windows");
+            anyhow::bail!("鼠标模拟仅支持 Windows 平台");
         }
         Ok(())
     }
@@ -346,7 +346,7 @@ impl KeypressSimulator {
         #[cfg(not(windows))]
         {
             let _ = button;
-            anyhow::bail!("Mouse simulation is only supported on Windows");
+            anyhow::bail!("鼠标模拟仅支持 Windows 平台");
         }
         Ok(())
     }

@@ -387,11 +387,81 @@ impl WindowManager {
         Ok(())
     }
 
+    /// 根据当前平台应用窗口兼容性调整。
+    ///
+    /// # 平台差异说明
+    /// - **Windows**：无边框 + 透明 + 无阴影，完全使用自定义标题栏；
+    /// - **macOS**：无边框 + 透明（保留 `titleBarStyle:Overlay` 效果），
+    ///   自定义标题栏提供完整控制；
+    /// - **Linux**：
+    ///   - X11 环境下透明窗口需要合成器（picom/compton 等），
+    ///     若无合成器则透明区域会显示为黑色。
+    ///   - 部分窗口管理器（GNOME/KDE 除外）对无边框窗口的拖拽支持有限，
+    ///     `data-tauri-drag-region` 可解决大部分情况。
+    ///   - Wayland 环境下客户端装饰（CSD）支持较好。
+    ///
+    /// 该函数当前记录平台信息日志，预留后续细调入口。
+    ///
+    /// # 参数
+    /// - `app`：Tauri 应用句柄。
+    ///
+    /// # 返回值
+    /// 成功返回 `Ok(())`。
+    pub fn apply_platform_window_config(app: &AppHandle) -> Result<()> {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let window = Self::get_main_window(app)?;
+
+        #[cfg(target_os = "windows")]
+        {
+            log::debug!("Applying Windows-specific window configuration");
+            let _ = app;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            log::debug!("Applying macOS-specific window configuration");
+            // macOS 上可考虑设置 titleBarStyle 为 overlay，
+            // 让窗口内容延伸到标题栏区域（需配合 contentProtected 等）
+            let _ = window.set_decorations(false);
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            log::debug!("Applying Linux-specific window configuration");
+            // Linux 下检测运行环境（X11/Wayland/WSLg），
+            // 对于无合成器的 X11 环境，透明窗口可能显示为黑色背景。
+            // 这里保留配置，由用户的桌面环境决定是否启用合成。
+            // 若后续发现兼容性问题，可在此处动态调整 decorations/transparent。
+            let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
+            let xdg_session = std::env::var("XDG_SESSION_TYPE")
+                .unwrap_or_else(|_| "unknown".to_string());
+            let wslg = std::env::var("WSLENV").is_ok()
+                || std::env::var("WSL_DISTRO_NAME").is_ok();
+
+            log::info!(
+                "Linux window environment: WAYLAND={}, XDG_SESSION_TYPE={}, WSLg={}",
+                wayland,
+                xdg_session,
+                wslg
+            );
+
+            // WSLg 环境下可能存在渲染问题，记录日志便于排查
+            if wslg {
+                log::warn!("Running under WSLg - transparent window may have rendering issues");
+            }
+
+            let _ = window;
+        }
+
+        Ok(())
+    }
+
     /// 应用启动时的初始窗口装配。
     ///
     /// # 业务逻辑
-    /// 1. 设置最小尺寸（[`DEFAULT_MIN_WIDTH`] × [`DEFAULT_MIN_HEIGHT`]），防止窗口过小；
-    /// 2. 调用 [`Self::restore_window_state`] 恢复上次保存的尺寸/位置/置顶。
+    /// 1. 调用 [`Self::apply_platform_window_config`] 应用平台特定配置；
+    /// 2. 设置最小尺寸（[`DEFAULT_MIN_WIDTH`] × [`DEFAULT_MIN_HEIGHT`]），防止窗口过小；
+    /// 3. 调用 [`Self::restore_window_state`] 恢复上次保存的尺寸/位置/置顶。
     ///
     /// # 参数
     /// - `app`：Tauri 应用句柄；
@@ -400,6 +470,10 @@ impl WindowManager {
     /// # 返回值
     /// 任一步骤失败返回封装后的错误。
     pub fn setup_initial_window(app: &AppHandle, settings: &Arc<RwLock<Settings>>) -> Result<()> {
+        // 先应用平台特定的窗口配置
+        if let Err(e) = Self::apply_platform_window_config(app) {
+            log::warn!("Failed to apply platform window config: {}", e);
+        }
         Self::set_min_size(app, DEFAULT_MIN_WIDTH, DEFAULT_MIN_HEIGHT)?;
         Self::restore_window_state(app, settings)?;
         Ok(())

@@ -69,8 +69,8 @@ export const CONSTANTS = {
   defaultTheme: 'dark',
   /** 默认是否自动生成分组文件夹图标 */
   defaultAutoGenerateFolderIcon: true,
-  /** 默认是否自动置顶窗口 */
-  defaultAutoPinWindow: true,
+  /** 默认不自动置顶窗口（普通优先级） */
+  defaultAutoPinWindow: false,
   /** 默认游戏外切换时是否显示菜单 */
   defaultShowMenuWhenTogglingOutsideGame: false,
   /** 默认是否通过模拟按键方式触发 keybind */
@@ -217,7 +217,7 @@ export const HOTKEY_GAMEPAD_NAMES: Record<HotkeyGamepad, string> = {
  */
 export const LAYOUT_MODE_NAMES: Record<LayoutMode, string> = {
   [LayoutMode.Auto]: 'Auto',
-  [LayoutMode.Carousel]: 'Carousel',
+  [LayoutMode.Carousel]: 'List',
   [LayoutMode.Grid]: 'Grid'
 };
 

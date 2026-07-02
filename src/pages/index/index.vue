@@ -19,7 +19,7 @@ import { useGameStore } from '../../stores/game';
 import { useSettingsStore } from '../../stores/settings';
 import { useHotkeyStore } from '../../stores/hotkey';
 import { EventNames, eventManager } from '../../utils/events';
-import { invokeGetModGroups } from '../../utils/invoke';
+import { invokeLoadMods } from '../../utils/invoke';
 import type { TabType } from '../../types';
 
 const { t } = useI18n();
@@ -49,7 +49,7 @@ async function loadModData() {
   if (gameStore.targetGame === 'none') return;
   try {
     uiStore.setLoading(true, t('Loading mods'));
-    const groups = await invokeGetModGroups(gameStore.targetGame);
+    const groups = await invokeLoadMods(gameStore.targetGame);
     gameStore.setModGroups(groups);
     gameStore.setModsLoaded(true);
   } catch {

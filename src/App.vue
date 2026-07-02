@@ -21,7 +21,6 @@ import id from 'element-plus/es/locale/lang/id';
 import { TitleBar, StatusBar } from './components';
 import IndexPage from './pages/index/index.vue';
 import { useSettingsStore } from './stores/settings';
-import { invokeToggleWindow } from './utils/invoke';
 
 const { locale } = useI18n();
 const settingsStore = useSettingsStore();
@@ -74,15 +73,12 @@ async function initApp() {
 }
 
 /**
- * 全局热键按下事件的回调：调用后端切换窗口的显示/隐藏状态。
+ * 全局热键按下事件的回调。
+ * 窗口切换已由后端 HotkeyManager 统一处理，此处仅接收事件通知，便于后续扩展 UI 反馈等。
  * @param _event Tauri 事件对象，payload 为热键标识字符串（此处未使用）
  */
-async function handleHotkeyPressed(_event: { payload: string }) {
-  try {
-    await invokeToggleWindow();
-  } catch {
-    // ignore
-  }
+function handleHotkeyPressed(_event: { payload: string }) {
+  // 窗口切换逻辑由后端 HotkeyManager::handle_in_game_hotkey 统一处理
 }
 
 // 监听语言变化，实时同步到 i18n，使界面文案立即切换

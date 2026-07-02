@@ -40,6 +40,10 @@ export function useGame() {
     isModsLoaded,
     // 当前选中的分组索引
     currentGroupIndex,
+    // 当前选中的分组路径（用于树形结构定位）
+    currentGroupPath,
+    // 展开的树节点路径集合
+    expandedPaths,
     // 当前搜索关键词
     searchKeyword,
     // 是否正在执行搜索
@@ -123,6 +127,32 @@ export function useGame() {
   }
 
   /**
+   * 通过路径设置当前选中的分组。
+   * @param groupPath 分组路径
+   * @returns 是否成功设置
+   */
+  function setCurrentGroupByPath(groupPath: string): boolean {
+    return gameStore.setCurrentGroupByPath(groupPath);
+  }
+
+  /**
+   * 切换树节点的展开/折叠状态。
+   * @param groupPath 分组路径
+   */
+  function toggleExpandPath(groupPath: string) {
+    gameStore.toggleExpandPath(groupPath);
+  }
+
+  /**
+   * 查找分组（支持树形结构）。
+   * @param groupPath 分组路径
+   * @returns 找到的分组对象，未找到返回 null
+   */
+  function findGroupByPath(groupPath: string): ModGroupData | null {
+    return gameStore.findGroupByPath(groupPath);
+  }
+
+  /**
    * 切换到下一个分组（循环到末尾后会回到开头）。
    */
   function nextGroup() {
@@ -190,12 +220,12 @@ export function useGame() {
   /**
    * 局部更新指定分组内指定 Mod 的部分字段。
    * 用于在编辑 Mod 后无需全量刷新即可更新 UI。
-   * @param groupIndex 分组索引
+   * @param groupPath 分组路径
    * @param modIndex 该分组内的 Mod 索引
    * @param modData 待覆盖的字段集合
    */
-  function updateModInGroup(groupIndex: number, modIndex: number, modData: Partial<ModData>) {
-    gameStore.updateModInGroup(groupIndex, modIndex, modData);
+  function updateModInGroup(groupPath: string, modIndex: number, modData: Partial<ModData>) {
+    gameStore.updateModInGroup(groupPath, modIndex, modData);
   }
 
   /**
@@ -223,6 +253,8 @@ export function useGame() {
     modsPath,
     isModsLoaded,
     currentGroupIndex,
+    currentGroupPath,
+    expandedPaths,
     searchKeyword,
     isSearching,
     searchResults,
@@ -240,6 +272,9 @@ export function useGame() {
     setModsPath,
     setModsLoaded,
     setCurrentGroupIndex,
+    setCurrentGroupByPath,
+    toggleExpandPath,
+    findGroupByPath,
     nextGroup,
     prevGroup,
     setSearchKeyword,

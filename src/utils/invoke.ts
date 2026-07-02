@@ -1,6 +1,6 @@
 // 前端对 Tauri 后端命令的统一封装层。
 // 所有跨进程调用（IPC）均通过本文件中的 invoke* 函数进行，便于集中维护与类型约束。
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import type {
   ModData,
   ModGroupData,
@@ -19,21 +19,36 @@ import type {
 import { CONSTANTS } from './constants';
 
 /**
- * 加载当前目标游戏下的全部 Mod 分组。
+ * 将本地文件系统路径转换为 WebView 可访问的 URL。
+ * 用于渲染本地图片等资源。
+ * @param path 本地文件绝对路径
+ * @returns WebView 可访问的 URL
+ */
+export function convertToAssetUrl(path: string | null | undefined): string {
+  if (!path) return '';
+  const url = convertFileSrc(path);
+  console.log('[convertToAssetUrl] input:', path, '-> output:', url);
+  return url;
+}
+
+/**
+ * 加载指定游戏的全部 Mod 分组。
  * 对应后端命令：`load_mods`。
+ * @param game 目标游戏（可选，不传则使用后端设置中的当前游戏）
  * @returns 分组数据数组
  */
-export async function invokeLoadMods(): Promise<ModGroupData[]> {
-  return invoke('load_mods');
+export async function invokeLoadMods(game?: TargetGame): Promise<ModGroupData[]> {
+  return invoke('load_mods', { game });
 }
 
 /**
  * 刷新 Mod 列表（重新读取文件系统），用于文件监听触发或手动刷新。
  * 对应后端命令：`refresh_mods`。
+ * @param game 目标游戏（可选，不传则使用后端设置中的当前游戏）
  * @returns 最新分组数据数组
  */
-export async function invokeRefreshMods(): Promise<ModGroupData[]> {
-  return invoke('refresh_mods');
+export async function invokeRefreshMods(game?: TargetGame): Promise<ModGroupData[]> {
+  return invoke('refresh_mods', { game });
 }
 
 /**
@@ -313,6 +328,18 @@ export async function invokeSearchMods(keyword: string, game: TargetGame): Promi
  */
 export async function invokeToggleModDisabled(modPath: string): Promise<boolean> {
   return invoke('toggle_mod_disabled', { modPath });
+}
+
+/**
+ * 切换树节点（# 目录）下 Mod 的禁用状态（互斥模式）。
+ * 启用时会先禁用同 # 目录下所有其他 Mod，再启用目标 Mod。
+ * 禁用时直接禁用目标 Mod。
+ * 对应后端命令：`toggle_tree_node_mod_disabled`。
+ * @param modPath Mod 绝对路径
+ * @returns [新模组路径, 切换后是否处于禁用状态]
+ */
+export async function invokeToggleTreeNodeModDisabled(modPath: string): Promise<[string, boolean]> {
+  return invoke('toggle_tree_node_mod_disabled', { modPath });
 }
 
 /**
@@ -612,4 +639,15 @@ export function getDefaultSettings(): AppSettings {
     modsPathZzz: '',
     modsPathEndfield: ''
   };
+}
+
+/**
+ * 从指定路径添加 Mod（复制到目标分组目录）。
+ * 对应后端命令：`add_mods`。
+ * @param sourcePaths 源文件/目录路径列表
+ * @param targetGroupPath 目标分组目录路径
+ * @returns 是否添加成功
+ */
+export async function invokeAddMods(sourcePaths: string[], targetGroupPath: string): Promise<boolean> {
+  return invoke('add_mods', { sourcePaths, targetGroupPath });
 }

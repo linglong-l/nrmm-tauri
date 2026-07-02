@@ -21,14 +21,14 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 1420,
+    port: 14200,
     strictPort: true,
-    host: host || false,
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: 14201,
         }
       : undefined,
     watch: {
@@ -44,15 +44,19 @@ export default defineConfig(async () => ({
     rollupOptions: {
       output: {
         // Code splitting for large dependencies
-        manualChunks: {
-          // Split Element Plus into its own chunk
-          "element-plus": ["element-plus"],
-          // Split Vue core libraries
-          "vue-core": ["vue", "vue-router", "pinia"],
-          // Split i18n
-          "vue-i18n": ["vue-i18n"],
-          // Split VueUse utilities
-          "vueuse": ["@vueuse/core"],
+        manualChunks(id) {
+          if (id.includes('node_modules/element-plus')) {
+            return 'element-plus';
+          }
+          if (id.includes('node_modules/vue') || id.includes('node_modules/vue-router') || id.includes('node_modules/pinia')) {
+            return 'vue-core';
+          }
+          if (id.includes('node_modules/vue-i18n')) {
+            return 'vue-i18n';
+          }
+          if (id.includes('node_modules/@vueuse')) {
+            return 'vueuse';
+          }
         },
       },
     },

@@ -32,6 +32,7 @@ const SETTINGS_TMP_FILE_NAME: &str = "settings.json.tmp";
 /// 通过 serde 序列化为 JSON 持久化。每个字段都配置了独立的默认值函数，
 /// 在反序列化时若字段缺失会自动回填默认值。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Settings {
     /// 键盘热键标识（如 `"altW"`）。`"none"` 表示禁用。
     #[serde(default = "default_hotkey_keyboard")]
@@ -238,9 +239,9 @@ fn default_is_auto_generate_folder_icon() -> bool {
     true
 }
 
-/// 默认开启自动置顶窗口。
+/// 默认关闭自动置顶窗口（普通优先级）。
 fn default_is_auto_pin_window() -> bool {
-    true
+    false
 }
 
 /// 默认在游戏外按热键时不显示菜单。
@@ -279,6 +280,25 @@ impl Settings {
         Self::default()
     }
 
+    /// 校验并修复设置中的非法值。
+    ///
+    /// 对超出合理范围的数值自动钳位到有效范围；
+    /// 对空字符串的关键字段回填默认值。
+    pub fn validate_and_fix(&mut self) {
+        self.overall_scale = self.overall_scale.clamp(0.5, 2.0);
+        self.bg_transparency = self.bg_transparency.clamp(0.0, 1.0);
+        self.layout_mode = self.layout_mode.clamp(0, 2);
+        self.sort_group_method = self.sort_group_method.clamp(0, 1);
+        if self.theme.is_empty() {
+            self.theme = default_theme();
+        }
+        if self.language.is_empty() {
+            self.language = default_language();
+        }
+        self.saved_window_width = self.saved_window_width.max(400);
+        self.saved_window_height = self.saved_window_height.max(300);
+    }
+
     /// 拼接设置文件的完整路径。
     ///
     /// # 参数
@@ -312,19 +332,25 @@ impl Settings {
         }
 
         match fs::read_to_string(&path) {
-            Ok(content) => match serde_json::from_str::<Settings>(&content) {
-                Ok(settings) => {
-                    log::info!("Settings loaded successfully from {:?}", path);
-                    settings
+            Ok(content) => {
+                let trimmed = content.trim();
+                if trimmed.is_empty() {
+                    warn!("Settings file {:?} is empty, using defaults", path);
+                    return Self::default();
                 }
-                Err(e) => {
-                    // 解析失败：配置文件损坏，回退默认值以保证应用可用
-                    warn!("Failed to parse settings file {:?}: {}. Using defaults.", path, e);
-                    Self::default()
+                match serde_json::from_str::<Settings>(&content) {
+                    Ok(mut settings) => {
+                        settings.validate_and_fix();
+                        log::info!("Settings loaded successfully from {:?}", path);
+                        settings
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse settings file {:?}: {}. Using defaults.", path, e);
+                        Self::default()
+                    }
                 }
-            },
+            }
             Err(e) => {
-                // 读取失败：IO 错误（权限/磁盘等），回退默认值
                 error!("Failed to read settings file {:?}: {}. Using defaults.", path, e);
                 Self::default()
             }

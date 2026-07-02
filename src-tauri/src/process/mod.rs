@@ -141,7 +141,7 @@ impl ProcessDetector {
         }
         #[cfg(not(windows))]
         {
-            anyhow::bail!("Foreground process detection is only supported on Windows")
+            anyhow::bail!("前台进程检测仅支持 Windows 平台")
         }
     }
 

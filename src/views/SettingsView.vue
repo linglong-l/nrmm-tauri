@@ -167,12 +167,16 @@ function getGameTargetProcess(game: TargetGame): string {
 
 /**
  * 处理 Mods 路径变更：更新 store、保存设置、立即校验路径有效性。
+ * 若修改的是当前游戏的路径，同步更新 gameStore.modsPath。
  * @param game 目标游戏
  * @param path 新的路径
  */
 async function handleModsPathChange(game: TargetGame, path: string) {
   settingsStore.setModsPath(game, path);
   await settingsStore.saveSettings();
+  if (gameStore.targetGame === game) {
+    gameStore.setModsPath(path);
+  }
   await validateModsPath(game, path);
 }
 
@@ -233,7 +237,7 @@ async function browseFolder(game: TargetGame) {
     }
   } catch (error) {
     console.error('Failed to open folder dialog:', error);
-    ElMessage.error('Failed to open folder dialog');
+    ElMessage.error(t('Failed to open folder dialog'));
   } finally {
     isBrowsingFolder.value = false;
   }
@@ -336,7 +340,7 @@ async function handleSortGroupMethodChange(value: SortGroupMethod) {
 async function handleUpdateModData() {
   const game = gameStore.targetGame;
   if (game === TargetGame.none) {
-    ElMessage.warning('Please select a game first.');
+    ElMessage.warning(t('Please select a game first.'));
     return;
   }
 
@@ -361,13 +365,13 @@ async function handleUpdateModData() {
   try {
     const result = await invokeUpdateModData(game);
     if (result.success) {
-      updateModDataLog.value = 'Update Mod Data completed successfully!';
+      updateModDataLog.value = t('Update Mod Data completed successfully!');
       ElNotification({
         message: t('Mods successfully managed!'),
         type: 'success'
       });
     } else {
-      updateModDataLog.value = result.errorMessage || 'Unknown error occurred.';
+      updateModDataLog.value = result.errorMessage || t('Unknown error occurred.');
       ElNotification({
         message: result.errorMessage || t('Unexpected error!'),
         type: 'error'
@@ -397,9 +401,9 @@ async function handleExportSettings() {
     a.download = 'nrmm_settings.json';
     a.click();
     URL.revokeObjectURL(url);
-    ElMessage.success('Settings exported successfully.');
+    ElMessage.success(t('Settings exported successfully.'));
   } catch {
-    ElMessage.error('Failed to export settings.');
+    ElMessage.error(t('Failed to export settings.'));
   }
 }
 
@@ -418,12 +422,12 @@ async function handleImportSettings(event: Event) {
     const success = await invokeImportSettings(text);
     if (success) {
       await settingsStore.loadSettings();
-      ElMessage.success('Settings imported successfully.');
+      ElMessage.success(t('Settings imported successfully.'));
     } else {
-      ElMessage.error('Failed to import settings.');
+      ElMessage.error(t('Failed to import settings.'));
     }
   } catch {
-    ElMessage.error('Failed to import settings. Invalid file format.');
+    ElMessage.error(t('Failed to import settings. Invalid file format.'));
   } finally {
     // 清空 input 的 value，使同一文件可再次触发 change
     input.value = '';
@@ -436,11 +440,11 @@ async function handleImportSettings(event: Event) {
 async function handleResetSettings() {
   try {
     await ElMessageBox.confirm(
-      'Are you sure you want to reset all settings to default?',
-      'Reset Settings',
+      t('Are you sure you want to reset all settings to default?'),
+      t('Reset Settings'),
       {
-        confirmButtonText: 'Confirm',
-        cancelButtonText: 'Cancel',
+        confirmButtonText: t('Confirm'),
+        cancelButtonText: t('Cancel'),
         type: 'warning'
       }
     );
@@ -451,9 +455,9 @@ async function handleResetSettings() {
   try {
     await invokeResetSettings();
     await settingsStore.loadSettings();
-    ElMessage.success('Settings reset successfully.');
+    ElMessage.success(t('Settings reset successfully.'));
   } catch {
-    ElMessage.error('Failed to reset settings.');
+    ElMessage.error(t('Failed to reset settings.'));
   }
 }
 
@@ -464,13 +468,13 @@ async function handleResetSettings() {
 async function handleOpenModFolder() {
   const game = gameStore.targetGame;
   if (game === TargetGame.none) {
-    ElMessage.warning('Please select a game first.');
+    ElMessage.warning(t('Please select a game first.'));
     return;
   }
   try {
     await invokeOpenModFolder(game);
   } catch {
-    ElMessage.error('Failed to open mod folder.');
+    ElMessage.error(t('Failed to open mod folder.'));
   }
 }
 
@@ -483,7 +487,7 @@ async function handleOpenAppDataDir() {
     const dir = await appDataDir();
     await invokeOpenPath(dir);
   } catch {
-    ElMessage.error('Failed to open app data directory.');
+    ElMessage.error(t('Failed to open app data directory.'));
   }
 }
 
@@ -652,7 +656,7 @@ onMounted(async () => {
         交互行为：选择热键组合
         禁用条件：settingsStore.isSaving (正在保存)
       -->
-      <el-tab-pane label="Hotkeys" name="hotkey">
+      <el-tab-pane :label="t('Hotkeys')" name="hotkey">
         <div class="tab-content-inner">
           <!-- 热键设置表单 -->
           <el-form label-position="top" :disabled="settingsStore.isSaving">
@@ -724,11 +728,11 @@ onMounted(async () => {
               <!-- 热键提示文本区域 -->
               <div class="hotkey-hint">
                 <!-- 各导航热键提示 -->
-                <span>Navigation: WASD / D-Pad</span>
-                <span>Select: F / A</span>
-                <span>Keybind: R / X</span>
-                <span>Tab: Q-E / LB-RB</span>
-                <span>Search: Space</span>
+                <span>{{ t('Navigation: WASD / D-Pad') }}</span>
+                <span>{{ t('Select: F / A') }}</span>
+                <span>{{ t('Keybind: R / X') }}</span>
+                <span>{{ t('Tab: Q-E / LB-RB') }}</span>
+                <span>{{ t('Search: Space') }}</span>
               </div>
             </el-form-item>
           </el-form>
@@ -744,7 +748,7 @@ onMounted(async () => {
         交互行为：拖动滑块、选择下拉选项
         禁用条件：settingsStore.isSaving (正在保存)
       -->
-      <el-tab-pane label="Display" name="display">
+      <el-tab-pane :label="t('Display')" name="display">
         <div class="tab-content-inner">
           <!-- 显示设置表单 -->
           <el-form label-position="top" :disabled="settingsStore.isSaving">
@@ -812,7 +816,7 @@ onMounted(async () => {
               数据来源：v-model 绑定 themeValue (computed 代理)
               交互行为：@change 选择后调用 handleThemeChange 保存
             -->
-            <el-form-item label="Theme">
+            <el-form-item :label="t('Theme')">
               <!-- 主题选择下拉框 -->
               <el-select v-model="themeValue" style="width: 100%">
                 <!-- 主题选项列表 -->
@@ -847,7 +851,7 @@ onMounted(async () => {
       </el-tab-pane>
 
       <!-- 功能设置 -->
-      <el-tab-pane label="Features" name="features">
+      <el-tab-pane :label="t('Features')" name="features">
         <div class="tab-content-inner">
           <el-form label-position="top" :disabled="settingsStore.isSaving">
             <el-form-item :label="t('Group Folder Icon')">
@@ -895,7 +899,7 @@ onMounted(async () => {
       </el-tab-pane>
 
       <!-- 管理设置 -->
-      <el-tab-pane label="Management" name="management">
+      <el-tab-pane :label="t('Management')" name="management">
         <div class="tab-content-inner">
           <el-form label-position="top" :disabled="settingsStore.isSaving">
             <el-form-item :label="t('Update Mod Data')">
@@ -912,7 +916,7 @@ onMounted(async () => {
               </div>
             </el-form-item>
 
-            <el-form-item v-if="updateModDataLog" label="Result">
+            <el-form-item v-if="updateModDataLog" :label="t('Result')">
               <el-input
                 v-model="updateModDataLog"
                 type="textarea"
@@ -923,12 +927,12 @@ onMounted(async () => {
 
             <div class="settings-divider" />
 
-            <div class="settings-section-title">Settings Management</div>
+            <div class="settings-section-title">{{ t('Settings Management') }}</div>
             <el-form-item>
               <el-row :gutter="10">
                 <el-col :span="8">
                   <el-button @click="handleExportSettings" style="width: 100%">
-                    Export
+                    {{ t('Export') }}
                   </el-button>
                 </el-col>
                 <el-col :span="8">
@@ -938,12 +942,12 @@ onMounted(async () => {
                     @change="handleImportSettings"
                     accept=".json"
                   >
-                    <el-button style="width: 100%">Import</el-button>
+                    <el-button style="width: 100%">{{ t('Import') }}</el-button>
                   </el-upload>
                 </el-col>
                 <el-col :span="8">
                   <el-button type="danger" @click="handleResetSettings" style="width: 100%">
-                    Reset
+                    {{ t('Reset') }}
                   </el-button>
                 </el-col>
               </el-row>
@@ -951,7 +955,7 @@ onMounted(async () => {
 
             <div class="settings-divider" />
 
-            <div class="settings-section-title">Open Folders</div>
+            <div class="settings-section-title">{{ t('Open Folders') }}</div>
             <el-form-item>
               <el-row :gutter="10">
                 <el-col :span="12">
@@ -961,7 +965,7 @@ onMounted(async () => {
                 </el-col>
                 <el-col :span="12">
                   <el-button @click="handleOpenAppDataDir" style="width: 100%">
-                    App Data
+                    {{ t('App Data') }}
                   </el-button>
                 </el-col>
               </el-row>
@@ -971,7 +975,7 @@ onMounted(async () => {
       </el-tab-pane>
 
       <!-- 关于 -->
-      <el-tab-pane label="About" name="about">
+      <el-tab-pane :label="t('About')" name="about">
         <div class="tab-content-inner">
           <div class="about-section">
             <div class="app-logo">

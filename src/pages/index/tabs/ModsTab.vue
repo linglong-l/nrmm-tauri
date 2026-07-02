@@ -17,13 +17,9 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
-  Search,
   Star,
   Plus,
-  Grid,
   Cpu,
-  MoreFilled,
-  Refresh,
   FolderAdd,
   FolderOpened,
   Edit,
@@ -40,16 +36,20 @@ import {
   invokeLoadMods,
   invokeRefreshMods,
   invokeToggleModDisabled,
+  invokeToggleTreeNodeModDisabled,
   invokeAddGroup,
+  invokeAddMods,
   invokeRemoveGroup,
   invokeRenameGroup,
   invokeOpenPath,
   invokeStartFileWatcher,
-  invokeStopFileWatcher
+  invokeStopFileWatcher,
+  convertToAssetUrl
 } from '../../../utils/invoke';
 import { EventNames, eventManager } from '../../../utils/events';
 import type { ModData, ModGroupData, LayoutMode } from '../../../types';
 import { LayoutMode as LayoutModeEnum } from '../../../types';
+import GroupTreeNode from './GroupTreeNode.vue';
 
 const { t } = useI18n();
 const game = useGame();
@@ -74,14 +74,81 @@ const contextMenuModIndex = ref(-1);                   // 右键菜单目标模�
 // 事件监听取消句柄；组件卸载时需调用以避免内存泄漏
 let fileWatcherUnlisten: (() => void) | null = null;
 let modsUpdatedUnlisten: (() => void) | null = null;
+let gameSwitchedUnlisten: (() => void) | null = null; // 游戏切换事件监听取消句柄
 // 文件监听防抖定时器句柄；用于合并短时间内的多次刷新请求
 let refreshDebounceTimer: number | null = null;
+
+// 拖拽状态
+const isDraggingOver = ref(false); // 拖拽悬停状态
+
+// 左侧栏宽度和拖拽调节
+const sidebarRef = ref<HTMLElement | null>(null);
+const sidebarWidth = ref(240); // 默认宽度 240px（适量增加）
+const SIDEBAR_MIN_WIDTH = 160;
+const SIDEBAR_MAX_WIDTH = 480;
+
+// 手机风格拖动滚动状态
+let scrollDragState: {
+  startY: number;
+  startScrollTop: number;
+  active: boolean;
+} | null = null;
+
+// 鼠标按下：启动手机风格拖动滚动
+function onSidebarMouseDown(e: MouseEvent) {
+  if (!sidebarRef.value) return;
+  // 排除点击按钮等交互元素
+  const target = e.target as HTMLElement;
+  if (target.closest('button') || target.closest('.el-button')) return;
+
+  scrollDragState = {
+    startY: e.clientY,
+    startScrollTop: sidebarRef.value.scrollTop,
+    active: true,
+  };
+  document.addEventListener('mousemove', onSidebarMouseMove);
+  document.addEventListener('mouseup', onSidebarMouseUp);
+}
+
+function onSidebarMouseMove(e: MouseEvent) {
+  if (!scrollDragState?.active || !sidebarRef.value) return;
+  const dy = e.clientY - scrollDragState.startY;
+  sidebarRef.value.scrollTop = scrollDragState.startScrollTop - dy;
+}
+
+function onSidebarMouseUp() {
+  scrollDragState = null;
+  document.removeEventListener('mousemove', onSidebarMouseMove);
+  document.removeEventListener('mouseup', onSidebarMouseUp);
+}
+
+// 分隔条拖拽调节宽度
+function onResizerMouseDown(e: MouseEvent) {
+  e.preventDefault();
+  const startX = e.clientX;
+  const startWidth = sidebarWidth.value;
+
+  const onMove = (ev: MouseEvent) => {
+    const dx = ev.clientX - startX;
+    sidebarWidth.value = Math.min(
+      SIDEBAR_MAX_WIDTH,
+      Math.max(SIDEBAR_MIN_WIDTH, startWidth + dx)
+    );
+  };
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
 
 // 实际显示的分组列表：基于排序后的分组，按收藏过滤开关筛选
 const displayGroups = computed(() => {
   let groups = game.sortedGroups.value;
   if (showFavoritesOnly.value) {
-    groups = groups.filter(g => g.favoriteDateTime !== null);
+    // 虚拟分类节点始终保留，避免其下子分组被隐藏
+    groups = groups.filter(g => g.isVirtual || g.favoriteDateTime !== null);
   }
   return groups;
 });
@@ -95,8 +162,15 @@ const displayMods = computed(() => {
   return mods;
 });
 
-// 当前生效的布局模式（来自设置）
+// 窗口宽度响应式（用于 Auto 布局模式自动切换 Grid/Carousel）
+const windowWidth = ref(window.innerWidth);
+let resizeHandler: (() => void) | null = null;
+
+// 当前生效的布局模式：Auto 模式下根据窗口宽度自动选择
 const effectiveLayoutMode = computed((): LayoutMode => {
+  if (settings.layoutMode.value === LayoutModeEnum.Auto) {
+    return windowWidth.value < 900 ? LayoutModeEnum.Carousel : LayoutModeEnum.Grid;
+  }
   return settings.layoutMode.value;
 });
 
@@ -109,9 +183,6 @@ const isGridLayout = computed(() => {
 const isCarouselLayout = computed(() => {
   return effectiveLayoutMode.value === LayoutModeEnum.Carousel;
 });
-
-// 将枚举暴露给模板使用（避免在模板中直接 import 枚举）
-const LayoutModeValues = LayoutModeEnum;
 
 /**
  * 判断指定分组是否为当前激活的分组（用于高亮显示）。
@@ -132,8 +203,11 @@ function isGroupActive(group: ModGroupData): boolean {
 async function loadMods() {
   isLoading.value = true;
   try {
-    const groups = await invokeLoadMods();
+    const groups = await invokeLoadMods(game.targetGame.value);
+    console.log('[ModsTab] loadMods groups:', groups.length, groups);
     game.setModGroups(groups);
+    console.log('[ModsTab] currentGroup:', game.currentGroup.value);
+    console.log('[ModsTab] currentMods:', game.currentMods.value.length, game.currentMods.value);
     game.setModsLoaded(true);
   } catch (error) {
     console.error('Failed to load mods:', error);
@@ -150,7 +224,7 @@ async function loadMods() {
 async function refreshMods() {
   isLoading.value = true;
   try {
-    const groups = await invokeRefreshMods();
+    const groups = await invokeRefreshMods(game.targetGame.value);
     game.setModGroups(groups);
   } catch (error) {
     console.error('Failed to refresh mods:', error);
@@ -174,19 +248,21 @@ function debouncedRefresh() {
 }
 
 /**
- * 选中指定索引的分组。
- * 业务逻辑：由于 displayGroups 可能经过过滤，需先通过 groupPath 反查原始 modGroups 中的真实索引。
- * @param index displayGroups 中的索引
+ * 选中指定分组。
+ * 业务逻辑：通过 groupPath 定位分组，并更新 currentGroupPath 和 currentGroupIndex。
+ * @param group 选中的分组数据
  */
-function selectGroup(index: number) {
-  const group = displayGroups.value[index];
-  if (group) {
-    const realIndex = game.modGroups.value.findIndex(g => g.groupPath === group.groupPath);
-    if (realIndex !== -1) {
-      game.setCurrentGroupIndex(realIndex);
-      selectedModIndex.value = 0;
-    }
-  }
+function selectGroup(group: ModGroupData) {
+  game.setCurrentGroupByPath(group.groupPath);
+  selectedModIndex.value = 0;
+}
+
+/**
+ * 切换树节点的展开/折叠状态。
+ * @param groupPath 分组路径
+ */
+function toggleExpand(groupPath: string) {
+  game.toggleExpandPath(groupPath);
 }
 
 /**
@@ -199,18 +275,30 @@ function selectMod(index: number) {
 
 /**
  * 切换模组的启用/禁用状态。
+ * - 普通分组：使用 invokeToggleModDisabled（独立切换）。
+ * - 树节点（# 目录）分组：使用 invokeToggleTreeNodeModDisabled（互斥切换，启用时禁用同组其他模组）。
  * @param mod 待切换的模组数据
  * @param modIndex 该模组在当前分组模组列表中的索引
  * 限制：realIndex === 0 的空槽位不可切换。
  */
 async function toggleMod(mod: ModData, modIndex: number) {
   if (mod.realIndex === 0) return;
+  const currentGroup = game.currentGroup.value;
+  const isTreeNode = currentGroup?.isTreeNode ?? false;
+
   try {
-    const success = await invokeToggleModDisabled(mod.modPath);
-    if (success) {
-      // 本地乐观更新：直接反转 isDisabled，避免等待下次刷新
-      const updatedMod = { ...mod, isDisabled: !mod.isDisabled };
-      game.updateModInGroup(game.currentGroupIndex.value, modIndex, updatedMod);
+    if (isTreeNode) {
+      // 树节点模式：互斥切换
+      const [newPath, newDisabled] = await invokeToggleTreeNodeModDisabled(mod.modPath);
+      const updatedMod = { ...mod, modPath: newPath, isDisabled: newDisabled };
+      game.updateModInGroup(game.currentGroupPath.value, modIndex, updatedMod);
+    } else {
+      // 普通模式：独立切换
+      const success = await invokeToggleModDisabled(mod.modPath);
+      if (success) {
+        const updatedMod = { ...mod, isDisabled: !mod.isDisabled };
+        game.updateModInGroup(game.currentGroupPath.value, modIndex, updatedMod);
+      }
     }
   } catch (error) {
     console.error('Failed to toggle mod:', error);
@@ -236,17 +324,65 @@ async function toggleGroupFavorite(group: ModGroupData) {
   await game.toggleGroupFavorite(group.groupPath);
 }
 
+// ===== 拖拽添加 Mod =====
+
 /**
- * 搜索输入回调：将关键字传递给 game composable 进行模组/分组过滤。
- * @param value 用户输入的搜索关键字
+ * 拖拽悬停时标记为可放置状态。
+ * @param event 拖拽事件
  */
-function onSearchInput(value: string) {
-  game.searchMods(value);
+function onDragOver(event: DragEvent) {
+  event.preventDefault();
+  isDraggingOver.value = true;
 }
 
-/** 清空搜索关键字并重置过滤状态 */
-function clearSearch() {
-  game.clearSearch();
+/**
+ * 拖拽离开时清除悬停状态。
+ */
+function onDragLeave() {
+  isDraggingOver.value = false;
+}
+
+/**
+ * 拖拽释放时获取文件路径并调用后端添加 Mod。
+ * 默认添加到当前选中的分组。
+ * @param event 拖拽事件
+ */
+async function onDrop(event: DragEvent) {
+  event.preventDefault();
+  isDraggingOver.value = false;
+
+  const files = event.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+
+  // 获取当前分组路径，如果未选择分组则提示用户
+  const currentGroup = game.currentGroup.value;
+  if (!currentGroup) {
+    ElMessage.warning(t('Please select a group first'));
+    return;
+  }
+
+  // 提取文件路径列表
+  const paths: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i] as any;
+    if (file.path) {
+      paths.push(file.path);
+    }
+  }
+
+  if (paths.length === 0) {
+    ElMessage.warning(t('No valid paths found'));
+    return;
+  }
+
+  try {
+    await invokeAddMods(paths, currentGroup.groupPath);
+    await refreshMods();
+    ElMessage.success(t('Mods added successfully'));
+  } catch (error) {
+    console.error('Failed to add mods:', error);
+    ElMessage.error(t('Failed to add mods'));
+  }
 }
 
 /** 打开新建分组对话框，并清空输入框 */
@@ -263,17 +399,17 @@ function showAddGroupDialog() {
  */
 async function handleAddGroup() {
   if (!newGroupName.value.trim()) {
-    ElMessage.warning('Group name cannot be empty');
+    ElMessage.warning(t('Group name cannot be empty'));
     return;
   }
   try {
     await invokeAddGroup(newGroupName.value.trim());
     await refreshMods();
     dialogAddGroupVisible.value = false;
-    ElMessage.success('Group added successfully');
+    ElMessage.success(t('Group added successfully'));
   } catch (error) {
     console.error('Failed to add group:', error);
-    ElMessage.error('Failed to add group');
+    ElMessage.error(t('Failed to add group'));
   }
 }
 
@@ -292,7 +428,7 @@ function showRenameGroupDialog(group: ModGroupData) {
  */
 async function handleRenameGroup() {
   if (!renameGroupName.value.trim()) {
-    ElMessage.warning('Group name cannot be empty');
+    ElMessage.warning(t('Group name cannot be empty'));
     return;
   }
   const group = game.currentGroup.value;
@@ -301,10 +437,10 @@ async function handleRenameGroup() {
     await invokeRenameGroup(group.groupPath, renameGroupName.value.trim());
     await refreshMods();
     dialogRenameGroupVisible.value = false;
-    ElMessage.success('Group renamed successfully');
+    ElMessage.success(t('Group renamed successfully'));
   } catch (error) {
     console.error('Failed to rename group:', error);
-    ElMessage.error('Failed to rename group');
+    ElMessage.error(t('Failed to rename group'));
   }
 }
 
@@ -330,11 +466,11 @@ async function handleRemoveGroup() {
     );
     await invokeRemoveGroup(group.groupPath);
     await refreshMods();
-    ElMessage.success('Group removed successfully');
+    ElMessage.success(t('Group removed successfully'));
   } catch (error) {
     if (error !== 'cancel') {
       console.error('Failed to remove group:', error);
-      ElMessage.error('Failed to remove group');
+      ElMessage.error(t('Failed to remove group'));
     }
   }
 }
@@ -361,14 +497,16 @@ function openGroupFolder(group: ModGroupData) {
  * 显示分组右键菜单。
  * @param event 鼠标事件，用于定位菜单坐标
  * @param group 目标分组数据
- * @param index 目标分组在 displayGroups 中的索引
  */
-function showGroupContextMenu(event: MouseEvent, group: ModGroupData, index: number) {
+function showGroupContextMenu(event: MouseEvent, group: ModGroupData) {
+  // 虚拟分类节点不支持右键菜单
+  if (group.isVirtual) return;
   event.preventDefault();
   contextMenuPosition.value = { x: event.clientX, y: event.clientY };
   contextMenuType.value = 'group';
   contextMenuData.value = group;
-  contextMenuGroupIndex.value = index;
+  // 通过路径查找索引
+  contextMenuGroupIndex.value = game.modGroups.value.findIndex(g => g.groupPath === group.groupPath);
   contextMenuVisible.value = true;
 }
 
@@ -478,6 +616,7 @@ async function setupFileWatcher() {
  * 注册前端事件监听：
  *  - FILE_WATCHER_EVENT：文件变化时触发防抖刷新。
  *  - MODS_UPDATED：后端通知模组更新时同步到 gameStore。
+ *  - GAME_SWITCHED：游戏切换时重新加载模组列表并重启文件监听。
  * 返回值：保存取消函数以便组件卸载时清理。
  */
 async function setupEventListeners() {
@@ -488,10 +627,18 @@ async function setupEventListeners() {
   modsUpdatedUnlisten = await eventManager.on(EventNames.MODS_UPDATED, (groups) => {
     game.setModGroups(groups);
   });
+
+  // 游戏切换时：重新加载模组列表、重启文件监听（因 modsPath 可能变化）
+  gameSwitchedUnlisten = await eventManager.on(EventNames.GAME_SWITCHED, async () => {
+    await loadMods();
+    await setupFileWatcher();
+  });
 }
 
 // 组件挂载：依次加载模组、注册事件监听、启动文件监听；并绑定全局点击事件用于关闭右键菜单
 onMounted(async () => {
+  resizeHandler = () => { windowWidth.value = window.innerWidth; };
+  window.addEventListener('resize', resizeHandler);
   await loadMods();
   await setupEventListeners();
   await setupFileWatcher();
@@ -506,11 +653,21 @@ onUnmounted(() => {
   if (modsUpdatedUnlisten) {
     modsUpdatedUnlisten();
   }
+  if (gameSwitchedUnlisten) {
+    gameSwitchedUnlisten();
+  }
   invokeStopFileWatcher().catch(console.error);
   document.removeEventListener('click', hideContextMenu);
+  if (resizeHandler) {
+    window.removeEventListener('resize', resizeHandler);
+    resizeHandler = null;
+  }
   if (refreshDebounceTimer) {
     clearTimeout(refreshDebounceTimer);
   }
+  // 清理拖动滚动事件
+  document.removeEventListener('mousemove', onSidebarMouseMove);
+  document.removeEventListener('mouseup', onSidebarMouseUp);
 });
 
 // 监听布局模式变化（占位 watcher，预留用于未来扩展，如布局切换动画等）
@@ -518,6 +675,20 @@ watch(
   () => settings.layoutMode.value,
   () => {
   }
+);
+
+// 监听当前分组变化，打印调试信息
+watch(
+  () => game.currentGroup.value,
+  (newGroup) => {
+    console.log('[ModsTab] currentGroup changed:', {
+      groupName: newGroup?.groupName || null,
+      groupPath: newGroup?.groupPath || null,
+      modsCount: newGroup?.modsInGroup.length || 0,
+      mods: newGroup?.modsInGroup.map(m => ({ name: m.modName, path: m.modPath })) || []
+    });
+  },
+  { immediate: true }
 );
 </script>
 
@@ -528,110 +699,6 @@ watch(
     交互行为：@click.self 点击空白区域时隐藏右键菜单
   -->
   <div class="mods-tab" @click.self="hideContextMenu">
-    <!-- 
-      顶部工具栏区域
-      数据来源：game.searchKeyword (搜索关键字), showFavoritesOnly (收藏过滤), isGridLayout/isCarouselLayout (布局模式)
-      交互行为：搜索、收藏过滤、添加分组、切换布局、刷新模组列表
-    -->
-    <div class="mods-toolbar">
-      <!-- 工具栏左侧：搜索和收藏过滤 -->
-      <div class="toolbar-left">
-        <!-- 
-          搜索输入框
-          数据来源：v-model 绑定 game.searchKeyword
-          交互行为：@input 实时搜索, @clear 清空搜索, clearable 显示清空按钮
-          业务逻辑：输入时调用 onSearchInput 触发搜索，清空时调用 clearSearch 重置
-        -->
-        <el-input
-          v-model="game.searchKeyword"
-          :placeholder="t('Search mod/group by name or real folder name')"
-          class="search-input"
-          clearable
-          @input="onSearchInput"
-          @clear="clearSearch"
-        >
-          <!-- 搜索图标前缀 -->
-          <template #prefix>
-            <el-icon><Search /></el-icon>
-          </template>
-        </el-input>
-        <!-- 
-          收藏过滤按钮
-          数据来源：showFavoritesOnly 控制是否仅显示收藏项
-          交互行为：@click 切换收藏过滤状态
-          动态绑定：:type 根据 showFavoritesOnly 切换按钮类型 (warning/default)
-        -->
-        <el-button
-          :type="showFavoritesOnly ? 'warning' : 'default'"
-          :icon="Star"
-          @click="showFavoritesOnly = !showFavoritesOnly"
-        >
-          {{ t('Favorites') }}
-        </el-button>
-      </div>
-      <!-- 工具栏右侧：分组和模组操作 -->
-      <div class="toolbar-right">
-        <!-- 
-          添加分组按钮
-          交互行为：@click 打开新建分组对话框
-        -->
-        <el-button :icon="FolderAdd" @click="showAddGroupDialog">
-          {{ t('Add group') }}
-        </el-button>
-        <!-- 
-          添加模组按钮（预留功能，当前未实现）
-          交互行为：@click 未绑定事件
-        -->
-        <el-button :icon="Plus">
-          {{ t('Add mods') }}
-        </el-button>
-        <!-- 
-          布局模式切换按钮组
-          数据来源：isGridLayout/isCarouselLayout 控制按钮高亮状态
-          交互行为：@click 切换布局模式
-          动态绑定：:type 根据当前布局模式切换按钮类型 (primary/default)
-        -->
-        <el-button-group>
-          <!-- 网格布局按钮 -->
-          <el-button
-            :type="isGridLayout ? 'primary' : 'default'"
-            :icon="Grid"
-            @click="settings.setLayoutMode(LayoutModeValues.Grid)"
-          />
-          <!-- 轮播布局按钮 -->
-          <el-button
-            :type="isCarouselLayout ? 'primary' : 'default'"
-            :icon="Cpu"
-            @click="settings.setLayoutMode(LayoutModeValues.Carousel)"
-          />
-        </el-button-group>
-        <!-- 
-          刷新按钮
-          交互行为：@click 重新扫描文件系统并刷新模组列表
-        -->
-        <el-button :icon="Refresh" @click="refreshMods">
-          {{ t('Refresh') }}
-        </el-button>
-        <!-- 
-          更多操作下拉菜单
-          交互行为：点击展开菜单，菜单项触发对应操作
-        -->
-        <el-dropdown>
-          <!-- 下拉菜单触发按钮 -->
-          <el-button :icon="MoreFilled" />
-          <!-- 下拉菜单内容 -->
-          <template #dropdown>
-            <el-dropdown-menu>
-              <!-- 刷新菜单项 -->
-              <el-dropdown-item @click="refreshMods">
-                <el-icon><Refresh /></el-icon>
-                {{ t('Refresh') }}
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </div>
-    </div>
 
     <!-- 
       主体内容区域：左侧分组列表 + 右侧模组展示
@@ -643,7 +710,12 @@ watch(
         数据来源：displayGroups (经过排序和收藏过滤后的分组列表), isLoading (加载状态)
         交互行为：点击分组切换选中，右键打开分组菜单，点击收藏图标切换收藏状态
       -->
-      <div class="groups-sidebar">
+      <div
+        class="groups-sidebar"
+        ref="sidebarRef"
+        :style="{ width: sidebarWidth + 'px' }"
+        @mousedown="onSidebarMouseDown"
+      >
         <!-- 
           分组区域头部
           作用：显示"Groups"标题和添加分组快捷按钮
@@ -654,69 +726,47 @@ watch(
             <span class="reserved-title">{{ t('Groups') }}</span>
             <!-- 添加分组快捷按钮 -->
             <el-button size="small" circle @click="showAddGroupDialog">
-              <el-icon><Plus /></el-icon>
+              <el-icon>
+                <Plus />
+              </el-icon>
             </el-button>
           </div>
         </div>
-        
-        <!-- 
-          分组列表容器
+
+        <!--
+          分组列表容器（树形结构）
           数据来源：displayGroups 提供分组数据
           加载状态：v-loading 在 isLoading 为 true 时显示加载动画
-          交互行为：每个分组项支持点击选中、右键菜单
+          交互行为：每个分组项支持点击选中、右键菜单、展开/折叠
         -->
         <div v-loading="isLoading" class="groups-list">
-          <!-- 
-            分组列表项
-            数据来源：v-for 遍历 displayGroups，key 使用 groupPath 保证唯一性
-            动态绑定：:class 根据 isGroupActive(group) 添加 active 类（高亮当前选中分组）
+          <!--
+            树形分组节点
+            数据来源：v-for 遍历 displayGroups（顶层分组），递归渲染子节点
+            动态绑定：
+              - :group 传递分组数据
+              - :depth 设置深度为 0（顶层节点）
+              - :is-active 根据 groupPath 判断是否为当前选中分组
+              - :is-expanded 根据 expandedPaths 判断是否展开
+              - :expanded-paths 传递展开状态集合
             交互行为：
-              - @click 调用 selectGroup(index) 切换选中分组
+              - @select 调用 selectGroup 切换选中分组
               - @contextmenu 调用 showGroupContextMenu 打开右键菜单
+              - @toggle-expand 调用 toggleExpand 切换展开/折叠
           -->
-          <div
-            v-for="(group, index) in displayGroups"
+          <GroupTreeNode
+            v-for="group in displayGroups"
             :key="group.groupPath"
-            class="group-item"
-            :class="{ active: isGroupActive(group) }"
-            @click="selectGroup(index)"
-            @contextmenu="showGroupContextMenu($event, group, index)"
-          >
-            <!-- 
-              分组图标区域
-              数据来源：group.iconPath 存在时显示自定义图标，否则显示默认文件夹图标
-              条件渲染：v-if/v-else 根据 iconPath 是否存在切换显示内容
-            -->
-            <div class="group-icon">
-              <!-- 自定义分组图标 -->
-              <img v-if="group.iconPath" :src="group.iconPath" alt="group icon" />
-              <!-- 默认文件夹图标 -->
-              <el-icon v-else><FolderOpened /></el-icon>
-            </div>
-            <!-- 
-              分组信息区域
-              数据来源：group.groupName (分组名称), group.modsInGroup.length (模组数量)
-            -->
-            <div class="group-info">
-              <!-- 分组名称 -->
-              <span class="group-name">{{ group.groupName }}</span>
-              <!-- 模组数量统计 -->
-              <span class="group-count">{{ group.modsInGroup.length }} {{ t('Mods') }}</span>
-            </div>
-            <!-- 
-              分组收藏图标
-              数据来源：group.favoriteDateTime 存在时显示（表示已收藏）
-              条件渲染：v-if 根据 favoriteDateTime 是否存在决定是否显示
-              样式：金色图标 (#f59e0b)
-            -->
-            <el-icon
-              v-if="group.favoriteDateTime"
-              class="group-favorite"
-              color="#f59e0b"
-            >
-              <Star />
-            </el-icon>
-          </div>
+            :group="group"
+            :depth="0"
+            :is-active="isGroupActive(group)"
+            :is-expanded="game.expandedPaths.value.has(group.groupPath)"
+            :expanded-paths="game.expandedPaths.value"
+            :current-group-path="game.currentGroupPath.value"
+            @select="selectGroup"
+            @contextmenu="showGroupContextMenu"
+            @toggle-expand="toggleExpand"
+          />
         </div>
         <!-- 
           空状态提示
@@ -724,20 +774,24 @@ watch(
           数据来源：isLoading (加载状态), displayGroups.length (分组数量)
           作用：当没有分组时提示用户添加分组
         -->
-        <el-empty
-          v-if="!isLoading && displayGroups.length === 0"
-          :description="t('Right-click and add group, then you can add mods.')"
-          :image-size="80"
-        />
+        <el-empty v-if="!isLoading && displayGroups.length === 0"
+          :description="t('Right-click and add group, then you can add mods.')" :image-size="80" />
       </div>
+      <!-- 拖拽分隔条：调节左侧栏宽度 -->
+      <div
+        class="sidebar-resizer"
+        @mousedown="onResizerMouseDown"
+      ></div>
 
       <!-- 
         模组展示区域
         数据来源：displayMods (经过排序和收藏过滤后的模组列表), isLoading (加载状态)
         布局：根据 effectiveLayoutMode 切换网格布局或轮播布局
         交互行为：点击选中模组，双击切换启用/禁用，右键打开模组菜单
+        拖拽行为：@dragover/@dragleave/@drop 处理拖拽文件/目录添加 Mod
       -->
-      <div class="mods-display">
+      <div class="mods-display" :class="{ 'drag-over': isDraggingOver }" @dragover="onDragOver" @dragleave="onDragLeave"
+        @drop="onDrop">
         <!-- 
           模组容器
           加载状态：v-loading 在 isLoading 为 true 时显示加载动画
@@ -766,19 +820,12 @@ watch(
                   - @dblclick 调用 onModDoubleClick(mod, index) 切换启用/禁用
                   - @contextmenu 调用 showModContextMenu 打开右键菜单
               -->
-              <div
-                v-for="(mod, index) in displayMods"
-                :key="mod.modPath"
-                class="mod-card"
-                :class="{
-                  selected: selectedModIndex === index,
-                  disabled: mod.isDisabled,
-                  'none-slot': mod.realIndex === 0
-                }"
-                @click="selectMod(index)"
-                @dblclick="onModDoubleClick(mod, index)"
-                @contextmenu="showModContextMenu($event, mod, index)"
-              >
+              <div v-for="(mod, index) in displayMods" :key="mod.modPath" class="mod-card" :class="{
+                selected: selectedModIndex === index,
+                disabled: mod.isDisabled,
+                'none-slot': mod.realIndex === 0
+              }" @click="selectMod(index)" @dblclick="onModDoubleClick(mod, index)"
+                @contextmenu="showModContextMenu($event, mod, index)">
                 <!-- 
                   模组图标区域
                   数据来源：
@@ -789,11 +836,15 @@ watch(
                 -->
                 <div class="mod-icon">
                   <!-- 自定义模组图标 -->
-                  <img v-if="mod.iconPath" :src="mod.iconPath" alt="mod icon" />
+                  <img v-if="mod.iconPath" :src="convertToAssetUrl(mod.iconPath)" alt="mod icon" loading="lazy" />
                   <!-- 空槽位图标 -->
-                  <el-icon v-else-if="mod.realIndex === 0"><Close /></el-icon>
+                  <el-icon v-else-if="mod.realIndex === 0">
+                    <Close />
+                  </el-icon>
                   <!-- 默认查看图标 -->
-                  <el-icon v-else><View /></el-icon>
+                  <el-icon v-else>
+                    <View />
+                  </el-icon>
                 </div>
                 <!-- 
                   模组名称
@@ -813,8 +864,11 @@ watch(
                     提示内容：显示 tooltip 说明"旧版本 NRMM 自动修复了语法错误"
                     样式：warning 类，橙色图标
                   -->
-                  <el-tooltip v-if="mod.isOldAutoFixed" :content="t('Mod syntax errors were auto-fixed by earlier NRMM versions.')">
-                    <el-icon class="status-icon warning"><MagicStick /></el-icon>
+                  <el-tooltip v-if="mod.isOldAutoFixed"
+                    :content="t('Mod syntax errors were auto-fixed by earlier NRMM versions.')">
+                    <el-icon class="status-icon warning">
+                      <MagicStick />
+                    </el-icon>
                   </el-tooltip>
                   <!-- 
                     语法错误已移除图标
@@ -822,8 +876,11 @@ watch(
                     提示内容：显示 tooltip 说明"语法错误已被自动移除"
                     样式：info 类，蓝色图标
                   -->
-                  <el-tooltip v-if="mod.isSyntaxErrorRemoved" :content="t('Mod syntax errors are automatically removed.')">
-                    <el-icon class="status-icon info"><Operation /></el-icon>
+                  <el-tooltip v-if="mod.isSyntaxErrorRemoved"
+                    :content="t('Mod syntax errors are automatically removed.')">
+                    <el-icon class="status-icon info">
+                      <Operation />
+                    </el-icon>
                   </el-tooltip>
                   <!-- 
                     未优化模组图标
@@ -831,8 +888,11 @@ watch(
                     提示内容：显示 tooltip 说明"模组未优化，可能影响性能或破坏其他模组"
                     样式：warning 类，橙色图标
                   -->
-                  <el-tooltip v-if="mod.isUnoptimized" :content="t('Mod is unoptimized and might slow down performance or even break other mods.')">
-                    <el-icon class="status-icon warning"><Timer /></el-icon>
+                  <el-tooltip v-if="mod.isUnoptimized"
+                    :content="t('Mod is unoptimized and might slow down performance or even break other mods.')">
+                    <el-icon class="status-icon warning">
+                      <Timer />
+                    </el-icon>
                   </el-tooltip>
                   <!-- 
                     命名空间模组图标
@@ -841,7 +901,9 @@ watch(
                     样式：info 类，蓝色图标
                   -->
                   <el-tooltip v-if="mod.isNamespaced" :content="t('Mod uses namespaces')">
-                    <el-icon class="status-icon info"><Cpu /></el-icon>
+                    <el-icon class="status-icon info">
+                      <Cpu />
+                    </el-icon>
                   </el-tooltip>
                 </div>
                 <!-- 
@@ -851,12 +913,8 @@ watch(
                   交互行为：@click.stop 阻止事件冒泡，调用 toggleModFavorite(mod) 切换收藏状态
                   样式：金色图标 (#f59e0b)，绝对定位在右上角
                 -->
-                <el-icon
-                  v-if="mod.favoriteDateTime && mod.realIndex !== 0"
-                  class="mod-favorite"
-                  color="#f59e0b"
-                  @click.stop="toggleModFavorite(mod)"
-                >
+                <el-icon v-if="mod.favoriteDateTime && mod.realIndex !== 0" class="mod-favorite" color="#f59e0b"
+                  @click.stop="toggleModFavorite(mod)">
                   <Star />
                 </el-icon>
                 <!-- 
@@ -872,88 +930,69 @@ watch(
             </div>
           </template>
 
-          <!-- 
-            轮播布局模式
-            条件渲染：v-else-if="isCarouselLayout" 当布局模式为 Carousel 时显示
-            布局方式：Element Plus Carousel 组件，大卡片轮播展示
+          <!--
+            行列布局模式（原轮播布局）
+            条件渲染：v-else-if="isCarouselLayout" 当布局模式为 List 时显示
+            布局方式：flex-wrap 横向排列多行，整体纵向滚动（Android 风格）
           -->
           <template v-else-if="isCarouselLayout">
-            <!-- 
-              轮播容器
-              数据来源：displayMods.length > 0 时显示，否则不渲染
-              双向绑定：:model-value 绑定 selectedModIndex（当前选中索引）
-              交互行为：@change 调用 selectMod 切换选中模组
-              样式：固定高度 400px
+            <!--
+              行列布局容器
+              数据来源：displayMods 遍历渲染卡片
+              布局：flex-wrap，卡片固定宽度，纵向滚动
             -->
-            <el-carousel
-              v-if="displayMods.length > 0"
-              :model-value="selectedModIndex"
-              height="400px"
-              @change="selectMod"
-            >
-              <!-- 
-                轮播项
-                数据来源：v-for 遍历 displayMods，key 使用 modPath
-              -->
-              <el-carousel-item v-for="(mod, index) in displayMods" :key="mod.modPath">
-                <!-- 
-                  轮播模组卡片
-                  动态绑定：
-                    - :class 根据 mod.isDisabled 添加 disabled 类
-                    - :class 根据 mod.realIndex === 0 添加 none-slot 类
-                  交互行为：
-                    - @dblclick 调用 onModDoubleClick 切换启用/禁用
-                    - @contextmenu 调用 showModContextMenu 打开右键菜单
-                -->
-                <div
-                  class="carousel-mod-card"
-                  :class="{
-                    disabled: mod.isDisabled,
-                    'none-slot': mod.realIndex === 0
-                  }"
-                  @dblclick="onModDoubleClick(mod, index)"
-                  @contextmenu="showModContextMenu($event, mod, index)"
-                >
-                  <!-- 
-                    轮播模组图标区域
-                    数据来源：同网格布局的图标逻辑
-                  -->
-                  <div class="carousel-mod-icon">
-                    <img v-if="mod.iconPath" :src="mod.iconPath" alt="mod icon" />
-                    <el-icon v-else-if="mod.realIndex === 0"><Close /></el-icon>
-                    <el-icon v-else><View /></el-icon>
-                  </div>
-                  <!-- 
-                    轮播模组名称
-                    数据来源：mod.modName
-                    样式：大字号，居中显示
-                  -->
-                  <div class="carousel-mod-name">{{ mod.modName }}</div>
-                  <!-- 
-                    轮播模组状态标签区域
-                    数据来源：mod.isDisabled, mod.favoriteDateTime
-                    作用：显示启用/禁用状态和收藏状态
-                  -->
-                  <div class="carousel-mod-status">
-                    <!-- 
-                      禁用/启用状态标签
-                      条件渲染：v-if/v-else 根据 mod.isDisabled 切换显示
-                      样式：禁用显示 danger 类型（红色），启用显示 success 类型（绿色）
-                    -->
-                    <el-tag v-if="mod.isDisabled" type="danger">{{ t('Disabled') }}</el-tag>
-                    <el-tag v-else type="success">{{ t('Enabled') }}</el-tag>
-                    <!-- 
-                      收藏状态标签
-                      条件渲染：v-if 根据 mod.favoriteDateTime 存在且非空槽位时显示
-                      样式：warning 类型（金色），带星标图标
-                    -->
-                    <el-tag v-if="mod.favoriteDateTime && mod.realIndex !== 0" type="warning">
-                      <el-icon><Star /></el-icon>
-                    </el-tag>
-                  </div>
+            <div class="mods-list" v-if="displayMods.length > 0">
+              <div v-for="(mod, index) in displayMods" :key="mod.modPath" class="list-mod-card" :class="{
+                selected: selectedModIndex === index,
+                disabled: mod.isDisabled,
+                'none-slot': mod.realIndex === 0
+              }" @click="selectMod(index)" @dblclick="onModDoubleClick(mod, index)"
+                @contextmenu="showModContextMenu($event, mod, index)">
+                <!-- 模组图标 -->
+                <div class="list-mod-icon">
+                  <img v-if="mod.iconPath" :src="convertToAssetUrl(mod.iconPath)" alt="mod icon" loading="lazy" />
+                  <el-icon v-else-if="mod.realIndex === 0">
+                    <Close />
+                  </el-icon>
+                  <el-icon v-else>
+                    <View />
+                  </el-icon>
                 </div>
-              </el-carousel-item>
-            </el-carousel>
+                <!-- 模组名称 -->
+                <div class="list-mod-name">{{ mod.modName }}</div>
+                <!-- 状态图标 -->
+                <div class="list-mod-status-icons">
+                  <el-tooltip v-if="mod.isOldAutoFixed"
+                    :content="t('Mod syntax errors were auto-fixed by earlier NRMM versions.')">
+                    <el-icon class="status-icon warning">
+                      <MagicStick />
+                    </el-icon>
+                  </el-tooltip>
+                  <el-tooltip v-if="mod.isSyntaxErrorRemoved"
+                    :content="t('Mod syntax errors are automatically removed.')">
+                    <el-icon class="status-icon info">
+                      <Operation />
+                    </el-icon>
+                  </el-tooltip>
+                  <el-tooltip v-if="mod.isUnoptimized"
+                    :content="t('Mod is unoptimized and might slow down performance or even break other mods.')">
+                    <el-icon class="status-icon warning">
+                      <Timer />
+                    </el-icon>
+                  </el-tooltip>
+                  <el-tooltip v-if="mod.isNamespaced" :content="t('Mod uses namespaces')">
+                    <el-icon class="status-icon info">
+                      <Cpu />
+                    </el-icon>
+                  </el-tooltip>
+                </div>
+                <!-- 收藏图标 -->
+                <el-icon v-if="mod.favoriteDateTime && mod.realIndex !== 0" class="mod-favorite" color="#f59e0b"
+                  @click.stop="toggleModFavorite(mod)">
+                  <Star />
+                </el-icon>
+              </div>
+            </div>
           </template>
 
           <!-- 
@@ -962,11 +1001,7 @@ watch(
             数据来源：isLoading (加载状态), displayMods.length (模组数量)
             作用：当没有模组时提示用户
           -->
-          <el-empty
-            v-if="!isLoading && displayMods.length === 0"
-            :description="t('No mods found')"
-            :image-size="100"
-          />
+          <el-empty v-if="!isLoading && displayMods.length === 0" :description="t('No mods found')" :image-size="100" />
         </div>
       </div>
     </div>
@@ -982,12 +1017,8 @@ watch(
       交互行为：@click.stop 阻止事件冒泡，避免触发外层点击隐藏
       样式：固定定位，z-index 9999 确保在最上层
     -->
-    <div
-      v-if="contextMenuVisible"
-      class="context-menu"
-      :style="{ left: contextMenuPosition.x + 'px', top: contextMenuPosition.y + 'px' }"
-      @click.stop
-    >
+    <div v-if="contextMenuVisible" class="context-menu"
+      :style="{ left: contextMenuPosition.x + 'px', top: contextMenuPosition.y + 'px' }" @click.stop>
       <!-- 
         分组右键菜单
         条件渲染：v-if="contextMenuType === 'group'" 当右键点击分组时显示
@@ -996,12 +1027,27 @@ watch(
       -->
       <template v-if="contextMenuType === 'group'">
         <!-- 
+          添加分组菜单项
+          交互行为：@click 调用 showAddGroupDialog 打开新建分组对话框
+          图标：FolderAdd 图标
+        -->
+        <div class="context-menu-item" @click="showAddGroupDialog">
+          <el-icon>
+            <FolderAdd />
+          </el-icon>
+          {{ t('Add group') }}
+        </div>
+        <!-- 分隔线 -->
+        <div class="context-menu-separator" />
+        <!-- 
           重命名菜单项
           交互行为：@click 调用 handleContextMenuSelect('rename')
           图标：Edit 图标
         -->
         <div class="context-menu-item" @click="handleContextMenuSelect('rename')">
-          <el-icon><Edit /></el-icon>
+          <el-icon>
+            <Edit />
+          </el-icon>
           {{ t('Rename') }}
         </div>
         <!-- 
@@ -1011,8 +1057,10 @@ watch(
           图标：Star 图标
         -->
         <div class="context-menu-item" @click="handleContextMenuSelect('favorite')">
-          <el-icon><Star /></el-icon>
-          {{ (contextMenuData as ModGroupData)?.favoriteDateTime ? 'Unfavorite' : 'Favorite' }}
+          <el-icon>
+            <Star />
+          </el-icon>
+          {{ (contextMenuData as ModGroupData)?.favoriteDateTime ? t('Unfavorite') : t('Favorite') }}
         </div>
         <!-- 
           在文件管理器中打开菜单项
@@ -1020,7 +1068,9 @@ watch(
           图标：FolderOpened 图标
         -->
         <div class="context-menu-item" @click="handleContextMenuSelect('open')">
-          <el-icon><FolderOpened /></el-icon>
+          <el-icon>
+            <FolderOpened />
+          </el-icon>
           {{ t('Open in File Explorer') }}
         </div>
         <!-- 
@@ -1030,7 +1080,9 @@ watch(
           图标：Delete 图标
         -->
         <div class="context-menu-item danger" @click="handleContextMenuSelect('delete')">
-          <el-icon><Delete /></el-icon>
+          <el-icon>
+            <Delete />
+          </el-icon>
           {{ t('Remove group') }}
         </div>
       </template>
@@ -1048,7 +1100,9 @@ watch(
           图标：View 图标
         -->
         <div class="context-menu-item" @click="handleContextMenuSelect('toggle')">
-          <el-icon><View /></el-icon>
+          <el-icon>
+            <View />
+          </el-icon>
           {{ (contextMenuData as ModData)?.isDisabled ? t('Enable mod') : t('Disable mod completely') }}
         </div>
         <!-- 
@@ -1058,8 +1112,10 @@ watch(
           图标：Star 图标
         -->
         <div class="context-menu-item" @click="handleContextMenuSelect('favorite')">
-          <el-icon><Star /></el-icon>
-          {{ (contextMenuData as ModData)?.favoriteDateTime ? 'Unfavorite' : 'Favorite' }}
+          <el-icon>
+            <Star />
+          </el-icon>
+          {{ (contextMenuData as ModData)?.favoriteDateTime ? t('Unfavorite') : t('Favorite') }}
         </div>
         <!-- 
           重命名菜单项
@@ -1067,7 +1123,9 @@ watch(
           图标：Edit 图标
         -->
         <div class="context-menu-item" @click="handleContextMenuSelect('rename')">
-          <el-icon><Edit /></el-icon>
+          <el-icon>
+            <Edit />
+          </el-icon>
           {{ t('Rename') }}
         </div>
         <!-- 
@@ -1076,7 +1134,9 @@ watch(
           图标：FolderOpened 图标
         -->
         <div class="context-menu-item" @click="handleContextMenuSelect('open')">
-          <el-icon><FolderOpened /></el-icon>
+          <el-icon>
+            <FolderOpened />
+          </el-icon>
           {{ t('Open in File Explorer') }}
         </div>
       </template>
@@ -1093,17 +1153,9 @@ watch(
         - 确认按钮点击调用 handleAddGroup 创建分组
       样式：固定宽度 400px
     -->
-    <el-dialog
-      v-model="dialogAddGroupVisible"
-      :title="t('Add group')"
-      width="400px"
-    >
+    <el-dialog v-model="dialogAddGroupVisible" :title="t('Add group')" width="400px">
       <!-- 分组名称输入框 -->
-      <el-input
-        v-model="newGroupName"
-        :placeholder="t('Group Name')"
-        @keyup.enter="handleAddGroup"
-      />
+      <el-input v-model="newGroupName" :placeholder="t('Group Name')" @keyup.enter="handleAddGroup" />
       <!-- 对话框底部按钮区域 -->
       <template #footer>
         <!-- 取消按钮 -->
@@ -1124,17 +1176,9 @@ watch(
         - 确认按钮点击调用 handleRenameGroup 重命名分组
       样式：固定宽度 400px
     -->
-    <el-dialog
-      v-model="dialogRenameGroupVisible"
-      :title="t('Rename')"
-      width="400px"
-    >
+    <el-dialog v-model="dialogRenameGroupVisible" :title="t('Rename')" width="400px">
       <!-- 分组名称输入框 -->
-      <el-input
-        v-model="renameGroupName"
-        :placeholder="t('Group Name')"
-        @keyup.enter="handleRenameGroup"
-      />
+      <el-input v-model="renameGroupName" :placeholder="t('Group Name')" @keyup.enter="handleRenameGroup" />
       <!-- 对话框底部按钮区域 -->
       <template #footer>
         <!-- 取消按钮 -->
@@ -1154,16 +1198,9 @@ watch(
         - 确认按钮点击（当前未绑定事件，预留功能）
       样式：固定宽度 400px
     -->
-    <el-dialog
-      v-model="dialogRenameModVisible"
-      :title="t('Rename')"
-      width="400px"
-    >
+    <el-dialog v-model="dialogRenameModVisible" :title="t('Rename')" width="400px">
       <!-- 模组名称输入框 -->
-      <el-input
-        v-model="renameModName"
-        :placeholder="t('Mod Name')"
-      />
+      <el-input v-model="renameModName" :placeholder="t('Mod Name')" />
       <!-- 对话框底部按钮区域 -->
       <template #footer>
         <!-- 取消按钮 -->
@@ -1212,7 +1249,7 @@ watch(
 }
 
 .groups-sidebar {
-  width: 200px;
+  width: 240px;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -1220,6 +1257,33 @@ watch(
   padding: 8px;
   gap: 8px;
   border-right: 1px solid rgba(255, 255, 255, 0.04);
+  /* 隐藏滚动条 */
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.groups-sidebar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/WebView */
+}
+
+.groups-sidebar:active {
+  cursor: grabbing;
+}
+
+/* 拖拽分隔条 */
+.sidebar-resizer {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background-color: transparent;
+  transition: background-color 0.2s ease;
+}
+
+.sidebar-resizer:hover {
+  background-color: rgba(255, 255, 255, 0.15);
 }
 
 .groups-list {
@@ -1324,10 +1388,37 @@ watch(
   flex-direction: column;
 }
 
+/* 拖拽悬停时的样式 */
+.mods-display.drag-over {
+  outline: 2px dashed rgba(64, 158, 255, 0.8);
+  outline-offset: -4px;
+  background-color: rgba(64, 158, 255, 0.05);
+}
+
 .mods-container {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Android 风格滚动条：隐藏原生滚动条 */
+.mods-container::-webkit-scrollbar {
+  width: 4px;
+}
+
+.mods-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mods-container::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+.mods-container::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.3);
 }
 
 .mods-grid {
@@ -1355,15 +1446,27 @@ watch(
 }
 
 .mod-card:hover .mod-icon {
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 0 0 2px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.3);
+}
+
+.mod-card .mod-icon {
+  box-shadow: 0 0 0 2px var(--el-color-primary);
 }
 
 .mod-card.selected .mod-icon {
-  box-shadow: 0 0 0 2px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.2);
+  box-shadow: 0 0 0 3px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.3);
+}
+
+.mod-card.disabled .mod-icon {
+  box-shadow: 0 0 0 2px #ef4444;
+}
+
+.mod-card.disabled.selected .mod-icon {
+  box-shadow: 0 0 0 3px #ef4444, 0 8px 24px rgba(239, 68, 68, 0.3);
 }
 
 .mod-card.disabled {
-  opacity: 0.5;
+  opacity: 1;
 }
 
 .mod-card.none-slot .mod-icon {
@@ -1438,63 +1541,111 @@ watch(
 }
 
 .mod-disabled-badge {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  padding: 2px 8px;
-  font-size: 11px;
-  background-color: var(--el-color-danger);
-  color: white;
-  border-radius: 4px;
-  font-weight: 500;
+  display: none;
 }
 
-.carousel-mod-card {
+/* ===== 行列布局（List）样式 ===== */
+
+.mods-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px;
+  scroll-snap-type: y proximity;
+}
+
+.list-mod-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
-  height: 100%;
-  padding: 24px;
+  gap: 6px;
+  width: 160px;
+  padding: 0;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background-color: transparent;
+  overflow: hidden;
+  scroll-snap-align: start;
 }
 
-.carousel-mod-card.disabled {
-  opacity: 0.6;
+.list-mod-card:hover {
+  transform: translateY(-2px);
 }
 
-.carousel-mod-icon {
-  width: 200px;
-  height: 200px;
-  border-radius: 16px;
+.list-mod-card:hover .list-mod-icon {
+  box-shadow: 0 0 0 2px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.3);
+}
+
+.list-mod-card .list-mod-icon {
+  box-shadow: 0 0 0 2px var(--el-color-primary);
+}
+
+.list-mod-card.selected .list-mod-icon {
+  box-shadow: 0 0 0 3px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.3);
+}
+
+.list-mod-card.disabled .list-mod-icon {
+  box-shadow: 0 0 0 2px #ef4444;
+}
+
+.list-mod-card.disabled.selected .list-mod-icon {
+  box-shadow: 0 0 0 3px #ef4444, 0 8px 24px rgba(239, 68, 68, 0.3);
+}
+
+.list-mod-card.disabled {
+  opacity: 1;
+}
+
+.list-mod-card.none-slot .list-mod-icon {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.list-mod-icon {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   background-color: rgba(255, 255, 255, 0.06);
+  transition: box-shadow 0.2s ease;
 }
 
-.carousel-mod-icon img {
+.list-mod-icon img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.carousel-mod-icon :deep(.el-icon) {
-  font-size: 80px;
+.list-mod-icon :deep(.el-icon) {
+  font-size: 36px;
   color: rgba(255, 255, 255, 0.2);
 }
 
-.carousel-mod-name {
-  font-size: 20px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.85);
+.list-mod-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
   text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.4;
+  min-height: 32px;
+  width: 100%;
+  padding: 0 4px;
 }
 
-.carousel-mod-status {
+.list-mod-status-icons {
   display: flex;
-  gap: 8px;
+  gap: 4px;
+  justify-content: center;
+  min-height: 16px;
 }
 
 .context-menu {
@@ -1530,6 +1681,12 @@ watch(
 
 .context-menu-item.danger:hover {
   background-color: rgba(245, 108, 108, 0.15);
+}
+
+.context-menu-separator {
+  height: 1px;
+  background-color: rgba(255, 255, 255, 0.1);
+  margin: 4px 0;
 }
 
 .context-menu-item :deep(.el-icon) {

@@ -11,7 +11,7 @@
 //! - 普通目录若符合「模组目录」特征（包含 icon.png 或 *.ini），也会被识别为单个分组。
 //! - 模组目录名以 `DISABLED` 前缀表示该模组处于禁用状态。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use walkdir::WalkDir;
 
+use crate::commands::get_icon_path;
 use crate::ini_handler::error_detection::ErroredLinesReport;
 use crate::ini_handler::{
     get_section_type, is_comment_line, is_section_header, parse_section_name, SectionType,
@@ -42,7 +43,7 @@ const FAVORITE_FILE: &str = ".favorite";
 const ICON_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "ico", "webp", "bmp"];
 
 /// 管理文件夹名称。所有由 NRMM 自动生成的分组 INI 及管理性内容均存放于此。
-const MANAGED_FOLDER: &str = "_MANAGED_";
+pub const MANAGED_FOLDER: &str = "_MANAGED_";
 
 /// 分组显示名称持久化文件名。文件内容为该分组的可读名称（独立于 `group_<index>` 目录名）。
 const GROUP_NAME_FILE: &str = "groupname";
@@ -113,6 +114,18 @@ pub struct ModGroupData {
     pub real_index: i32,
     /// 上次持久化保存的选中模组索引（用于 UI 还原选中状态）。
     pub previous_selected_mod_on_group: i32,
+    /// 嵌套子分组列表（树形结构，# 目录下的子 # 目录）。
+    #[serde(default)]
+    pub children: Vec<ModGroupData>,
+    /// 是否为树节点（# 开头的目录）。
+    #[serde(default)]
+    pub is_tree_node: bool,
+    /// 是否为虚拟分类节点（如 "Group" 主分类，无真实文件路径，仅作容器）。
+    #[serde(default)]
+    pub is_virtual: bool,
+    /// 分组是否处于禁用状态（目录名以 DISABLED 开头）。
+    #[serde(default)]
+    pub is_disabled: bool,
 }
 
 /// 日志条目，用于将后端处理过程中的信息传递给前端展示。
@@ -305,10 +318,7 @@ impl ModManager {
             return ModsPathStatus::InvalidNotExist;
         }
 
-        let folder_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if folder_name != "Mods" {
             return ModsPathStatus::InvalidNotModsFolder;
         }
@@ -536,8 +546,9 @@ impl ModManager {
         let index_file = managed_path.join(SELECTED_INDEX_FILE);
 
         if index_file.exists() {
-            let content = fs::read_to_string(&index_file)
-                .with_context(|| format!("Failed to read selected group index: {:?}", index_file))?;
+            let content = fs::read_to_string(&index_file).with_context(|| {
+                format!("Failed to read selected group index: {:?}", index_file)
+            })?;
             let index = content.trim().parse::<i32>().unwrap_or(0);
             if index >= 0 && index < group_count as i32 {
                 Ok(index)
@@ -545,8 +556,9 @@ impl ModManager {
                 Ok(0)
             }
         } else {
-            fs::write(&index_file, "0")
-                .with_context(|| format!("Failed to write selected group index: {:?}", index_file))?;
+            fs::write(&index_file, "0").with_context(|| {
+                format!("Failed to write selected group index: {:?}", index_file)
+            })?;
             Ok(0)
         }
     }
@@ -632,8 +644,8 @@ impl ModManager {
     ///
     /// 参数：
     /// - `path`: 模组或分组目录路径。
-    pub fn get_icon_path(path: &str) -> Option<String> {
-        let dir_path = Path::new(path);
+    pub fn get_icon_path(path: impl Into<PathBuf>) -> Option<String> {
+        let dir_path = path.into();
         // 第一阶段：按优先顺序查找 icon.<ext>
         for ext in ICON_EXTENSIONS {
             let icon_name = format!("icon.{}", ext);
@@ -644,7 +656,7 @@ impl ModManager {
         }
 
         // 第二阶段：回退到目录中任意匹配扩展名的文件
-        if let Ok(entries) = fs::read_dir(dir_path) {
+        if let Ok(entries) = fs::read_dir(&dir_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() {
@@ -676,8 +688,12 @@ impl ModManager {
             anyhow::bail!("Source icon file does not exist: {:?}", source_path);
         }
 
-        fs::copy(source_path, &target_path)
-            .with_context(|| format!("Failed to copy icon: {:?} -> {:?}", source_path, target_path))?;
+        fs::copy(source_path, &target_path).with_context(|| {
+            format!(
+                "Failed to copy icon: {:?} -> {:?}",
+                source_path, target_path
+            )
+        })?;
 
         Ok(())
     }
@@ -754,6 +770,119 @@ impl ModManager {
         Ok(!is_disabled)
     }
 
+    /// 判断给定路径是否位于某个 # 目录下（向上遍历查找最近的 # 开头目录）。
+    ///
+    /// 参数：
+    /// - `path`: 待判断的路径。
+    ///
+    /// 返回：
+    /// - `Some(PathBuf)`：找到的 # 目录路径。
+    /// - `None`：不在任何 # 目录下。
+    fn find_parent_tree_node(path: &Path) -> Option<PathBuf> {
+        let mut current = path.parent()?;
+        loop {
+            if let Some(name) = current.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('#') {
+                    return Some(current.to_path_buf());
+                }
+            }
+            match current.parent() {
+                Some(parent) if parent != current => current = parent,
+                _ => return None,
+            }
+        }
+    }
+
+    /// 切换树节点（# 目录）下模组的启用/禁用状态（互斥模式）。
+    ///
+    /// 与普通 `toggle_mod_disabled` 的区别：
+    /// - **启用操作**：先禁用同 # 目录下所有其他模组，再启用目标模组（单选互斥）。
+    /// - **禁用操作**：直接禁用目标模组，不影响其他模组。
+    /// - 不涉及 INI 文件修改，纯靠目录重命名实现。
+    ///
+    /// 参数：
+    /// - `mod_path`: 目标模组目录路径。
+    ///
+    /// 返回：`(新模组路径, 操作后是否禁用)`。
+    pub fn toggle_tree_node_mod_disabled(mod_path: &str) -> Result<(String, bool)> {
+        let path = Path::new(mod_path);
+        if !path.exists() || !path.is_dir() {
+            anyhow::bail!("Mod path does not exist: {:?}", path);
+        }
+
+        let parent = match path.parent() {
+            Some(p) => p,
+            None => anyhow::bail!("Invalid mod path: no parent directory"),
+        };
+
+        let dir_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let is_disabled = dir_name.starts_with(DISABLED_PREFIX);
+
+        if is_disabled {
+            // 禁用 -> 启用：先禁用同目录下所有其他启用的模组，再启用目标
+            let tree_node_dir =
+                Self::find_parent_tree_node(path).unwrap_or_else(|| parent.to_path_buf());
+
+            // 第一步：遍历同级目录，禁用所有启用的非 #、非隐藏目录
+            if let Ok(entries) = fs::read_dir(&tree_node_dir) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if !entry_path.is_dir() {
+                        continue;
+                    }
+                    let entry_name = entry_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    // 跳过 # 子目录、隐藏目录、已经禁用的目录
+                    if entry_name.starts_with('#')
+                        || entry_name.starts_with('.')
+                        || entry_name.starts_with(DISABLED_PREFIX)
+                    {
+                        continue;
+                    }
+                    // 跳过目标模组（后面单独处理）
+                    if entry_path == path {
+                        continue;
+                    }
+                    // 禁用该模组（添加 DISABLED 前缀）
+                    let new_name = format!("{}{}", DISABLED_PREFIX, entry_name);
+                    let new_path = tree_node_dir.join(&new_name);
+                    if !new_path.exists() {
+                        let _ = fs::rename(&entry_path, &new_path);
+                    }
+                }
+            }
+
+            // 第二步：启用目标模组（移除 DISABLED 前缀）
+            let new_name = dir_name.trim_start_matches(DISABLED_PREFIX).to_string();
+            let new_path = parent.join(&new_name);
+            if new_path.exists() {
+                anyhow::bail!("Destination path already exists: {:?}", new_path);
+            }
+            fs::rename(path, &new_path)
+                .with_context(|| format!("Failed to rename mod: {:?} -> {:?}", path, new_path))?;
+
+            Ok((new_path.to_string_lossy().to_string(), false))
+        } else {
+            // 启用 -> 禁用：直接禁用，不影响其他模组
+            let new_name = format!("{}{}", DISABLED_PREFIX, dir_name);
+            let new_path = parent.join(&new_name);
+            if new_path.exists() {
+                anyhow::bail!("Destination path already exists: {:?}", new_path);
+            }
+            fs::rename(path, &new_path)
+                .with_context(|| format!("Failed to rename mod: {:?} -> {:?}", path, new_path))?;
+
+            Ok((new_path.to_string_lossy().to_string(), true))
+        }
+    }
+
     /// 扫描 Mods 目录下的所有分组。
     ///
     /// 默认读取 `_MANAGED_` 目录下的内容，支持三种分组识别方式：
@@ -773,20 +902,17 @@ impl ModManager {
     ///
     /// 返回：分组数据列表。Mods 路径或 `_MANAGED_` 不存在时返回空 Vec。
     pub fn scan_groups(
-        mods_path: &str,
+        managed_path_str: &str,
         sort_method: SortGroupMethod,
     ) -> Result<Vec<ModGroupData>> {
-        let mods_path = Path::new(mods_path);
-        if !mods_path.exists() || !mods_path.is_dir() {
-            return Ok(Vec::new());
-        }
-
-        let managed_path = mods_path.join(MANAGED_FOLDER);
+        let managed_path = Path::new(managed_path_str);
         if !managed_path.exists() || !managed_path.is_dir() {
             return Ok(Vec::new());
         }
 
         let mut groups: Vec<ModGroupData> = Vec::new();
+        // 收集所有 group_<index> 目录，后续统一归入虚拟 "Group" 分类节点
+        let mut group_children: Vec<ModGroupData> = Vec::new();
         // 用于递归/普通目录的递增索引（group_ 形式有自己的索引）
         let mut index: i32 = 1;
 
@@ -795,41 +921,57 @@ impl ModManager {
                 let path = entry.path();
                 if path.is_dir() {
                     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
+                    if name.is_empty() {
+                        continue;
+                    };
                     if name.starts_with("group_") {
-                        // 情况 1：标准 group_<index> 目录
+                        // 情况 1：标准 group_<index> 目录，归入 "Group" 分类
                         if let Some(idx_str) = name.strip_prefix("group_") {
                             if let Ok(idx) = idx_str.parse::<i32>() {
                                 if let Ok(group) = Self::scan_single_group(&path, idx) {
-                                    groups.push(group);
+                                    group_children.push(group);
                                 }
                             }
                         }
                     } else if name.starts_with('#') {
-                        // 情况 2：# 开头目录，递归收集所有 # 子目录
-                        let recursive_paths = Self::scan_recursive_with_queue(&path);
-                        for rec_path in recursive_paths {
-                            let group_name = rec_path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            if let Ok(group) = Self::scan_single_group_by_path(&rec_path, index, &group_name) {
-                                groups.push(group);
-                                index += 1;
-                            }
+                        // 情况 2：# 开头目录，构建树形嵌套结构
+                        if let Some(tree_group) =
+                            Self::scan_tree_node(&path)
+                        {
+                            groups.push(tree_group);
                         }
                     } else if !name.starts_with('.') && Self::is_mod_directory(&path) {
                         // 情况 3：普通模组目录（跳过隐藏目录 .xxx）
                         let group_name = name.to_string();
-                        if let Ok(group) = Self::scan_single_group_by_path(&path, index, &group_name) {
+                        if let Ok(group) =
+                            Self::scan_single_group_by_path(&path, index, &group_name)
+                        {
                             groups.push(group);
                             index += 1;
                         }
                     }
                 }
             }
+        }
+
+        // 若存在 group_<index> 目录，创建虚拟 "Group" 父分类节点
+        if !group_children.is_empty() {
+            // 子分组按 real_index 升序排序，保证分类内顺序稳定
+            group_children.sort_by(|a, b| a.real_index.cmp(&b.real_index));
+            let group_node = ModGroupData {
+                group_path: format!("{}__virtual__Group", managed_path_str),
+                icon_path: None,
+                group_name: "Group".to_string(),
+                favorite_date_time: None,
+                mods_in_group: Vec::new(),
+                real_index: 0,
+                previous_selected_mod_on_group: 0,
+                children: group_children,
+                is_tree_node: true,
+                is_virtual: true,
+                is_disabled: false,
+            };
+            groups.push(group_node);
         }
 
         // 排序：收藏优先，其次按指定方式
@@ -840,8 +982,9 @@ impl ModManager {
 
     /// 使用队列（BFS）递归收集所有以 `#` 开头的子目录。
     ///
-    /// 采用迭代式广度优先搜索而非递归，以避免深层嵌套目录导致的栈溢出。
-    /// 起始路径本身也会被包含在结果中。
+    /// - 采用迭代式广度优先搜索而非递归，避免栈溢出
+    /// - 自动解析符号链接并去重，避免循环引用死循环
+    /// - 同时存储原始路径和 canonical 绝对路径用于去重
     ///
     /// 参数：
     /// - `base_path`: 起始目录路径（应为 `#` 开头目录）。
@@ -850,24 +993,289 @@ impl ModManager {
     fn scan_recursive_with_queue(base_path: &Path) -> Vec<PathBuf> {
         let mut result = Vec::new();
         let mut queue = std::collections::VecDeque::new();
+        // 已访问路径集合（使用 canonical 路径去重，避免循环引用）
+        let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
         queue.push_back(base_path.to_path_buf());
 
         while let Some(current) = queue.pop_front() {
+            // 解析符号链接，获取真实路径
+            let canonical = match current.canonicalize() {
+                Ok(p) => p,
+                Err(_) => current.clone(),
+            };
+
+            // 去重：已访问过的路径跳过（避免循环引用死循环）
+            if visited.contains(&canonical) {
+                continue;
+            }
+            visited.insert(canonical.clone());
+
             if let Ok(entries) = fs::read_dir(&current) {
                 for entry in entries.flatten() {
                     let path = entry.path();
+
+                    // 仅处理目录
                     if path.is_dir() {
                         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
                         if name.starts_with('#') {
-                            // 同时入队继续搜索并加入结果列表
-                            queue.push_back(path.clone());
-                            result.push(path);
+                            // 处理符号链接：解析真实路径后检查是否重复
+                            let resolved = if path.is_symlink() {
+                                match path.canonicalize() {
+                                    Ok(p) => p,
+                                    Err(_) => path.clone(),
+                                }
+                            } else {
+                                path.clone()
+                            };
+
+                            // 符号链接去重检查
+                            if !visited.contains(&resolved) {
+                                queue.push_back(path.clone());
+                                result.push(path);
+                            }
                         }
                     }
                 }
             }
         }
         result
+    }
+
+    /// 使用显式栈（非递归）扫描目录树，构建树形嵌套结构。
+    ///
+    /// 所有子目录均参与分类：
+    /// - 模组目录（含 .ini 或 icon.*）：构建为 ModData，加入 mods_in_group
+    /// - 常规目录（不含上述文件）：作为子树节点，加入 children，继续深入
+    ///
+    /// index 由函数内部自行维护，类型为 u32。
+    ///
+    /// 参数：
+    /// - `base_path`: 起始目录路径。
+    ///
+    /// 返回：构建完成的 ModGroupData（树形结构）。
+    fn scan_tree_node(
+        base_path: &Path,
+    ) -> Option<ModGroupData> {
+        struct NodeInfo {
+            path: PathBuf,
+            child_paths: Vec<PathBuf>,
+            mod_paths: Vec<PathBuf>,
+            is_disabled: bool,
+        }
+
+        let mut visited: HashSet<PathBuf> = HashSet::new();
+        let mut node_info_map: std::collections::HashMap<PathBuf, NodeInfo> = std::collections::HashMap::new();
+        let mut post_order: Vec<PathBuf> = Vec::new();
+        let mut stack: Vec<PathBuf> = Vec::new();
+
+        stack.push(base_path.to_path_buf());
+
+        while let Some(path) = stack.pop() {
+            if !path.exists() || !path.is_dir() {
+                continue;
+            }
+
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if visited.contains(&path) || visited.contains(&canonical) {
+                continue;
+            }
+            visited.insert(path.clone());
+            visited.insert(canonical);
+
+            let dir_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            let is_disabled = dir_name.starts_with(DISABLED_PREFIX);
+
+            let mut mod_paths: Vec<PathBuf> = Vec::new();
+            let mut child_paths: Vec<PathBuf> = Vec::new();
+
+            if let Ok(entries) = fs::read_dir(&path) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if !entry_path.is_dir() {
+                        continue;
+                    }
+
+                    let name = entry_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    if name.starts_with('.') {
+                        continue;
+                    }
+
+                    if Self::is_mod_directory(&entry_path) {
+                        mod_paths.push(entry_path);
+                    } else {
+                        child_paths.push(entry_path);
+                    }
+                }
+            }
+
+            mod_paths.sort_by(|a, b| {
+                let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let b_name = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let a_disabled = a_name.starts_with(DISABLED_PREFIX);
+                let b_disabled = b_name.starts_with(DISABLED_PREFIX);
+                match (a_disabled, b_disabled) {
+                    (true, false) => std::cmp::Ordering::Greater,
+                    (false, true) => std::cmp::Ordering::Less,
+                    _ => {
+                        let a_fav = a.join(FAVORITE_FILE).exists();
+                        let b_fav = b.join(FAVORITE_FILE).exists();
+                        match (a_fav, b_fav) {
+                            (true, false) => std::cmp::Ordering::Less,
+                            (false, true) => std::cmp::Ordering::Greater,
+                            _ => a_name.to_lowercase().cmp(&b_name.to_lowercase()),
+                        }
+                    }
+                }
+            });
+
+            child_paths.sort_by(|a, b| {
+                let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                let b_name = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                a_name.to_lowercase().cmp(&b_name.to_lowercase())
+            });
+
+            node_info_map.insert(
+                path.clone(),
+                NodeInfo {
+                    path: path.clone(),
+                    child_paths: child_paths.clone(),
+                    mod_paths,
+                    is_disabled,
+                },
+            );
+
+            post_order.push(path.clone());
+
+            for child in child_paths.iter().rev() {
+                stack.push(child.clone());
+            }
+        }
+
+        let mut built_map: std::collections::HashMap<PathBuf, ModGroupData> = std::collections::HashMap::new();
+        let mut index: u32 = 0;
+
+        for path in post_order.iter().rev() {
+            let info = match node_info_map.get(path) {
+                Some(i) => i,
+                None => continue,
+            };
+
+            let group_path_str = path.to_string_lossy().to_string();
+            let group_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            let icon_path = Self::get_icon_path(path);
+            let favorite_date_time = Self::is_favorite(&group_path_str).unwrap_or(None);
+
+            let mut mods_in_group: Vec<ModData> = Vec::new();
+
+            if !info.mod_paths.is_empty() {
+                let none_icon_path = path.join(NONE_SLOT_ICON);
+                mods_in_group.push(ModData {
+                    mod_path: "None".to_string(),
+                    icon_path: if none_icon_path.exists() {
+                        Some(none_icon_path.to_string_lossy().to_string())
+                    } else {
+                        None
+                    },
+                    mod_name: "None".to_string(),
+                    real_index: 0,
+                    is_old_auto_fixed: false,
+                    is_syntax_error_removed: false,
+                    is_unoptimized: false,
+                    is_namespaced: false,
+                    is_disabled: false,
+                    favorite_date_time: None,
+                });
+
+                let mut mod_real_index: i32 = 1;
+                for mod_path in &info.mod_paths {
+                    let mod_path_str = mod_path.to_string_lossy().to_string();
+                    let mod_name = Self::get_mod_name(&mod_path_str).unwrap_or_else(|_| {
+                        mod_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("mod")
+                            .to_string()
+                    });
+                    let mod_icon = Self::get_icon_path(mod_path);
+                    let mod_favorite = Self::is_favorite(&mod_path_str).unwrap_or(None);
+                    let mod_dir_name = mod_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    let mod_is_disabled = mod_dir_name.starts_with(DISABLED_PREFIX);
+
+                    mods_in_group.push(ModData {
+                        mod_path: mod_path_str,
+                        icon_path: mod_icon,
+                        mod_name,
+                        real_index: mod_real_index,
+                        is_old_auto_fixed: mod_path.join("modforced").exists(),
+                        is_syntax_error_removed: mod_path.join("modsyntaxerrorremoved").exists(),
+                        is_unoptimized: mod_path.join("modunoptimized").exists(),
+                        is_namespaced: mod_path.join("modnamespaced").exists(),
+                        is_disabled: mod_is_disabled,
+                        favorite_date_time: mod_favorite,
+                    });
+
+                    mod_real_index += 1;
+                }
+            }
+
+            let mods_count = mods_in_group.len();
+            let previous_selected_mod_on_group =
+                Self::get_selected_mod_in_group(&group_path_str, mods_count).unwrap_or(0);
+
+            let mut children: Vec<ModGroupData> = Vec::new();
+            for child_path in &info.child_paths {
+                if let Some(child_group) = built_map.get(child_path) {
+                    children.push(child_group.clone());
+                }
+            }
+
+            let current_index = index as i32;
+            index += 1;
+
+            info!(
+                "Tree node scanned: {} (index={}, children={}, mods={}, disabled={})",
+                group_path_str,
+                current_index,
+                children.len(),
+                mods_in_group.len(),
+                info.is_disabled
+            );
+
+            built_map.insert(
+                path.clone(),
+                ModGroupData {
+                    group_path: group_path_str,
+                    icon_path,
+                    group_name,
+                    favorite_date_time,
+                    mods_in_group,
+                    real_index: current_index,
+                    previous_selected_mod_on_group,
+                    children,
+                    is_tree_node: true,
+                    is_virtual: false,
+                    is_disabled: info.is_disabled,
+                },
+            );
+        }
+
+        built_map.remove(base_path)
     }
 
     /// 判断一个目录是否为「模组目录」。
@@ -903,6 +1311,69 @@ impl ModManager {
         false
     }
 
+    /// 放宽版的模组目录判定（用于 # 目录下的子目录）。
+    ///
+    /// 判定标准（满足任一即可）：
+    /// 1. 存在 icon.png 或 *.ini 文件（同标准判定）
+    /// 2. 目录下有子目录（可能是多层结构的模组）
+    /// 3. 目录下有 .txt / .json / .xml 等常见配置文件
+    ///
+    /// 目的：避免因判定条件过严导致模组丢失。
+    ///
+    /// 参数：
+    /// - `path`: 待判定的目录路径。
+    ///
+    /// 返回：是模组目录返回 `true`，否则返回 `false`。
+    fn is_mod_directory_relaxed(path: &Path) -> bool {
+        if !path.exists() || !path.is_dir() {
+            return false;
+        }
+
+        // 标准判定：icon.png 或 .ini 文件
+        if Self::is_mod_directory(path) {
+            return true;
+        }
+
+        // 放宽判定：检查目录内容
+        if let Ok(entries) = fs::read_dir(path) {
+            let mut has_sub_dir = false;
+            let mut has_config_file = false;
+
+            for entry in entries.flatten() {
+                let file_type = match entry.file_type() {
+                    Ok(ft) => ft,
+                    Err(_) => continue,
+                };
+
+                if file_type.is_dir() {
+                    has_sub_dir = true;
+                } else if file_type.is_file() {
+                    let name = entry.file_name().to_string_lossy().to_lowercase();
+                    if name.ends_with(".txt")
+                        || name.ends_with(".json")
+                        || name.ends_with(".xml")
+                        || name.ends_with(".toml")
+                        || name.ends_with(".yaml")
+                        || name.ends_with(".yml")
+                        || name.ends_with(".dds")
+                        || name.ends_with(".png")
+                        || name.ends_with(".jpg")
+                        || name.ends_with(".jpeg")
+                    {
+                        has_config_file = true;
+                    }
+                }
+            }
+
+            // 有子目录 或 有配置/资源文件，视为模组目录
+            if has_sub_dir || has_config_file {
+                return true;
+            }
+        }
+
+        false
+    }
+
     /// 通过显式路径与名称扫描单个分组（用于 `#` 开头目录和普通目录）。
     ///
     /// 与 `scan_single_group` 的区别：本函数直接使用传入的 `group_name`，
@@ -912,7 +1383,11 @@ impl ModManager {
     /// - `group_path`: 分组目录路径。
     /// - `real_index`: 分组的真实索引。
     /// - `group_name`: 分组显示名称。
-    fn scan_single_group_by_path(group_path: &Path, real_index: i32, group_name: &str) -> Result<ModGroupData> {
+    fn scan_single_group_by_path(
+        group_path: &Path,
+        real_index: i32,
+        group_name: &str,
+    ) -> Result<ModGroupData> {
         let group_path_str = group_path.to_string_lossy().to_string();
         let icon_path = Self::get_icon_path(&group_path_str);
         let favorite_date_time = Self::is_favorite(&group_path_str).unwrap_or(None);
@@ -929,6 +1404,10 @@ impl ModManager {
             mods_in_group,
             real_index,
             previous_selected_mod_on_group,
+            children: vec![],
+            is_tree_node: false,
+            is_virtual: false,
+            is_disabled: false,
         })
     }
 
@@ -965,6 +1444,10 @@ impl ModManager {
             mods_in_group,
             real_index,
             previous_selected_mod_on_group,
+            children: vec![],
+            is_tree_node: false,
+            is_virtual: false,
+            is_disabled: false,
         })
     }
 
@@ -1000,7 +1483,11 @@ impl ModManager {
                 Ok(e) => {
                     let path = e.path();
                     if path.is_dir() {
-                        dir_entries.push(path);
+                        // 过滤掉 # 开头的子目录（树形结构的子分组）
+                        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if !name.starts_with('#') {
+                            dir_entries.push(path);
+                        }
                     }
                 }
                 Err(e) => warn!("Failed to read entry: {}", e),
@@ -1174,6 +1661,98 @@ impl ModManager {
         Ok(new_index)
     }
 
+    /// 从指定路径添加 Mod（复制文件/目录到目标分组目录）。
+    ///
+    /// - 支持复制文件或目录
+    /// - 目录会被递归复制
+    /// - 目标路径存在时会覆盖
+    ///
+    /// 参数：
+    /// - `source_paths`: 源文件/目录路径列表。
+    /// - `target_group_path`: 目标分组目录路径。
+    ///
+    /// 返回：`true` 表示添加成功。
+    pub async fn add_mods(
+        &self,
+        source_paths: Vec<String>,
+        target_group_path: &str,
+    ) -> Result<bool> {
+        let target_group_path = target_group_path.to_string();
+
+        // 在阻塞线程中执行文件复制，避免阻塞异步运行时
+        tokio::task::spawn_blocking(move || Self::add_mods_sync(&source_paths, &target_group_path))
+            .await
+            .with_context(|| "Failed to spawn blocking task for adding mods")?
+    }
+
+    /// 同步版本的 add_mods（在阻塞线程中执行）。
+    fn add_mods_sync(source_paths: &[String], target_group_path: &str) -> Result<bool> {
+        let target = Path::new(target_group_path);
+
+        // 确保目标目录存在
+        if !target.exists() {
+            anyhow::bail!("Target group path does not exist: {:?}", target);
+        }
+        if !target.is_dir() {
+            anyhow::bail!("Target path is not a directory: {:?}", target);
+        }
+
+        for source_path in source_paths {
+            let source = Path::new(source_path);
+
+            if !source.exists() {
+                warn!("Source path does not exist, skipping: {:?}", source);
+                continue;
+            }
+
+            let name = source
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            let dest = target.join(name);
+
+            if source.is_dir() {
+                // 递归复制目录
+                Self::copy_dir_all(source, &dest).with_context(|| {
+                    format!("Failed to copy directory {:?} to {:?}", source, dest)
+                })?;
+                info!("Copied directory {:?} to {:?}", source, dest);
+            } else {
+                // 复制文件
+                fs::copy(source, &dest)
+                    .with_context(|| format!("Failed to copy file {:?} to {:?}", source, dest))?;
+                info!("Copied file {:?} to {:?}", source, dest);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// 递归复制目录（使用 Rust std 实现）。
+    fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+        fs::create_dir_all(dst)
+            .with_context(|| format!("Failed to create directory: {:?}", dst))?;
+
+        for entry in
+            fs::read_dir(src).with_context(|| format!("Failed to read directory: {:?}", src))?
+        {
+            let entry = entry?;
+            let ty = entry.file_type()?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+
+            if ty.is_dir() {
+                Self::copy_dir_all(&src_path, &dst_path)?;
+            } else {
+                fs::copy(&src_path, &dst_path).with_context(|| {
+                    format!("Failed to copy file {:?} to {:?}", src_path, dst_path)
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// 移除分组（移动到 `_MANAGED_` 下并重命名加 `_removed_<timestamp>` 后缀）。
     ///
     /// 此操作不会真正删除分组目录，而是将其移动到 `_MANAGED_` 目录下并附加时间戳后缀，
@@ -1197,10 +1776,7 @@ impl ModManager {
         fs::create_dir_all(&managed_path)
             .with_context(|| format!("Failed to create managed folder: {:?}", managed_path))?;
 
-        let group_name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("group");
+        let group_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("group");
 
         // 生成时间戳后缀，避免多次移除同名分组时冲突
         let timestamp = std::time::SystemTime::now()
@@ -1211,8 +1787,12 @@ impl ModManager {
         let dest_name = format!("{}_removed_{}", group_name, timestamp);
         let dest_path = managed_path.join(&dest_name);
 
-        fs::rename(path, &dest_path)
-            .with_context(|| format!("Failed to move group to _MANAGED_: {:?} -> {:?}", path, dest_path))?;
+        fs::rename(path, &dest_path).with_context(|| {
+            format!(
+                "Failed to move group to _MANAGED_: {:?} -> {:?}",
+                path, dest_path
+            )
+        })?;
 
         info!("Group removed to _MANAGED_: {:?}", dest_path);
         Ok(())
@@ -1284,32 +1864,35 @@ impl ModManager {
     ///
     /// 返回：分组数据列表。
     pub async fn load_mods(&self, settings: &Settings) -> Result<Vec<ModGroupData>> {
-        let target_game = settings.target_game;
-        let mods_path = Self::get_mods_path_for_game(settings, target_game);
+        let target_game: TargetGame = settings.target_game;
+        let mods_path: String = Self::get_mods_path_for_game(settings, target_game);
 
         if mods_path.is_empty() {
             warn!("No mods path configured for game: {:?}", target_game);
-            return Ok(Vec::new());
+            return Ok(vec![]);
         }
 
-        let status = Self::validate_mods_path(&mods_path);
+        let status: ModsPathStatus = Self::validate_mods_path(&mods_path);
         if status != ModsPathStatus::Valid {
-            warn!("Mods path is not valid: {:?}, status: {:?}", mods_path, status);
-            return Ok(Vec::new());
+            warn!(
+                "Mods path is not valid: {:?}, status: {:?}",
+                mods_path, status
+            );
+            return Ok(vec![]);
         }
 
-        let managed_path = Path::new(&mods_path).join(MANAGED_FOLDER);
-        let managed_path_str = managed_path.to_string_lossy().to_string();
+        let managed_path: PathBuf = Path::new(&mods_path).join(MANAGED_FOLDER);
+        let managed_path_str: String = managed_path.to_string_lossy().to_string();
 
-        let sort_method = SortGroupMethod::from_i32(settings.sort_group_method);
+        let sort_method: SortGroupMethod = SortGroupMethod::from_i32(settings.sort_group_method);
 
         // 在阻塞线程中执行文件系统扫描，避免阻塞 Tokio 运行时
-        let groups = tokio::task::spawn_blocking(move || {
-            Self::scan_groups(&managed_path_str, sort_method)
-        })
-        .await
-        .with_context(|| "Failed to spawn blocking task for scanning groups")??;
+        let groups: Vec<ModGroupData> =
+            tokio::task::spawn_blocking(move || Self::scan_groups(&managed_path_str, sort_method))
+                .await
+                .with_context(|| "Failed to spawn blocking task for scanning groups")??;
 
+        println!("groups icon_path 信息：{:#?}", &groups[0].icon_path);
         info!("Loaded {} groups", groups.len());
         Ok(groups)
     }
@@ -1333,8 +1916,8 @@ impl ModManager {
         let groups = tokio::task::spawn_blocking(move || {
             Self::scan_groups(&mods_path, SortGroupMethod::ByIndex)
         })
-        .await
-        .with_context(|| "Failed to spawn blocking task for refreshing mod data")??;
+            .await
+            .with_context(|| "Failed to spawn blocking task for refreshing mod data")??;
 
         Ok(groups)
     }
@@ -1366,17 +1949,15 @@ impl ModManager {
         let result = tokio::task::spawn_blocking(move || {
             Self::update_mod_data_sync(&mods_path, &known_libraries)
         })
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?;
+            .await
+            .map_err(|e| format!("Task join error: {}", e))?;
 
         let (result_logs, error_report, result_success, hash_conflict_report) = match result {
             Ok((logs, report, hash_report)) => (logs, Some(report), true, Some(hash_report)),
             Err(e) => {
                 success = false;
-                let mut error_logs = vec![LogEntry::error(format!(
-                    "Update Mod Data failed: {}",
-                    e
-                ))];
+                let mut error_logs =
+                    vec![LogEntry::error(format!("Update Mod Data failed: {}", e))];
                 error_logs.push(LogEntry::error(
                     "Please check the logs above for more details".to_string(),
                 ));
@@ -1437,8 +2018,9 @@ impl ModManager {
 
         // 确保 _MANAGED_ 目录存在
         if !managed_path.exists() {
-            fs::create_dir_all(&managed_path)
-                .with_context(|| format!("Failed to create _MANAGED_ folder: {:?}", managed_path))?;
+            fs::create_dir_all(&managed_path).with_context(|| {
+                format!("Failed to create _MANAGED_ folder: {:?}", managed_path)
+            })?;
             logs.push(LogEntry::info("Created _MANAGED_ folder"));
         }
 
@@ -1473,46 +2055,45 @@ impl ModManager {
         }
 
         // 并行处理每个分组
-        group_folders.par_iter().for_each(|(group_path, group_index)| {
-            let group_name = format!("group_{}", group_index);
+        group_folders
+            .par_iter()
+            .for_each(|(group_path, group_index)| {
+                let group_name = format!("group_{}", group_index);
 
-            // 删除分组目录下旧的 INI 文件
-            if let Err(e) = Self::delete_group_ini_files(group_path) {
-                warn!("Failed to delete group INI files for {}: {}", group_path, e);
-            }
-
-            // 创建新的分组 INI 文件（包含 active_slot 变量与切换快捷键）
-            if let Err(e) = Self::create_group_ini(group_path, &group_name, *group_index) {
-                warn!("Failed to create group INI for {}: {}", group_path, e);
-            }
-
-            // 管理分组内的每个模组
-            match Self::get_mods_on_group(group_path) {
-                Ok(mods) => {
-                    mods.par_iter().for_each(|mod_data| {
-                        // 跳过 None 槽位和禁用模组
-                        if mod_data.mod_path == "None" || mod_data.is_disabled {
-                            return;
-                        }
-
-                        if let Err(e) = Self::manage_mod(
-                            &mod_data.mod_path,
-                            &group_name,
-                            mod_data.real_index,
-                            *group_index,
-                        ) {
-                            warn!(
-                                "Failed to manage mod {}: {}",
-                                mod_data.mod_path, e
-                            );
-                        }
-                    });
+                // 删除分组目录下旧的 INI 文件
+                if let Err(e) = Self::delete_group_ini_files(group_path) {
+                    warn!("Failed to delete group INI files for {}: {}", group_path, e);
                 }
-                Err(e) => {
-                    warn!("Failed to get mods for group {}: {}", group_path, e);
+
+                // 创建新的分组 INI 文件（包含 active_slot 变量与切换快捷键）
+                if let Err(e) = Self::create_group_ini(group_path, &group_name, *group_index) {
+                    warn!("Failed to create group INI for {}: {}", group_path, e);
                 }
-            }
-        });
+
+                // 管理分组内的每个模组
+                match Self::get_mods_on_group(group_path) {
+                    Ok(mods) => {
+                        mods.par_iter().for_each(|mod_data| {
+                            // 跳过 None 槽位和禁用模组
+                            if mod_data.mod_path == "None" || mod_data.is_disabled {
+                                return;
+                            }
+
+                            if let Err(e) = Self::manage_mod(
+                                &mod_data.mod_path,
+                                &group_name,
+                                mod_data.real_index,
+                                *group_index,
+                            ) {
+                                warn!("Failed to manage mod {}: {}", mod_data.mod_path, e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        warn!("Failed to get mods for group {}: {}", group_path, e);
+                    }
+                }
+            });
 
         // 在所有分组处理完成后，检测启用的 mod 的 hash 冲突
         let mut groups_for_hash_check: Vec<ModGroupData> = Vec::new();
@@ -1534,6 +2115,10 @@ impl ModManager {
                     mods_in_group: mods,
                     real_index: *_group_index,
                     previous_selected_mod_on_group: 0,
+                    children: Vec::new(),
+                    is_tree_node: false,
+                    is_virtual: false,
+                    is_disabled: false,
                 };
                 groups_for_hash_check.push(group_data);
             }
@@ -1543,11 +2128,9 @@ impl ModManager {
             Self::check_and_report_hash_conflicts(&managed_path_str, &groups_for_hash_check);
 
         // 计算 hash 冲突报告
-        let hash_conflict_report = Self::check_enabled_mod_hash_conflicts(
-            &managed_path_str,
-            &groups_for_hash_check,
-        )
-        .unwrap_or_default();
+        let hash_conflict_report =
+            Self::check_enabled_mod_hash_conflicts(&managed_path_str, &groups_for_hash_check)
+                .unwrap_or_default();
 
         logs.extend(hash_logs);
 
@@ -1658,11 +2241,7 @@ impl ModManager {
 
         for ini_file in &ini_files {
             // 备份路径：<ini>.baknrmm
-            let backup_path = format!(
-                "{}.{}",
-                ini_file.to_string_lossy(),
-                MANAGED_BACKUP_EXT
-            );
+            let backup_path = format!("{}.{}", ini_file.to_string_lossy(), MANAGED_BACKUP_EXT);
             let backup_path = Path::new(&backup_path);
 
             // 仅在备份不存在时创建，避免覆盖原始备份
@@ -1782,10 +2361,7 @@ impl ModManager {
         }
 
         // 注入 $managed_slot_id 变量到 Constants 段
-        let managed_var_line = format!(
-            "global $managed_slot_id = {}",
-            mod_index
-        );
+        let managed_var_line = format!("global $managed_slot_id = {}", mod_index);
 
         if has_constants {
             // 在已有 Constants 段头部插入变量
@@ -1940,10 +2516,7 @@ impl ModManager {
                         hash: hash.clone(),
                     };
 
-                    content_by_hash
-                        .entry(hash)
-                        .or_default()
-                        .push(info);
+                    content_by_hash.entry(hash).or_default().push(info);
                 }
             }
         }
@@ -1992,13 +2565,13 @@ impl ModManager {
 
                     // 为每个冲突生成详细日志
                     for (hash, mods) in &report.enabled_mod_hashes {
-                        let mod_names: Vec<String> = mods.iter().map(|m| m.mod_name.clone()).collect();
+                        let mod_names: Vec<String> =
+                            mods.iter().map(|m| m.mod_name.clone()).collect();
                         logs.push(LogEntry::warn(format!(
                             "Hash conflict: [{}] appears in mods: {} (group: {})",
                             &hash[..8.min(hash.len())],
                             mod_names.join(", "),
-                            mods
-                                .first()
+                            mods.first()
                                 .map(|m| m.group_name.clone())
                                 .unwrap_or_default()
                         )));
@@ -2009,7 +2582,10 @@ impl ModManager {
             }
             Err(e) => {
                 warn!("Failed to check hash conflicts: {}", e);
-                (0, vec![LogEntry::warn(format!("Hash conflict check failed: {}", e))])
+                (
+                    0,
+                    vec![LogEntry::warn(format!("Hash conflict check failed: {}", e))],
+                )
             }
         }
     }
@@ -2072,5 +2648,10 @@ mod tests {
 
         let success = LogEntry::success("success");
         assert_eq!(success.level, "success");
+    }
+
+    #[test]
+    fn test_scan_tree_node() {
+        println!("{:#?}", ModManager::scan_tree_node(Path::new(r"D:\Games\MODS\XXMI\GIMI\Mods\_MANAGED_")))
     }
 }

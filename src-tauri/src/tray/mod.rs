@@ -263,7 +263,7 @@ impl TrayManager {
         }
 
         // 在独立线程中持久化设置：避免在托盘回调中执行阻塞 IO
-        if let Ok(app_data_dir) = app.path().app_data_dir() {
+        if let Some(app_data_dir) = crate::get_app_data_dir() {
             let settings_arc = state.settings.clone();
             let app_data_dir = app_data_dir.clone();
             std::thread::spawn(move || {

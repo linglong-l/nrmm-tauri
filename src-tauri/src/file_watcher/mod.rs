@@ -344,8 +344,17 @@ impl FileWatcher {
         {
             let path_str = path.to_string_lossy();
             if path_str.len() >= MAX_PATH && !path_str.starts_with("\\\\?\\") {
-                let long_path = format!("\\\\?\\{}", path_str);
-                return PathBuf::from(long_path);
+                if let Ok(canonical) = path.canonicalize() {
+                    let canonical_str = canonical.to_string_lossy();
+                    if !canonical_str.starts_with("\\\\?\\") {
+                        return PathBuf::from(format!("\\\\?\\{}", canonical_str));
+                    }
+                    return canonical;
+                }
+                
+                let mut long_path = PathBuf::from("\\\\?\\");
+                long_path.push(path);
+                return long_path;
             }
         }
         path.to_path_buf()

@@ -19,27 +19,45 @@
 //! 错误处理约定：所有命令返回 `Result<T, String>`，将底层错误转换为字符串返回给前端。
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::mod_manager::{ModGroupData, ModsPathStatus, UpdateModDataResult};
 use crate::state::AppState;
 use crate::task_queue::TaskQueueError;
 
-/// 加载当前目标游戏的模组数据。
+/// 加载模组数据。
 ///
-/// 从全局设置中读取目标游戏对应的 Mods 路径，扫描所有分组与模组并返回结构化数据。
+/// 若指定了 `game` 参数则按该游戏加载（覆盖设置中的 target_game）；
+/// 未指定则从全局设置中读取当前目标游戏。
 /// 通过 `TaskQueue` 保证同一时刻只有一个 `load_mods` 任务在执行，避免并发冲突。
 ///
 /// 参数：
 /// - `state`: 应用全局状态（包含设置、模组管理器、任务队列等）。
+/// - `game`: 可选的目标游戏字符串（前端枚举值，带下划线，如 "Wuthering_Waves"）。
 ///
 /// 返回：分组数据列表。
 /// 错误：任务已在运行时返回 `"Task 'load_mods' is already running"`；
 ///       扫描失败时返回底层错误信息。
 #[tauri::command]
-pub async fn load_mods(state: State<'_, AppState>) -> Result<Vec<ModGroupData>, String> {
-    let settings = state.settings.read().clone();
+pub async fn load_mods(
+    state: State<'_, AppState>,
+    game: Option<String>,
+) -> Result<Vec<ModGroupData>, String> {
+    let mut settings = state.settings.read().clone();
+    if let Some(g) = game {
+        use crate::process::TargetGame;
+        let target = match g.as_str() {
+            "Wuthering_Waves" => TargetGame::WutheringWaves,
+            "Genshin_Impact" => TargetGame::GenshinImpact,
+            "Honkai_Star_Rail" => TargetGame::HonkaiStarRail,
+            "Zenless_Zone_Zero" => TargetGame::ZenlessZoneZero,
+            "Arknights_Endfield" => TargetGame::ArknightsEndfield,
+            _ => TargetGame::None,
+        };
+        settings.target_game = target;
+    }
     state
         .task_queue
         .run_task("load_mods", state.mod_manager.load_mods(&settings))
@@ -56,11 +74,27 @@ pub async fn load_mods(state: State<'_, AppState>) -> Result<Vec<ModGroupData>, 
 ///
 /// 参数：
 /// - `state`: 应用全局状态。
+/// - `game`: 可选的目标游戏字符串（前端枚举值，带下划线）。
 ///
 /// 返回：分组数据列表。
 #[tauri::command]
-pub async fn refresh_mods(state: State<'_, AppState>) -> Result<Vec<ModGroupData>, String> {
-    let settings = state.settings.read().clone();
+pub async fn refresh_mods(
+    state: State<'_, AppState>,
+    game: Option<String>,
+) -> Result<Vec<ModGroupData>, String> {
+    let mut settings = state.settings.read().clone();
+    if let Some(g) = game {
+        use crate::process::TargetGame;
+        let target = match g.as_str() {
+            "Wuthering_Waves" => TargetGame::WutheringWaves,
+            "Genshin_Impact" => TargetGame::GenshinImpact,
+            "Honkai_Star_Rail" => TargetGame::HonkaiStarRail,
+            "Zenless_Zone_Zero" => TargetGame::ZenlessZoneZero,
+            "Arknights_Endfield" => TargetGame::ArknightsEndfield,
+            _ => TargetGame::None,
+        };
+        settings.target_game = target;
+    }
     state
         .task_queue
         .run_task("load_mods", state.mod_manager.refresh_mods(&settings))
@@ -85,7 +119,8 @@ pub async fn refresh_mod_data(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<Vec<ModGroupData>, String> {
-    state.mod_manager
+    state
+        .mod_manager
         .refresh_mod_data(&path)
         .await
         .map_err(|e| e.to_string())
@@ -114,7 +149,9 @@ pub async fn update_mod_data(
         .task_queue
         .run_task(
             "update_mod_data",
-            state.mod_manager.update_mod_data(&mods_path, &known_libraries),
+            state
+                .mod_manager
+                .update_mod_data(&mods_path, &known_libraries),
         )
         .await
         .map_err(|e| match e {
@@ -297,10 +334,7 @@ pub async fn is_favorite(
 ///
 /// 返回：操作后该路径是否处于收藏状态。
 #[tauri::command]
-pub async fn toggle_favorite(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<bool, String> {
+pub async fn toggle_favorite(state: State<'_, AppState>, path: String) -> Result<bool, String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::toggle_favorite(&path).map_err(|e| e.to_string())
@@ -363,11 +397,9 @@ pub async fn get_icon_path(
 ) -> Result<Option<String>, String> {
     let _ = state;
     Ok(
-        tokio::task::spawn_blocking(move || {
-            crate::mod_manager::ModManager::get_icon_path(&path)
-        })
-        .await
-        .unwrap_or_default()
+        tokio::task::spawn_blocking(move || crate::mod_manager::ModManager::get_icon_path(path))
+            .await
+            .unwrap_or_default(),
     )
 }
 
@@ -398,10 +430,7 @@ pub async fn set_icon(
 /// - `state`: 应用全局状态（当前未使用）。
 /// - `path`: 目标目录路径。
 #[tauri::command]
-pub async fn remove_icon(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<(), String> {
+pub async fn remove_icon(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::remove_icon(&path).map_err(|e| e.to_string())
@@ -430,6 +459,32 @@ pub async fn toggle_mod_disabled(
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
+/// 切换树节点（# 目录）下模组的启用/禁用状态（互斥模式）。
+///
+/// 与普通 `toggle_mod_disabled` 的区别：
+/// - 启用操作：先禁用同 # 目录下所有其他模组，再启用目标模组（单选互斥）。
+/// - 禁用操作：直接禁用目标模组，不影响其他模组。
+/// - 不涉及 INI 文件修改，纯靠目录重命名实现。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `mod_path`: 目标模组目录路径。
+///
+/// 返回：`(新模组路径, 操作后是否禁用)`。
+#[tauri::command]
+pub async fn toggle_tree_node_mod_disabled(
+    state: State<'_, AppState>,
+    mod_path: String,
+) -> Result<(String, bool), String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::toggle_tree_node_mod_disabled(&mod_path)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
 /// 在 `_MANAGED_` 目录下新建一个分组。
 ///
 /// 从全局设置中获取当前游戏的 Mods 路径，自动寻找最小可用索引创建分组。
@@ -441,22 +496,20 @@ pub async fn toggle_mod_disabled(
 /// 返回：新分组的索引。
 /// 错误：未配置 Mods 路径时返回 `"No mods path configured"`。
 #[tauri::command]
-pub async fn add_group(
-    state: State<'_, AppState>,
-    group_name: String,
-) -> Result<i32, String> {
+pub async fn add_group(state: State<'_, AppState>, group_name: String) -> Result<i32, String> {
     let managed_path = {
         let settings = state.settings.read();
-        let mods_path = crate::mod_manager::ModManager::get_mods_path_for_game(
-            &settings,
-            settings.target_game,
-        );
+        let mods_path =
+            crate::mod_manager::ModManager::get_mods_path_for_game(&settings, settings.target_game);
 
         if mods_path.is_empty() {
             return Err("No mods path configured".to_string());
         }
 
-        format!("{}/_MANAGED_", mods_path)
+        Path::new(&mods_path)
+            .join(crate::mod_manager::MANAGED_FOLDER)
+            .to_string_lossy()
+            .to_string()
     };
 
     tokio::task::spawn_blocking(move || {
@@ -473,10 +526,7 @@ pub async fn add_group(
 /// - `state`: 应用全局状态（当前未使用）。
 /// - `group_path`: 待移除的分组目录路径。
 #[tauri::command]
-pub async fn remove_group(
-    state: State<'_, AppState>,
-    group_path: String,
-) -> Result<(), String> {
+pub async fn remove_group(state: State<'_, AppState>, group_path: String) -> Result<(), String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::remove_group(&group_path).map_err(|e| e.to_string())
@@ -738,8 +788,7 @@ pub async fn set_always_on_top(
     on_top: bool,
 ) -> Result<(), String> {
     let _ = state;
-    crate::window_manager::WindowManager::set_always_on_top(&app, on_top)
-        .map_err(|e| e.to_string())
+    crate::window_manager::WindowManager::set_always_on_top(&app, on_top).map_err(|e| e.to_string())
 }
 
 /// 查询窗口是否处于置顶状态。
@@ -773,8 +822,7 @@ pub async fn set_window_size(
     height: f64,
 ) -> Result<(), String> {
     let _ = state;
-    crate::window_manager::WindowManager::set_size(&app, width, height)
-        .map_err(|e| e.to_string())
+    crate::window_manager::WindowManager::set_size(&app, width, height).map_err(|e| e.to_string())
 }
 
 /// 获取窗口尺寸。
@@ -808,8 +856,7 @@ pub async fn set_window_position(
     y: f64,
 ) -> Result<(), String> {
     let _ = state;
-    crate::window_manager::WindowManager::set_position(&app, x, y)
-        .map_err(|e| e.to_string())
+    crate::window_manager::WindowManager::set_position(&app, x, y).map_err(|e| e.to_string())
 }
 
 /// 重置窗口位置到默认位置（通常为屏幕居中）。
@@ -839,10 +886,8 @@ pub async fn save_window_state(
     crate::window_manager::WindowManager::save_window_state(&app, &state.settings)
         .map_err(|e| e.to_string())?;
 
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let app_data_dir =
+        crate::get_app_data_dir().ok_or_else(|| "Failed to get app data dir".to_string())?;
 
     let settings_arc = state.settings.clone();
     tokio::spawn(async move {
@@ -938,8 +983,8 @@ pub async fn get_foreground_process(state: State<'_, AppState>) -> Result<String
 /// 返回：目标游戏名称字符串（如 `"WutheringWaves"`）；未匹配时返回空字符串。
 #[tauri::command]
 pub async fn get_foreground_game(state: State<'_, AppState>) -> Result<String, String> {
-    let foreground_process =
-        crate::process::ProcessDetector::get_foreground_process_name().map_err(|e| e.to_string())?;
+    let foreground_process = crate::process::ProcessDetector::get_foreground_process_name()
+        .map_err(|e| e.to_string())?;
 
     let settings = state.settings.read();
     let game = crate::process::ProcessDetector::match_game_process(&foreground_process, &settings);
@@ -966,14 +1011,12 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<crate::settings:
 /// - `settings`: 新的设置内容。
 #[tauri::command]
 pub async fn save_settings(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: State<'_, AppState>,
     settings: crate::settings::Settings,
 ) -> Result<(), String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let app_data_dir =
+        crate::get_app_data_dir().ok_or_else(|| "Failed to get app data dir".to_string())?;
 
     {
         let mut current = state.settings.write();
@@ -1002,13 +1045,11 @@ pub async fn save_settings(
 /// - `state`: 应用全局状态。
 #[tauri::command]
 pub async fn reset_settings(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let app_data_dir =
+        crate::get_app_data_dir().ok_or_else(|| "Failed to get app data dir".to_string())?;
 
     {
         let mut current = state.settings.write();
@@ -1037,7 +1078,9 @@ pub async fn reset_settings(
 ///
 /// 返回：当前缓存的 `CloudData` 副本。
 #[tauri::command]
-pub async fn get_cloud_data(state: State<'_, AppState>) -> Result<crate::cloud_data::CloudData, String> {
+pub async fn get_cloud_data(
+    state: State<'_, AppState>,
+) -> Result<crate::cloud_data::CloudData, String> {
     Ok(state.cloud_data.read().clone())
 }
 
@@ -1048,13 +1091,13 @@ pub async fn get_cloud_data(state: State<'_, AppState>) -> Result<crate::cloud_d
 ///
 /// 返回：获取到的 `CloudData`。
 #[tauri::command]
-pub async fn fetch_cloud_data(state: State<'_, AppState>) -> Result<crate::cloud_data::CloudData, String> {
-    let cloud_data = crate::cloud_data::CloudData::fetch()
-        .await
-        .map_err(|e| {
-            log::error!("Failed to fetch cloud data: {}", e);
-            e.to_string()
-        })?;
+pub async fn fetch_cloud_data(
+    state: State<'_, AppState>,
+) -> Result<crate::cloud_data::CloudData, String> {
+    let cloud_data = crate::cloud_data::CloudData::fetch().await.map_err(|e| {
+        log::error!("Failed to fetch cloud data: {}", e);
+        e.to_string()
+    })?;
 
     {
         let mut state_cloud_data = state.cloud_data.write();
@@ -1070,12 +1113,10 @@ pub async fn fetch_cloud_data(state: State<'_, AppState>) -> Result<crate::cloud
 /// - `state`: 应用全局状态。
 #[tauri::command]
 pub async fn sync_cloud_data(state: State<'_, AppState>) -> Result<(), String> {
-    let cloud_data = crate::cloud_data::CloudData::fetch()
-        .await
-        .map_err(|e| {
-            log::error!("Failed to sync cloud data: {}", e);
-            e.to_string()
-        })?;
+    let cloud_data = crate::cloud_data::CloudData::fetch().await.map_err(|e| {
+        log::error!("Failed to sync cloud data: {}", e);
+        e.to_string()
+    })?;
 
     {
         let mut state_cloud_data = state.cloud_data.write();
@@ -1169,10 +1210,8 @@ pub async fn check_all_mods_syntax(
 ) -> Result<crate::ini_handler::error_detection::ErroredLinesReport, String> {
     let mods_path = {
         let settings = state.settings.read();
-        let path = crate::mod_manager::ModManager::get_mods_path_for_game(
-            &settings,
-            settings.target_game,
-        );
+        let path =
+            crate::mod_manager::ModManager::get_mods_path_for_game(&settings, settings.target_game);
 
         if path.is_empty() {
             return Err("No mods path configured".to_string());
@@ -1219,4 +1258,25 @@ pub async fn select_directory(app: AppHandle) -> Result<Option<String>, String> 
             Ok(None)
         }
     }
+}
+
+/// 从指定路径添加 Mod（复制文件/目录到目标分组目录）。
+///
+/// 参数：
+/// - `state`: 应用全局状态。
+/// - `source_paths`: 源文件/目录路径列表。
+/// - `target_group_path`: 目标分组目录路径。
+///
+/// 返回：`true` 表示添加成功。
+#[tauri::command]
+pub async fn add_mods(
+    state: State<'_, AppState>,
+    source_paths: Vec<String>,
+    target_group_path: String,
+) -> Result<bool, String> {
+    state
+        .mod_manager
+        .add_mods(source_paths, &target_group_path)
+        .await
+        .map_err(|e| e.to_string())
 }

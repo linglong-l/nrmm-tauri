@@ -10,24 +10,35 @@
 //! Tauri Builder 装配插件 → setup 回调加载设置/窗口/热键/托盘 → 注册命令并启动事件循环。
 
 // 子模块声明：每个模块对应一类业务能力
-mod init_xx;          // 初始化辅助逻辑（含日志格式化）
-mod mod_manager;      // Mod 管理器：加载、刷新、分组、收藏等
-mod ini_handler;      // INI 文件读写与语法检查
-mod file_watcher;     // 文件系统监听（Mods 目录变更通知）
-mod hotkey;           // 全局热键注册与事件分发
-mod window_manager;   // 主窗口的显示/隐藏/尺寸/置顶等管理
-mod tray;             // 系统托盘菜单与图标事件
-mod process;          // 目标游戏进程检测与匹配
-mod settings;         // 用户设置持久化
-mod cloud_data;       // 云端数据同步
+mod cloud_data; // 云端数据同步
+mod commands;
+mod file_watcher; // 文件系统监听（Mods 目录变更通知）
+mod hotkey; // 全局热键注册与事件分发
+mod ini_handler; // INI 文件读写与语法检查
+mod init_xx; // 初始化辅助逻辑（含日志格式化）
 mod keypress_simulator; // 按键/鼠标动作模拟
-mod task_queue;       // 后台任务队列
-mod state;            // 全局应用状态容器 AppState
-mod commands;         // 暴露给前端的 Tauri 命令
+mod mod_manager; // Mod 管理器：加载、刷新、分组、收藏等
+mod process; // 目标游戏进程检测与匹配
+mod settings; // 用户设置持久化
+mod state; // 全局应用状态容器 AppState
+mod task_queue; // 后台任务队列
+mod tray; // 系统托盘菜单与图标事件
+mod window_manager; // 主窗口的显示/隐藏/尺寸/置顶等管理 // 暴露给前端的 Tauri 命令
 
 use fern::Dispatch;
-use tauri::Manager;
 use state::AppState;
+use tauri::Manager;
+
+/// 获取应用数据目录（%LOCALAPPDATA%\xxmi-nrmm）。
+///
+/// 用于统一配置文件、日志等所有应用数据的存储位置。
+/// 日志目录为 `app_data_dir()/logs`，配置文件为 `app_data_dir()/settings.json`。
+///
+/// # 返回值
+/// 成功返回 `Some(PathBuf)`，失败返回 `None`（罕见平台差异）。
+pub fn get_app_data_dir() -> Option<std::path::PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("xxmi-nrmm"))
+}
 
 /// Tauri 应用启动入口。
 ///
@@ -75,8 +86,8 @@ pub fn run() {
             let state = app_handle.state::<AppState>();
 
             // 1) 加载持久化设置：失败时回退到默认值并记录警告
-            match app_handle.path().app_data_dir() {
-                Ok(app_data_dir) => {
+            match get_app_data_dir() {
+                Some(app_data_dir) => {
                     let settings = crate::settings::Settings::load(&app_data_dir);
                     {
                         // 写入状态时获取写锁，写入后立即释放
@@ -85,8 +96,8 @@ pub fn run() {
                     }
                     log::info!("Settings loaded during startup");
                 }
-                Err(e) => {
-                    log::warn!("Failed to get app data dir during startup: {}, using default settings", e);
+                None => {
+                    log::warn!("Failed to get app data dir during startup, using default settings");
                 }
             }
 
@@ -101,10 +112,9 @@ pub fn run() {
             // 3) 根据已加载设置注册全局热键（先清空再注册，避免重复）
             {
                 let settings = state.settings.read();
-                if let Err(e) = crate::hotkey::HotkeyManager::register_from_settings(
-                    &app_handle,
-                    &settings,
-                ) {
+                if let Err(e) =
+                    crate::hotkey::HotkeyManager::register_from_settings(&app_handle, &settings)
+                {
                     log::error!("Failed to register hotkeys from settings: {}", e);
                 }
             }
@@ -116,7 +126,9 @@ pub fn run() {
 
             // 5) 注册托盘菜单点击事件分发器
             app_handle.on_menu_event(|app, event| {
-                if let Err(e) = crate::tray::TrayManager::handle_menu_event(app, event.id().as_ref()) {
+                if let Err(e) =
+                    crate::tray::TrayManager::handle_menu_event(app, event.id().as_ref())
+                {
                     log::error!("Failed to handle menu event: {}", e);
                 }
             });
@@ -124,7 +136,9 @@ pub fn run() {
             // 6) 注册托盘图标交互事件（如左键单击切换窗口显示）
             let app_handle_for_tray = app_handle.clone();
             app_handle.on_tray_icon_event(move |_tray, event| {
-                if let Err(e) = crate::tray::TrayManager::handle_tray_icon_event(&app_handle_for_tray, &event) {
+                if let Err(e) =
+                    crate::tray::TrayManager::handle_tray_icon_event(&app_handle_for_tray, &event)
+                {
                     log::error!("Failed to handle tray icon event: {}", e);
                 }
             });
@@ -133,76 +147,63 @@ pub fn run() {
             //    为避免 Move/Resized 高频触发导致写入风暴，使用独立线程 + sleep 500ms 进行防抖
             let settings_arc = state.settings.clone();
             let app_handle_clone = app_handle.clone();
-            app_handle
-                .get_webview_window("main")
-                .map(|window| {
-                    window.on_window_event(move |event| {
-                        let settings = settings_arc.clone();
-                        let app = app_handle_clone.clone();
-                        match event {
-                            // 关闭请求：保存窗口状态，并在独立线程中保存设置文件
-                            tauri::WindowEvent::CloseRequested { .. } => {
+            app_handle.get_webview_window("main").map(|window| {
+                window.on_window_event(move |event| {
+                    let settings = settings_arc.clone();
+                    let app = app_handle_clone.clone();
+                    match event {
+                        // 关闭请求：保存窗口状态，并在独立线程中保存设置文件
+                        tauri::WindowEvent::CloseRequested { .. } => {
+                            if let Err(e) = crate::window_manager::WindowManager::save_window_state(
+                                &app, &settings,
+                            ) {
+                                log::error!("Failed to save window state on close: {}", e);
+                            }
+                            if let Some(app_data_dir) = get_app_data_dir() {
+                                let settings_clone = settings.clone();
+                                // 在独立线程执行文件 IO，避免阻塞 UI 线程
+                                std::thread::spawn(move || {
+                                    let s = {
+                                        // 仅短时持有读锁以克隆设置，随后立即释放
+                                        let guard = settings_clone.read();
+                                        guard.clone()
+                                    };
+                                    if let Err(e) = s.save(&app_data_dir) {
+                                        log::error!("Failed to save settings file on close: {}", e);
+                                    }
+                                });
+                            }
+                        }
+                        // 窗口移动：防抖 500ms 后保存窗口状态
+                        tauri::WindowEvent::Moved(_) => {
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
                                 if let Err(e) =
                                     crate::window_manager::WindowManager::save_window_state(
                                         &app, &settings,
                                     )
                                 {
-                                    log::error!("Failed to save window state on close: {}", e);
+                                    log::error!("Failed to save window state on move: {}", e);
                                 }
-                                if let Ok(app_data_dir) = app.path().app_data_dir() {
-                                    let settings_clone = settings.clone();
-                                    // 在独立线程执行文件 IO，避免阻塞 UI 线程
-                                    std::thread::spawn(move || {
-                                        let s = {
-                                            // 仅短时持有读锁以克隆设置，随后立即释放
-                                            let guard = settings_clone.read();
-                                            guard.clone()
-                                        };
-                                        if let Err(e) = s.save(&app_data_dir) {
-                                            log::error!(
-                                                "Failed to save settings file on close: {}",
-                                                e
-                                            );
-                                        }
-                                    });
-                                }
-                            }
-                            // 窗口移动：防抖 500ms 后保存窗口状态
-                            tauri::WindowEvent::Moved(_) => {
-                                std::thread::spawn(move || {
-                                    std::thread::sleep(std::time::Duration::from_millis(500));
-                                    if let Err(e) =
-                                        crate::window_manager::WindowManager::save_window_state(
-                                            &app, &settings,
-                                        )
-                                    {
-                                        log::error!(
-                                            "Failed to save window state on move: {}",
-                                            e
-                                        );
-                                    }
-                                });
-                            }
-                            // 窗口尺寸变化：防抖 500ms 后保存窗口状态
-                            tauri::WindowEvent::Resized(_) => {
-                                std::thread::spawn(move || {
-                                    std::thread::sleep(std::time::Duration::from_millis(500));
-                                    if let Err(e) =
-                                        crate::window_manager::WindowManager::save_window_state(
-                                            &app, &settings,
-                                        )
-                                    {
-                                        log::error!(
-                                            "Failed to save window state on resize: {}",
-                                            e
-                                        );
-                                    }
-                                });
-                            }
-                            _ => {}
+                            });
                         }
-                    });
+                        // 窗口尺寸变化：防抖 500ms 后保存窗口状态
+                        tauri::WindowEvent::Resized(_) => {
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
+                                if let Err(e) =
+                                    crate::window_manager::WindowManager::save_window_state(
+                                        &app, &settings,
+                                    )
+                                {
+                                    log::error!("Failed to save window state on resize: {}", e);
+                                }
+                            });
+                        }
+                        _ => {}
+                    }
                 });
+            });
 
             Ok(())
         })
@@ -227,6 +228,7 @@ pub fn run() {
             commands::set_icon,
             commands::remove_icon,
             commands::toggle_mod_disabled,
+            commands::toggle_tree_node_mod_disabled,
             commands::add_group,
             commands::remove_group,
             commands::rename_group,
@@ -294,11 +296,17 @@ pub fn run() {
 ///
 /// # 限制
 /// - 日志级别固定为 `Debug`，目前未通过设置动态调整；
-/// - 日志文件以追加方式写入，长期运行可能增长过大（无自动轮转）。
+/// - 日志文件按日期分层存储（year/month/day.log），无自动清理。
 fn init_logging() {
     // 构造基础 Dispatch：设置全局级别与统一格式化器，并链接到 stdout
     let dispatch = Dispatch::new()
-        .level(log::LevelFilter::Debug)  // 设置日志级别为 Debug
+        .level({
+            if cfg!(dev) {
+                log::LevelFilter::Debug
+            } else {
+                log::LevelFilter::Info
+            }
+        })
         .format(|out, message, record| {
             init_xx::logger::custom_log_format(out, message, record);
         })
@@ -307,18 +315,26 @@ fn init_logging() {
     // 尝试添加文件日志（可选）：失败则回退到仅 stdout
     if let Some(log_dir) = dirs::data_local_dir() {
         let app_log_dir = log_dir.join("xxmi-nrmm").join("logs");
-        // 确保日志目录存在，创建失败则跳过文件日志
+        // 确保日志根目录存在
         if std::fs::create_dir_all(&app_log_dir).is_ok() {
-            let log_file = app_log_dir.join("app.log");
-            // 以追加模式打开日志文件，便于跨次运行保留历史
-            if let Ok(file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_file)
-            {
-                // 同时输出到 stdout 与文件，并应用为全局 logger
-                let _ = dispatch.chain(file).apply();
-                return;
+            // 按日期生成日志文件路径：logs/2026/06/30.log
+            let now = time::OffsetDateTime::now_local()
+                .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+            let year_dir = app_log_dir.join(format!("{}", now.year()));
+            let month_dir = year_dir.join(format!("{:02}", now.month() as u8));
+            let log_file = month_dir.join(format!("{:02}.log", now.day()));
+
+            // 确保年月目录存在，以追加模式打开日志文件
+            if std::fs::create_dir_all(&month_dir).is_ok() {
+                if let Ok(file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_file)
+                {
+                    // 同时输出到 stdout 与文件，并应用为全局 logger
+                    let _ = dispatch.chain(file).apply();
+                    return;
+                }
             }
         }
     }
