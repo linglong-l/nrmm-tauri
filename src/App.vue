@@ -105,6 +105,11 @@ watch(
 
 // 组件挂载：初始化应用，并注册 Tauri 全局热键事件监听
 onMounted(() => {
+  // 阻止 WebView 系统默认右键菜单
+  document.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+  });
+
   initApp();
 
   listen('hotkey-pressed', handleHotkeyPressed).then((unlisten) => {

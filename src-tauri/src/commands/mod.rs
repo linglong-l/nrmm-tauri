@@ -1197,6 +1197,106 @@ pub async fn check_ini_syntax(
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
+/// 在系统文件管理器中打开指定路径。
+///
+/// Windows 下使用 explorer /select, 打开并选中目标文件/文件夹；
+/// Linux 下使用 xdg-open 打开所在文件夹。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `path`: 要打开的文件或目录路径。
+///
+/// 返回：`Ok(())` 表示命令执行成功。
+#[tauri::command]
+pub async fn open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let _ = state;
+    let path_buf = PathBuf::from(&path);
+
+    if !path_buf.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", path_buf.display()))
+            .spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let parent = path_buf
+            .parent()
+            .unwrap_or_else(|| Path::new("/"))
+            .to_path_buf();
+        std::process::Command::new("xdg-open")
+            .arg(&parent)
+            .spawn()
+            .map_err(|e| format!("Failed to open xdg-open: {}", e))?;
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err("Unsupported platform".to_string());
+    }
+
+    Ok(())
+}
+
+/// 打开指定游戏的 Mods 目录。
+///
+/// 参数：
+/// - `state`: 应用全局状态。
+/// - `game`: 目标游戏字符串标识。
+///
+/// 返回：`Ok(())` 表示命令执行成功。
+#[tauri::command]
+pub async fn open_mod_folder(state: State<'_, AppState>, game: String) -> Result<(), String> {
+    use crate::mod_manager::ModManager;
+    use crate::process::TargetGame;
+
+    let target_game = match game.as_str() {
+        "Wuthering_Waves" => TargetGame::WutheringWaves,
+        "Genshin_Impact" => TargetGame::GenshinImpact,
+        "Honkai_Star_Rail" => TargetGame::HonkaiStarRail,
+        "Zenless_Zone_Zero" => TargetGame::ZenlessZoneZero,
+        "Arknights_Endfield" => TargetGame::ArknightsEndfield,
+        _ => TargetGame::None,
+    };
+
+    let settings = state.settings.read();
+    let mods_path = ModManager::get_mods_path_for_game(&settings, target_game);
+
+    let path_buf = PathBuf::from(&mods_path);
+    if !path_buf.exists() {
+        return Err(format!("Mods folder does not exist: {}", mods_path));
+    }
+
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(&mods_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open explorer: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&mods_path)
+            .spawn()
+            .map_err(|e| format!("Failed to open xdg-open: {}", e))?;
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        return Err("Unsupported platform".to_string());
+    }
+
+    Ok(())
+}
+
 /// 检查当前游戏 Mods 目录下所有 INI 文件的语法错误。
 ///
 /// 参数：

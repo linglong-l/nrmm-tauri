@@ -13,7 +13,7 @@
  *  - realIndex === 0 的项是"空槽位"占位符，不可切换启用状态、不可收藏、不可打开文件夹。
  *  - 删除分组会使其内部模组脱离模组管理器管理（重新可直接被游戏读取）。
  */
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -67,6 +67,7 @@ const renameGroupName = ref('');                       // 重命名分组名称�
 const renameModName = ref('');                         // 重命名模组名称输入
 const contextMenuVisible = ref(false);                 // 右键菜单可见性
 const contextMenuPosition = ref({ x: 0, y: 0 });       // 右键菜单显示坐标
+const contextMenuRef = ref<HTMLElement | null>(null);   // 右键菜单 DOM 引用
 const contextMenuType = ref<'group' | 'mod' | null>(null); // 右键菜单目标类型
 const contextMenuData = ref<ModGroupData | ModData | null>(null); // 右键菜单目标数据
 const contextMenuGroupIndex = ref(-1);                 // 右键菜单目标分组索引
@@ -141,6 +142,34 @@ function onResizerMouseDown(e: MouseEvent) {
   };
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
+}
+
+// 右键菜单边界检测：确保菜单完全可见
+function adjustContextMenuPosition() {
+  if (!contextMenuRef.value) return;
+  
+  const menu = contextMenuRef.value;
+  const rect = menu.getBoundingClientRect();
+  const windowWidth = window.innerWidth;
+  const windowHeight = window.innerHeight;
+  
+  let { x, y } = contextMenuPosition.value;
+  
+  // 如果菜单底部超出窗口，向上偏移
+  if (rect.bottom > windowHeight) {
+    y = windowHeight - rect.height - 8;
+  }
+  
+  // 如果菜单右侧超出窗口，向左偏移
+  if (rect.right > windowWidth) {
+    x = windowWidth - rect.width - 8;
+  }
+  
+  // 确保不超出左上角
+  x = Math.max(8, x);
+  y = Math.max(8, y);
+  
+  contextMenuPosition.value = { x, y };
 }
 
 // 实际显示的分组列表：基于排序后的分组，按收藏过滤开关筛选
@@ -508,6 +537,8 @@ function showGroupContextMenu(event: MouseEvent, group: ModGroupData) {
   // 通过路径查找索引
   contextMenuGroupIndex.value = game.modGroups.value.findIndex(g => g.groupPath === group.groupPath);
   contextMenuVisible.value = true;
+  // 边界检测：确保菜单完全可见
+  nextTick(adjustContextMenuPosition);
 }
 
 /**
@@ -525,6 +556,8 @@ function showModContextMenu(event: MouseEvent, mod: ModData, index: number) {
   contextMenuData.value = mod;
   contextMenuModIndex.value = index;
   contextMenuVisible.value = true;
+  // 边界检测：确保菜单完全可见
+  nextTick(adjustContextMenuPosition);
 }
 
 /** 隐藏右键菜单并清空相关状态 */
@@ -1018,6 +1051,7 @@ watch(
       样式：固定定位，z-index 9999 确保在最上层
     -->
     <div v-if="contextMenuVisible" class="context-menu"
+      ref="contextMenuRef"
       :style="{ left: contextMenuPosition.x + 'px', top: contextMenuPosition.y + 'px' }" @click.stop>
       <!-- 
         分组右键菜单

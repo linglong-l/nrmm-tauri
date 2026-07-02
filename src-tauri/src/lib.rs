@@ -271,6 +271,8 @@ pub fn run() {
             commands::check_ini_syntax,
             commands::check_all_mods_syntax,
             commands::select_directory,
+            commands::open_path,
+            commands::open_mod_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
