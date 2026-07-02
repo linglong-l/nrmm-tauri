@@ -41,6 +41,7 @@ import {
   invokeAddMods,
   invokeRemoveGroup,
   invokeRenameGroup,
+  invokeRenameMod,
   invokeOpenPath,
   invokeStartFileWatcher,
   invokeStopFileWatcher,
@@ -470,6 +471,32 @@ async function handleRenameGroup() {
   } catch (error) {
     console.error('Failed to rename group:', error);
     ElMessage.error(t('Failed to rename group'));
+  }
+}
+
+/**
+ * 处理模组重命名确认。
+ * 业务逻辑：
+ *  - 验证输入名称不为空
+ *  - 获取当前右键菜单选中的模组数据
+ *  - 调用后端命令重命名模组（禁用状态会自动保留 DISABLED 前缀）
+ *  - 成功后刷新模组列表并关闭对话框
+ */
+async function handleRenameMod() {
+  if (!renameModName.value.trim()) {
+    ElMessage.warning(t('Mod name cannot be empty'));
+    return;
+  }
+  const mod = contextMenuData.value as ModData;
+  if (!mod) return;
+  try {
+    await invokeRenameMod(mod.modPath, renameModName.value.trim());
+    await refreshMods();
+    dialogRenameModVisible.value = false;
+    ElMessage.success(t('Mod renamed successfully'));
+  } catch (error) {
+    console.error('Failed to rename mod:', error);
+    ElMessage.error(t('Failed to rename mod'));
   }
 }
 
@@ -1239,8 +1266,8 @@ watch(
       <template #footer>
         <!-- 取消按钮 -->
         <el-button @click="dialogRenameModVisible = false">{{ t('Cancel') }}</el-button>
-        <!-- 确认按钮（预留功能） -->
-        <el-button type="primary">{{ t('Confirm') }}</el-button>
+        <!-- 确认按钮 -->
+        <el-button type="primary" @click="handleRenameMod">{{ t('Confirm') }}</el-button>
       </template>
     </el-dialog>
   </div>

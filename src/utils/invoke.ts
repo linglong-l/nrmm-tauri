@@ -300,6 +300,17 @@ export async function invokeRenameGroup(groupPath: string, newName: string): Pro
 }
 
 /**
+ * 重命名指定模组。
+ * 对应后端命令：`rename_mod`。
+ * @param modPath 模组绝对路径
+ * @param newName 新模组名称（不含 DISABLED 前缀）
+ * @returns 是否重命名成功
+ */
+export async function invokeRenameMod(modPath: string, newName: string): Promise<boolean> {
+  return invoke('rename_mod', { modPath, newName });
+}
+
+/**
  * 按给定顺序重排分组。
  * 对应后端命令：`reorder_groups`。
  * @param groupPaths 分组路径的有序数组

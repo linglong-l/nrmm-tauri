@@ -556,6 +556,29 @@ pub async fn rename_group(
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
+/// 重命名模组目录。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `mod_path`: 模组目录路径。
+/// - `new_name`: 新的目录名称（不含 DISABLED 前缀）。
+///
+/// 返回：`Ok(())` 表示重命名成功。
+#[tauri::command]
+pub async fn rename_mod(
+    state: State<'_, AppState>,
+    mod_path: String,
+    new_name: String,
+) -> Result<(), String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::rename_mod(&mod_path, &new_name)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
 /// 搜索名称包含关键词的模组（当前为占位实现，返回空列表）。
 ///
 /// 参数：

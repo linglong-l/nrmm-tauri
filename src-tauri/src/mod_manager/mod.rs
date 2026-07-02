@@ -1829,6 +1829,49 @@ impl ModManager {
         Ok(())
     }
 
+    /// 重命名模组目录。
+    ///
+    /// 参数：
+    /// - `mod_path`: 模组目录路径。
+    /// - `new_name`: 新的目录名称（不含 DISABLED 前缀）。
+    ///
+    /// 返回：操作结果。
+    pub fn rename_mod(mod_path: &str, new_name: &str) -> Result<()> {
+        let path = Path::new(mod_path);
+        if !path.exists() || !path.is_dir() {
+            anyhow::bail!("Mod path does not exist: {:?}", path);
+        }
+
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => anyhow::bail!("Invalid mod path: no file name"),
+        };
+
+        let is_disabled = dir_name.starts_with(DISABLED_PREFIX);
+
+        let parent = match path.parent() {
+            Some(p) => p,
+            None => anyhow::bail!("Invalid mod path: no parent directory"),
+        };
+
+        let final_new_name = if is_disabled {
+            format!("{}{}", DISABLED_PREFIX, new_name)
+        } else {
+            new_name.to_string()
+        };
+
+        let new_path = parent.join(&final_new_name);
+        if new_path.exists() {
+            anyhow::bail!("Destination path already exists: {:?}", new_path);
+        }
+
+        fs::rename(path, &new_path)
+            .with_context(|| format!("Failed to rename mod: {:?} -> {:?}", path, new_path))?;
+
+        info!("Mod renamed: {:?} -> {:?} (disabled={})", path, new_path, is_disabled);
+        Ok(())
+    }
+
     /// 在所有分组中搜索名称包含关键词的模组。
     ///
     /// 参数：

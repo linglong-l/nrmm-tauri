@@ -232,6 +232,7 @@ pub fn run() {
             commands::add_group,
             commands::remove_group,
             commands::rename_group,
+            commands::rename_mod,
             commands::search_mods,
             commands::load_ini,
             commands::save_ini,
