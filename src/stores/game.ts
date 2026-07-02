@@ -381,6 +381,20 @@ export const useGameStore = defineStore('game', () => {
     }
   }
 
+  /**
+   * 更新单个分组的模组列表（仅更新 mods，保留原有 children）。
+   * 通过 groupPath 递归查找分组（支持嵌套子分组）。
+   * @param groupPath 分组路径
+   * @param newGroup 包含最新 mods 的分组数据
+   */
+  function updateGroup(groupPath: string, newGroup: ModGroupData) {
+    const group = findGroupByPath(groupPath);
+    if (group) {
+      group.modsInGroup = newGroup.modsInGroup;
+      group.previousSelectedModOnGroup = newGroup.previousSelectedModOnGroup;
+    }
+  }
+
   /** 追加一个新分组到分组列表末尾。 */
   function addModGroup(group: ModGroupData) {
     modGroups.value.push(group);
@@ -437,6 +451,7 @@ export const useGameStore = defineStore('game', () => {
     toggleModFavorite,
     toggleGroupFavorite,
     updateModInGroup,
+    updateGroup,
     addModGroup,
     removeModGroup,
     findGroupByPath,

@@ -112,6 +112,7 @@ function toggleExpand(event: MouseEvent) {
             :src="convertToAssetUrl(group.iconPath)"
             alt="group icon"
             loading="lazy"
+            @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
           />
           <el-icon v-else>
             <FolderOpened />

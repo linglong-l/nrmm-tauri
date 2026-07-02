@@ -229,6 +229,15 @@ export function useGame() {
   }
 
   /**
+   * 更新单个分组的模组列表（仅更新 mods，保留原有 children）。
+   * @param groupPath 分组路径
+   * @param newGroup 包含最新 mods 的分组数据
+   */
+  function updateGroup(groupPath: string, newGroup: ModGroupData) {
+    gameStore.updateGroup(groupPath, newGroup);
+  }
+
+  /**
    * 添加一个新的分组到分组列表。
    * @param group 新的分组数据
    */
@@ -284,6 +293,7 @@ export function useGame() {
     toggleModFavorite,
     toggleGroupFavorite,
     updateModInGroup,
+    updateGroup,
     addModGroup,
     removeModGroup
   };

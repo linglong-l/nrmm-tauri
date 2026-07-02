@@ -27,7 +27,6 @@ import { CONSTANTS } from './constants';
 export function convertToAssetUrl(path: string | null | undefined): string {
   if (!path) return '';
   const url = convertFileSrc(path);
-  console.log('[convertToAssetUrl] input:', path, '-> output:', url);
   return url;
 }
 
@@ -49,6 +48,16 @@ export async function invokeLoadMods(game?: TargetGame): Promise<ModGroupData[]>
  */
 export async function invokeRefreshMods(game?: TargetGame): Promise<ModGroupData[]> {
   return invoke('refresh_mods', { game });
+}
+
+/**
+ * 刷新单个分组的模组列表。
+ * 对应后端命令：`refresh_single_group`。
+ * @param groupPath 分组目录路径
+ * @returns 更新后的分组数据（仅包含最新的 mods，保留原有 children）
+ */
+export async function invokeRefreshSingleGroup(groupPath: string): Promise<ModGroupData> {
+  return invoke('refresh_single_group', { groupPath });
 }
 
 /**

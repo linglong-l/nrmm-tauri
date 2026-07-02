@@ -35,6 +35,7 @@ import { useSettings } from '../../../composables/useSettings';
 import {
   invokeLoadMods,
   invokeRefreshMods,
+  invokeRefreshSingleGroup,
   invokeToggleModDisabled,
   invokeToggleTreeNodeModDisabled,
   invokeAddGroup,
@@ -330,6 +331,9 @@ async function toggleMod(mod: ModData, modIndex: number) {
         game.updateModInGroup(game.currentGroupPath.value, modIndex, updatedMod);
       }
     }
+    // 刷新分组信息，确保互斥模式下其他模组状态正确更新
+    const updatedGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
+    game.updateGroup(game.currentGroupPath.value, updatedGroup);
   } catch (error) {
     console.error('Failed to toggle mod:', error);
     ElMessage.error(mod.isDisabled ? t('Failed to enable mod') : t('Failed to disable mod'));
@@ -896,7 +900,13 @@ watch(
                 -->
                 <div class="mod-icon">
                   <!-- 自定义模组图标 -->
-                  <img v-if="mod.iconPath" :src="convertToAssetUrl(mod.iconPath)" alt="mod icon" loading="lazy" />
+                  <img 
+                    v-if="mod.iconPath" 
+                    :src="convertToAssetUrl(mod.iconPath)" 
+                    alt="mod icon" 
+                    loading="lazy"
+                    @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
+                  />
                   <!-- 空槽位图标 -->
                   <el-icon v-else-if="mod.realIndex === 0">
                     <Close />
@@ -1010,7 +1020,13 @@ watch(
                 @contextmenu="showModContextMenu($event, mod, index)">
                 <!-- 模组图标 -->
                 <div class="list-mod-icon">
-                  <img v-if="mod.iconPath" :src="convertToAssetUrl(mod.iconPath)" alt="mod icon" loading="lazy" />
+                  <img 
+                    v-if="mod.iconPath" 
+                    :src="convertToAssetUrl(mod.iconPath)" 
+                    alt="mod icon" 
+                    loading="lazy"
+                    @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
+                  />
                   <el-icon v-else-if="mod.realIndex === 0">
                     <Close />
                   </el-icon>

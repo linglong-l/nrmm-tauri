@@ -211,6 +211,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::load_mods,
             commands::refresh_mods,
+            commands::refresh_single_group,
             commands::refresh_mod_data,
             commands::update_mod_data,
             commands::validate_mods_path,

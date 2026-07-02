@@ -596,6 +596,58 @@ pub async fn search_mods(
     Ok(Vec::new())
 }
 
+/// 刷新单个分组的模组列表。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `group_path`: 分组目录路径。
+///
+/// 返回：更新后的分组数据（仅包含最新的 mods，保留原有 children）。
+#[tauri::command]
+pub async fn refresh_single_group(
+    state: State<'_, AppState>,
+    group_path: String,
+) -> Result<crate::mod_manager::ModGroupData, String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        use crate::mod_manager::ModManager;
+        use crate::mod_manager::ModGroupData;
+
+        let group_path_str = group_path.clone();
+        let path = std::path::Path::new(&group_path);
+
+        let dir_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        let icon_path = ModManager::get_icon_path(&group_path_str);
+        let favorite_date_time = ModManager::is_favorite(&group_path_str).unwrap_or(None);
+        let mods_in_group = ModManager::get_mods_on_group(&group_path_str)
+            .map_err(|e| e.to_string())?;
+        let mods_count = mods_in_group.len();
+        let previous_selected_mod_on_group =
+            ModManager::get_selected_mod_in_group(&group_path_str, mods_count).unwrap_or(0);
+
+        Ok(ModGroupData {
+            group_path: group_path_str,
+            icon_path,
+            group_name: dir_name,
+            favorite_date_time,
+            mods_in_group,
+            real_index: 0,
+            previous_selected_mod_on_group,
+            children: vec![],
+            is_tree_node: true,
+            is_virtual: false,
+            is_disabled: false,
+        })
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
 /// 异步加载 INI 文件并返回可序列化数据结构。
 ///
 /// 参数：
