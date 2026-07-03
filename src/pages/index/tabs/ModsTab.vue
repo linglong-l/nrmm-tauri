@@ -97,6 +97,17 @@ let scrollDragState: {
   active: boolean;
 } | null = null;
 
+// 右侧模组容器拖动滚动状态
+const modsContainerRef = ref<HTMLElement | null>(null);
+let modsScrollDragState: {
+  startY: number;
+  startX: number;
+  startScrollTop: number;
+  startScrollLeft: number;
+  active: boolean;
+  moved: boolean;
+} | null = null;
+
 // 鼠标按下：启动手机风格拖动滚动
 function onSidebarMouseDown(e: MouseEvent) {
   if (!sidebarRef.value) return;
@@ -123,6 +134,56 @@ function onSidebarMouseUp() {
   scrollDragState = null;
   document.removeEventListener('mousemove', onSidebarMouseMove);
   document.removeEventListener('mouseup', onSidebarMouseUp);
+}
+
+// 右侧模组容器：鼠标按下启动拖动滚动
+function onModsContainerMouseDown(e: MouseEvent) {
+  if (!modsContainerRef.value) return;
+  // 排除交互元素：按钮、输入框、模组卡片上的收藏图标等
+  const target = e.target as HTMLElement;
+  if (target.closest('button') ||
+      target.closest('.el-button') ||
+      target.closest('.mod-favorite') ||
+      target.closest('input') ||
+      target.closest('textarea')) return;
+
+  modsScrollDragState = {
+    startY: e.clientY,
+    startX: e.clientX,
+    startScrollTop: modsContainerRef.value.scrollTop,
+    startScrollLeft: modsContainerRef.value.scrollLeft,
+    active: true,
+    moved: false,
+  };
+  document.addEventListener('mousemove', onModsContainerMouseMove);
+  document.addEventListener('mouseup', onModsContainerMouseUp);
+}
+
+function onModsContainerMouseMove(e: MouseEvent) {
+  if (!modsScrollDragState?.active || !modsContainerRef.value) return;
+  const dy = e.clientY - modsScrollDragState.startY;
+  const dx = e.clientX - modsScrollDragState.startX;
+
+  // 位移超过 5px 视为拖动
+  if (Math.abs(dy) > 5 || Math.abs(dx) > 5) {
+    modsScrollDragState.moved = true;
+  }
+
+  if (modsScrollDragState.moved) {
+    modsContainerRef.value.scrollTop = modsScrollDragState.startScrollTop - dy;
+    modsContainerRef.value.scrollLeft = modsScrollDragState.startScrollLeft - dx;
+  }
+}
+
+function onModsContainerMouseUp() {
+  modsScrollDragState = null;
+  document.removeEventListener('mousemove', onModsContainerMouseMove);
+  document.removeEventListener('mouseup', onModsContainerMouseUp);
+}
+
+// 检查模组容器是否处于拖动状态（用于阻止点击事件）
+function isModsContainerDragging(): boolean {
+  return modsScrollDragState?.moved === true;
 }
 
 // 分隔条拖拽调节宽度
@@ -301,6 +362,7 @@ function toggleExpand(groupPath: string) {
  * @param index displayMods 中的索引
  */
 function selectMod(index: number) {
+  if (isModsContainerDragging()) return;
   selectedModIndex.value = index;
 }
 
@@ -703,7 +765,12 @@ async function setupEventListeners() {
 onMounted(async () => {
   resizeHandler = () => { windowWidth.value = window.innerWidth; };
   window.addEventListener('resize', resizeHandler);
-  await loadMods();
+  // 若已有当前游戏的模组数据，则跳过加载（避免切页重复读取）
+  if (game.isModsLoaded.value && game.targetGame.value !== 'none') {
+    // 已有数据，仅启动事件监听和文件监听
+  } else {
+    await loadMods();
+  }
   await setupEventListeners();
   await setupFileWatcher();
   document.addEventListener('click', hideContextMenu);
@@ -860,7 +927,7 @@ watch(
           模组容器
           加载状态：v-loading 在 isLoading 为 true 时显示加载动画
         -->
-        <div v-loading="isLoading" class="mods-container">
+        <div v-loading="isLoading" class="mods-container" ref="modsContainerRef" @mousedown="onModsContainerMouseDown">
           <!-- 
             网格布局模式
             条件渲染：v-if="isGridLayout" 当布局模式为 Grid 时显示
@@ -1478,6 +1545,12 @@ watch(
   padding: 16px;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
+  cursor: grab;
+  user-select: none;
+}
+
+.mods-container:active {
+  cursor: grabbing;
 }
 
 /* Android 风格滚动条：隐藏原生滚动条 */

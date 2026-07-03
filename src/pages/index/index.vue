@@ -139,15 +139,15 @@ onUnmounted(() => {
     <div class="content-area">
       <div class="content-body">
         <!-- 模组管理标签页 -->
-        <div v-if="activeTab === 'mods'" class="tab-content">
+        <div v-show="activeTab === 'mods'" class="tab-content">
           <ModsTab />
         </div>
         <!-- 热键标签页：仅显示空状态提示，引导用户从模组右键菜单进入 -->
-        <div v-else-if="activeTab === 'keybinds'" class="tab-content">
+        <div v-show="activeTab === 'keybinds'" class="tab-content">
           <ElEmpty :description="t('Right-click a mod and select Keybind.')" />
         </div>
         <!-- 设置标签页 -->
-        <div v-else-if="activeTab === 'settings'" class="tab-content">
+        <div v-show="activeTab === 'settings'" class="tab-content">
           <SettingsView />
         </div>
       </div>

@@ -54,9 +54,13 @@ const isDark = computed(() => settingsStore.theme === 'dark');
 // 背景透明度数值（0~1），通过 CSS 变量 --bg-opacity 透传给样式
 const bgOpacity = computed(() => settingsStore.bgTransparency);
 
-// 动态计算的根容器内联样式：仅注入背景透明度变量
+// 整体缩放比例，通过 transform: scale 应用到根容器
+const appScale = computed(() => settingsStore.overallScale);
+
+// 动态计算的根容器内联样式：注入背景透明度变量与缩放变量
 const appStyle = computed(() => ({
-  '--bg-opacity': bgOpacity.value
+  '--bg-opacity': bgOpacity.value,
+  '--app-scale': appScale.value
 }));
 
 /**
@@ -162,14 +166,16 @@ body,
 .app-container {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  width: 100vw;
+  height: calc(100vh / var(--app-scale, 1));
+  width: calc(100vw / var(--app-scale, 1));
   overflow: hidden;
   background-color: rgba(20, 20, 24, var(--bg-opacity, 0.88));
   backdrop-filter: blur(24px) saturate(1.2);
   -webkit-backdrop-filter: blur(24px) saturate(1.2);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   border-radius: 12px;
+  transform: scale(var(--app-scale, 1));
+  transform-origin: top left;
 }
 
 .app-container.dark-theme {

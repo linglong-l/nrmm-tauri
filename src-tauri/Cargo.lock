@@ -2445,6 +2445,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "nrmm-rust"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 5.0.1",
+ "fern",
+ "image",
+ "ini",
+ "log",
+ "notify",
+ "parking_lot",
+ "rayon",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "walkdir",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "ntapi"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5922,35 +5951,6 @@ name = "xkeysym"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
-
-[[package]]
-name = "xxmi-nrmm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dirs 5.0.1",
- "fern",
- "image",
- "ini",
- "log",
- "notify",
- "parking_lot",
- "rayon",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "walkdir",
- "windows 0.62.2",
-]
 
 [[package]]
 name = "y4m"

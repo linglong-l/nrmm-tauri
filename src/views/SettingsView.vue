@@ -23,7 +23,7 @@ import { useGameStore } from '../stores/game';
 import {
   invokeUpdateModData, invokeValidateModsPath, invokeExportSettings,
   invokeImportSettings, invokeResetSettings, invokeOpenModFolder,
-  invokeOpenPath, invokeSelectDirectory
+  invokeOpenPath, invokeSelectDirectory, invokeLoadMods
 } from '../utils/invoke';
 import { TargetGame, HotkeyKeyboard, HotkeyGamepad, LayoutMode, SortGroupMethod, ModsPathStatus } from '../types';
 import {
@@ -31,6 +31,7 @@ import {
   LAYOUT_MODE_NAMES, SORT_GROUP_METHOD_NAMES, SUPPORTED_LANGUAGES,
   MODS_PATH_STATUS_DESCRIPTIONS
 } from '../utils/constants';
+import { EventNames, eventManager } from '../utils/events';
 import { getVersion } from '@tauri-apps/api/app';
 
 const { t } = useI18n();
@@ -370,6 +371,16 @@ async function handleUpdateModData() {
         message: t('Mods successfully managed!'),
         type: 'success'
       });
+      // 更新模组数据成功后，重新加载模组列表并通知前端更新
+      try {
+        const groups = await invokeLoadMods(game);
+        gameStore.setModGroups(groups);
+        gameStore.setModsLoaded(true);
+        eventManager.emit(EventNames.MOD_GROUPS_UPDATED, groups);
+        eventManager.emit(EventNames.MODS_UPDATED, groups);
+      } catch {
+        // 刷新失败不影响主流程，静默忽略
+      }
     } else {
       updateModDataLog.value = result.errorMessage || t('Unknown error occurred.');
       ElNotification({
