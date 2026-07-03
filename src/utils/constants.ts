@@ -168,6 +168,7 @@ export const CONSTANTS = {
 
 /**
  * 目标游戏到完整名称的映射，用于界面展示。
+ * 注意：此映射为英文默认值，实际展示时应优先使用 i18n 翻译。
  */
 export const GAME_NAMES: Record<TargetGame, string> = {
   [TargetGame.none]: 'None',
@@ -177,6 +178,16 @@ export const GAME_NAMES: Record<TargetGame, string> = {
   [TargetGame.Zenless_Zone_Zero]: 'Zenless Zone Zero',
   [TargetGame.Arknights_Endfield]: 'Arknights: Endfield'
 };
+
+/**
+ * 获取游戏名称的 i18n 翻译键。
+ * 用于在模板中直接使用 $t() 进行翻译。
+ * @param game - 目标游戏枚举值
+ * @returns i18n 翻译键（如 "game.wuwa", "game.hsr"）
+ */
+export function getGameNameKey(game: TargetGame): string {
+  return `game.${GAME_SHORT_NAMES[game]}`;
+}
 
 /**
  * 目标游戏到短标识的映射，用于内部存储与路径构造（如 wuwa/genshin/hsr/zzz/endfield）。

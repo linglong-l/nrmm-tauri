@@ -12,42 +12,42 @@
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElSelect, ElOption } from 'element-plus';
-import { useGameStore } from '../stores/game';
+import { useGame } from '../composables/useGame';
 import { TargetGame } from '../types';
+import { getGameNameKey } from '../utils/constants';
 
 const { t } = useI18n();
-const gameStore = useGameStore();
+const game = useGame();
 
-// 游戏选项列表：value 为枚举值，labelKey 为 i18n 翻译键
+// 游戏选项列表：value 为枚举值
 const gameOptions = [
-  { value: TargetGame.Wuthering_Waves, labelKey: 'Wuthering Waves' },
-  { value: TargetGame.Genshin_Impact, labelKey: 'Genshin Impact' },
-  { value: TargetGame.Honkai_Star_Rail, labelKey: 'Honkai Star Rail' },
-  { value: TargetGame.Zenless_Zone_Zero, labelKey: 'Zenless Zone Zero' },
-  { value: TargetGame.Arknights_Endfield, labelKey: 'Arknights Endfield' }
+  TargetGame.Wuthering_Waves,
+  TargetGame.Genshin_Impact,
+  TargetGame.Honkai_Star_Rail,
+  TargetGame.Zenless_Zone_Zero,
+  TargetGame.Arknights_Endfield
 ] as const;
 
-// 当前选中的游戏（双向绑定到 gameStore）
+// 当前选中的游戏（双向绑定到 gameStore，setter 使用 useGame 的防抖版本）
 const currentGame = computed({
-  get: () => gameStore.targetGame,
-  set: (val: TargetGame) => gameStore.setTargetGame(val)
+  get: () => game.targetGame.value,
+  set: (val: TargetGame) => game.setTargetGame(val)
 });
 </script>
 
 <template>
-  <!-- 游戏选择下拉框：change 事件再次调用 setTargetGame 以确保状态同步 -->
+  <!-- 游戏选择下拉框：v-model setter 已绑定 useGame 的防抖版本，无需额外 @change -->
   <div class="game-selector">
     <ElSelect
       v-model="currentGame"
       size="small"
       class="game-select"
-      @change="(val: TargetGame) => gameStore.setTargetGame(val)"
     >
       <ElOption
         v-for="game in gameOptions"
-        :key="game.value"
-        :label="t(game.labelKey)"
-        :value="game.value"
+        :key="game"
+        :label="t(getGameNameKey(game))"
+        :value="game"
       />
     </ElSelect>
   </div>

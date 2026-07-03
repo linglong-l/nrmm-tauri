@@ -14,12 +14,13 @@
  *  - "Update Mod Data" 用于在用户通过文件管理器直接增删改模组后，重新同步后端的模组索引。
  *  - 语言切换需重启应用才能完全生效。
  */
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
 import { Folder } from '@element-plus/icons-vue';
 import { useSettingsStore } from '../stores/settings';
 import { useGameStore } from '../stores/game';
+import { useHotkeyStore } from '../stores/hotkey';
 import {
   invokeUpdateModData, invokeValidateModsPath, invokeExportSettings,
   invokeImportSettings, invokeResetSettings, invokeOpenModFolder,
@@ -27,9 +28,9 @@ import {
 } from '../utils/invoke';
 import { TargetGame, HotkeyKeyboard, HotkeyGamepad, LayoutMode, SortGroupMethod, ModsPathStatus } from '../types';
 import {
-  GAME_NAMES, HOTKEY_KEYBOARD_NAMES, HOTKEY_GAMEPAD_NAMES,
+  HOTKEY_KEYBOARD_NAMES, HOTKEY_GAMEPAD_NAMES,
   LAYOUT_MODE_NAMES, SORT_GROUP_METHOD_NAMES, SUPPORTED_LANGUAGES,
-  MODS_PATH_STATUS_DESCRIPTIONS
+  MODS_PATH_STATUS_DESCRIPTIONS, getGameNameKey
 } from '../utils/constants';
 import { EventNames, eventManager } from '../utils/events';
 import { getVersion } from '@tauri-apps/api/app';
@@ -37,6 +38,7 @@ import { getVersion } from '@tauri-apps/api/app';
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
 const gameStore = useGameStore();
+const hotkeyStore = useHotkeyStore();
 
 // 当前激活的设置 Tab（默认游戏设置）
 const activeTab = ref('game');
@@ -150,6 +152,28 @@ const sortGroupMethodValue = computed({
 });
 
 /**
+ * 游戏选择器的双向绑定代理。
+ * getter 从 gameStore 读取，setter 调用完整的状态更新链路，
+ * 确保 modsPath 更新和 GAME_SWITCHED 事件发射。
+ */
+const selectedGame = computed({
+  get: () => gameStore.targetGame,
+  set: (val: TargetGame) => {
+    handleGameChange(val);
+  }
+});
+
+/**
+ * 处理游戏切换：更新 gameStore 和 settingsStore。
+ * 注意：gameStore.setTargetGame 内部已同步更新 settingsStore 并保存设置，
+ * 此处无需重复调用 saveSettings。
+ * @param game 目标游戏
+ */
+function handleGameChange(game: TargetGame) {
+  gameStore.setTargetGame(game);
+}
+
+/**
  * 获取指定游戏的 Mods 路径。
  * @param game 目标游戏
  * @returns 配置的路径字符串（可能为空）
@@ -159,11 +183,55 @@ function getGameModsPath(game: TargetGame): string {
 }
 
 /**
- * 获取指定游戏的目标进程名（用于热键触发判断）。
+ * 各游戏目标进程名的响应式计算映射。
+ * 使用 computed 确保设置变化时输入框能响应式更新。
+ */
+const targetProcessMap = computed(() => {
+  const map: Record<TargetGame, string> = {} as Record<TargetGame, string>;
+  for (const game of games) {
+    map[game] = settingsStore.getTargetProcess(game);
+  }
+  return map;
+});
+
+/**
+ * 获取指定游戏的默认目标进程名。
+ * 用作输入框占位符提示。
  * @param game 目标游戏
  */
-function getGameTargetProcess(game: TargetGame): string {
-  return settingsStore.getTargetProcess(game);
+function getDefaultTargetProcess(game: TargetGame): string {
+  switch (game) {
+    case TargetGame.Wuthering_Waves:
+      return 'Wuthering Waves.exe';
+    case TargetGame.Genshin_Impact:
+      return 'GenshinImpact.exe';
+    case TargetGame.Honkai_Star_Rail:
+      return 'StarRail.exe';
+    case TargetGame.Zenless_Zone_Zero:
+      return 'ZenlessZoneZero.exe';
+    case TargetGame.Arknights_Endfield:
+      return 'Endfield-Win64-Shipping.exe';
+    default:
+      return '';
+  }
+}
+
+/**
+ * 创建防抖函数
+ * @param fn 需要防抖的异步函数
+ * @param delay 延迟毫秒
+ */
+function createDebounce<T extends (...args: any[]) => Promise<void>>(
+  fn: T,
+  delay: number
+): (...args: Parameters<T>) => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return (...args: Parameters<T>) => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      fn(...args);
+    }, delay);
+  };
 }
 
 /**
@@ -254,10 +322,20 @@ async function handleTargetProcessChange(game: TargetGame, processName: string) 
   await settingsStore.saveSettings();
 }
 
+// 防抖版本：避免输入框每次按键都触发保存导致表单禁用、输入失焦
+const debouncedHandleModsPathChange = createDebounce(handleModsPathChange, 500);
+const debouncedHandleTargetProcessChange = createDebounce(handleTargetProcessChange, 500);
+
 /** 键盘热键变更处理 */
 async function handleHotkeyKeyboardChange(value: HotkeyKeyboard) {
   settingsStore.setHotkeyKeyboard(value);
   await settingsStore.saveSettings();
+  // 重新注册热键到后端
+  try {
+    await hotkeyStore.registerHotkeyBackend(value);
+  } catch (error) {
+    console.error('Failed to register new hotkey:', error);
+  }
 }
 
 /** 手柄热键变更处理 */
@@ -372,12 +450,13 @@ async function handleUpdateModData() {
         type: 'success'
       });
       // 更新模组数据成功后，重新加载模组列表并通知前端更新
+      // 注意：仅通过事件通知，由 index.vue 的 MOD_GROUPS_UPDATED 监听器和
+      // ModsTab.vue 的 MODS_UPDATED 监听器统一调用 setModGroups，避免冗余更新
       try {
         const groups = await invokeLoadMods(game);
-        gameStore.setModGroups(groups);
         gameStore.setModsLoaded(true);
-        eventManager.emit(EventNames.MOD_GROUPS_UPDATED, groups);
-        eventManager.emit(EventNames.MODS_UPDATED, groups);
+        eventManager.emitLocal(EventNames.MOD_GROUPS_UPDATED, groups);
+        eventManager.emitLocal(EventNames.MODS_UPDATED, groups);
       } catch {
         // 刷新失败不影响主流程，静默忽略
       }
@@ -547,6 +626,22 @@ onMounted(async () => {
   }
   getAppVersion();
 });
+
+// 监听设置加载完成，重新校验所有游戏路径
+// 防止 onMounted 时设置尚未加载导致路径校验被跳过
+watch(
+  () => settingsStore.isLoaded,
+  (loaded) => {
+    if (loaded) {
+      for (const game of games) {
+        const path = settingsStore.getModsPath(game);
+        if (path) {
+          validateModsPath(game, path);
+        }
+      }
+    }
+  }
+);
 </script>
 
 <template>
@@ -578,17 +673,23 @@ onMounted(async () => {
           <el-form label-position="top" :disabled="settingsStore.isSaving || isBrowsingFolder">
             <!-- 
               选择游戏表单项
-              数据来源：v-model 绑定 gameStore.targetGame
-              交互行为：选择游戏后更新 gameStore
+              数据来源：v-model 绑定 selectedGame (computed 代理)
+              交互行为：选择游戏后触发完整状态更新链路
+              配置：teleported=true 确保下拉框不被父容器裁剪
             -->
             <el-form-item :label="t('Select Game')">
               <!-- 游戏选择下拉框 -->
-              <el-select v-model="gameStore.targetGame" style="width: 100%">
-                <!-- 游戏选项列表 -->
+              <el-select
+                v-model="selectedGame"
+                style="width: 100%"
+                :teleported="true"
+                popper-class="game-select-popper"
+              >
+                <!-- 游戏选项列表（使用 i18n 国际化） -->
                 <el-option
                   v-for="game in games"
                   :key="game"
-                  :label="GAME_NAMES[game]"
+                  :label="t(getGameNameKey(game))"
                   :value="game"
                 />
               </el-select>
@@ -607,8 +708,8 @@ onMounted(async () => {
                 数据来源：game 变量（当前遍历的游戏）
               -->
               <div class="game-section">
-                <!-- 游戏名称标题 -->
-                <div class="section-title">{{ GAME_NAMES[game] }}</div>
+                <!-- 游戏名称标题（使用 i18n 国际化） -->
+                <div class="section-title">{{ t(getGameNameKey(game)) }}</div>
                 <!-- 
                   Mods 路径表单项
                   数据来源：getGameModsPath(game) 获取当前游戏的 Mods 路径
@@ -623,7 +724,7 @@ onMounted(async () => {
                     :model-value="getGameModsPath(game)"
                     placeholder='example: D:\XXMI Launcher\Mods'
                     :status="getPathStatusType(game)"
-                    @update:model-value="(val: string) => handleModsPathChange(game, val)"
+                    @update:model-value="(val: string) => debouncedHandleModsPathChange(game, val)"
                   >
                     <!-- 浏览文件夹按钮 -->
                     <template #append>
@@ -644,14 +745,16 @@ onMounted(async () => {
 
                 <!-- 
                   目标进程表单项
-                  数据来源：getGameTargetProcess(game) 获取当前游戏的目标进程名
+                  数据来源：targetProcessMap[game] 响应式计算属性
                   交互行为：@update:model-value 输入进程名时实时更新
+                  占位符：显示默认进程名作为提示
                 -->
                 <el-form-item :label="t('Target Process')">
                   <!-- 目标进程输入框 -->
                   <el-input
-                    :model-value="getGameTargetProcess(game)"
-                    @update:model-value="(val: string) => handleTargetProcessChange(game, val)"
+                    :model-value="targetProcessMap[game]"
+                    :placeholder="getDefaultTargetProcess(game)"
+                    @update:model-value="(val: string) => debouncedHandleTargetProcessChange(game, val)"
                   />
                 </el-form-item>
               </div>
@@ -1401,5 +1504,79 @@ onMounted(async () => {
 
 :deep(.el-col) {
   padding-bottom: 0;
+}
+
+/*
+ * 自定义滚动条样式
+ * 隐藏默认滚动条，实现与界面视觉风格统一的自定义滚动条
+ */
+
+/* 隐藏默认滚动条（WebKit/Blink 浏览器） */
+.tab-content-inner::-webkit-scrollbar {
+  display: none;
+}
+
+/* 隐藏默认滚动条（IE/Edge） */
+.tab-content-inner {
+  -ms-overflow-style: none;
+}
+
+/* 隐藏默认滚动条（Firefox） */
+.tab-content-inner {
+  scrollbar-width: none;
+}
+
+/* 自定义滚动条容器 */
+.tab-content-inner {
+  position: relative;
+  overflow: auto;
+}
+
+/* 自定义滚动条轨道 */
+.tab-content-inner::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+/* 自定义滚动条滑块 - 使用 CSS scrollbar-gutter 和 scrollbar-color（现代浏览器） */
+.tab-content-inner {
+  scrollbar-gutter: stable;
+}
+
+/* 滚动容器 hover 时显示更明显的滚动条提示 */
+.tab-content-inner:hover {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.03);
+}
+
+/* 文本域自定义滚动条 */
+:deep(.el-textarea__inner)::-webkit-scrollbar {
+  width: 6px;
+}
+
+:deep(.el-textarea__inner)::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 3px;
+}
+
+:deep(.el-textarea__inner)::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+:deep(.el-textarea__inner)::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+:deep(.el-textarea__inner) {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.03);
 }
 </style>

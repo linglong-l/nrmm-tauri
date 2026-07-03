@@ -45,8 +45,16 @@ pub async fn load_mods(
     state: State<'_, AppState>,
     game: Option<String>,
 ) -> Result<Vec<ModGroupData>, String> {
+    // 记录请求开始时间（用于计算耗时）
+    let start_time = std::time::Instant::now();
+
+    // 记录请求参数
+    log::debug!("[load_mods] Request received - game: {:?}", game);
+
     let mut settings = state.settings.read().clone();
-    if let Some(g) = game {
+    let target_game_before = settings.target_game;
+
+    if let Some(ref g) = game {
         use crate::process::TargetGame;
         let target = match g.as_str() {
             "Wuthering_Waves" => TargetGame::WutheringWaves,
@@ -54,18 +62,80 @@ pub async fn load_mods(
             "Honkai_Star_Rail" => TargetGame::HonkaiStarRail,
             "Zenless_Zone_Zero" => TargetGame::ZenlessZoneZero,
             "Arknights_Endfield" => TargetGame::ArknightsEndfield,
-            _ => TargetGame::None,
+            e => {
+                log::error!(
+                    "[load_mods] Unknown game string: {:?}, defaulting to None",
+                    e
+                );
+                Err("Unknown game string")?;
+                TargetGame::None
+            }
         };
         settings.target_game = target;
     }
-    state
+
+    // 记录设置信息
+    log::debug!(
+        "[load_mods] Settings - target_game: {:?} -> {:?}",
+        target_game_before,
+        settings.target_game
+    );
+
+    // 克隆参数以满足 'static 生命周期要求
+    let mod_manager = state.mod_manager.clone();
+    let settings_clone = settings.clone();
+    let game_str = game.clone();
+
+    // 执行任务队列
+    log::debug!("[load_mods] Starting task queue execution");
+    let result = state
         .task_queue
-        .run_task("load_mods", state.mod_manager.load_mods(&settings))
-        .await
-        .map_err(|e| match e {
-            TaskQueueError::TaskAlreadyRunning(t) => format!("Task '{}' is already running", t),
-        })?
-        .map_err(|e| e.to_string())
+        .run_task("load_mods", async move {
+            log::debug!(
+                "[load_mods] Executing mod_manager.load_mods for game: {:?}",
+                game_str
+            );
+            mod_manager.load_mods(&settings_clone).await
+        })
+        .await;
+
+    // 计算耗时
+    let duration = start_time.elapsed();
+
+    match result {
+        Ok(groups) => {
+            log::debug!(
+                "[load_mods] Success - game: {:?}, groups: {}, duration: {:?}",
+                game,
+                groups.len(),
+                duration
+            );
+            Ok(groups)
+        }
+        Err(e) => {
+            let error_msg = match e {
+                TaskQueueError::TaskCancelled(t) => {
+                    log::debug!(
+                        "[load_mods] Cancelled - task: {}, game: {:?}, duration: {:?}",
+                        t,
+                        game,
+                        duration
+                    );
+                    format!("Task '{}' was cancelled", t)
+                }
+                TaskQueueError::ExecutionError(e) => {
+                    log::debug!(
+                        "[load_mods] Failed - game: {:?}, error: {}, duration: {:?}",
+                        game,
+                        e,
+                        duration
+                    );
+                    format!("Task execution failed: {}", e)
+                }
+            };
+            Err(error_msg)
+        }
+    }
 }
 
 /// 刷新模组数据（语义上表示强制重新加载，与 `load_mods` 等价）。
@@ -95,14 +165,20 @@ pub async fn refresh_mods(
         };
         settings.target_game = target;
     }
-    state
+    // 克隆参数以满足 'static 生命周期要求
+    let mod_manager = state.mod_manager.clone();
+    let settings_clone = settings.clone();
+
+    Ok(state
         .task_queue
-        .run_task("load_mods", state.mod_manager.refresh_mods(&settings))
+        .run_task("load_mods", async move {
+            mod_manager.refresh_mods(&settings_clone).await
+        })
         .await
         .map_err(|e| match e {
-            TaskQueueError::TaskAlreadyRunning(t) => format!("Task '{}' is already running", t),
-        })?
-        .map_err(|e| e.to_string())
+            TaskQueueError::TaskCancelled(t) => format!("Task '{}' was cancelled", t),
+            TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e),
+        })?)
 }
 
 /// 根据指定路径刷新模组数据（不依赖全局设置）。
@@ -145,18 +221,23 @@ pub async fn update_mod_data(
     mods_path: String,
     known_libraries: HashMap<String, String>,
 ) -> Result<UpdateModDataResult, String> {
-    state
+    // 克隆参数以满足 'static 生命周期要求
+    let mod_manager = state.mod_manager.clone();
+    let mods_path_clone = mods_path.clone();
+    let known_libraries_clone = known_libraries.clone();
+
+    Ok(state
         .task_queue
-        .run_task(
-            "update_mod_data",
-            state
-                .mod_manager
-                .update_mod_data(&mods_path, &known_libraries),
-        )
+        .run_task("update_mod_data", async move {
+            mod_manager
+                .update_mod_data(&mods_path_clone, &known_libraries_clone)
+                .await
+        })
         .await
         .map_err(|e| match e {
-            TaskQueueError::TaskAlreadyRunning(t) => format!("Task '{}' is already running", t),
-        })?
+            TaskQueueError::TaskCancelled(t) => format!("Task '{}' was cancelled", t),
+            TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e),
+        })?)
 }
 
 /// 校验 Mods 路径是否为合法的 3DMigoto Mods 目录。
@@ -572,8 +653,7 @@ pub async fn rename_mod(
 ) -> Result<(), String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
-        crate::mod_manager::ModManager::rename_mod(&mod_path, &new_name)
-            .map_err(|e| e.to_string())
+        crate::mod_manager::ModManager::rename_mod(&mod_path, &new_name).map_err(|e| e.to_string())
     })
     .await
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
@@ -610,8 +690,8 @@ pub async fn refresh_single_group(
 ) -> Result<crate::mod_manager::ModGroupData, String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
-        use crate::mod_manager::ModManager;
         use crate::mod_manager::ModGroupData;
+        use crate::mod_manager::ModManager;
 
         let group_path_str = group_path.clone();
         let path = std::path::Path::new(&group_path);
@@ -624,8 +704,8 @@ pub async fn refresh_single_group(
 
         let icon_path = ModManager::get_icon_path(&group_path_str);
         let favorite_date_time = ModManager::is_favorite(&group_path_str).unwrap_or(None);
-        let mods_in_group = ModManager::get_mods_on_group(&group_path_str)
-            .map_err(|e| e.to_string())?;
+        let mods_in_group =
+            ModManager::get_mods_on_group(&group_path_str).map_err(|e| e.to_string())?;
         let mods_count = mods_in_group.len();
         let previous_selected_mod_on_group =
             ModManager::get_selected_mod_in_group(&group_path_str, mods_count).unwrap_or(0);
@@ -979,11 +1059,12 @@ pub async fn save_window_state(
 ///
 /// 参数：
 /// - `app`: Tauri 应用句柄。
-/// - `state`: 应用全局状态（当前未使用）。
+/// - `state`: 应用全局状态（用于获取当前语言设置）。
 #[tauri::command]
 pub async fn setup_tray(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let _ = state;
-    crate::tray::TrayManager::setup_tray(&app).map_err(|e| e.to_string())
+    let settings = state.settings.read();
+    let locale = settings.language.as_str();
+    crate::tray::TrayManager::setup_tray(&app, locale).map_err(|e| e.to_string())
 }
 
 /// 更新系统托盘的提示文字（tooltip）。
@@ -1416,11 +1497,15 @@ pub async fn check_all_mods_syntax(
 pub async fn select_directory(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let result = app
-        .dialog()
-        .file()
-        .set_title("Select Mods Folder")
-        .blocking_pick_folder();
+    // 将同步阻塞的对话框调用放到 spawn_blocking 中，避免阻塞 tokio 工作线程
+    let result = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("Select Mods Folder")
+            .blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
 
     match result {
         Some(path) => {
@@ -1454,4 +1539,43 @@ pub async fn add_mods(
         .add_mods(source_paths, &target_group_path)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// 使用 BFS（广度优先搜索）算法查找指定路径下的所有 `.ini` 文件。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `path`: 起始路径（文件或目录）。
+///
+/// 返回：INI 文件路径列表。
+#[tauri::command]
+pub async fn find_ini_files(state: State<'_, AppState>, path: String) -> Result<Vec<String>, String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&path);
+        let ini_files = crate::mod_manager::ModManager::find_ini_files_bfs(path);
+        Ok(ini_files
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
+/// 处理 INI 文件，移除 xxmi 专属的 INI 语句。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `paths`: INI 文件路径列表。
+///
+/// 返回：是否处理成功。
+#[tauri::command]
+pub async fn process_ini_files(state: State<'_, AppState>, paths: Vec<String>) -> Result<bool, String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::process_ini_files(&paths).map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }

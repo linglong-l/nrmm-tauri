@@ -1,7 +1,7 @@
 // 全局事件总线模块。
 // 该模块基于 Tauri 事件系统封装了一层类型安全的事件订阅/分发机制，
 // 同时保留了对前端进程内（非跨进程）自定义事件的支持，便于在组件解耦场景下通信。
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { listen, emit as tauriEmit, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
   FileWatcherEvent,
   ModGroupData,
@@ -120,11 +120,13 @@ type EventCallback<T = unknown> = (payload: T) => void;
  * 事件管理器单例类。
  *
  * 同时管理两类监听：
- * 1. Tauri 跨进程事件监听（通过 `listen` 注册，存储于 `listeners`）；
- * 2. 前端进程内自定义事件监听（存储于 `customListeners`），用于 Tauri 事件不可用的场景。
+ * 1. Tauri 跨进程事件监听（通过 `listen` 注册，存储于 `listeners`），用于接收后端 emit 的事件；
+ * 2. 前端进程内自定义事件监听（存储于 `customListeners`），用于可靠接收前端 emit 的内部事件。
  *
- * 在 `on` 中会优先尝试注册 Tauri 监听；若失败（例如在非 Tauri 环境或测试环境），
- * 则自动降级为注册自定义监听，保证调用方逻辑的一致性。
+ * 在 `on` 中会同时注册两种监听，确保：
+ * - 后端 emit 的事件能通过 Tauri 监听接收到；
+ * - 前端 emit 的事件能通过自定义监听同步、可靠地接收到。
+ * 两种监听机制互不干扰，各自独立。
  */
 class EventManager {
   /** Tauri 跨进程事件监听的取消函数集合，按事件名分组 */
@@ -134,7 +136,10 @@ class EventManager {
 
   /**
    * 订阅指定事件。
-   * 优先尝试通过 Tauri 的 `listen` 注册跨进程监听；若失败则降级为自定义监听。
+   * 同时注册 Tauri 跨进程监听和前端进程内自定义监听：
+   * - Tauri 监听用于接收后端 emit 的事件；
+   * - 自定义监听用于可靠接收前端 emit 的内部事件（同步触发，无延迟）。
+   * 两种监听各自独立，不会重复触发同一回调。
    * @param event 事件名称
    * @param callback 事件回调（接收类型安全的载荷）
    * @returns 取消订阅函数，调用后移除该监听
@@ -143,6 +148,9 @@ class EventManager {
     event: T,
     callback: (payload: EventPayloadMap[T]) => void
   ): Promise<() => void> {
+    const removeCustom = this.addCustomListener(event, callback as EventCallback);
+
+    let removeTauri: (() => void) | null = null;
     try {
       const unlisten = await listen(event, (eventData) => {
         callback(eventData.payload as EventPayloadMap[T]);
@@ -152,29 +160,66 @@ class EventManager {
         this.listeners.set(event, []);
       }
       this.listeners.get(event)!.push(unlisten);
-
-      return () => {
+      removeTauri = () => {
         this.removeTauriListener(event, unlisten);
       };
     } catch {
-      // Tauri 监听注册失败时降级为自定义监听
-      return this.addCustomListener(event, callback as EventCallback);
+      // Tauri 监听注册失败时忽略，自定义监听仍已注册
+    }
+
+    return () => {
+      if (removeTauri) {
+        removeTauri();
+      }
+      removeCustom();
+    };
+  }
+
+  /**
+   * 触发指定事件（同时触发 Tauri 跨进程事件和前端进程内的自定义监听）。
+   * 用于需要后端接收的事件：
+   * - Tauri 事件供后端和通过 Tauri listen 注册的监听器接收；
+   * - 自定义监听供前端内部使用，同步触发、可靠无延迟。
+   * @param event 事件名称
+   * @param payload 事件载荷
+   */
+  async emit<T extends EventName>(event: T, payload: EventPayloadMap[T]): Promise<void> {
+    console.log('[EventManager] emit event:', event, 'payload:', payload);
+    // 触发 Tauri 跨进程事件（供后端和通过 listen 注册的监听器接收）
+    try {
+      await tauriEmit(event, payload);
+    } catch {
+      // Tauri 环境不可用时忽略错误（如非 Tauri 环境或测试环境）
+    }
+
+    // 触发前端进程内的自定义监听（同步触发，可靠无延迟）
+    const callbacks = this.customListeners.get(event);
+    if (callbacks) {
+      console.log('[EventManager] event', event, 'has', callbacks.size, 'custom listeners');
+      callbacks.forEach((cb) => {
+        try {
+          cb(payload);
+        } catch {
+          // 单个回调异常不影响其他回调，忽略
+        }
+      });
     }
   }
 
   /**
-   * 触发指定事件（仅对前端进程内的自定义监听生效，不会推送至 Tauri 后端）。
+   * 触发前端内部事件（仅触发自定义监听，不触发 Tauri 跨进程事件）。
+   * 用于前端组件间通信，避免 Tauri listen 监听器重复触发。
    * @param event 事件名称
    * @param payload 事件载荷
    */
-  emit<T extends EventName>(event: T, payload: EventPayloadMap[T]): void {
+  emitLocal<T extends EventName>(event: T, payload: EventPayloadMap[T]): void {
     const callbacks = this.customListeners.get(event);
     if (callbacks) {
       callbacks.forEach((cb) => {
         try {
           cb(payload);
         } catch {
-          // 单个回调异常不影响其他回调，忽略
+          // 单个回调异常不影响其他回调
         }
       });
     }

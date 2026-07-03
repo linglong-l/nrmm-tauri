@@ -224,6 +224,8 @@ export interface AppSettings {
   savedWindowY: number | null;
   /** 主题名称 */
   theme: string;
+  /** 当前目标游戏 */
+  targetGame: TargetGame;
   /** 鸣潮的 Mods 目录路径 */
   modsPathWuwa: string;
   /** 原神的 Mods 目录路径 */

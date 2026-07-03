@@ -119,9 +119,13 @@ pub fn run() {
                 }
             }
 
-            // 4) 创建系统托盘菜单与图标
-            if let Err(e) = crate::tray::TrayManager::setup_tray(&app_handle) {
-                log::error!("Failed to setup tray: {}", e);
+            // 4) 创建系统托盘菜单与图标（根据当前语言设置显示本地化文本）
+            {
+                let settings = state.settings.read();
+                let locale = settings.language.as_str();
+                if let Err(e) = crate::tray::TrayManager::setup_tray(&app_handle, locale) {
+                    log::error!("Failed to setup tray: {}", e);
+                }
             }
 
             // 5) 注册托盘菜单点击事件分发器
@@ -175,9 +179,11 @@ pub fn run() {
                             }
                         }
                         // 窗口移动：防抖 500ms 后保存窗口状态
+                        // 使用 tauri::async_runtime::spawn + tokio::time::sleep，
+                        // 避免每次事件都创建 OS 线程导致线程泄漏
                         tauri::WindowEvent::Moved(_) => {
-                            std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                                 if let Err(e) =
                                     crate::window_manager::WindowManager::save_window_state(
                                         &app, &settings,
@@ -188,9 +194,11 @@ pub fn run() {
                             });
                         }
                         // 窗口尺寸变化：防抖 500ms 后保存窗口状态
+                        // 使用 tauri::async_runtime::spawn + tokio::time::sleep，
+                        // 避免每次事件都创建 OS 线程导致线程泄漏
                         tauri::WindowEvent::Resized(_) => {
-                            std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                                 if let Err(e) =
                                     crate::window_manager::WindowManager::save_window_state(
                                         &app, &settings,
@@ -275,6 +283,9 @@ pub fn run() {
             commands::select_directory,
             commands::open_path,
             commands::open_mod_folder,
+            commands::add_mods,
+            commands::find_ini_files,
+            commands::process_ini_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

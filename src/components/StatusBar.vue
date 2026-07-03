@@ -11,7 +11,7 @@ import { useI18n } from 'vue-i18n';
 import { useGameStore } from '../stores/game';
 import { useHotkeyStore } from '../stores/hotkey';
 import { useSettingsStore } from '../stores/settings';
-import { GAME_NAMES } from '../utils/constants';
+import { getGameNameKey } from '../utils/constants';
 import { HotkeyGamepad } from '../types';
 
 const { t } = useI18n();
@@ -24,9 +24,9 @@ const totalMods = computed(() => {
   return gameStore.modGroups.reduce((sum, group) => sum + group.modsInGroup.length, 0);
 });
 
-// 当前游戏显示名（未选择时显示 None）
+// 当前游戏显示名（未选择时显示 None），使用 i18n 国际化
 const currentGameName = computed(() => {
-  return GAME_NAMES[gameStore.targetGame] || 'None';
+  return t(getGameNameKey(gameStore.targetGame));
 });
 
 // 热键状态文本：键盘热键始终启用，手柄热键可设为 none

@@ -21,9 +21,11 @@ import id from 'element-plus/es/locale/lang/id';
 import { TitleBar, StatusBar } from './components';
 import IndexPage from './pages/index/index.vue';
 import { useSettingsStore } from './stores/settings';
+import { useGameStore } from './stores/game';
 
 const { locale } = useI18n();
 const settingsStore = useSettingsStore();
+const gameStore = useGameStore();
 
 // 用于在组件卸载时取消 Tauri 事件监听的句柄；null 表示尚未注册或已注销
 let unlistenHotkey: UnlistenFn | null = null;
@@ -71,6 +73,8 @@ async function initApp() {
   try {
     await settingsStore.loadSettings();
     locale.value = settingsStore.language;
+    // 设置加载完成后，同步目标游戏到 gameStore
+    gameStore.initFromSettings();
   } catch {
     // ignore
   }
@@ -107,12 +111,18 @@ watch(
   { immediate: true }
 );
 
+/**
+ * 全局右键菜单禁用回调函数
+ * @param e - 右键菜单事件
+ */
+function handleContextMenu(e: MouseEvent) {
+  e.preventDefault();
+}
+
 // 组件挂载：初始化应用，并注册 Tauri 全局热键事件监听
 onMounted(() => {
-  // 阻止 WebView 系统默认右键菜单
-  document.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-  });
+  // 全局禁用默认右键菜单，防止与自定义右键功能冲突
+  document.addEventListener('contextmenu', handleContextMenu);
 
   initApp();
 
@@ -121,8 +131,11 @@ onMounted(() => {
   }).catch(() => {});
 });
 
-// 组件卸载：注销 Tauri 事件监听，避免内存泄漏与重复触发
+// 组件卸载：注销 Tauri 事件监听和全局右键菜单禁用，避免内存泄漏与重复触发
 onUnmounted(() => {
+  // 移除全局右键菜单禁用事件监听
+  document.removeEventListener('contextmenu', handleContextMenu);
+
   if (unlistenHotkey) {
     unlistenHotkey();
     unlistenHotkey = null;
@@ -131,8 +144,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <!-- 应用根容器：通过 ElConfigProvider 注入语言与主题，外层 div 控制整体布局/主题/背景透明度 -->
-  <ElConfigProvider :locale="elementPlusLocale" theme="dark">
+  <!-- 应用根容器：通过 ElConfigProvider 注入语言，外层 div 控制整体布局/主题/背景透明度 -->
+  <ElConfigProvider :locale="elementPlusLocale">
     <div
       class="app-container"
       :class="{ 'dark-theme': isDark }"

@@ -56,6 +56,12 @@ export function useGame() {
     isCasualStyle,
     // 是否为 INI 文件类型 Mod
     isIniFile,
+    // 是否正在加载模组（用于 UI loading 状态）
+    isLoading,
+    // 加载状态：idle | loading | cancelled | completed | error
+    loadStatus,
+    // 最后一次请求加载的游戏（用于数据一致性校验）
+    lastRequestedGame,
     // 当前选中的分组对象（getter，由 currentGroupIndex 推导）
     currentGroup,
     // 当前选中分组下的 Mod 列表（getter）
@@ -68,11 +74,32 @@ export function useGame() {
 
   /**
    * 切换目标游戏。
-   * 切换后会触发对应游戏 Mods 目录的加载与界面状态重置。
+   * 
+   * 仅更新游戏状态并发射 GAME_SWITCHED 事件，不直接触发模组加载。
+   * 模组加载由事件监听器（如 ModsTab.vue）统一负责，避免重复加载。
+   * 
    * @param game 目标游戏枚举值
    */
   function setTargetGame(game: TargetGame) {
     gameStore.setTargetGame(game);
+  }
+
+  /**
+   * 直接加载指定游戏的模组数据（不经过防抖）。
+   * 适用于需要立即加载的场景，如托盘菜单点击。
+   * @param game 目标游戏枚举值
+   */
+  async function loadModsForGame(game: TargetGame) {
+    await gameStore.loadModsForGame(game);
+  }
+
+  /**
+   * 清除指定游戏的模组缓存。
+   * 适用于文件变化、手动刷新等场景，确保下次加载时从后端获取最新数据。
+   * @param game 目标游戏，不传则清除当前游戏的缓存
+   */
+  function clearModsCache(game?: TargetGame) {
+    gameStore.clearModsCache(game);
   }
 
   /**
@@ -253,6 +280,16 @@ export function useGame() {
     gameStore.removeModGroup(groupPath);
   }
 
+  /**
+   * 从指定分组中移除指定索引的模组。
+   * 用于将模组移动到还原区的场景。
+   * @param groupPath 分组路径
+   * @param modIndex 该分组内的模组索引
+   */
+  function removeModFromGroup(groupPath: string, modIndex: number) {
+    gameStore.removeModFromGroup(groupPath, modIndex);
+  }
+
   // 统一返回响应式状态与方法，供调用方按需解构使用
   return {
     targetGame,
@@ -270,11 +307,16 @@ export function useGame() {
     modKeybindInfo,
     isCasualStyle,
     isIniFile,
+    // 性能优化与交互改进相关状态
+    isLoading,
+    loadStatus,
+    lastRequestedGame,
     currentGroup,
     currentMods,
     favoriteGroups,
     sortedGroups,
     setTargetGame,
+    loadModsForGame,
     setMods,
     setModGroups,
     setModsPathStatus,
@@ -295,6 +337,8 @@ export function useGame() {
     updateModInGroup,
     updateGroup,
     addModGroup,
-    removeModGroup
+    removeModGroup,
+    removeModFromGroup,
+    clearModsCache
   };
 }

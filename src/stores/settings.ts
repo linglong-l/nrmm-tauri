@@ -55,6 +55,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const keybindSimulateKeypress = computed(() => settings.value.keybindSimulateKeypress);
   /** 模组分组的排序方式：ByIndex / ByName */
   const sortGroupMethod = computed(() => settings.value.sortGroupMethod);
+  /** 当前目标游戏 */
+  const targetGame = computed(() => settings.value.targetGame);
 
   /** 设置键盘热键。注意：此处仅修改内存中的值，需另外调用 saveSettings 持久化。 */
   function setHotkeyKeyboard(value: HotkeyKeyboard) {
@@ -114,6 +116,11 @@ export const useSettingsStore = defineStore('settings', () => {
   /** 设置分组排序方式。 */
   function setSortGroupMethod(value: SortGroupMethod) {
     settings.value.sortGroupMethod = value;
+  }
+
+  /** 设置目标游戏。 */
+  function setTargetGame(value: TargetGame) {
+    settings.value.targetGame = value;
   }
 
   /**
@@ -333,6 +340,7 @@ export const useSettingsStore = defineStore('settings', () => {
     showMenuWhenTogglingOutsideGame,
     keybindSimulateKeypress,
     sortGroupMethod,
+    targetGame,
     setHotkeyKeyboard,
     setHotkeyGamepad,
     setOverallScale,
@@ -345,6 +353,7 @@ export const useSettingsStore = defineStore('settings', () => {
     setShowMenuWhenTogglingOutsideGame,
     setKeybindSimulateKeypress,
     setSortGroupMethod,
+    setTargetGame,
     setTargetProcess,
     getTargetProcess,
     setModsPath,

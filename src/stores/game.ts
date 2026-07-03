@@ -1,9 +1,11 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { ModData, ModGroupData, ModsPathStatus, TargetGame, ModKeybindInfo } from '../types';
+import { invoke } from '@tauri-apps/api/core';
 import { invokeToggleModFavorite, invokeToggleGroupFavorite, invokeSearchMods } from '../utils/invoke';
 import { EventNames, eventManager } from '../utils/events';
 import { useSettingsStore } from './settings';
+import { getModsCache, setModsCache, removeModsCache } from '../utils/cache';
 
 /**
  * 游戏 / Mods 数据 Store
@@ -45,6 +47,16 @@ export const useGameStore = defineStore('game', () => {
   const isCasualStyle = ref(false);
   // 绑定目标是否为 ini 文件（区别于运行时 Mod）。
   const isIniFile = ref(false);
+
+  /**
+   * 性能优化与交互改进相关状态
+   */
+  // 是否正在加载模组（用于 UI loading 状态显示）
+  const isLoading = ref(false);
+  // 加载状态：idle(空闲) | loading(加载中) | cancelled(已取消) | completed(已完成) | error(错误)
+  const loadStatus = ref<'idle' | 'loading' | 'cancelled' | 'completed' | 'error'>('idle');
+  // 最后一次请求加载的游戏（用于数据一致性校验）
+  const lastRequestedGame = ref<TargetGame | null>(null);
 
   /**
    * 当前选中的分组对象。
@@ -158,15 +170,143 @@ export const useGameStore = defineStore('game', () => {
   /**
    * 切换目标游戏，并广播 GAME_SWITCHED 事件。
    * 同时从 settingsStore 同步对应游戏的 Mods 路径到 gameStore.modsPath。
-   * 注意：本函数仅更新状态并通知，不负责重新扫描 Mods，
-   * 调用方应在监听到事件后自行触发加载流程。
+   *
+   * 注意：本函数仅负责状态更新和事件发射，不触发模组加载。
+   * 模组加载由调用方（如 useGame.ts 的防抖回调或 ModsTab.vue 的事件监听器）显式控制，
+   * 避免状态更新与加载操作耦合导致的事件循环和重复加载问题。
+   *
+   * 同时同步更新 settingsStore 中的 targetGame 并持久化到配置文件，
+   * 确保 gameStore 与 settingsStore 的目标游戏状态始终一致。
+   *
    * @param game 新的目标游戏
    */
   function setTargetGame(game: TargetGame) {
+    console.log('[gameStore] setTargetGame called, game:', game);
     targetGame.value = game;
     const settingsStore = useSettingsStore();
     modsPath.value = settingsStore.getModsPath(game);
-    eventManager.emit(EventNames.GAME_SWITCHED, { game });
+    // 同步更新 settings 中的 targetGame 并持久化
+    settingsStore.setTargetGame(game);
+    settingsStore.saveSettings().catch(() => {
+      console.warn('[gameStore] Failed to save settings after game change');
+    });
+    console.log('[gameStore] Emitting GAME_SWITCHED event with game:', game);
+    eventManager.emitLocal(EventNames.GAME_SWITCHED, { game });
+  }
+
+  /**
+   * 从设置中初始化游戏状态。
+   * 在设置加载完成后调用，确保 gameStore 与 settingsStore 保持同步。
+   * 仅当 targetGame 仍为 'none' 时才同步，避免覆盖用户已选择的游戏。
+   */
+  function initFromSettings() {
+    if (targetGame.value !== 'none') {
+      console.log('[gameStore] initFromSettings: targetGame already set, skipping');
+      return;
+    }
+    const settingsStore = useSettingsStore();
+    const settingsGame = settingsStore.targetGame;
+    console.log('[gameStore] initFromSettings: syncing targetGame from settings:', settingsGame);
+    if (settingsGame && settingsGame !== 'none') {
+      targetGame.value = settingsGame;
+      modsPath.value = settingsStore.getModsPath(settingsGame);
+      console.log('[gameStore] initFromSettings: Emitting GAME_SWITCHED event with game:', settingsGame);
+      eventManager.emitLocal(EventNames.GAME_SWITCHED, { game: settingsGame });
+    } else {
+      console.log('[gameStore] initFromSettings: settings game is none, staying at none');
+    }
+  }
+
+  /**
+   * 加载指定游戏的模组数据。
+   * 
+   * 实现缓存优先策略与数据一致性保障：
+   * 1. 检查内存缓存：若当前游戏的数据已加载且未过期，直接返回
+   * 2. 检查 localStorage 缓存：若存在有效缓存，直接使用
+   * 3. 从后端加载：缓存不存在或过期时，调用后端 API 并更新缓存
+   * 4. 数据一致性校验：仅当返回的数据与最后一次请求的游戏匹配时才更新状态
+   * 5. 根据结果更新加载状态（completed / cancelled / error）
+   * 
+   * @param game 目标游戏
+   */
+  async function loadModsForGame(game: TargetGame) {
+    // 检查 game 是否为 none（未选择游戏），若是则直接返回，不发起任何请求
+    if (game === 'none') {
+      console.log('[gameStore] Game is none, skipping mods loading');
+      return;
+    }
+
+    // 检查内存缓存：当前游戏的数据已加载，直接返回
+    if (targetGame.value === game && isModsLoaded.value && modGroups.value.length > 0) {
+      console.log('[gameStore] Using memory cache for game:', game);
+      loadStatus.value = 'completed';
+      return;
+    }
+
+    // 更新加载状态
+    loadStatus.value = 'loading';
+    isLoading.value = true;
+    // 记录最后一次请求的游戏（用于数据一致性校验）
+    lastRequestedGame.value = game;
+
+    try {
+      // 检查 localStorage 缓存
+      const cachedGroups = getModsCache<ModGroupData[]>(game);
+      if (cachedGroups && cachedGroups.length > 0) {
+        console.log('[gameStore] Using localStorage cache for game:', game);
+        
+        if (lastRequestedGame.value === game) {
+          setModGroups(cachedGroups);
+          setModsLoaded(true);
+          loadStatus.value = 'completed';
+        } else {
+          loadStatus.value = 'cancelled';
+        }
+        return;
+      }
+
+      // 缓存不存在或过期，从后端加载
+      console.log('[gameStore] Loading mods from backend for game:', game);
+      const groups = await invoke<ModGroupData[]>('load_mods', { game });
+
+      // 数据一致性检查：仅当返回的数据与最后一次请求的游戏匹配时才更新状态
+      if (lastRequestedGame.value === game) {
+        setModGroups(groups);
+        setModsLoaded(true);
+        loadStatus.value = 'completed';
+        // 更新 localStorage 缓存
+        setModsCache(game, groups);
+      } else {
+        // 数据已过时（用户已切换到其他游戏），标记为已取消
+        loadStatus.value = 'cancelled';
+      }
+    } catch (error) {
+      // 检查是否为后端任务取消错误
+      if (error === 'Task cancelled' || String(error).includes('cancelled')) {
+        loadStatus.value = 'cancelled';
+      } else {
+        // 加载失败：清空旧数据，避免展示上一个游戏的残留内容
+        modGroups.value = [];
+        isModsLoaded.value = false;
+        loadStatus.value = 'error';
+        console.error('[gameStore] loadModsForGame failed:', error);
+      }
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  /**
+   * 清除指定游戏的模组缓存。
+   * 
+   * 适用于文件变化、手动刷新等场景，确保下次加载时从后端获取最新数据。
+   * 
+   * @param game 目标游戏，不传则清除当前游戏的缓存
+   */
+  function clearModsCache(game?: TargetGame) {
+    const target = game || targetGame.value;
+    removeModsCache(target);
+    console.log('[gameStore] Cache cleared for game:', target);
   }
 
   /** 直接替换整个 Mods 列表。 */
@@ -260,14 +400,18 @@ export const useGameStore = defineStore('game', () => {
   /** 切换到下一个分组，循环回到开头。 */
   function nextGroup() {
     if (modGroups.value.length > 0) {
-      currentGroupIndex.value = (currentGroupIndex.value + 1) % modGroups.value.length;
+      const nextIndex = (currentGroupIndex.value + 1) % modGroups.value.length;
+      currentGroupIndex.value = nextIndex;
+      currentGroupPath.value = modGroups.value[nextIndex].groupPath;
     }
   }
 
   /** 切换到上一个分组，循环回到末尾。 */
   function prevGroup() {
     if (modGroups.value.length > 0) {
-      currentGroupIndex.value = (currentGroupIndex.value - 1 + modGroups.value.length) % modGroups.value.length;
+      const prevIndex = (currentGroupIndex.value - 1 + modGroups.value.length) % modGroups.value.length;
+      currentGroupIndex.value = prevIndex;
+      currentGroupPath.value = modGroups.value[prevIndex].groupPath;
     }
   }
 
@@ -401,18 +545,34 @@ export const useGameStore = defineStore('game', () => {
   }
 
   /**
-   * 按分组路径移除分组。
-   * 移除后若 currentGroupIndex 越界，则回退到末尾合法位置。
-   */
-  function removeModGroup(groupPath: string) {
-    const index = modGroups.value.findIndex(g => g.groupPath === groupPath);
-    if (index > -1) {
-      modGroups.value.splice(index, 1);
-      if (currentGroupIndex.value >= modGroups.value.length) {
-        currentGroupIndex.value = Math.max(0, modGroups.value.length - 1);
-      }
+ * 按分组路径移除分组。
+ * 移除后若 currentGroupIndex 越界，则回退到末尾合法位置。
+ */
+function removeModGroup(groupPath: string) {
+  const index = modGroups.value.findIndex(g => g.groupPath === groupPath);
+  if (index > -1) {
+    modGroups.value.splice(index, 1);
+    if (currentGroupIndex.value >= modGroups.value.length) {
+      currentGroupIndex.value = Math.max(0, modGroups.value.length - 1);
     }
   }
+}
+
+/**
+ * 从指定分组中移除指定索引的模组。
+ * 用于将模组移动到还原区的场景。
+ * @param groupPath 分组路径
+ * @param modIndex 该分组内的模组索引
+ */
+function removeModFromGroup(groupPath: string, modIndex: number) {
+  const group = findGroupByPath(groupPath);
+  if (group && modIndex >= 0 && modIndex < group.modsInGroup.length) {
+    group.modsInGroup.splice(modIndex, 1);
+    for (let i = modIndex; i < group.modsInGroup.length; i++) {
+      group.modsInGroup[i].realIndex -= 1;
+    }
+  }
+}
 
   return {
     targetGame,
@@ -430,11 +590,17 @@ export const useGameStore = defineStore('game', () => {
     modKeybindInfo,
     isCasualStyle,
     isIniFile,
+    // 性能优化与交互改进相关状态
+    isLoading,
+    loadStatus,
+    lastRequestedGame,
     currentGroup,
     currentMods,
     favoriteGroups,
     sortedGroups,
     setTargetGame,
+    initFromSettings,
+    loadModsForGame,
     setMods,
     setModGroups,
     setModsPathStatus,
@@ -454,10 +620,12 @@ export const useGameStore = defineStore('game', () => {
     updateGroup,
     addModGroup,
     removeModGroup,
+    removeModFromGroup,
     findGroupByPath,
     findGroupIndexByPath,
     findAncestorPaths,
     toggleExpandPath,
-    expandParentPaths
+    expandParentPaths,
+    clearModsCache
   };
 });

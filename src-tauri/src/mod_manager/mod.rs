@@ -935,9 +935,7 @@ impl ModManager {
                         }
                     } else if name.starts_with('#') {
                         // 情况 2：# 开头目录，构建树形嵌套结构
-                        if let Some(tree_group) =
-                            Self::scan_tree_node(&path)
-                        {
+                        if let Some(tree_group) = Self::scan_tree_node(&path) {
                             groups.push(tree_group);
                         }
                     } else if !name.starts_with('.') && Self::is_mod_directory(&path) {
@@ -1055,9 +1053,7 @@ impl ModManager {
     /// - `base_path`: 起始目录路径。
     ///
     /// 返回：构建完成的 ModGroupData（树形结构）。
-    fn scan_tree_node(
-        base_path: &Path,
-    ) -> Option<ModGroupData> {
+    fn scan_tree_node(base_path: &Path) -> Option<ModGroupData> {
         struct NodeInfo {
             path: PathBuf,
             child_paths: Vec<PathBuf>,
@@ -1066,7 +1062,8 @@ impl ModManager {
         }
 
         let mut visited: HashSet<PathBuf> = HashSet::new();
-        let mut node_info_map: std::collections::HashMap<PathBuf, NodeInfo> = std::collections::HashMap::new();
+        let mut node_info_map: std::collections::HashMap<PathBuf, NodeInfo> =
+            std::collections::HashMap::new();
         let mut post_order: Vec<PathBuf> = Vec::new();
         let mut stack: Vec<PathBuf> = Vec::new();
 
@@ -1160,7 +1157,8 @@ impl ModManager {
             }
         }
 
-        let mut built_map: std::collections::HashMap<PathBuf, ModGroupData> = std::collections::HashMap::new();
+        let mut built_map: std::collections::HashMap<PathBuf, ModGroupData> =
+            std::collections::HashMap::new();
         let mut index: u32 = 0;
 
         for path in post_order.iter().rev() {
@@ -1211,10 +1209,7 @@ impl ModManager {
                     });
                     let mod_icon = Self::get_icon_path(mod_path);
                     let mod_favorite = Self::is_favorite(&mod_path_str).unwrap_or(None);
-                    let mod_dir_name = mod_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("");
+                    let mod_dir_name = mod_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     let mod_is_disabled = mod_dir_name.starts_with(DISABLED_PREFIX);
 
                     mods_in_group.push(ModData {
@@ -1766,13 +1761,13 @@ impl ModManager {
             anyhow::bail!("Group path does not exist: {:?}", path);
         }
 
-        // 取 Mods 根目录（分组的父目录的父目录）
-        let mods_path = match path.parent() {
+        // group_path = mods_root/_MANAGED_/group_xx
+        // parent() = mods_root/_MANAGED_ → 这就是 managed_path
+        let managed_path = match path.parent() {
             Some(p) => p,
             None => anyhow::bail!("Invalid group path: no parent directory"),
         };
 
-        let managed_path = mods_path.join(MANAGED_FOLDER);
         fs::create_dir_all(&managed_path)
             .with_context(|| format!("Failed to create managed folder: {:?}", managed_path))?;
 
@@ -1868,7 +1863,10 @@ impl ModManager {
         fs::rename(path, &new_path)
             .with_context(|| format!("Failed to rename mod: {:?} -> {:?}", path, new_path))?;
 
-        info!("Mod renamed: {:?} -> {:?} (disabled={})", path, new_path, is_disabled);
+        info!(
+            "Mod renamed: {:?} -> {:?} (disabled={})",
+            path, new_path, is_disabled
+        );
         Ok(())
     }
 
@@ -1907,6 +1905,7 @@ impl ModManager {
     ///
     /// 返回：分组数据列表。
     pub async fn load_mods(&self, settings: &Settings) -> Result<Vec<ModGroupData>> {
+        log::debug!("读取游戏模组：{:?}", &settings.target_game);
         let target_game: TargetGame = settings.target_game;
         let mods_path: String = Self::get_mods_path_for_game(settings, target_game);
 
@@ -1935,7 +1934,6 @@ impl ModManager {
                 .await
                 .with_context(|| "Failed to spawn blocking task for scanning groups")??;
 
-        println!("groups icon_path 信息：{:#?}", &groups[0].icon_path);
         info!("Loaded {} groups", groups.len());
         Ok(groups)
     }
@@ -1959,8 +1957,8 @@ impl ModManager {
         let groups = tokio::task::spawn_blocking(move || {
             Self::scan_groups(&mods_path, SortGroupMethod::ByIndex)
         })
-            .await
-            .with_context(|| "Failed to spawn blocking task for refreshing mod data")??;
+        .await
+        .with_context(|| "Failed to spawn blocking task for refreshing mod data")??;
 
         Ok(groups)
     }
@@ -1992,8 +1990,8 @@ impl ModManager {
         let result = tokio::task::spawn_blocking(move || {
             Self::update_mod_data_sync(&mods_path, &known_libraries)
         })
-            .await
-            .map_err(|e| format!("Task join error: {}", e))?;
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?;
 
         let (result_logs, error_report, result_success, hash_conflict_report) = match result {
             Ok((logs, report, hash_report)) => (logs, Some(report), true, Some(hash_report)),
@@ -2114,14 +2112,19 @@ impl ModManager {
                 }
 
                 // 管理分组内的每个模组
+                // 状态过滤系统：仅处理启用状态的模组，禁用模组（is_disabled=true）会被自动忽略
+                // 状态保护机制：本流程不会改变任何模组的启用/禁用状态，状态由目录名的 DISABLED 前缀决定
                 match Self::get_mods_on_group(group_path) {
                     Ok(mods) => {
                         mods.par_iter().for_each(|mod_data| {
-                            // 跳过 None 槽位和禁用模组
+                            // 状态过滤：跳过 None 槽位和禁用模组
+                            // None 槽位（mod_path == "None"）是特殊占位符，不需要 INI 处理
+                            // 禁用模组（is_disabled == true）目录名以 DISABLED 开头，3DMigoto 会忽略，无需注入
                             if mod_data.mod_path == "None" || mod_data.is_disabled {
                                 return;
                             }
 
+                            // manage_mod 内部会进行路径安全验证，确保仅处理 _MANAGED_/group_xx 下的模组
                             if let Err(e) = Self::manage_mod(
                                 &mod_data.mod_path,
                                 &group_name,
@@ -2257,12 +2260,58 @@ impl ModManager {
         Ok(())
     }
 
+    /// 验证模组路径是否在允许的范围内。
+    ///
+    /// 安全检查规则：
+    /// 1. 模组路径必须位于 Mods/_MANAGED_/ 目录下；
+    /// 2. 路径中不得包含任何以 '#' 开头的目录（防止越权访问系统文件）；
+    /// 3. 模组必须直接属于某个 group_xx 子目录。
+    ///
+    /// 参数：
+    /// - `mods_root`: Mods 根目录路径。
+    /// - `mod_path`: 待验证的模组目录路径。
+    ///
+    /// 返回：`true` 表示路径合法，`false` 表示路径超出允许范围。
+    fn is_valid_mod_path(mods_root: &Path, mod_path: &Path) -> bool {
+        // 检查是否在 _MANAGED_ 目录下
+        let managed_path = mods_root.join(MANAGED_FOLDER);
+        if !mod_path.starts_with(&managed_path) {
+            return false;
+        }
+
+        // 检查路径中是否包含 # 目录（安全限制：禁止访问系统隐藏目录）
+        for component in mod_path.components() {
+            if let Some(name) = component.as_os_str().to_str() {
+                if name.starts_with('#') {
+                    return false;
+                }
+            }
+        }
+
+        // 检查是否直接属于 group_xx 目录
+        let relative = match mod_path.strip_prefix(&managed_path) {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+
+        let components: Vec<&str> = relative
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+
+        !components.is_empty() && components[0].starts_with("group_")
+    }
+
     /// 管理单个模组：备份并修改其 INI 文件以支持槽位切换。
     ///
+    /// **状态保护机制**：本函数仅修改 INI 文件内容，不会改变模组的启用/禁用状态。
+    /// 模组状态由目录名的 `DISABLED` 前缀决定，任何可能导致状态变更的代码均禁止在此函数中出现。
+    ///
     /// 流程：
-    /// 1. 递归查找模组目录下的所有 `.ini` 文件。
-    /// 2. 对每个 INI 文件：若不存在 `.baknrmm` 备份则创建备份。
-    /// 3. 调用 `modify_ini_file` 注入 `managed_slot_id` 变量与条件块。
+    /// 1. 验证路径安全性（确保仅处理 _MANAGED_/group_xx 下的模组）。
+    /// 2. 递归查找模组目录下的所有 `.ini` 文件。
+    /// 3. 对每个 INI 文件：若不存在 `.baknrmm` 备份则创建备份。
+    /// 4. 调用 `modify_ini_file` 注入 `managed_slot_id` 变量与条件块。
     ///
     /// 参数：
     /// - `mod_path`: 模组目录路径。
@@ -2278,6 +2327,24 @@ impl ModManager {
         let mod_path = Path::new(mod_path);
         if !mod_path.exists() || !mod_path.is_dir() {
             anyhow::bail!("Mod path does not exist: {:?}", mod_path);
+        }
+
+        // 路径安全验证：确保模组位于 _MANAGED_/group_xx 目录下
+        // 禁止处理 # 目录及其他非预期路径，防止越权访问系统文件
+        let mods_root = match mod_path.parent().and_then(|p| p.parent()) {
+            Some(p) => p,
+            None => {
+                warn!("Skipping mod with invalid parent path: {:?}", mod_path);
+                return Ok(());
+            }
+        };
+
+        if !Self::is_valid_mod_path(mods_root, mod_path) {
+            warn!(
+                "Skipping mod with invalid path (outside _MANAGED_/group_xx or contains #): {:?}",
+                mod_path
+            );
+            return Ok(());
         }
 
         let ini_files = Self::find_ini_files_recursive(mod_path);
@@ -2334,6 +2401,135 @@ impl ModManager {
         }
 
         ini_files
+    }
+
+    /// 使用 BFS（广度优先搜索）算法查找指定路径下的所有 `.ini` 文件。
+    ///
+    /// 采用迭代式队列遍历而非递归，避免深目录导致的栈溢出问题。
+    /// 支持传入文件路径（直接返回该文件，如果是.ini文件）或目录路径（递归查找）。
+    ///
+    /// 参数：
+    /// - `path`: 起始路径（文件或目录）。
+    ///
+    /// 返回：INI 文件路径列表。路径不存在时返回空 Vec。
+    pub fn find_ini_files_bfs(path: &Path) -> Vec<PathBuf> {
+        let mut result = Vec::new();
+
+        if !path.exists() {
+            return result;
+        }
+
+        if path.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if ext.eq_ignore_ascii_case("ini") {
+                    result.push(path.to_path_buf());
+                }
+            }
+            return result;
+        }
+
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(path.to_path_buf());
+
+        while let Some(current) = queue.pop_front() {
+            if let Ok(entries) = fs::read_dir(&current) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_dir() {
+                        queue.push_back(entry_path);
+                    } else if entry_path.is_file() {
+                        if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
+                            if ext.eq_ignore_ascii_case("ini") {
+                                result.push(entry_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// 处理 INI 文件，移除 xxmi 专属的 INI 语句。
+    ///
+    /// xxmi 专属语句包括：
+    /// - `managed_slot_id` 相关变量定义
+    /// - `if $managed_slot_id == ...` / `endif` 条件块
+    /// - `$\\modmanageragl\\group_*` 相关引用
+    ///
+    /// 参数：
+    /// - `paths`: INI 文件路径列表。
+    ///
+    /// 返回：是否处理成功。
+    pub fn process_ini_files(paths: &[String]) -> Result<bool> {
+        for path_str in paths {
+            let path = Path::new(path_str);
+            if !path.exists() || !path.is_file() {
+                warn!("INI file does not exist: {:?}", path);
+                continue;
+            }
+
+            let content = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read INI file: {:?}", path))?;
+
+            let processed_content = Self::remove_xxmi_ini_statements(&content);
+
+            if content != processed_content {
+                fs::write(path, &processed_content)
+                    .with_context(|| format!("Failed to write INI file: {:?}", path))?;
+                info!("Processed INI file: {:?}", path);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// 从 INI 文件内容中移除 xxmi 专属语句。
+    ///
+    /// 移除规则：
+    /// 1. 移除 `global $managed_slot_id = ...` 行
+    /// 2. 移除 `if $managed_slot_id == ...` 和对应的 `endif` 行
+    /// 3. 移除包含 `$\\modmanageragl\\` 的行
+    ///
+    /// 参数：
+    /// - `content`: INI 文件原始内容。
+    ///
+    /// 返回：处理后的 INI 文件内容。
+    fn remove_xxmi_ini_statements(content: &str) -> String {
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result: Vec<String> = Vec::new();
+        let mut in_xxmi_block = false;
+
+        for line in lines {
+            let trimmed = line.trim();
+
+            if trimmed.starts_with("global $managed_slot_id") {
+                continue;
+            }
+
+            if trimmed.starts_with("if $managed_slot_id") {
+                in_xxmi_block = true;
+                continue;
+            }
+
+            if in_xxmi_block && trimmed == "endif" {
+                in_xxmi_block = false;
+                continue;
+            }
+
+            if in_xxmi_block {
+                continue;
+            }
+
+            if trimmed.contains(r"$\modmanageragl\") {
+                continue;
+            }
+
+            result.push(line.to_string());
+        }
+
+        result.join("\n")
     }
 
     /// 修改单个 INI 文件，注入槽位管理逻辑。
@@ -2693,8 +2889,4 @@ mod tests {
         assert_eq!(success.level, "success");
     }
 
-    #[test]
-    fn test_scan_tree_node() {
-        println!("{:#?}", ModManager::scan_tree_node(Path::new(r"D:\Games\MODS\XXMI\GIMI\Mods\_MANAGED_")))
-    }
 }

@@ -33,7 +33,6 @@ import {
 import { useGame } from '../../../composables/useGame';
 import { useSettings } from '../../../composables/useSettings';
 import {
-  invokeLoadMods,
   invokeRefreshMods,
   invokeRefreshSingleGroup,
   invokeToggleModDisabled,
@@ -46,10 +45,13 @@ import {
   invokeOpenPath,
   invokeStartFileWatcher,
   invokeStopFileWatcher,
+  invokeSetSelectedMod,
+  invokeFindIniFiles,
+  invokeProcessIniFiles,
   convertToAssetUrl
 } from '../../../utils/invoke';
 import { EventNames, eventManager } from '../../../utils/events';
-import type { ModData, ModGroupData, LayoutMode } from '../../../types';
+import type { ModData, ModGroupData, LayoutMode, TargetGame } from '../../../types';
 import { LayoutMode as LayoutModeEnum } from '../../../types';
 import GroupTreeNode from './GroupTreeNode.vue';
 
@@ -80,9 +82,17 @@ let modsUpdatedUnlisten: (() => void) | null = null;
 let gameSwitchedUnlisten: (() => void) | null = null; // 游戏切换事件监听取消句柄
 // 文件监听防抖定时器句柄；用于合并短时间内的多次刷新请求
 let refreshDebounceTimer: number | null = null;
+// 游戏切换防抖定时器句柄；防止快速连续选择游戏导致的频繁请求
+let gameSwitchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const GAME_SWITCH_DEBOUNCE_DELAY = 1000; // 游戏切换防抖延迟（毫秒）
 
 // 拖拽状态
 const isDraggingOver = ref(false); // 拖拽悬停状态
+
+// 还原区相关状态
+const isRestoreZoneDragging = ref(false); // 还原区拖拽悬停状态
+const restoreZoneFiles = ref<Array<{ name: string; path: string }>>([]); // 还原区文件列表
+const isProcessingRestore = ref(false); // 还原区处理中状态
 
 // 左侧栏宽度和拖拽调节
 const sidebarRef = ref<HTMLElement | null>(null);
@@ -288,28 +298,6 @@ function isGroupActive(group: ModGroupData): boolean {
 }
 
 /**
- * 初次加载模组列表。
- * 业务逻辑：调用后端 invokeLoadMods 获取所有分组，写入 gameStore 并标记已加载。
- * 异常处理：路径不存在时通过 ElMessage 提示用户。
- */
-async function loadMods() {
-  isLoading.value = true;
-  try {
-    const groups = await invokeLoadMods(game.targetGame.value);
-    console.log('[ModsTab] loadMods groups:', groups.length, groups);
-    game.setModGroups(groups);
-    console.log('[ModsTab] currentGroup:', game.currentGroup.value);
-    console.log('[ModsTab] currentMods:', game.currentMods.value.length, game.currentMods.value);
-    game.setModsLoaded(true);
-  } catch (error) {
-    console.error('Failed to load mods:', error);
-    ElMessage.error(t('Mods path does not exist.'));
-  } finally {
-    isLoading.value = false;
-  }
-}
-
-/**
  * 刷新模组列表（重新读取文件系统）。
  * 与 loadMods 的区别：refreshMods 用于文件变化后的重新扫描，不会重置 modsLoaded 标记。
  */
@@ -371,26 +359,30 @@ function selectMod(index: number) {
  * - 普通分组：使用 invokeToggleModDisabled（独立切换）。
  * - 树节点（# 目录）分组：使用 invokeToggleTreeNodeModDisabled（互斥切换，启用时禁用同组其他模组）。
  * @param mod 待切换的模组数据
- * @param modIndex 该模组在当前分组模组列表中的索引
  * 限制：realIndex === 0 的空槽位不可切换。
+ * 注意：通过 modPath 在当前分组中查找真实索引，避免收藏过滤导致索引错位。
  */
-async function toggleMod(mod: ModData, modIndex: number) {
+async function toggleMod(mod: ModData) {
   if (mod.realIndex === 0) return;
   const currentGroup = game.currentGroup.value;
   const isTreeNode = currentGroup?.isTreeNode ?? false;
+
+  // 通过 modPath 在当前分组中查找真实索引，避免收藏过滤导致索引错位
+  const realIndex = currentGroup?.modsInGroup.findIndex(m => m.modPath === mod.modPath) ?? -1;
+  if (realIndex === -1) return;
 
   try {
     if (isTreeNode) {
       // 树节点模式：互斥切换
       const [newPath, newDisabled] = await invokeToggleTreeNodeModDisabled(mod.modPath);
       const updatedMod = { ...mod, modPath: newPath, isDisabled: newDisabled };
-      game.updateModInGroup(game.currentGroupPath.value, modIndex, updatedMod);
+      game.updateModInGroup(game.currentGroupPath.value, realIndex, updatedMod);
     } else {
       // 普通模式：独立切换
       const success = await invokeToggleModDisabled(mod.modPath);
       if (success) {
         const updatedMod = { ...mod, isDisabled: !mod.isDisabled };
-        game.updateModInGroup(game.currentGroupPath.value, modIndex, updatedMod);
+        game.updateModInGroup(game.currentGroupPath.value, realIndex, updatedMod);
       }
     }
     // 刷新分组信息，确保互斥模式下其他模组状态正确更新
@@ -478,6 +470,105 @@ async function onDrop(event: DragEvent) {
   } catch (error) {
     console.error('Failed to add mods:', error);
     ElMessage.error(t('Failed to add mods'));
+  }
+}
+
+function onRestoreZoneDragOver(event: DragEvent) {
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy';
+  }
+  isRestoreZoneDragging.value = true;
+}
+
+function onRestoreZoneDragLeave() {
+  isRestoreZoneDragging.value = false;
+}
+
+async function onRestoreZoneDrop(event: DragEvent) {
+  isRestoreZoneDragging.value = false;
+  const files = event.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+
+  const validFiles: Array<{ name: string; path: string }> = [];
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i] as any;
+    if (file.path) {
+      const isValid = validatePath(file.path);
+      if (isValid) {
+        const isIniFile = file.name.toLowerCase().endsWith('.ini');
+        if (isIniFile) {
+          validFiles.push({ name: file.name, path: file.path });
+        } else {
+          const iniFiles = await findIniFilesInPath(file.path);
+          validFiles.push(...iniFiles);
+        }
+      }
+    }
+  }
+
+  if (validFiles.length === 0) {
+    ElMessage.warning(t('No valid .ini files found'));
+    return;
+  }
+
+  restoreZoneFiles.value = [...restoreZoneFiles.value, ...validFiles];
+  ElMessage.success(t(`${validFiles.length} file(s) added to restore zone`));
+}
+
+function validatePath(path: string): boolean {
+  if (!path || path.trim() === '') {
+    return false;
+  }
+  const normalizedPath = path.replace(/\\/g, '/');
+  if (normalizedPath.length > 32000) {
+    return false;
+  }
+  if (normalizedPath.includes('..')) {
+    return false;
+  }
+  return true;
+}
+
+async function findIniFilesInPath(path: string): Promise<Array<{ name: string; path: string }>> {
+  try {
+    const result = await invokeFindIniFiles(path);
+    return result.map((p: string) => ({
+      name: p.split(/[\\/]/).pop() || '',
+      path: p
+    }));
+  } catch (error) {
+    console.error('Failed to find ini files:', error);
+    return [];
+  }
+}
+
+function removeRestoreZoneFile(index: number) {
+  restoreZoneFiles.value.splice(index, 1);
+}
+
+function clearRestoreZone() {
+  restoreZoneFiles.value = [];
+}
+
+async function processRestoreZoneFiles() {
+  if (restoreZoneFiles.value.length === 0) return;
+
+  isProcessingRestore.value = true;
+  try {
+    const paths = restoreZoneFiles.value.map(f => f.path);
+    const result = await invokeProcessIniFiles(paths);
+    if (result) {
+      ElMessage.success(t('Files processed successfully'));
+      clearRestoreZone();
+    } else {
+      ElMessage.error(t('Failed to process files'));
+    }
+  } catch (error) {
+    console.error('Failed to process ini files:', error);
+    ElMessage.error(t('Failed to process files'));
+  } finally {
+    isProcessingRestore.value = false;
   }
 }
 
@@ -638,16 +729,14 @@ function showGroupContextMenu(event: MouseEvent, group: ModGroupData) {
  * 显示模组右键菜单。
  * @param event 鼠标事件，用于定位菜单坐标
  * @param mod 目标模组数据
- * @param index 目标模组在 displayMods 中的索引
  * 限制：realIndex === 0 的空槽位不显示菜单。
  */
-function showModContextMenu(event: MouseEvent, mod: ModData, index: number) {
+function showModContextMenu(event: MouseEvent, mod: ModData) {
   event.preventDefault();
   if (mod.realIndex === 0) return;
   contextMenuPosition.value = { x: event.clientX, y: event.clientY };
   contextMenuType.value = 'mod';
   contextMenuData.value = mod;
-  contextMenuModIndex.value = index;
   contextMenuVisible.value = true;
   // 边界检测：确保菜单完全可见
   nextTick(adjustContextMenuPosition);
@@ -667,7 +756,7 @@ function hideContextMenu() {
  * @param command 菜单命令标识：rename / favorite / open / delete / toggle
  * 业务逻辑：根据 contextMenuType 分发到 group 或 mod 的对应处理函数，最后统一隐藏菜单。
  */
-function handleContextMenuSelect(command: string) {
+async function handleContextMenuSelect(command: string) {
   if (contextMenuType.value === 'group') {
     const group = contextMenuData.value as ModGroupData;
     switch (command) {
@@ -686,10 +775,12 @@ function handleContextMenuSelect(command: string) {
     }
   } else if (contextMenuType.value === 'mod') {
     const mod = contextMenuData.value as ModData;
-    const index = contextMenuModIndex.value;
     switch (command) {
+      case 'select':
+        selectModInGroup(mod);
+        break;
       case 'toggle':
-        toggleMod(mod, index);
+        toggleMod(mod);
         break;
       case 'rename':
         renameModName.value = mod.modName;
@@ -701,11 +792,50 @@ function handleContextMenuSelect(command: string) {
       case 'open':
         openModFolder(mod);
         break;
-      case 'delete':
+      case 'remove':
+        await removeModFromGroup(mod);
         break;
     }
   }
   hideContextMenu();
+}
+
+async function selectModInGroup(mod: ModData) {
+  const realIndex = game.currentGroup.value?.modsInGroup.findIndex(m => m.modPath === mod.modPath) ?? -1;
+  if (realIndex >= 0) {
+    selectedModIndex.value = realIndex;
+    try {
+      await invokeSetSelectedMod(game.currentGroupPath.value, realIndex);
+    } catch (error) {
+      console.error('Failed to select mod:', error);
+    }
+  }
+}
+
+async function removeModFromGroup(mod: ModData) {
+  if (mod.realIndex === 0) return;
+  try {
+    await ElMessageBox.confirm(
+      t('Removing mod will move it to restore zone.'),
+      t('Warning'),
+      {
+        confirmButtonText: t('Confirm'),
+        cancelButtonText: t('Cancel'),
+        type: 'warning'
+      }
+    );
+    const realIndex = game.currentGroup.value?.modsInGroup.findIndex(m => m.modPath === mod.modPath) ?? -1;
+    if (realIndex >= 0) {
+      game.removeModFromGroup(game.currentGroupPath.value, realIndex);
+      await refreshMods();
+      ElMessage.success(t('Mod removed successfully'));
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('Failed to remove mod:', error);
+      ElMessage.error(t('Failed to remove mod'));
+    }
+  }
 }
 
 /**
@@ -714,27 +844,33 @@ function handleContextMenuSelect(command: string) {
  *  - 空槽位双击仅选中，不切换状态。
  *  - 普通模组双击切换启用/禁用状态。
  * @param mod 目标模组
- * @param index 目标模组在 displayMods 中的索引
+ * @param index 目标模组在 displayMods 中的索引（仅用于空槽位选中高亮）
  */
 function onModDoubleClick(mod: ModData, index: number) {
   if (mod.realIndex === 0) {
     selectMod(index);
     return;
   }
-  toggleMod(mod, index);
+  toggleMod(mod);
 }
 
 /**
  * 启动后端文件监听器，监听 Mods 目录变化。
- * 业务逻辑：仅当存在 modsPath 时启动；失败时记录错误但不阻塞。
+ * 业务逻辑：先停止旧监听避免泄漏；仅当存在 modsPath 时启动新监听；失败时记录错误但不阻塞。
  */
 async function setupFileWatcher() {
   try {
+    // 先停止旧的文件监听器，避免泄漏
+    try {
+      await invokeStopFileWatcher();
+    } catch {
+      // 忽略停止失败（可能没有正在运行的监听器）
+    }
     if (game.modsPath.value) {
       await invokeStartFileWatcher(game.modsPath.value);
     }
   } catch (error) {
-    console.error('Failed to start file watcher:', error);
+    console.error('[ModsTab] Failed to setup file watcher:', error);
   }
 }
 
@@ -755,9 +891,19 @@ async function setupEventListeners() {
   });
 
   // 游戏切换时：重新加载模组列表、重启文件监听（因 modsPath 可能变化）
-  gameSwitchedUnlisten = await eventManager.on(EventNames.GAME_SWITCHED, async () => {
-    await loadMods();
-    await setupFileWatcher();
+  // 使用事件载荷中的 game 参数而非 game.targetGame.value，确保获取最新值
+  // 避免 Vue 响应式更新延迟导致读取到旧值（如 'none'）
+  // 添加防抖机制，防止用户快速连续选择游戏导致的频繁请求
+  gameSwitchedUnlisten = await eventManager.on(EventNames.GAME_SWITCHED, async ({ game: newGame }) => {
+    console.log('[ModsTab] GAME_SWITCHED event received, newGame:', newGame);
+    if (gameSwitchDebounceTimer) {
+      clearTimeout(gameSwitchDebounceTimer);
+    }
+    gameSwitchDebounceTimer = setTimeout(async () => {
+      console.log('[ModsTab] GAME_SWITCHED debounce complete, loading mods for game:', newGame);
+      await game.loadModsForGame(newGame as TargetGame);
+      await setupFileWatcher();
+    }, GAME_SWITCH_DEBOUNCE_DELAY);
   });
 }
 
@@ -766,10 +912,11 @@ onMounted(async () => {
   resizeHandler = () => { windowWidth.value = window.innerWidth; };
   window.addEventListener('resize', resizeHandler);
   // 若已有当前游戏的模组数据，则跳过加载（避免切页重复读取）
+  // 使用 game.loadModsForGame() 统一加载入口，利用 store 中的缓存逻辑
   if (game.isModsLoaded.value && game.targetGame.value !== 'none') {
     // 已有数据，仅启动事件监听和文件监听
   } else {
-    await loadMods();
+    await game.loadModsForGame(game.targetGame.value);
   }
   await setupEventListeners();
   await setupFileWatcher();
@@ -796,15 +943,34 @@ onUnmounted(() => {
   if (refreshDebounceTimer) {
     clearTimeout(refreshDebounceTimer);
   }
+  if (gameSwitchDebounceTimer) {
+    clearTimeout(gameSwitchDebounceTimer);
+  }
   // 清理拖动滚动事件
   document.removeEventListener('mousemove', onSidebarMouseMove);
   document.removeEventListener('mouseup', onSidebarMouseUp);
+  document.removeEventListener('mousemove', onModsContainerMouseMove);
+  document.removeEventListener('mouseup', onModsContainerMouseUp);
 });
 
 // 监听布局模式变化（占位 watcher，预留用于未来扩展，如布局切换动画等）
 watch(
   () => settings.layoutMode.value,
   () => {
+  }
+);
+
+// 监听设置加载完成：如果设置加载后 targetGame 变为有效值且模组未加载，触发加载
+// 使用 isInitialModsLoad 标志防止与 onMounted 中的加载逻辑双重触发
+let isInitialModsLoad = false;
+watch(
+  () => settings.isLoaded.value,
+  (loaded) => {
+    if (loaded && game.targetGame.value !== 'none' && !game.isModsLoaded.value && !isInitialModsLoad) {
+      isInitialModsLoad = true;
+      console.log('[ModsTab] Settings loaded, triggering mods load for game:', game.targetGame.value);
+      game.loadModsForGame(game.targetGame.value);
+    }
   }
 );
 
@@ -956,7 +1122,7 @@ watch(
                 disabled: mod.isDisabled,
                 'none-slot': mod.realIndex === 0
               }" @click="selectMod(index)" @dblclick="onModDoubleClick(mod, index)"
-                @contextmenu="showModContextMenu($event, mod, index)">
+                @contextmenu="showModContextMenu($event, mod)">
                 <!-- 
                   模组图标区域
                   数据来源：
@@ -1084,7 +1250,7 @@ watch(
                 disabled: mod.isDisabled,
                 'none-slot': mod.realIndex === 0
               }" @click="selectMod(index)" @dblclick="onModDoubleClick(mod, index)"
-                @contextmenu="showModContextMenu($event, mod, index)">
+                @contextmenu="showModContextMenu($event, mod)">
                 <!-- 模组图标 -->
                 <div class="list-mod-icon">
                   <img 
@@ -1145,6 +1311,54 @@ watch(
             作用：当没有模组时提示用户
           -->
           <el-empty v-if="!isLoading && displayMods.length === 0" :description="t('No mods found')" :image-size="100" />
+        </div>
+
+        <!-- 
+          还原区功能模块
+          作用：允许用户将文件或目录拖拽至此区域进行处理
+          功能：仅处理.ini文件类型，移除xxmi专属ini语句
+          交互行为：@dragover/@dragleave/@drop 处理拖拽事件
+        -->
+        <div class="restore-zone" :class="{ 'drag-over': isRestoreZoneDragging }"
+          @dragover.prevent="onRestoreZoneDragOver"
+          @dragleave="onRestoreZoneDragLeave"
+          @drop.prevent="onRestoreZoneDrop">
+          <div class="restore-zone-header">
+            <el-icon class="restore-zone-icon">
+              <FolderOpened />
+            </el-icon>
+            <span class="restore-zone-title">{{ t('Restore Zone') }}</span>
+            <span class="restore-zone-hint">{{ t('Drop .ini files here') }}</span>
+          </div>
+          <div class="restore-zone-content">
+            <div v-if="!isRestoreZoneDragging && restoreZoneFiles.length === 0" class="restore-zone-empty">
+              <el-icon size="48" color="rgba(255,255,255,0.3)">
+                <FolderAdd />
+              </el-icon>
+              <p>{{ t('Drag files or directories here') }}</p>
+              <p class="restore-zone-sub">{{ t('Only .ini files will be processed') }}</p>
+            </div>
+            <div v-else-if="restoreZoneFiles.length > 0" class="restore-zone-files">
+              <div v-for="(file, index) in restoreZoneFiles" :key="index" class="restore-zone-file-item">
+                <el-icon size="16" color="#f59e0b">
+                  <Cpu />
+                </el-icon>
+                <span class="restore-zone-file-name">{{ file.name }}</span>
+                <span class="restore-zone-file-path">{{ file.path }}</span>
+                <el-button size="small" type="danger" @click="removeRestoreZoneFile(index)">
+                  <el-icon>
+                    <Delete />
+                  </el-icon>
+                </el-button>
+              </div>
+              <div class="restore-zone-actions">
+                <el-button type="primary" @click="processRestoreZoneFiles" :loading="isProcessingRestore">
+                  {{ t('Process') }}
+                </el-button>
+                <el-button @click="clearRestoreZone">{{ t('Clear') }}</el-button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1238,6 +1452,19 @@ watch(
       -->
       <template v-else-if="contextMenuType === 'mod'">
         <!-- 
+          选择菜单项（顶层）
+          交互行为：@click 调用 handleContextMenuSelect('select')
+          图标：View 图标
+        -->
+        <div class="context-menu-item" @click="handleContextMenuSelect('select')">
+          <el-icon>
+            <View />
+          </el-icon>
+          {{ t('Select') }}
+        </div>
+        <!-- 分隔线 -->
+        <div class="context-menu-separator" />
+        <!-- 
           启用/禁用模组菜单项
           交互行为：@click 调用 handleContextMenuSelect('toggle')
           动态文本：根据 mod.isDisabled 显示"Enable mod"或"Disable mod completely"
@@ -1282,6 +1509,20 @@ watch(
             <FolderOpened />
           </el-icon>
           {{ t('Open in File Explorer') }}
+        </div>
+        <!-- 分隔线 -->
+        <div class="context-menu-separator" />
+        <!-- 
+          移除菜单项（底层）
+          交互行为：@click 调用 handleContextMenuSelect('remove')
+          样式：danger 类，红色文字，表示危险操作
+          图标：Delete 图标
+        -->
+        <div class="context-menu-item danger" @click="handleContextMenuSelect('remove')">
+          <el-icon>
+            <Delete />
+          </el-icon>
+          {{ t('Remove') }}
         </div>
       </template>
     </div>
@@ -1841,5 +2082,108 @@ watch(
 
 .context-menu-item :deep(.el-icon) {
   font-size: 16px;
+}
+
+.restore-zone {
+  margin-top: 16px;
+  border: 2px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 16px;
+  background-color: rgba(255, 255, 255, 0.02);
+  transition: all 0.2s ease;
+}
+
+.restore-zone.drag-over {
+  border-color: var(--el-color-primary);
+  background-color: rgba(64, 158, 255, 0.1);
+}
+
+.restore-zone-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.restore-zone-icon {
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.restore-zone-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.restore-zone-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-left: auto;
+}
+
+.restore-zone-content {
+  min-height: 80px;
+}
+
+.restore-zone-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+}
+
+.restore-zone-empty p {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0;
+}
+
+.restore-zone-sub {
+  font-size: 12px !important;
+  color: rgba(255, 255, 255, 0.3) !important;
+}
+
+.restore-zone-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.restore-zone-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+}
+
+.restore-zone-file-name {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  flex-shrink: 0;
+}
+
+.restore-zone-file-path {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.restore-zone-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 </style>

@@ -12,10 +12,10 @@ import type {
   WindowPosition,
   TrayMenuItem,
   CloudData,
-  TargetGame,
   HotkeyKeyboard,
   HotkeyGamepad
 } from '../types';
+import { TargetGame } from '../types';
 import { CONSTANTS } from './constants';
 
 /**
@@ -653,6 +653,7 @@ export function getDefaultSettings(): AppSettings {
     savedWindowX: null,
     savedWindowY: null,
     theme: CONSTANTS.defaultTheme,
+    targetGame: TargetGame.Wuthering_Waves,
     modsPathWuwa: '',
     modsPathGenshin: '',
     modsPathHsr: '',
@@ -670,4 +671,24 @@ export function getDefaultSettings(): AppSettings {
  */
 export async function invokeAddMods(sourcePaths: string[], targetGroupPath: string): Promise<boolean> {
   return invoke('add_mods', { sourcePaths, targetGroupPath });
+}
+
+/**
+ * 使用BFS算法查找指定路径下的所有.ini文件。
+ * 对应后端命令：`find_ini_files`。
+ * @param path 起始路径（文件或目录）
+ * @returns .ini文件路径列表
+ */
+export async function invokeFindIniFiles(path: string): Promise<string[]> {
+  return invoke('find_ini_files', { path });
+}
+
+/**
+ * 处理.ini文件，移除xxmi专属ini语句。
+ * 对应后端命令：`process_ini_files`。
+ * @param paths .ini文件路径列表
+ * @returns 是否处理成功
+ */
+export async function invokeProcessIniFiles(paths: string[]): Promise<boolean> {
+  return invoke('process_ini_files', { paths });
 }
