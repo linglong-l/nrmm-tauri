@@ -580,33 +580,6 @@ export async function invokeSelectDirectory(): Promise<string | null> {
 }
 
 /**
- * 导出当前应用设置为 JSON 字符串。
- * 对应后端命令：`export_settings`。
- * @returns 设置 JSON 字符串
- */
-export async function invokeExportSettings(): Promise<string> {
-  return invoke('export_settings');
-}
-
-/**
- * 从 JSON 字符串导入应用设置。
- * 对应后端命令：`import_settings`。
- * @param settingsJson 设置 JSON 字符串
- * @returns 是否导入成功
- */
-export async function invokeImportSettings(settingsJson: string): Promise<boolean> {
-  return invoke('import_settings', { settingsJson });
-}
-
-/**
- * 重置应用设置为默认值。
- * 对应后端命令：`reset_settings`。
- */
-export async function invokeResetSettings(): Promise<void> {
-  return invoke('reset_settings');
-}
-
-/**
  * 在系统默认程序中打开指定路径（文件或目录）。
  * 对应后端命令：`open_path`。
  * @param path 待打开路径
@@ -691,4 +664,57 @@ export async function invokeFindIniFiles(path: string): Promise<string[]> {
  */
 export async function invokeProcessIniFiles(paths: string[]): Promise<boolean> {
   return invoke('process_ini_files', { paths });
+}
+
+/**
+ * 验证压缩文件的有效性。
+ * 对应后端命令：`validate_archive_file`。
+ * @param path 文件路径
+ * @returns (是否有效, 文件类型字符串: "zip"/"7z"/"rar"/"unknown")
+ */
+export async function invokeValidateArchiveFile(path: string): Promise<[boolean, string]> {
+  return invoke('validate_archive_file', { path });
+}
+
+/**
+ * 使用BFS算法递归查找目录下所有文件。
+ * 对应后端命令：`find_all_files`。
+ * @param path 起始目录路径
+ * @returns 目录下所有文件的路径列表
+ */
+export async function invokeFindAllFiles(path: string): Promise<string[]> {
+  return invoke('find_all_files', { path });
+}
+
+/**
+ * 解压压缩文件到指定目录（自动识别文件类型）。
+ * 对应后端命令：`extract_archive`。
+ * @param file_path 压缩文件路径
+ * @param dest_dir 目标目录路径
+ * @returns 是否解压成功
+ */
+export async function invokeExtractArchive(file_path: string, dest_dir: string): Promise<boolean> {
+  return invoke('extract_archive', { file_path, dest_dir });
+}
+
+/**
+ * 导出单个模组为7z压缩文件。
+ * 对应后端命令：`export_mod`。
+ * @param mod_path 模组目录路径
+ * @param dest_dir 目标目录路径
+ * @returns 导出文件的完整路径
+ */
+export async function invokeExportMod(mod_path: string, dest_dir: string): Promise<string> {
+  return invoke('export_mod', { mod_path, dest_dir });
+}
+
+/**
+ * 导出分组模组为7z压缩文件（保持目录结构）。
+ * 对应后端命令：`export_group`。
+ * @param group_path 分组目录路径
+ * @param dest_dir 目标目录路径
+ * @returns 导出文件的完整路径
+ */
+export async function invokeExportGroup(group_path: string, dest_dir: string): Promise<string> {
+  return invoke('export_group', { group_path, dest_dir });
 }

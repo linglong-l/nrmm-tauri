@@ -94,6 +94,24 @@ export function useGame() {
   }
 
   /**
+   * 校验缓存数据与当前请求游戏的一致性。
+   *
+   * 业务逻辑：
+   * - 游戏为 'none' 返回 skip
+   * - 缓存为空且游戏合法返回 load
+   * - 缓存所属游戏与请求游戏不一致返回 clear_and_load
+   * - 缓存有效且匹配返回 use_cache
+   *
+   * 该函数为纯函数，调用方根据返回的 action 决定后续操作。
+   *
+   * @param game 待校验的目标游戏
+   * @returns 校验结果对象，包含 action 字段
+   */
+  function validateCache(game: TargetGame): { action: 'skip' | 'load' | 'clear_and_load' | 'use_cache' } {
+    return gameStore.validateCache(game);
+  }
+
+  /**
    * 清除指定游戏的模组缓存。
    * 适用于文件变化、手动刷新等场景，确保下次加载时从后端获取最新数据。
    * @param game 目标游戏，不传则清除当前游戏的缓存
@@ -256,6 +274,24 @@ export function useGame() {
   }
 
   /**
+   * 获取指定分组当前选中的模组路径。
+   * @param groupPath 分组路径
+   * @returns 选中模组的 modPath，未选中时返回 null
+   */
+  function getSelectedModPath(groupPath: string): string | null {
+    return gameStore.getSelectedModPath(groupPath);
+  }
+
+  /**
+   * 设置指定分组当前选中的模组路径。
+   * @param groupPath 分组路径
+   * @param modPath 选中模组的 modPath
+   */
+  function setSelectedModPath(groupPath: string, modPath: string) {
+    gameStore.setSelectedModPath(groupPath, modPath);
+  }
+
+  /**
    * 更新单个分组的模组列表（仅更新 mods，保留原有 children）。
    * @param groupPath 分组路径
    * @param newGroup 包含最新 mods 的分组数据
@@ -317,6 +353,7 @@ export function useGame() {
     sortedGroups,
     setTargetGame,
     loadModsForGame,
+    validateCache,
     setMods,
     setModGroups,
     setModsPathStatus,
@@ -335,6 +372,8 @@ export function useGame() {
     toggleModFavorite,
     toggleGroupFavorite,
     updateModInGroup,
+    getSelectedModPath,
+    setSelectedModPath,
     updateGroup,
     addModGroup,
     removeModGroup,

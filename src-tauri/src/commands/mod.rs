@@ -84,26 +84,19 @@ pub async fn load_mods(
     // 克隆参数以满足 'static 生命周期要求
     let mod_manager = state.mod_manager.clone();
     let settings_clone = settings.clone();
-    let game_str = game.clone();
 
     // 执行任务队列
-    log::debug!("[load_mods] Starting task queue execution");
     let result = state
         .task_queue
         .run_task("load_mods", async move {
-            log::debug!(
-                "[load_mods] Executing mod_manager.load_mods for game: {:?}",
-                game_str
-            );
             mod_manager.load_mods(&settings_clone).await
         })
         .await;
 
     // 计算耗时
     let duration = start_time.elapsed();
-
     match result {
-        Ok(groups) => {
+                Ok(groups) => {
             log::debug!(
                 "[load_mods] Success - game: {:?}, groups: {}, duration: {:?}",
                 game,
@@ -111,6 +104,7 @@ pub async fn load_mods(
                 duration
             );
             Ok(groups)
+            
         }
         Err(e) => {
             let error_msg = match e {
@@ -133,6 +127,7 @@ pub async fn load_mods(
                     format!("Task execution failed: {}", e)
                 }
             };
+            log::error!("[load_mods] Error - {:?}", error_msg);
             Err(error_msg)
         }
     }
@@ -1194,39 +1189,6 @@ pub async fn save_settings(
     Ok(())
 }
 
-/// 重置设置为默认值并持久化。
-///
-/// 参数：
-/// - `app`: Tauri 应用句柄。
-/// - `state`: 应用全局状态。
-#[tauri::command]
-pub async fn reset_settings(
-    _app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let app_data_dir =
-        crate::get_app_data_dir().ok_or_else(|| "Failed to get app data dir".to_string())?;
-
-    {
-        let mut current = state.settings.write();
-        current.reset_to_default();
-    }
-
-    let settings_arc = state.settings.clone();
-    let app_data_dir_clone = app_data_dir.clone();
-    tokio::spawn(async move {
-        let settings_clone = {
-            let settings = settings_arc.read();
-            settings.clone()
-        };
-        if let Err(e) = settings_clone.save_async(&app_data_dir_clone).await {
-            log::error!("Failed to save settings after reset: {}", e);
-        }
-    });
-
-    Ok(())
-}
-
 /// 获取已缓存的云端数据。
 ///
 /// 参数：
@@ -1575,6 +1537,112 @@ pub async fn process_ini_files(state: State<'_, AppState>, paths: Vec<String>) -
     let _ = state;
     tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::process_ini_files(&paths).map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
+/// 验证压缩文件的有效性。
+///
+/// 验证策略：
+/// 1. 优先检查文件扩展名（.zip, .7z, .rar）
+/// 2. 同时检查文件头魔数确保文件格式真实性
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `path`: 文件路径。
+///
+/// 返回：(是否有效, 文件类型字符串: "zip"/"7z"/"rar"/"unknown")。
+#[tauri::command]
+pub async fn validate_archive_file(state: State<'_, AppState>, path: String) -> Result<(bool, String), String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        let (valid, archive_type) = crate::mod_manager::ModManager::validate_archive_file(Path::new(&path));
+        let type_str = match archive_type {
+            crate::mod_manager::ArchiveType::Zip => "zip",
+            crate::mod_manager::ArchiveType::SevenZip => "7z",
+            crate::mod_manager::ArchiveType::Rar => "rar",
+            crate::mod_manager::ArchiveType::Unknown => "unknown",
+        };
+        Ok((valid, type_str.to_string()))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
+/// 使用 BFS 算法递归查找目录下所有文件。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `path`: 起始目录路径。
+///
+/// 返回：目录下所有文件的路径列表。
+#[tauri::command]
+pub async fn find_all_files(state: State<'_, AppState>, path: String) -> Result<Vec<String>, String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        let files = crate::mod_manager::ModManager::find_all_files_bfs(Path::new(&path));
+        Ok(files
+            .into_iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
+/// 解压压缩文件到指定目录（自动识别文件类型）。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `file_path`: 压缩文件路径。
+/// - `dest_dir`: 目标目录路径。
+///
+/// 返回：是否解压成功。
+#[tauri::command]
+pub async fn extract_archive(state: State<'_, AppState>, file_path: String, dest_dir: String) -> Result<bool, String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::extract_archive(Path::new(&file_path), Path::new(&dest_dir))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
+/// 导出单个模组为 7z 压缩文件。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `mod_path`: 模组目录路径。
+/// - `dest_dir`: 目标目录路径。
+///
+/// 返回：导出文件的完整路径。
+#[tauri::command]
+pub async fn export_mod(state: State<'_, AppState>, mod_path: String, dest_dir: String) -> Result<String, String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::export_mod(&mod_path, &dest_dir)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
+/// 导出分组模组为 7z 压缩文件（保持目录结构）。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `group_path`: 分组目录路径。
+/// - `dest_dir`: 目标目录路径。
+///
+/// 返回：导出文件的完整路径。
+#[tauri::command]
+pub async fn export_group(state: State<'_, AppState>, group_path: String, dest_dir: String) -> Result<String, String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::export_group(&group_path, &dest_dir)
+            .map_err(|e| e.to_string())
     })
     .await
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))

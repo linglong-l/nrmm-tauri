@@ -21,8 +21,8 @@ export const EventNames = {
   MODS_UPDATED: 'mods-updated',
   /** Mod 分组列表已更新 */
   MOD_GROUPS_UPDATED: 'mod-groups-updated',
-  /** 文件监听器捕获到一次文件系统变化 */
-  FILE_WATCHER_EVENT: 'file-watcher-event',
+  /** 文件监听器捕获到一次文件系统变化（与后端 file_watcher 的 emit 名称一致） */
+  FILE_WATCHER_EVENT: 'mods-directory-changed',
   /** 全局热键被按下 */
   HOTKEY_PRESSED: 'hotkey-pressed',
   /** 热键注册结果（成功/失败） */
@@ -184,7 +184,6 @@ class EventManager {
    * @param payload 事件载荷
    */
   async emit<T extends EventName>(event: T, payload: EventPayloadMap[T]): Promise<void> {
-    console.log('[EventManager] emit event:', event, 'payload:', payload);
     // 触发 Tauri 跨进程事件（供后端和通过 listen 注册的监听器接收）
     try {
       await tauriEmit(event, payload);
@@ -195,7 +194,6 @@ class EventManager {
     // 触发前端进程内的自定义监听（同步触发，可靠无延迟）
     const callbacks = this.customListeners.get(event);
     if (callbacks) {
-      console.log('[EventManager] event', event, 'has', callbacks.size, 'custom listeners');
       callbacks.forEach((cb) => {
         try {
           cb(payload);

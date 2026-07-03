@@ -21,6 +21,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use walkdir::WalkDir;
+use zip::ZipArchive;
+use sevenz_rust::decompress_file;
 
 use crate::commands::get_icon_path;
 use crate::ini_handler::error_detection::ErroredLinesReport;
@@ -281,6 +283,22 @@ impl SortGroupMethod {
             _ => SortGroupMethod::ByIndex,
         }
     }
+}
+
+/// 支持的压缩文件类型枚举。
+///
+/// 用于 `detect_archive_type` / `validate_archive_file` 等函数的返回值，
+/// 标识压缩文件的实际格式。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchiveType {
+    /// ZIP 格式（.zip）
+    Zip,
+    /// 7z 格式（.7z）
+    SevenZip,
+    /// RAR 格式（.rar）
+    Rar,
+    /// 未知格式或不支持
+    Unknown,
 }
 
 /// 模组管理器主结构体。
@@ -2828,6 +2846,462 @@ impl ModManager {
             }
         }
     }
+
+    /// 检测文件的真实类型（通过文件头魔数）。
+    ///
+    /// 参数：
+    /// - `path`: 文件路径。
+    ///
+    /// 返回：检测到的文件类型。
+    pub fn detect_archive_type(path: &Path) -> ArchiveType {
+        let bytes = match fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return ArchiveType::Unknown,
+        };
+
+        // ZIP 文件头: 50 4B 03 04
+        if bytes.len() >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4B && bytes[2] == 0x03 && bytes[3] == 0x04 {
+            return ArchiveType::Zip;
+        }
+
+        // 7z 文件头: 37 7A BC AF 27 1C
+        if bytes.len() >= 6 && bytes[0] == 0x37 && bytes[1] == 0x7A && bytes[2] == 0xBC && bytes[3] == 0xAF && bytes[4] == 0x27 && bytes[5] == 0x1C {
+            return ArchiveType::SevenZip;
+        }
+
+        // RAR 文件头: 52 61 72 21 1A 07 00 (RAR 5.0) 或 52 61 72 21 1A 07 (RAR 4.x)
+        if bytes.len() >= 7 && bytes[0] == 0x52 && bytes[1] == 0x61 && bytes[2] == 0x72 && bytes[3] == 0x21 && bytes[4] == 0x1A && bytes[5] == 0x07 {
+            return ArchiveType::Rar;
+        }
+
+        ArchiveType::Unknown
+    }
+
+    /// 验证文件是否为有效的压缩文件。
+    ///
+    /// 验证策略：
+    /// 1. 优先检查文件扩展名（.zip, .7z, .rar）
+    /// 2. 同时检查文件头魔数确保文件格式真实性
+    ///
+    /// 参数：
+    /// - `path`: 文件路径。
+    ///
+    /// 返回：(是否有效, 检测到的文件类型)
+    pub fn validate_archive_file(path: &Path) -> (bool, ArchiveType) {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let expected_type = match ext.as_str() {
+            "zip" => ArchiveType::Zip,
+            "7z" => ArchiveType::SevenZip,
+            "rar" => ArchiveType::Rar,
+            _ => ArchiveType::Unknown,
+        };
+
+        let actual_type = Self::detect_archive_type(path);
+
+        if expected_type != ArchiveType::Unknown && expected_type == actual_type {
+            (true, actual_type)
+        } else if actual_type != ArchiveType::Unknown {
+            (true, actual_type)
+        } else {
+            (false, ArchiveType::Unknown)
+        }
+    }
+
+    /// 使用 BFS 算法递归查找目录下所有文件（非递归实现）。
+    ///
+    /// 参数：
+    /// - `path`: 起始目录路径。
+    ///
+    /// 返回：目录下所有文件的路径列表。
+    pub fn find_all_files_bfs(path: &Path) -> Vec<PathBuf> {
+        let mut result = Vec::new();
+
+        if !path.exists() || !path.is_dir() {
+            return result;
+        }
+
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(path.to_path_buf());
+
+        while let Some(current) = queue.pop_front() {
+            if let Ok(entries) = fs::read_dir(&current) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_dir() {
+                        queue.push_back(entry_path);
+                    } else if entry_path.is_file() {
+                        result.push(entry_path);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// 解压 ZIP 文件到指定目录。
+    ///
+    /// 参数：
+    /// - `file_path`: ZIP 文件路径。
+    /// - `dest_dir`: 目标目录路径。
+    ///
+    /// 返回：是否解压成功。
+    pub fn extract_zip(file_path: &Path, dest_dir: &Path) -> Result<bool> {
+        let file = fs::File::open(file_path)
+            .with_context(|| format!("Failed to open ZIP file: {:?}", file_path))?;
+
+        let mut archive = ZipArchive::new(file)
+            .with_context(|| format!("Failed to read ZIP file: {:?}", file_path))?;
+
+        fs::create_dir_all(dest_dir)
+            .with_context(|| format!("Failed to create destination directory: {:?}", dest_dir))?;
+
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)
+                .with_context(|| format!("Failed to read entry {} in ZIP file", i))?;
+
+            let entry_path = dest_dir.join(file.name());
+
+            if (*file.name()).ends_with('/') {
+                fs::create_dir_all(&entry_path)
+                    .with_context(|| format!("Failed to create directory: {:?}", entry_path))?;
+            } else {
+                if let Some(parent) = entry_path.parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("Failed to create parent directory: {:?}", parent))?;
+                }
+
+                let mut out_file = fs::File::create(&entry_path)
+                    .with_context(|| format!("Failed to create file: {:?}", entry_path))?;
+
+                std::io::copy(&mut file, &mut out_file)
+                    .with_context(|| format!("Failed to write file: {:?}", entry_path))?;
+            }
+        }
+
+        info!("Extracted ZIP file: {:?} -> {:?}", file_path, dest_dir);
+        Ok(true)
+    }
+
+    /// 解压 7z 文件到指定目录。
+    ///
+    /// 参数：
+    /// - `file_path`: 7z 文件路径。
+    /// - `dest_dir`: 目标目录路径。
+    ///
+    /// 返回：是否解压成功。
+    pub fn extract_7z(file_path: &Path, dest_dir: &Path) -> Result<bool> {
+        fs::create_dir_all(dest_dir)
+            .with_context(|| format!("Failed to create destination directory: {:?}", dest_dir))?;
+
+        decompress_file(file_path, dest_dir)
+            .with_context(|| format!("Failed to extract 7z file: {:?}", file_path))?;
+
+        info!("Extracted 7z file: {:?} -> {:?}", file_path, dest_dir);
+        Ok(true)
+    }
+
+    /// 解压压缩文件到指定目录（自动识别文件类型）。
+    ///
+    /// 参数：
+    /// - `file_path`: 压缩文件路径。
+    /// - `dest_dir`: 目标目录路径。
+    ///
+    /// 返回：是否解压成功。
+    pub fn extract_archive(file_path: &Path, dest_dir: &Path) -> Result<bool> {
+        let (valid, archive_type) = Self::validate_archive_file(file_path);
+
+        if !valid {
+            anyhow::bail!("Invalid archive file: {:?}", file_path);
+        }
+
+        match archive_type {
+            ArchiveType::Zip => Self::extract_zip(file_path, dest_dir),
+            ArchiveType::SevenZip => Self::extract_7z(file_path, dest_dir),
+            ArchiveType::Rar => {
+                anyhow::bail!("RAR format is not supported for extraction");
+            }
+            ArchiveType::Unknown => {
+                anyhow::bail!("Unknown archive format");
+            }
+        }
+    }
+
+    /// 递归复制目录内容到目标路径（使用 BFS 避免栈溢出）。
+    ///
+    /// 采用迭代式队列遍历，复制文件和目录结构。
+    /// 跳过符号链接以避免循环引用。
+    ///
+    /// 参数：
+    /// - `src`: 源目录路径。
+    /// - `dst`: 目标目录路径（会被自动创建）。
+    fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+        fs::create_dir_all(dst)
+            .with_context(|| format!("Failed to create destination directory: {:?}", dst))?;
+
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back((src.to_path_buf(), dst.to_path_buf()));
+
+        while let Some((current_src, current_dst)) = queue.pop_front() {
+            if !current_src.exists() {
+                continue;
+            }
+
+            // 跳过符号链接
+            if current_src.is_symlink() {
+                continue;
+            }
+
+            if current_src.is_dir() {
+                fs::create_dir_all(&current_dst)
+                    .with_context(|| format!("Failed to create directory: {:?}", current_dst))?;
+
+                if let Ok(entries) = fs::read_dir(&current_src) {
+                    for entry in entries.flatten() {
+                        let entry_path = entry.path();
+                        let dest_path = current_dst.join(entry.file_name());
+                        queue.push_back((entry_path, dest_path));
+                    }
+                }
+            } else if current_src.is_file() {
+                fs::copy(&current_src, &current_dst)
+                    .with_context(|| format!("Failed to copy file: {:?} -> {:?}", current_src, current_dst))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 导出单个模组为 7z 压缩文件（极限压缩）。
+    ///
+    /// 导出流程：
+    /// 1. 将模组目录复制到临时目录（避免修改原始文件）
+    /// 2. 查找临时副本中所有 .ini 文件
+    /// 3. 调用模组还原功能，移除 xxmi 专属 INI 语句
+    /// 4. 使用极限压缩算法生成 7z 文件
+    /// 5. 清理临时目录
+    /// 6. 导出文件名称去除禁用标识符
+    ///
+    /// 参数：
+    /// - `mod_path`: 模组目录路径。
+    /// - `dest_dir`: 目标目录路径。
+    ///
+    /// 返回：导出文件的完整路径。
+    pub fn export_mod(mod_path: &str, dest_dir: &str) -> Result<String> {
+        let mod_path = Path::new(mod_path);
+        let dest_dir = Path::new(dest_dir);
+
+        if !mod_path.exists() || !mod_path.is_dir() {
+            anyhow::bail!("Mod path does not exist: {:?}", mod_path);
+        }
+
+        fs::create_dir_all(dest_dir)
+            .with_context(|| format!("Failed to create destination directory: {:?}", dest_dir))?;
+
+        let mod_name = mod_path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("mod");
+
+        let clean_name = mod_name.trim_start_matches(DISABLED_PREFIX);
+        let dest_file = dest_dir.join(format!("{}.7z", clean_name));
+
+        // 创建临时目录用于存放还原后的模组副本
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let temp_dir = std::env::temp_dir().join(format!("xxmi_export_mod_{}", timestamp));
+        let temp_mod_dir = temp_dir.join(clean_name);
+
+        // 执行复制→还原→压缩→清理流程
+        let result = (|| -> Result<()> {
+            // 1. 复制模组到临时目录
+            Self::copy_dir_recursive(mod_path, &temp_mod_dir)?;
+
+            // 2. 查找临时副本中所有 .ini 文件
+            let ini_files = Self::find_ini_files_bfs(&temp_mod_dir);
+            if !ini_files.is_empty() {
+                let ini_paths: Vec<String> = ini_files
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect();
+                // 3. 处理 INI 文件，移除 xxmi 专属语句
+                Self::process_ini_files(&ini_paths)?;
+            }
+
+            // 4. 压缩为 7z
+            Self::compress_to_7z(&[temp_mod_dir.clone()], &dest_file)?;
+            Ok(())
+        })();
+
+        // 5. 无论成功或失败，都清理临时目录
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        result?;
+        info!("Exported mod: {:?} -> {:?}", mod_path, dest_file);
+        Ok(dest_file.to_string_lossy().to_string())
+    }
+
+    /// 导出分组模组为 7z 压缩文件（保持目录结构）。
+    ///
+    /// 导出流程：
+    /// 1. 将分组目录复制到临时目录（避免修改原始文件）
+    /// 2. 查找临时副本中所有 .ini 文件
+    /// 3. 调用模组还原功能，移除所有模组的 xxmi 专属 INI 语句
+    /// 4. 使用极限压缩算法生成 7z 文件
+    /// 5. 清理临时目录
+    /// 6. 保持"分组名称->模组名称"的目录结构
+    ///
+    /// 参数：
+    /// - `group_path`: 分组目录路径。
+    /// - `dest_dir`: 目标目录路径。
+    ///
+    /// 返回：导出文件的完整路径。
+    pub fn export_group(group_path: &str, dest_dir: &str) -> Result<String> {
+        let group_path = Path::new(group_path);
+        let dest_dir = Path::new(dest_dir);
+
+        if !group_path.exists() || !group_path.is_dir() {
+            anyhow::bail!("Group path does not exist: {:?}", group_path);
+        }
+
+        fs::create_dir_all(dest_dir)
+            .with_context(|| format!("Failed to create destination directory: {:?}", dest_dir))?;
+
+        let group_name = group_path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("group");
+
+        let dest_file = dest_dir.join(format!("{}.7z", group_name));
+
+        // 创建临时目录用于存放还原后的分组副本
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let temp_dir = std::env::temp_dir().join(format!("xxmi_export_group_{}", timestamp));
+        let temp_group_dir = temp_dir.join(group_name);
+
+        // 执行复制→还原→压缩→清理流程
+        let result = (|| -> Result<()> {
+            // 1. 复制分组到临时目录
+            Self::copy_dir_recursive(group_path, &temp_group_dir)?;
+
+            // 2. 查找临时副本中所有 .ini 文件（涵盖所有模组子目录）
+            let ini_files = Self::find_ini_files_bfs(&temp_group_dir);
+            if !ini_files.is_empty() {
+                let ini_paths: Vec<String> = ini_files
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect();
+                // 3. 处理 INI 文件，移除 xxmi 专属语句
+                Self::process_ini_files(&ini_paths)?;
+            }
+
+            // 4. 收集临时副本中的所有模组子目录作为压缩源
+            let mut source_paths = Vec::new();
+            if let Ok(entries) = fs::read_dir(&temp_group_dir) {
+                for entry in entries.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_dir() {
+                        source_paths.push(entry_path);
+                    }
+                }
+            }
+
+            Self::compress_to_7z(&source_paths, &dest_file)?;
+            Ok(())
+        })();
+
+        // 5. 无论成功或失败，都清理临时目录
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        result?;
+        info!("Exported group: {:?} -> {:?}", group_path, dest_file);
+        Ok(dest_file.to_string_lossy().to_string())
+    }
+
+    /// 使用 7z 格式压缩文件（LZMA2 压缩算法）。
+    ///
+    /// 业务逻辑：
+    /// - 对每个源路径，保留其目录名/文件名作为压缩包内的根条目。
+    /// - 目录会递归遍历，保留相对路径结构。
+    /// - 文件直接以文件名作为条目名压缩。
+    ///
+    /// 参数：
+    /// - `source_paths`: 源文件/目录路径列表。
+    /// - `dest_path`: 目标压缩文件路径（.7z）。
+    ///
+    /// 返回：是否压缩成功。
+    pub fn compress_to_7z(source_paths: &[PathBuf], dest_path: &Path) -> Result<bool> {
+        use sevenz_rust::{SevenZArchiveEntry, SevenZWriter};
+
+        let mut writer = SevenZWriter::create(dest_path)
+            .with_context(|| format!("Failed to create 7z archive: {:?}", dest_path))?;
+
+        for source_path in source_paths {
+            // 取源路径末尾名称作为压缩包内根条目名（保留目录结构）
+            let base_name = source_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("root")
+                .to_string();
+
+            if source_path.is_file() {
+                // 单个文件：直接以文件名作为条目名压缩
+                let entry = SevenZArchiveEntry::from_path(source_path, base_name.clone());
+                let file = fs::File::open(source_path)
+                    .with_context(|| format!("Failed to open file: {:?}", source_path))?;
+                writer
+                    .push_archive_entry(entry, Some(file))
+                    .with_context(|| format!("Failed to push archive entry: {:?}", source_path))?;
+            } else if source_path.is_dir() {
+                // 目录：先添加目录条目本身，再递归添加其内容
+                let dir_entry = SevenZArchiveEntry::from_path(source_path, base_name.clone());
+                writer
+                    .push_archive_entry::<fs::File>(dir_entry, None)
+                    .with_context(|| {
+                        format!("Failed to push directory entry: {:?}", source_path)
+                    })?;
+
+                // 使用 WalkDir 递归遍历目录，min_depth(1) 跳过根目录自身
+                for entry in WalkDir::new(source_path).min_depth(1) {
+                    let entry = entry.with_context(|| "Failed to read directory entry")?;
+                    // 计算相对路径并转换为正斜杠风格（兼容 7z 标准）
+                    let relative = entry
+                        .path()
+                        .strip_prefix(source_path)
+                        .with_context(|| "Failed to compute relative path")?;
+                    let entry_name = format!(
+                        "{}/{}",
+                        base_name,
+                        relative.to_string_lossy().replace('\\', "/")
+                    );
+
+                    let archive_entry = SevenZArchiveEntry::from_path(entry.path(), entry_name);
+                    // 文件条目需要提供 Reader；目录条目传 None
+                    let reader = if entry.path().is_file() {
+                        Some(fs::File::open(entry.path()).with_context(|| {
+                            format!("Failed to open file: {:?}", entry.path())
+                        })?)
+                    } else {
+                        None
+                    };
+                    writer
+                        .push_archive_entry(archive_entry, reader)
+                        .with_context(|| {
+                            format!("Failed to push archive entry: {:?}", entry.path())
+                        })?;
+                }
+            }
+        }
+
+        writer
+            .finish()
+            .with_context(|| format!("Failed to finish 7z archive: {:?}", dest_path))?;
+
+        Ok(true)
+    }
 }
 
 impl Default for ModManager {
@@ -2867,6 +3341,7 @@ mod tests {
             logs: vec![LogEntry::info("Test")],
             duration_ms: 100,
             error_report: None,
+            hash_conflict_report: None,
         };
 
         let json = serde_json::to_string(&result).unwrap();

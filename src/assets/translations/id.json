@@ -285,6 +285,8 @@
   "Failed to remove group": "Gagal menghapus grup",
   "Favorite": "Favorit",
   "Unfavorite": "Hapus Favorit",
+  "Pin to top": "Sematkan ke atas",
+  "Unpin from top": "Lepaskan dari atas",
   "Hotkeys": "Hotkey",
   "Display": "Tampilan",
   "Features": "Fitur",
@@ -318,5 +320,16 @@
   "Failed to reset settings.": "Gagal mereset pengaturan.",
   "Failed to open mod folder.": "Gagal membuka folder mod.",
   "Failed to open app data directory.": "Gagal membuka direktori data aplikasi.",
-  "Hotkey:": "Hotkey:"
+  "Hotkey:": "Hotkey:",
+  "Open {game} working directory": "Buka direktori kerja {game}",
+  "Restore Zone": "Zona Pemulihan",
+  "Drop .ini files here": "Letakkan file .ini di sini",
+  "Drag files or directories here": "Seret file atau direktori ke sini",
+  "Only .ini files will be processed": "Hanya file .ini yang akan diproses",
+  "Process": "Proses",
+  "Clear": "Bersihkan",
+  "Files processed successfully": "File berhasil diproses",
+  "Failed to process files": "Gagal memproses file",
+  "No valid .ini files found": "Tidak ada file .ini yang valid ditemukan",
+  "{count} file(s) added to restore zone": "{count} file telah ditambahkan ke zona pemulihan"
 }

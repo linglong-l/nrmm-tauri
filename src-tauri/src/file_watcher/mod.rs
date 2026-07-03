@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -23,11 +23,19 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use crate::utils::log_sampler::LogSampler;
+
 /// 防抖等待时长（500ms）。
 ///
 /// 在收到文件系统事件后，会等待该时长；若期间又有新事件到达，则重新计时。
 /// 仅当连续 500ms 无新事件时，才向前端发送变更通知。
 const DEBOUNCE_DURATION: Duration = Duration::from_millis(500);
+
+/// 文件系统事件日志采样器全局实例。
+///
+/// 使用 [`OnceLock`] 实现懒加载的全局单例，避免在 `move` 闭包中捕获实例字段的复杂性。
+/// 仅对 `debug!("File system event: ...")` 这一类高频日志生效，抑制窗口期内的重复输出。
+static FILE_EVENT_SAMPLER: OnceLock<LogSampler> = OnceLock::new();
 
 /// Windows 路径长度阈值（260 字符，即 MAX_PATH）。
 ///
@@ -131,6 +139,10 @@ impl FileWatcher {
         let debounce_tx_clone = debounce_tx.clone();
         let is_running_clone = is_running.clone();
 
+        // 获取日志采样器全局单例：在闭包中通过共享引用访问，无需捕获实例字段。
+        // 仅对高频的 file_event 调试日志生效，error 日志不受影响。
+        let sampler = FILE_EVENT_SAMPLER.get_or_init(LogSampler::new);
+
         // 创建底层 notify watcher，注册事件回调
         let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
             // 已停止时直接忽略事件
@@ -142,7 +154,10 @@ impl FileWatcher {
                 Ok(event) => {
                     // 仅处理与模组相关的事件
                     if Self::is_relevant_event(&event) {
-                        debug!("File system event: {:?}", event);
+                        // 高频日志采样：1 秒窗口内仅首次输出，抑制重复输出
+                        if sampler.should_log("file_event") {
+                            debug!("File system event: {:?}", event);
+                        }
                         let tx = debounce_tx_clone.clone();
                         // 异步发送防抖信号，不阻塞 watcher 线程
                         tokio::spawn(async move {
@@ -151,6 +166,7 @@ impl FileWatcher {
                     }
                 }
                 Err(e) => {
+                    // error 日志不参与采样，确保错误始终被记录
                     error!("File watcher error: {}", e);
                 }
             }

@@ -86,6 +86,22 @@ watch(
   }
 );
 
+// 监听标签页切换：切回 mods 标签页时触发缓存校验
+// 业务逻辑：由于使用 v-show 切换标签页，ModsTab 只 mount 一次，
+// 切回时不会重新触发 onMounted，因此需要在此显式校验缓存数据一致性。
+watch(activeTab, (newTab) => {
+  if (newTab === 'mods') {
+    const result = gameStore.validateCache(gameStore.targetGame);
+    if (result.action === 'load') {
+      gameStore.loadModsForGame(gameStore.targetGame);
+    } else if (result.action === 'clear_and_load') {
+      gameStore.clearModsCache();
+      gameStore.loadModsForGame(gameStore.targetGame);
+    }
+    // action 为 'skip' 或 'use_cache' 时无需操作
+  }
+});
+
 // 组件挂载：注册事件监听；若设置已加载则注册热键
 onMounted(() => {
   setupEventListeners();

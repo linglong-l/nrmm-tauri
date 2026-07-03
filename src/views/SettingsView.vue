@@ -17,14 +17,14 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
-import { Folder } from '@element-plus/icons-vue';
+import { Folder, Delete } from '@element-plus/icons-vue';
 import { useSettingsStore } from '../stores/settings';
 import { useGameStore } from '../stores/game';
 import { useHotkeyStore } from '../stores/hotkey';
 import {
-  invokeUpdateModData, invokeValidateModsPath, invokeExportSettings,
-  invokeImportSettings, invokeResetSettings, invokeOpenModFolder,
-  invokeOpenPath, invokeSelectDirectory, invokeLoadMods
+  invokeUpdateModData, invokeValidateModsPath, invokeOpenModFolder,
+  invokeSelectDirectory, invokeLoadMods,
+  invokeFindIniFiles, invokeProcessIniFiles
 } from '../utils/invoke';
 import { TargetGame, HotkeyKeyboard, HotkeyGamepad, LayoutMode, SortGroupMethod, ModsPathStatus } from '../types';
 import {
@@ -478,81 +478,151 @@ async function handleUpdateModData() {
   }
 }
 
+// 还原区相关状态
+const isRestoreZoneDragging = ref(false);
+const restoreZoneFiles = ref<Array<{ name: string; path: string }>>([]);
+const isProcessingRestore = ref(false);
+
 /**
- * 导出设置：从后端获取设置 JSON，作为 nrmm_settings.json 文件下载到本地。
+ * 处理还原区文件拖拽悬停事件。
+ * 设置拖拽状态，用于触发样式变化。
  */
-async function handleExportSettings() {
-  try {
-    const settingsJson = await invokeExportSettings();
-    const blob = new Blob([settingsJson], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'nrmm_settings.json';
-    a.click();
-    URL.revokeObjectURL(url);
-    ElMessage.success(t('Settings exported successfully.'));
-  } catch {
-    ElMessage.error(t('Failed to export settings.'));
+function onRestoreZoneDragOver(event: DragEvent) {
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy';
   }
+  isRestoreZoneDragging.value = true;
 }
 
 /**
- * 导入设置：读取用户选择的 JSON 文件并提交后端解析。
- * 业务逻辑：成功后重新加载 settingsStore 以同步 UI 状态。
- * @param event 文件输入框 change 事件
+ * 处理还原区文件拖拽离开事件。
+ * 重置拖拽状态。
  */
-async function handleImportSettings(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-
-  try {
-    const text = await file.text();
-    const success = await invokeImportSettings(text);
-    if (success) {
-      await settingsStore.loadSettings();
-      ElMessage.success(t('Settings imported successfully.'));
-    } else {
-      ElMessage.error(t('Failed to import settings.'));
-    }
-  } catch {
-    ElMessage.error(t('Failed to import settings. Invalid file format.'));
-  } finally {
-    // 清空 input 的 value，使同一文件可再次触发 change
-    input.value = '';
-  }
+function onRestoreZoneDragLeave() {
+  isRestoreZoneDragging.value = false;
 }
 
 /**
- * 重置设置：弹窗二次确认后调用后端重置为默认值，并重新加载设置。
+ * 处理还原区文件放置事件。
+ * 从拖拽数据中提取文件路径，校验有效性后添加到还原区列表。
  */
-async function handleResetSettings() {
-  try {
-    await ElMessageBox.confirm(
-      t('Are you sure you want to reset all settings to default?'),
-      t('Reset Settings'),
-      {
-        confirmButtonText: t('Confirm'),
-        cancelButtonText: t('Cancel'),
-        type: 'warning'
+async function onRestoreZoneDrop(event: DragEvent) {
+  isRestoreZoneDragging.value = false;
+  const items = event.dataTransfer?.items;
+  const files = event.dataTransfer?.files;
+  if (!items && !files) return;
+
+  const validFiles: Array<{ name: string; path: string }> = [];
+
+  if (items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.kind === 'file') {
+        const entry = item.webkitGetAsEntry();
+        if (entry) {
+          if (entry.isFile) {
+            const file = item.getAsFile();
+            if (file) {
+              const isIniFile = file.name.toLowerCase().endsWith('.ini');
+              if (isIniFile) {
+                validFiles.push({ name: file.name, path: file.path! });
+              } else {
+                const iniFiles = await findIniFilesInPath(file.path!);
+                validFiles.push(...iniFiles);
+              }
+            }
+          } else if (entry.isDirectory) {
+            const file = item.getAsFile();
+            if (file) {
+              const iniFiles = await findIniFilesInPath(file.path!);
+              validFiles.push(...iniFiles);
+            }
+          }
+        }
       }
-    );
-  } catch {
+    }
+  } else if (files) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const isIniFile = file.name.toLowerCase().endsWith('.ini');
+      if (isIniFile) {
+        validFiles.push({ name: file.name, path: file.path! });
+      } else {
+        const iniFiles = await findIniFilesInPath(file.path!);
+        validFiles.push(...iniFiles);
+      }
+    }
+  }
+
+  if (validFiles.length === 0) {
+    ElMessage.warning(t('No valid .ini files found'));
     return;
   }
 
+  restoreZoneFiles.value = [...restoreZoneFiles.value, ...validFiles];
+  ElMessage.success(t(`${validFiles.length} file(s) added to restore zone`));
+}
+
+/**
+ * 使用后端 BFS 算法查找指定路径下的所有 .ini 文件。
+ * @param path 起始路径（文件或目录）
+ * @returns .ini 文件列表（包含文件名和完整路径）
+ */
+async function findIniFilesInPath(path: string): Promise<Array<{ name: string; path: string }>> {
   try {
-    await invokeResetSettings();
-    await settingsStore.loadSettings();
-    ElMessage.success(t('Settings reset successfully.'));
-  } catch {
-    ElMessage.error(t('Failed to reset settings.'));
+    const result = await invokeFindIniFiles(path);
+    return result.map((p: string) => ({
+      name: p.split(/[\\/]/).pop() || '',
+      path: p
+    }));
+  } catch (error) {
+    console.error('Failed to find ini files:', error);
+    return [];
   }
 }
 
 /**
- * 打开当前目标游戏的 Mods 文件夹。
+ * 从还原区列表中移除指定索引的文件。
+ * @param index 文件在列表中的索引
+ */
+function removeRestoreZoneFile(index: number) {
+  restoreZoneFiles.value.splice(index, 1);
+}
+
+/**
+ * 清空还原区文件列表。
+ */
+function clearRestoreZone() {
+  restoreZoneFiles.value = [];
+}
+
+/**
+ * 处理还原区文件，移除其中的 xxmi 专属 INI 语句。
+ * 调用后端命令批量处理所有已添加的 .ini 文件。
+ */
+async function processRestoreZoneFiles() {
+  if (restoreZoneFiles.value.length === 0) return;
+
+  isProcessingRestore.value = true;
+  try {
+    const paths = restoreZoneFiles.value.map(f => f.path);
+    const result = await invokeProcessIniFiles(paths);
+    if (result) {
+      ElMessage.success(t('Files processed successfully'));
+      clearRestoreZone();
+    } else {
+      ElMessage.error(t('Failed to process files'));
+    }
+  } catch (error) {
+    console.error('Failed to process ini files:', error);
+    ElMessage.error(t('Failed to process files'));
+  } finally {
+    isProcessingRestore.value = false;
+  }
+}
+
+/**
+ * 打开当前目标游戏的 Mods 文件夹（工作目录）。
  * 限制：必须先选择游戏。
  */
 async function handleOpenModFolder() {
@@ -565,19 +635,6 @@ async function handleOpenModFolder() {
     await invokeOpenModFolder(game);
   } catch {
     ElMessage.error(t('Failed to open mod folder.'));
-  }
-}
-
-/**
- * 打开应用的 AppData 目录（用于查看日志、配置文件等）。
- */
-async function handleOpenAppDataDir() {
-  try {
-    const { appDataDir } = await import('@tauri-apps/api/path');
-    const dir = await appDataDir();
-    await invokeOpenPath(dir);
-  } catch {
-    ElMessage.error(t('Failed to open app data directory.'));
   }
 }
 
@@ -1041,48 +1098,48 @@ watch(
 
             <div class="settings-divider" />
 
-            <div class="settings-section-title">{{ t('Settings Management') }}</div>
+            <div class="settings-section-title">{{ t('Open Folders') }}</div>
             <el-form-item>
-              <el-row :gutter="10">
-                <el-col :span="8">
-                  <el-button @click="handleExportSettings" style="width: 100%">
-                    {{ t('Export') }}
-                  </el-button>
-                </el-col>
-                <el-col :span="8">
-                  <el-upload
-                    :show-file-list="false"
-                    :before-upload="() => false"
-                    @change="handleImportSettings"
-                    accept=".json"
-                  >
-                    <el-button style="width: 100%">{{ t('Import') }}</el-button>
-                  </el-upload>
-                </el-col>
-                <el-col :span="8">
-                  <el-button type="danger" @click="handleResetSettings" style="width: 100%">
-                    {{ t('Reset') }}
-                  </el-button>
-                </el-col>
-              </el-row>
+              <el-button @click="handleOpenModFolder" style="width: 100%">
+                {{ t('Open {game} working directory', { game: gameStore.targetGame !== TargetGame.none ? t(getGameNameKey(gameStore.targetGame)) : t('Game') }) }}
+              </el-button>
             </el-form-item>
 
             <div class="settings-divider" />
 
-            <div class="settings-section-title">{{ t('Open Folders') }}</div>
+            <div class="settings-section-title">{{ t('Restore Zone') }}</div>
             <el-form-item>
-              <el-row :gutter="10">
-                <el-col :span="12">
-                  <el-button @click="handleOpenModFolder" style="width: 100%">
-                    {{ t('Open in File Explorer') }}
-                  </el-button>
-                </el-col>
-                <el-col :span="12">
-                  <el-button @click="handleOpenAppDataDir" style="width: 100%">
-                    {{ t('App Data') }}
-                  </el-button>
-                </el-col>
-              </el-row>
+              <div class="restore-zone" :class="{ 'drag-over': isRestoreZoneDragging }"
+                @dragover.prevent="onRestoreZoneDragOver"
+                @dragleave="onRestoreZoneDragLeave"
+                @drop.prevent="onRestoreZoneDrop">
+                <div class="restore-zone-header">
+                  <span class="restore-zone-hint">{{ t('Drop .ini files here') }}</span>
+                </div>
+                <div class="restore-zone-content">
+                  <div v-if="!isRestoreZoneDragging && restoreZoneFiles.length === 0" class="restore-zone-empty">
+                    <p>{{ t('Drag files or directories here') }}</p>
+                    <p class="restore-zone-sub">{{ t('Only .ini files will be processed') }}</p>
+                  </div>
+                  <div v-else-if="restoreZoneFiles.length > 0" class="restore-zone-files">
+                    <div v-for="(file, index) in restoreZoneFiles" :key="index" class="restore-zone-file-item">
+                      <span class="restore-zone-file-name">{{ file.name }}</span>
+                      <span class="restore-zone-file-path">{{ file.path }}</span>
+                      <el-button size="small" type="danger" @click="removeRestoreZoneFile(index)">
+                        <el-icon>
+                          <Delete />
+                        </el-icon>
+                      </el-button>
+                    </div>
+                    <div class="restore-zone-actions">
+                      <el-button type="primary" @click="processRestoreZoneFiles" :loading="isProcessingRestore">
+                        {{ t('Process') }}
+                      </el-button>
+                      <el-button @click="clearRestoreZone">{{ t('Clear') }}</el-button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </el-form-item>
           </el-form>
         </div>
@@ -1578,5 +1635,106 @@ watch(
 :deep(.el-textarea__inner) {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.2) rgba(255, 255, 255, 0.03);
+}
+
+/* 还原区样式 */
+.restore-zone {
+  border: 2px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 16px;
+  transition: all 0.3s ease;
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.restore-zone:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.restore-zone.drag-over {
+  border-color: var(--el-color-primary);
+  background-color: rgba(64, 158, 255, 0.1);
+}
+
+.restore-zone-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.restore-zone-hint {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 500;
+}
+
+.restore-zone-content {
+  min-height: 80px;
+}
+
+.restore-zone-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 0;
+}
+
+.restore-zone-empty p {
+  margin: 4px 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.restore-zone-sub {
+  font-size: 12px !important;
+  color: rgba(255, 255, 255, 0.3) !important;
+}
+
+.restore-zone-files {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.restore-zone-file-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background-color: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.restore-zone-file-item:last-child {
+  margin-bottom: 0;
+}
+
+.restore-zone-file-name {
+  flex: 1;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.restore-zone-file-path {
+  flex: 2;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.restore-zone-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.restore-zone-actions :deep(.el-button) {
+  flex: 1;
 }
 </style>

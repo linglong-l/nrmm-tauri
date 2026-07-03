@@ -285,6 +285,8 @@
   "Failed to remove group": "移除群組失敗",
   "Favorite": "收藏",
   "Unfavorite": "取消收藏",
+  "Pin to top": "置頂",
+  "Unpin from top": "取消置頂",
   "Hotkeys": "快捷鍵",
   "Display": "顯示",
   "Features": "功能",
@@ -318,5 +320,16 @@
   "Failed to reset settings.": "重置設定失敗。",
   "Failed to open mod folder.": "開啟模組資料夾失敗。",
   "Failed to open app data directory.": "開啟應用資料目錄失敗。",
-  "Hotkey:": "快捷鍵："
+  "Hotkey:": "快捷鍵：",
+  "Open {game} working directory": "開啟{game}工作目錄",
+  "Restore Zone": "還原區",
+  "Drop .ini files here": "將.ini檔案拖放至此處",
+  "Drag files or directories here": "將檔案或目錄拖放至此處",
+  "Only .ini files will be processed": "僅處理.ini檔案",
+  "Process": "處理",
+  "Clear": "清空",
+  "Files processed successfully": "檔案處理成功",
+  "Failed to process files": "處理檔案失敗",
+  "No valid .ini files found": "未找到有效.ini檔案",
+  "{count} file(s) added to restore zone": "{count}個檔案已添加到還原區"
 }

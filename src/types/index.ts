@@ -373,16 +373,13 @@ export type FileWatcherEventType = 'create' | 'modify' | 'delete' | 'rename';
 
 /**
  * 文件监听事件，由后端 file_watcher 推送到前端，描述一次具体变化。
+ * 与后端 ModsChangedEvent 结构一致（serde camelCase 序列化）。
  */
 export interface FileWatcherEvent {
-  /** 事件类型 */
-  type: FileWatcherEventType;
   /** 受影响的文件/目录路径 */
   path: string;
-  /** 是否为目录变化 */
-  isDirectory: boolean;
-  /** 事件发生时间戳（毫秒） */
-  timestamp: number;
+  /** 变更类型字符串（如 "modified"） */
+  changeType: string;
 }
 
 /**

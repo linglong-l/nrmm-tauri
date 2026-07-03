@@ -285,6 +285,8 @@
   "Failed to remove group": "Не удалось удалить группу",
   "Favorite": "Избранное",
   "Unfavorite": "Убрать из избранного",
+  "Pin to top": "Закрепить наверху",
+  "Unpin from top": "Открепить сверху",
   "Hotkeys": "Горячие клавиши",
   "Display": "Отображение",
   "Features": "Функции",
@@ -318,5 +320,16 @@
   "Failed to reset settings.": "Не удалось сбросить настройки.",
   "Failed to open mod folder.": "Не удалось открыть папку модов.",
   "Failed to open app data directory.": "Не удалось открыть каталог данных приложения.",
-  "Hotkey:": "Горячая клавиша:"
+  "Hotkey:": "Горячая клавиша:",
+  "Open {game} working directory": "Открыть рабочую директорию {game}",
+  "Restore Zone": "Зона восстановления",
+  "Drop .ini files here": "Перетащите .ini файлы сюда",
+  "Drag files or directories here": "Перетащите файлы или директории сюда",
+  "Only .ini files will be processed": "Будут обработаны только .ini файлы",
+  "Process": "Обработать",
+  "Clear": "Очистить",
+  "Files processed successfully": "Файлы успешно обработаны",
+  "Failed to process files": "Не удалось обработать файлы",
+  "No valid .ini files found": "Нет действительных .ini файлов",
+  "{count} file(s) added to restore zone": "{count} файл(ов) добавлено в зону восстановления"
 }

@@ -57,6 +57,21 @@ export const useGameStore = defineStore('game', () => {
   const loadStatus = ref<'idle' | 'loading' | 'cancelled' | 'completed' | 'error'>('idle');
   // 最后一次请求加载的游戏（用于数据一致性校验）
   const lastRequestedGame = ref<TargetGame | null>(null);
+  /**
+   * 当前缓存数据所属的游戏。
+   * 与 targetGame 分离：targetGame 在 setTargetGame 中立即更新（UI 响应），
+   * 而 cachedGame 仅在 setModGroups 中更新（数据实际加载完成时）。
+   * validateCache 通过 cachedGame 检测"缓存数据所属游戏与请求游戏不一致"的场景，
+   * 避免 setTargetGame 提前更新 targetGame 导致缓存校验误判为 use_cache。
+   */
+  const cachedGame = ref<TargetGame>('none' as TargetGame);
+
+  /**
+   * 各分组当前选中的模组路径映射表。
+   * key: 分组路径，value: 选中模组的 modPath。
+   * 从后端返回的 previousSelectedModOnGroup 索引初始化，用于前端紫色描边和排序。
+   */
+  const selectedModPaths = ref<Map<string, string>>(new Map());
 
   /**
    * 当前选中的分组对象。
@@ -69,20 +84,25 @@ export const useGameStore = defineStore('game', () => {
   });
 
   /**
-   * 递归查找分组（支持树形结构）。
+   * 查找分组（支持树形结构）。
+   *
+   * 使用栈进行 DFS 迭代遍历，避免递归导致的深层次栈溢出风险。
+   * 遍历顺序：将子分组压入栈中，逐个弹出检查路径匹配。
+   *
    * @param groupPath 分组路径
    * @param groups 分组列表（默认使用 modGroups）
    * @returns 找到的分组对象，未找到返回 null
    */
   function findGroupByPath(groupPath: string, groups: ModGroupData[] = modGroups.value): ModGroupData | null {
-    for (const group of groups) {
+    const stack: ModGroupData[] = [...groups];
+    while (stack.length > 0) {
+      const group = stack.pop()!;
       if (group.groupPath === groupPath) {
         return group;
       }
-      // 递归查找子分组
+      // 将子分组压入栈中继续迭代查找
       if (group.children && group.children.length > 0) {
-        const found = findGroupByPath(groupPath, group.children);
-        if (found) return found;
+        stack.push(...group.children);
       }
     }
     return null;
@@ -110,24 +130,34 @@ export const useGameStore = defineStore('game', () => {
   }
 
   /**
-   * 递归查找目标分组的所有祖先路径（用于展开父节点确保可见）。
+   * 查找目标分组的所有祖先路径（用于展开父节点确保可见）。
+   *
+   * 使用栈进行 DFS 迭代遍历，避免递归导致的深层次栈溢出风险。
+   * 每个栈元素携带当前分组及其祖先路径列表，匹配到目标时直接返回其祖先路径。
+   *
    * @param targetPath 目标分组路径
    * @returns 祖先路径数组（从顶层到直接父节点），未找到返回空数组
    */
   function findAncestorPaths(targetPath: string): string[] {
-    function search(groups: ModGroupData[], ancestors: string[]): string[] | null {
-      for (const group of groups) {
-        if (group.groupPath === targetPath) {
-          return ancestors;
-        }
-        if (group.children && group.children.length > 0) {
-          const result = search(group.children, [...ancestors, group.groupPath]);
-          if (result !== null) return result;
+    // 使用栈进行 DFS 迭代，每个栈元素包含当前分组和其祖先路径
+    const stack: Array<{ group: ModGroupData; ancestors: string[] }> = [];
+    for (const g of modGroups.value) {
+      stack.push({ group: g, ancestors: [] });
+    }
+    while (stack.length > 0) {
+      const { group, ancestors } = stack.pop()!;
+      if (group.groupPath === targetPath) {
+        return ancestors;
+      }
+      // 将子分组及其更新后的祖先路径压入栈中继续查找
+      if (group.children && group.children.length > 0) {
+        const childAncestors = [...ancestors, group.groupPath];
+        for (const child of group.children) {
+          stack.push({ group: child, ancestors: childAncestors });
         }
       }
-      return null;
     }
-    return search(modGroups.value, []) || [];
+    return [];
   }
 
   /**
@@ -160,11 +190,62 @@ export const useGameStore = defineStore('game', () => {
   });
 
   /**
-   * 按 realIndex 升序排列的分组副本。
+   * 排序后的分组列表（含置顶功能）。
+   *
+   * 排序优先级（从高到低）：
+   * 1. 收藏的角色分组（groupPath 包含 'group_'）— 按 favoriteDateTime 降序
+   * 2. 收藏的非角色分组 — 按 favoriteDateTime 降序
+   * 3. 未收藏的角色分组 — 按 realIndex 升序
+   * 4. 未收藏的非角色分组 — 按 realIndex 升序
+   *
+   * 置顶机制复用 favoriteDateTime 字段：收藏即置顶。
+   * 角色分组通过 groupPath 是否包含 'group_' 识别（对应 Mods/_MANAGED_/group_xx 目录）。
+   *
    * 注意：返回的是拷贝，不会影响 modGroups 原数组的顺序。
    */
   const sortedGroups = computed(() => {
-    return [...modGroups.value].sort((a, b) => a.realIndex - b.realIndex);
+    /**
+     * 判断分组是否为角色分组（group_xx 目录）。
+     * 通过 groupPath 是否包含 'group_' 字符串识别。
+     * @param group 分组数据
+     * @returns true 表示为角色分组
+     */
+    const isCharacterGroup = (group: ModGroupData): boolean => {
+      return group.groupPath.includes('group_');
+    };
+
+    /**
+     * 计算分组的排序优先级（数值越小越靠前）。
+     * 优先级：0=收藏角色分组, 1=收藏非角色分组, 2=未收藏角色分组, 3=未收藏非角色分组
+     * @param group 分组数据
+     * @returns 排序优先级数值
+     */
+    const getSortPriority = (group: ModGroupData): number => {
+      const isFavorited = group.favoriteDateTime !== null;
+      const isCharacter = isCharacterGroup(group);
+      if (isFavorited && isCharacter) return 0;
+      if (isFavorited && !isCharacter) return 1;
+      if (!isFavorited && isCharacter) return 2;
+      return 3;
+    };
+
+    return [...modGroups.value].sort((a, b) => {
+      const priorityA = getSortPriority(a);
+      const priorityB = getSortPriority(b);
+      // 优先级不同时，按优先级排序
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
+      }
+      // 优先级相同时的二级排序
+      const aFavorited = a.favoriteDateTime !== null;
+      const bFavorited = b.favoriteDateTime !== null;
+      if (aFavorited && bFavorited) {
+        // 收藏分组按 favoriteDateTime 降序（最近收藏的在前）
+        return (b.favoriteDateTime ?? '').localeCompare(a.favoriteDateTime ?? '');
+      }
+      // 未收藏分组按 realIndex 升序
+      return a.realIndex - b.realIndex;
+    });
   });
 
   /**
@@ -181,7 +262,6 @@ export const useGameStore = defineStore('game', () => {
    * @param game 新的目标游戏
    */
   function setTargetGame(game: TargetGame) {
-    console.log('[gameStore] setTargetGame called, game:', game);
     targetGame.value = game;
     const settingsStore = useSettingsStore();
     modsPath.value = settingsStore.getModsPath(game);
@@ -190,7 +270,6 @@ export const useGameStore = defineStore('game', () => {
     settingsStore.saveSettings().catch(() => {
       console.warn('[gameStore] Failed to save settings after game change');
     });
-    console.log('[gameStore] Emitting GAME_SWITCHED event with game:', game);
     eventManager.emitLocal(EventNames.GAME_SWITCHED, { game });
   }
 
@@ -201,19 +280,14 @@ export const useGameStore = defineStore('game', () => {
    */
   function initFromSettings() {
     if (targetGame.value !== 'none') {
-      console.log('[gameStore] initFromSettings: targetGame already set, skipping');
       return;
     }
     const settingsStore = useSettingsStore();
     const settingsGame = settingsStore.targetGame;
-    console.log('[gameStore] initFromSettings: syncing targetGame from settings:', settingsGame);
     if (settingsGame && settingsGame !== 'none') {
       targetGame.value = settingsGame;
       modsPath.value = settingsStore.getModsPath(settingsGame);
-      console.log('[gameStore] initFromSettings: Emitting GAME_SWITCHED event with game:', settingsGame);
       eventManager.emitLocal(EventNames.GAME_SWITCHED, { game: settingsGame });
-    } else {
-      console.log('[gameStore] initFromSettings: settings game is none, staying at none');
     }
   }
 
@@ -232,15 +306,29 @@ export const useGameStore = defineStore('game', () => {
   async function loadModsForGame(game: TargetGame) {
     // 检查 game 是否为 none（未选择游戏），若是则直接返回，不发起任何请求
     if (game === 'none') {
-      console.log('[gameStore] Game is none, skipping mods loading');
       return;
     }
 
-    // 检查内存缓存：当前游戏的数据已加载，直接返回
-    if (targetGame.value === game && isModsLoaded.value && modGroups.value.length > 0) {
-      console.log('[gameStore] Using memory cache for game:', game);
+    // 缓存数据校验：检查当前缓存数据与请求游戏的一致性
+    const cacheCheck = validateCache(game);
+
+    // skip：游戏未选择，直接返回
+    if (cacheCheck.action === 'skip') {
+      return;
+    }
+
+    // use_cache：缓存有效且游戏匹配，直接返回
+    if (cacheCheck.action === 'use_cache') {
       loadStatus.value = 'completed';
       return;
+    }
+
+    // clear_and_load：缓存数据所属游戏与请求游戏不一致，先清除旧缓存并重置加载状态
+    if (cacheCheck.action === 'clear_and_load') {
+      clearModsCache(cachedGame.value);
+      // 重置加载状态，确保走完整加载流程（避免后续 isModsLoaded 检查误判）
+      isModsLoaded.value = false;
+      modGroups.value = [];
     }
 
     // 更新加载状态
@@ -253,8 +341,6 @@ export const useGameStore = defineStore('game', () => {
       // 检查 localStorage 缓存
       const cachedGroups = getModsCache<ModGroupData[]>(game);
       if (cachedGroups && cachedGroups.length > 0) {
-        console.log('[gameStore] Using localStorage cache for game:', game);
-        
         if (lastRequestedGame.value === game) {
           setModGroups(cachedGroups);
           setModsLoaded(true);
@@ -266,7 +352,6 @@ export const useGameStore = defineStore('game', () => {
       }
 
       // 缓存不存在或过期，从后端加载
-      console.log('[gameStore] Loading mods from backend for game:', game);
       const groups = await invoke<ModGroupData[]>('load_mods', { game });
 
       // 数据一致性检查：仅当返回的数据与最后一次请求的游戏匹配时才更新状态
@@ -297,6 +382,56 @@ export const useGameStore = defineStore('game', () => {
   }
 
   /**
+   * 缓存校验结果类型。
+   * - `skip`：游戏未选择（none），无需任何操作
+   * - `load`：缓存为空且游戏合法，需从后端加载最新数据
+   * - `clear_and_load`：缓存数据所属游戏与请求游戏不一致，需先清除旧缓存再加载
+   * - `use_cache`：缓存有效且游戏匹配，可直接使用现有数据
+   */
+  type CacheValidationResult = {
+    action: 'skip' | 'load' | 'clear_and_load' | 'use_cache';
+  };
+
+  /**
+   * 校验缓存数据与当前请求游戏的一致性。
+   *
+   * 业务逻辑：
+   * 1. 游戏为 'none' 时直接返回 skip，不发起任何请求
+   * 2. 内存缓存为空（modGroups 为空或未加载）且游戏合法时返回 load
+   * 3. 内存缓存所属游戏（cachedGame.value）与请求游戏不同且游戏合法时返回 clear_and_load
+   * 4. 内存缓存有效且游戏匹配时返回 use_cache
+   *
+   * 注意：使用 cachedGame 而非 targetGame 进行比较，因为 targetGame 在 setTargetGame
+   * 中已被立即更新为新游戏，而 cachedGame 仅在 setModGroups 中更新，能准确反映当前
+   * modGroups 数据实际所属的游戏。
+   *
+   * 该函数为纯函数，无副作用，调用方根据返回的 action 决定后续操作。
+   *
+   * @param game 待校验的目标游戏
+   * @returns 校验结果对象，包含 action 字段指示后续操作
+   */
+  function validateCache(game: TargetGame): CacheValidationResult {
+    // 游戏未选择，直接跳过
+    if (game === 'none') {
+      return { action: 'skip' };
+    }
+
+    // 内存缓存为空：需从后端加载
+    if (!isModsLoaded.value || modGroups.value.length === 0) {
+      return { action: 'load' };
+    }
+
+    // 缓存数据所属游戏与请求游戏不一致：需先清除旧缓存再加载
+    // 使用 cachedGame 而非 targetGame，避免 setTargetGame 提前更新导致误判
+    if (cachedGame.value !== game) {
+      return { action: 'clear_and_load' };
+    }
+
+    // 缓存有效且游戏匹配
+    return { action: 'use_cache' };
+  }
+
+  /**
    * 清除指定游戏的模组缓存。
    * 
    * 适用于文件变化、手动刷新等场景，确保下次加载时从后端获取最新数据。
@@ -306,7 +441,6 @@ export const useGameStore = defineStore('game', () => {
   function clearModsCache(game?: TargetGame) {
     const target = game || targetGame.value;
     removeModsCache(target);
-    console.log('[gameStore] Cache cleared for game:', target);
   }
 
   /** 直接替换整个 Mods 列表。 */
@@ -322,6 +456,28 @@ export const useGameStore = defineStore('game', () => {
    */
   function setModGroups(newGroups: ModGroupData[]) {
     modGroups.value = newGroups;
+    // 同步更新 cachedGame：当前 modGroups 数据实际所属的游戏
+    cachedGame.value = targetGame.value;
+
+    // 初始化各分组的选中模组路径映射（使用栈进行 DFS 迭代，避免递归）
+    const newSelectedMap = new Map<string, string>();
+    const initStack: ModGroupData[] = [...newGroups];
+    while (initStack.length > 0) {
+      const group = initStack.pop()!;
+      const idx = group.previousSelectedModOnGroup;
+      if (idx >= 0 && idx < group.modsInGroup.length) {
+        const selectedMod = group.modsInGroup[idx];
+        if (selectedMod) {
+          newSelectedMap.set(group.groupPath, selectedMod.modPath);
+        }
+      }
+      // 将子分组压入栈中继续处理
+      if (group.children && group.children.length > 0) {
+        initStack.push(...group.children);
+      }
+    }
+    selectedModPaths.value = newSelectedMap;
+
     if (newGroups.length === 0) {
       currentGroupIndex.value = 0;
       currentGroupPath.value = '';
@@ -526,6 +682,26 @@ export const useGameStore = defineStore('game', () => {
   }
 
   /**
+   * 获取指定分组当前选中的模组路径。
+   * @param groupPath 分组路径
+   * @returns 选中模组的 modPath，未选中时返回 null
+   */
+  function getSelectedModPath(groupPath: string): string | null {
+    return selectedModPaths.value.get(groupPath) ?? null;
+  }
+
+  /**
+   * 设置指定分组当前选中的模组路径。
+   * @param groupPath 分组路径
+   * @param modPath 选中模组的 modPath
+   */
+  function setSelectedModPath(groupPath: string, modPath: string) {
+    selectedModPaths.value.set(groupPath, modPath);
+    // 触发响应式更新
+    selectedModPaths.value = new Map(selectedModPaths.value);
+  }
+
+  /**
    * 更新单个分组的模组列表（仅更新 mods，保留原有 children）。
    * 通过 groupPath 递归查找分组（支持嵌套子分组）。
    * @param groupPath 分组路径
@@ -576,6 +752,7 @@ function removeModFromGroup(groupPath: string, modIndex: number) {
 
   return {
     targetGame,
+    cachedGame: computed(() => cachedGame.value),
     mods,
     modGroups,
     modsPathStatus,
@@ -601,6 +778,7 @@ function removeModFromGroup(groupPath: string, modIndex: number) {
     setTargetGame,
     initFromSettings,
     loadModsForGame,
+    validateCache,
     setMods,
     setModGroups,
     setModsPathStatus,
@@ -617,6 +795,8 @@ function removeModFromGroup(groupPath: string, modIndex: number) {
     toggleModFavorite,
     toggleGroupFavorite,
     updateModInGroup,
+    getSelectedModPath,
+    setSelectedModPath,
     updateGroup,
     addModGroup,
     removeModGroup,

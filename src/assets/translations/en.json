@@ -285,6 +285,8 @@
   "Failed to remove group": "Failed to remove group",
   "Favorite": "Favorite",
   "Unfavorite": "Unfavorite",
+  "Pin to top": "Pin to top",
+  "Unpin from top": "Unpin from top",
   "Hotkeys": "Hotkeys",
   "Display": "Display",
   "Features": "Features",
@@ -318,5 +320,16 @@
   "Failed to reset settings.": "Failed to reset settings.",
   "Failed to open mod folder.": "Failed to open mod folder.",
   "Failed to open app data directory.": "Failed to open app data directory.",
-  "Hotkey:": "Hotkey:"
+  "Hotkey:": "Hotkey:",
+  "Open {game} working directory": "Open {game} working directory",
+  "Restore Zone": "Restore Zone",
+  "Drop .ini files here": "Drop .ini files here",
+  "Drag files or directories here": "Drag files or directories here",
+  "Only .ini files will be processed": "Only .ini files will be processed",
+  "Process": "Process",
+  "Clear": "Clear",
+  "Files processed successfully": "Files processed successfully",
+  "Failed to process files": "Failed to process files",
+  "No valid .ini files found": "No valid .ini files found",
+  "{count} file(s) added to restore zone": "{count} file(s) added to restore zone"
 }

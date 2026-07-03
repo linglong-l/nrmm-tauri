@@ -23,6 +23,7 @@ mod settings; // 用户设置持久化
 mod state; // 全局应用状态容器 AppState
 mod task_queue; // 后台任务队列
 mod tray; // 系统托盘菜单与图标事件
+mod utils; // 通用工具集（日志采样器等）
 mod window_manager; // 主窗口的显示/隐藏/尺寸/置顶等管理 // 暴露给前端的 Tauri 命令
 
 use fern::Dispatch;
@@ -271,7 +272,6 @@ pub fn run() {
             commands::get_foreground_game,
             commands::get_settings,
             commands::save_settings,
-            commands::reset_settings,
             commands::get_cloud_data,
             commands::fetch_cloud_data,
             commands::sync_cloud_data,
@@ -286,6 +286,11 @@ pub fn run() {
             commands::add_mods,
             commands::find_ini_files,
             commands::process_ini_files,
+            commands::validate_archive_file,
+            commands::find_all_files,
+            commands::extract_archive,
+            commands::export_mod,
+            commands::export_group,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -310,18 +315,28 @@ pub fn run() {
 /// - `apply()` 仅在第一次成功设置全局 logger 时生效，后续调用会被忽略。
 ///
 /// # 限制
-/// - 日志级别固定为 `Debug`，目前未通过设置动态调整；
+/// - 日志级别可通过环境变量 `XXMI_LOG_LEVEL` 动态配置（取值：`trace`/`debug`/`info`/`warn`/`error`/`off`，大小写不敏感，优先级最高）；未设置或无效值时，dev 构建默认 `Debug`，release 构建默认 `Info`；
 /// - 日志文件按日期分层存储（year/month/day.log），无自动清理。
 fn init_logging() {
-    // 构造基础 Dispatch：设置全局级别与统一格式化器，并链接到 stdout
-    let dispatch = Dispatch::new()
-        .level({
+    // 解析环境变量 XXMI_LOG_LEVEL（优先级最高），未设置或无效值时回退到默认级别
+    // log::LevelFilter 实现了 FromStr，支持大小写不敏感解析（trace/debug/info/warn/error/off）
+    let level_filter = match std::env::var("XXMI_LOG_LEVEL")
+        .ok()
+        .and_then(|v| v.to_lowercase().parse::<log::LevelFilter>().ok())
+    {
+        Some(level) => level,
+        None => {
             if cfg!(dev) {
                 log::LevelFilter::Debug
             } else {
                 log::LevelFilter::Info
             }
-        })
+        }
+    };
+
+    // 构造基础 Dispatch：设置全局级别与统一格式化器，并链接到 stdout
+    let dispatch = Dispatch::new()
+        .level(level_filter)
         .format(|out, message, record| {
             init_xx::logger::custom_log_format(out, message, record);
         })
