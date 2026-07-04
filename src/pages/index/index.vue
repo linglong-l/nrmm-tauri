@@ -10,7 +10,7 @@
  * 
  * 注意：模组加载逻辑已统一交由 ModsTab.vue 负责，此处不再处理。
  */
-import { computed, onMounted, onUnmounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElEmpty } from 'element-plus';
 import { SideNav } from '../../components';
@@ -35,17 +35,25 @@ const activeTab = computed({
   set: (val: TabType) => uiStore.setActiveTab(val)
 });
 
+// ModsTab 组件实例引用（用于调用搜索框聚焦方法）
+const modsTabRef = ref<InstanceType<typeof ModsTab> | null>(null);
+
 // 事件监听取消函数句柄；组件卸载时需调用以避免内存泄漏
 let unlistenModsUpdated: (() => void) | null = null;
 
 /**
  * 将设置中配置的键盘热键注册到 Tauri 后端。
- * 限制：仅在设置加载完成时调用；失败时静默忽略，避免阻塞主流程。
+ * 先注销所有已注册热键，再注册新键，避免旧键未释放导致新键注册失败。
+ * 限制：仅在设置变更时调用；失败时静默忽略，避免阻塞主流程。
  */
 async function registerHotkeys() {
   try {
     const hotkey = settingsStore.hotkeyKeyboard;
-    await hotkeyStore.registerHotkeyBackend(hotkey);
+    // 先注销所有已注册热键，避免旧键未释放导致新键注册失败
+    await hotkeyStore.unregisterAllHotkeys();
+    if (hotkey) {
+      await hotkeyStore.registerHotkeyBackend(hotkey);
+    }
   } catch {
     // ignore
   }
@@ -57,11 +65,19 @@ async function registerHotkeys() {
  * 业务逻辑：监听返回 Promise，注册成功后保存取消函数以便后续清理。
  * 注意：GAME_SWITCHED 的模组加载由 ModsTab.vue 负责，此处不再注册 no-op 监听器。
  */
+let unlistenSettingsUpdated: (() => void) | null = null;
+
 function setupEventListeners() {
   eventManager.on(EventNames.MOD_GROUPS_UPDATED, (groups) => {
     gameStore.setModGroups(groups);
   }).then((unlisten) => {
     unlistenModsUpdated = unlisten;
+  }).catch(() => {});
+
+  eventManager.on(EventNames.SETTINGS_UPDATED, () => {
+    registerHotkeys();
+  }).then((unlisten) => {
+    unlistenSettingsUpdated = unlisten;
   }).catch(() => {});
 }
 
@@ -74,17 +90,69 @@ function cleanupEventListeners() {
     unlistenModsUpdated();
     unlistenModsUpdated = null;
   }
+  if (unlistenSettingsUpdated) {
+    unlistenSettingsUpdated();
+    unlistenSettingsUpdated = null;
+  }
 }
 
-// 监听设置加载完成事件：加载完成后注册热键
-watch(
-  () => settingsStore.isLoaded,
-  (loaded) => {
-    if (loaded) {
-      registerHotkeys();
-    }
+/**
+ * 全局键盘按下事件处理函数。
+ *
+ * 作用：
+ *  - 监听窗口内的 Alt+字母 组合键，匹配设置中的搜索快捷键配置
+ *  - 匹配成功时聚焦对应搜索框（分组搜索框或模组搜索框）
+ *  - 当焦点在 input/textarea/contenteditable 元素时不触发，避免干扰文字输入
+ *  - 仅在 mods 标签页激活时生效（搜索框仅在 mods 标签页存在）
+ *
+ * 设计目的：为用户提供窗口内快捷键快速聚焦搜索框，与后端注册的全局热键
+ * （呼出菜单）解耦，仅作用于本窗口且不干扰正常文字输入。
+ *
+ * @param event 键盘事件
+ */
+function handleSearchHotkey(event: KeyboardEvent): void {
+  // 仅在 mods 标签页激活时响应
+  if (uiStore.activeTab !== 'mods') return;
+
+  // 必须按住 Alt 键
+  if (!event.altKey) return;
+
+  // 焦点在 input/textarea/contenteditable 元素时不触发，避免干扰文字输入
+  const target = event.target as HTMLElement;
+  if (target) {
+    const tagName = target.tagName.toLowerCase();
+    if (tagName === 'input' || tagName === 'textarea') return;
+    if (target.isContentEditable) return;
   }
-);
+
+  // 转换按键为 "alt+字母" 格式（小写）
+  const key = event.key.toLowerCase();
+  // 仅匹配单个字母键（a-z），忽略其他功能键
+  if (key.length !== 1 || !/[a-z]/.test(key)) return;
+
+  const pressedHotkey = `alt${key}`;
+
+  // 检查是否与全局热键冲突，若是则交由后端处理
+  if (pressedHotkey === settingsStore.hotkeyKeyboard.toLowerCase()) {
+    return;
+  }
+
+  // 匹配分组搜索快捷键（统一小写比较）— toggle 显示/隐藏
+  if (pressedHotkey === settingsStore.groupSearchHotkey.toLowerCase()) {
+    event.preventDefault();
+    modsTabRef.value?.toggleGroupSearch();
+    return;
+  }
+
+  // 匹配模组搜索快捷键（统一小写比较）— toggle 显示/隐藏
+  if (pressedHotkey === settingsStore.modSearchHotkey.toLowerCase()) {
+    event.preventDefault();
+    modsTabRef.value?.toggleModSearch();
+    return;
+  }
+}
+
+
 
 // 监听标签页切换：切回 mods 标签页时触发缓存校验
 // 业务逻辑：由于使用 v-show 切换标签页，ModsTab 只 mount 一次，
@@ -102,17 +170,18 @@ watch(activeTab, (newTab) => {
   }
 });
 
-// 组件挂载：注册事件监听；若设置已加载则注册热键
+// 组件挂载：注册事件监听；注册窗口内搜索快捷键监听器
 onMounted(() => {
   setupEventListeners();
-  if (settingsStore.isLoaded) {
-    registerHotkeys();
-  }
+  // 注册窗口内搜索快捷键监听器
+  window.addEventListener('keydown', handleSearchHotkey);
 });
 
-// 组件卸载：清理事件监听
+// 组件卸载：清理事件监听；移除窗口内搜索快捷键监听器
 onUnmounted(() => {
   cleanupEventListeners();
+  // 移除窗口内搜索快捷键监听器
+  window.removeEventListener('keydown', handleSearchHotkey);
 });
 </script>
 
@@ -123,7 +192,7 @@ onUnmounted(() => {
       <div class="content-body">
         <!-- 模组管理标签页 -->
         <div v-show="activeTab === 'mods'" class="tab-content">
-          <ModsTab />
+          <ModsTab ref="modsTabRef" />
         </div>
         <!-- 热键标签页：仅显示空状态提示，引导用户从模组右键菜单进入 -->
         <div v-show="activeTab === 'keybinds'" class="tab-content">

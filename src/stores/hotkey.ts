@@ -121,7 +121,7 @@ export const useHotkeyStore = defineStore('hotkey', () => {
   function setLastHotkeyPressed(key: string) {
     lastHotkeyPressed.value = key;
     lastHotkeyPressedTime.value = Date.now();
-    eventManager.emit(EventNames.HOTKEY_PRESSED, { key, timestamp: Date.now() });
+    eventManager.emit(EventNames.HOTKEY_PRESSED, { key, source: 'in-game' as const, timestamp: Date.now() });
   }
 
   /** 清除最近一次按下热键的记录（标识与时间戳均置空）。 */

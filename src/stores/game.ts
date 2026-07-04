@@ -204,46 +204,21 @@ export const useGameStore = defineStore('game', () => {
    * 注意：返回的是拷贝，不会影响 modGroups 原数组的顺序。
    */
   const sortedGroups = computed(() => {
-    /**
-     * 判断分组是否为角色分组（group_xx 目录）。
-     * 通过 groupPath 是否包含 'group_' 字符串识别。
-     * @param group 分组数据
-     * @returns true 表示为角色分组
-     */
-    const isCharacterGroup = (group: ModGroupData): boolean => {
-      return group.groupPath.includes('group_');
-    };
-
-    /**
-     * 计算分组的排序优先级（数值越小越靠前）。
-     * 优先级：0=收藏角色分组, 1=收藏非角色分组, 2=未收藏角色分组, 3=未收藏非角色分组
-     * @param group 分组数据
-     * @returns 排序优先级数值
-     */
-    const getSortPriority = (group: ModGroupData): number => {
-      const isFavorited = group.favoriteDateTime !== null;
-      const isCharacter = isCharacterGroup(group);
-      if (isFavorited && isCharacter) return 0;
-      if (isFavorited && !isCharacter) return 1;
-      if (!isFavorited && isCharacter) return 2;
-      return 3;
-    };
-
     return [...modGroups.value].sort((a, b) => {
-      const priorityA = getSortPriority(a);
-      const priorityB = getSortPriority(b);
-      // 优先级不同时，按优先级排序
-      if (priorityA !== priorityB) {
-        return priorityA - priorityB;
+      const aFav = a.favoriteDateTime !== null;
+      const bFav = b.favoriteDateTime !== null;
+      
+      // 收藏分组始终排在未收藏分组之前（NRMM兼容）
+      if (aFav !== bFav) {
+        return aFav ? -1 : 1;
       }
-      // 优先级相同时的二级排序
-      const aFavorited = a.favoriteDateTime !== null;
-      const bFavorited = b.favoriteDateTime !== null;
-      if (aFavorited && bFavorited) {
-        // 收藏分组按 favoriteDateTime 降序（最近收藏的在前）
+      
+      // 收藏分组按 favoriteDateTime 降序（最近收藏的在前）
+      if (aFav && bFav) {
         return (b.favoriteDateTime ?? '').localeCompare(a.favoriteDateTime ?? '');
       }
-      // 未收藏分组按 realIndex 升序
+      
+      // 未收藏分组按 realIndex 升序（NRMM兼容）
       return a.realIndex - b.realIndex;
     });
   });
@@ -692,13 +667,19 @@ export const useGameStore = defineStore('game', () => {
 
   /**
    * 设置指定分组当前选中的模组路径。
+   * 仅允许选择已启用的模组，禁用模组的选择请求将被忽略。
    * @param groupPath 分组路径
    * @param modPath 选中模组的 modPath
    */
   function setSelectedModPath(groupPath: string, modPath: string) {
-    selectedModPaths.value.set(groupPath, modPath);
-    // 触发响应式更新
-    selectedModPaths.value = new Map(selectedModPaths.value);
+    const group = findGroupByPath(groupPath);
+    if (group) {
+      const mod = group.modsInGroup.find(m => m.modPath === modPath);
+      if (mod && !mod.isDisabled) {
+        selectedModPaths.value.set(groupPath, modPath);
+        selectedModPaths.value = new Map(selectedModPaths.value);
+      }
+    }
   }
 
   /**
@@ -744,9 +725,8 @@ function removeModFromGroup(groupPath: string, modIndex: number) {
   const group = findGroupByPath(groupPath);
   if (group && modIndex >= 0 && modIndex < group.modsInGroup.length) {
     group.modsInGroup.splice(modIndex, 1);
-    for (let i = modIndex; i < group.modsInGroup.length; i++) {
-      group.modsInGroup[i].realIndex -= 1;
-    }
+    // realIndex 由后端管理（来自目录列表原始顺序），前端不维护递减逻辑；
+    // refreshMods() 会从后端重新加载完整数据，无需在此处手动修正 realIndex。
   }
 }
 
@@ -809,3 +789,39 @@ function removeModFromGroup(groupPath: string, modIndex: number) {
     clearModsCache
   };
 });
+
+/**
+ * 模组显示排序工具函数。
+ *
+ * 作用：
+ * - 用于前端展示前的模组排序，规则与 NRMM 一致：
+ *   1. None 占位模组（realIndex === 0）始终排在最前；
+ *   2. 当前选中的模组排在 None 之后；
+ *   3. 其余模组按后端返回的数组原始顺序排列（保持 disabled-last / favorites-first / name 排序结果）。
+ *
+ * 设计原因：
+ * - 修复 realIndex 一致性后，realIndex 不再等于数组位置（realIndex 来自目录列表原始顺序），
+ *   因此不能按 realIndex 排序，否则显示顺序会变为目录列表顺序而非 disabled/favorites/name 顺序。
+ * - 改为按原始数组位置排序，可保持后端返回的排序顺序不变。
+ *
+ * @param mods 后端返回的模组数组（已按 disabled-last / favorites-first / name 排序）
+ * @param selectedPath 当前选中模组的 modPath，无选中时传 null
+ * @returns 排序后的新数组（不修改原数组）
+ */
+export function sortModsForDisplay(mods: ModData[], selectedPath: string | null): ModData[] {
+  // 为每个模组附加原始数组索引，按数组位置排序而非 realIndex
+  const indexed = mods.map((mod, idx) => ({ mod, idx }));
+  indexed.sort((a, b) => {
+    // None 占位模组始终最前
+    if (a.mod.realIndex === 0) return -1;
+    if (b.mod.realIndex === 0) return 1;
+    // 选中模组排在未选中模组之前
+    const aSelected = a.mod.modPath === selectedPath;
+    const bSelected = b.mod.modPath === selectedPath;
+    if (aSelected && !bSelected) return -1;
+    if (!aSelected && bSelected) return 1;
+    // 其余模组按原始数组位置排序（保持后端返回的排序顺序）
+    return a.idx - b.idx;
+  });
+  return indexed.map(item => item.mod);
+}

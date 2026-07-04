@@ -16,6 +16,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import type { InputInstance } from 'element-plus';
 import {
   Star,
   Plus,
@@ -29,9 +30,13 @@ import {
   MagicStick,
   Operation,
   Timer,
-  Top
+  Top,
+  Search
 } from '@element-plus/icons-vue';
 import { useGame } from '../../../composables/useGame';
+import { sortModsForDisplay } from '../../../stores/game';
+import { fuzzyMatch, splitByIndices } from '../../../utils/fuzzyMatch';
+import type { TextSegment } from '../../../utils/fuzzyMatch';
 import { useSettings } from '../../../composables/useSettings';
 import {
   invokeRefreshMods,
@@ -259,21 +264,62 @@ const displayMods = computed(() => {
   if (showFavoritesOnly.value) {
     mods = mods.filter(m => m.favoriteDateTime !== null);
   }
-  // 排序：None 占位模组 → 选中模组 → 未选中模组
+  // 排序：None 占位模组 → 选中模组 → 未选中模组（按后端返回的数组顺序）
+  // 注意：修复 realIndex 一致性后，realIndex 来自目录列表原始顺序而非数组位置，
+  // 因此按数组位置排序以保持后端返回的 disabled-last / favorites-first / name 显示顺序
   const selectedPath = game.getSelectedModPath(game.currentGroupPath.value);
-  return [...mods].sort((a, b) => {
-    // None 占位模组始终在最前
-    if (a.realIndex === 0) return -1;
-    if (b.realIndex === 0) return 1;
-    // 选中模组排在未选中模组之前
-    const aSelected = a.modPath === selectedPath;
-    const bSelected = b.modPath === selectedPath;
-    if (aSelected && !bSelected) return -1;
-    if (!aSelected && bSelected) return 1;
-    // 其他情况保持原有 realIndex 顺序
-    return a.realIndex - b.realIndex;
+  return sortModsForDisplay(mods, selectedPath);
+});
+
+// 模组搜索关键字（纯前端模糊匹配，不调用后端）
+const modSearchKeyword = ref('');
+
+// 分组搜索关键字（简单 includes 匹配，用于高亮匹配的分组项）
+const groupSearchKeyword = ref('');
+// 分组列表容器引用（用于搜索时滚动到第一个匹配项）
+const groupListRef = ref<HTMLElement | null>(null);
+// 搜索输入框引用（用于快捷键聚焦）
+const groupSearchInputRef = ref<InputInstance | null>(null);
+const modSearchInputRef = ref<InputInstance | null>(null);
+// 搜索栏显示/隐藏状态（通过快捷键切换）
+const searchBarsVisible = ref(false);
+
+/**
+ * 判断分组名称是否匹配搜索关键字。
+ * @param groupName 分组名称
+ * @returns true 表示匹配搜索关键字
+ */
+function isGroupMatched(groupName: string): boolean {
+  if (!groupSearchKeyword.value) return false;
+  return groupName.toLowerCase().includes(groupSearchKeyword.value.toLowerCase());
+}
+
+// 搜索关键字变化时滚动到第一个匹配项
+watch(groupSearchKeyword, (newVal) => {
+  if (!newVal || !groupListRef.value) return;
+  nextTick(() => {
+    const firstMatch = groupListRef.value?.querySelector('.group-highlight');
+    firstMatch?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   });
 });
+
+// 经过搜索关键字过滤后的模组列表：在 displayMods（已应用收藏过滤与排序）基础上叠加模糊匹配
+const filteredMods = computed(() => {
+  const currentMods = displayMods.value;
+  if (!modSearchKeyword.value) return currentMods;
+  return currentMods.filter(mod => fuzzyMatch(modSearchKeyword.value, mod.modName).matched);
+});
+
+/**
+ * 根据搜索关键字将模组名称拆分为高亮片段。
+ * @param modName 模组名称
+ * @returns 文本片段数组，每个片段标记是否高亮
+ */
+function getModNameSegments(modName: string): TextSegment[] {
+  if (!modSearchKeyword.value) return [{ text: modName, highlight: false }];
+  const result = fuzzyMatch(modSearchKeyword.value, modName);
+  return splitByIndices(modName, result.indices);
+}
 
 /**
  * 判断指定模组是否为当前分组的选中模组（用于紫色描边显示）。
@@ -789,13 +835,17 @@ async function handleContextMenuSelect(command: string) {
 }
 
 async function selectModInGroup(mod: ModData) {
-  const realIndex = game.currentGroup.value?.modsInGroup.findIndex(m => m.modPath === mod.modPath) ?? -1;
-  if (realIndex >= 0) {
-    selectedModIndex.value = realIndex;
-    // 同步选中模组路径到 store（用于紫色描边和排序）
+  if (mod.isDisabled) {
+    return;
+  }
+  // 注意：此变量名为 arrayIndex 而非 realIndex，因为 findIndex 返回的是 modsInGroup 数组位置，
+  // 用于写入 selectedindex 文件（UI 选择恢复），与 ModData.realIndex（INI 注入的 $managed_slot_id）无关
+  const arrayIndex = game.currentGroup.value?.modsInGroup.findIndex(m => m.modPath === mod.modPath) ?? -1;
+  if (arrayIndex >= 0) {
+    selectedModIndex.value = arrayIndex;
     game.setSelectedModPath(game.currentGroupPath.value, mod.modPath);
     try {
-      await invokeSetSelectedMod(game.currentGroupPath.value, realIndex);
+      await invokeSetSelectedMod(game.currentGroupPath.value, arrayIndex);
     } catch (error) {
       console.error('Failed to select mod:', error);
     }
@@ -951,6 +1001,7 @@ onMounted(async () => {
   await setupEventListeners();
   await setupFileWatcher();
   document.addEventListener('click', hideContextMenu);
+  document.addEventListener('keydown', handleEscKey);
 });
 
 // 组件卸载：取消事件监听、停止文件监听、移除全局点击监听、清理防抖定时器
@@ -966,6 +1017,7 @@ onUnmounted(() => {
   }
   invokeStopFileWatcher().catch(console.error);
   document.removeEventListener('click', hideContextMenu);
+  document.removeEventListener('keydown', handleEscKey);
   if (resizeHandler) {
     window.removeEventListener('resize', resizeHandler);
     resizeHandler = null;
@@ -1019,6 +1071,101 @@ watch(
   },
   { immediate: true }
 );
+
+/**
+ * 聚焦分组搜索框（供父组件通过 ref 调用）。
+ */
+function focusGroupSearch(): void {
+  searchBarsVisible.value = true;
+  // 延迟 focus 以等待 CSS max-height 过渡完成（过渡时间 250ms）
+  setTimeout(() => {
+    groupSearchInputRef.value?.focus();
+  }, 300);
+}
+
+/**
+ * 聚焦模组搜索框（供父组件通过 ref 调用）。
+ */
+function focusModSearch(): void {
+  searchBarsVisible.value = true;
+  setTimeout(() => {
+    modSearchInputRef.value?.focus();
+  }, 300);
+}
+
+/**
+ * 切换搜索栏显示/隐藏（供父组件通过 ref 调用）。
+ * 隐藏时清空搜索关键字；显示时自动聚焦模组搜索框。
+ */
+function toggleSearchBars(): void {
+  searchBarsVisible.value = !searchBarsVisible.value;
+  if (searchBarsVisible.value) {
+    setTimeout(() => {
+      modSearchInputRef.value?.focus();
+    }, 300);
+  } else {
+    groupSearchKeyword.value = '';
+    modSearchKeyword.value = '';
+  }
+}
+
+/**
+ * 切换分组搜索框显示/隐藏（供父组件通过 ref 调用）。
+ * 已显示时隐藏并清空关键字；隐藏时显示并聚焦分组搜索框。
+ */
+function toggleGroupSearch(): void {
+  if (searchBarsVisible.value) {
+    searchBarsVisible.value = false;
+    groupSearchKeyword.value = '';
+    modSearchKeyword.value = '';
+  } else {
+    searchBarsVisible.value = true;
+    setTimeout(() => {
+      groupSearchInputRef.value?.focus();
+    }, 300);
+  }
+}
+
+/**
+ * 切换模组搜索框显示/隐藏（供父组件通过 ref 调用）。
+ * 已显示时隐藏并清空关键字；隐藏时显示并聚焦模组搜索框。
+ */
+function toggleModSearch(): void {
+  if (searchBarsVisible.value) {
+    searchBarsVisible.value = false;
+    groupSearchKeyword.value = '';
+    modSearchKeyword.value = '';
+  } else {
+    searchBarsVisible.value = true;
+    setTimeout(() => {
+      modSearchInputRef.value?.focus();
+    }, 300);
+  }
+}
+
+/**
+ * 隐藏搜索栏并清空关键字（点击外部区域或按 Esc 时调用）。
+ */
+function hideSearchBars(): void {
+  if (!searchBarsVisible.value) return;
+  searchBarsVisible.value = false;
+  groupSearchKeyword.value = '';
+  modSearchKeyword.value = '';
+}
+
+/**
+ * 全局键盘事件处理：按 Esc 退出搜索。
+ */
+function handleEscKey(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && searchBarsVisible.value) {
+    event.preventDefault();
+    hideSearchBars();
+    (document.activeElement as HTMLElement)?.blur();
+  }
+}
+
+// 暴露搜索框聚焦方法供父组件通过组件 ref 调用，用于快捷键聚焦
+defineExpose({ focusGroupSearch, focusModSearch, toggleSearchBars, toggleGroupSearch, toggleModSearch });
 </script>
 
 <template>
@@ -1044,6 +1191,7 @@ watch(
         ref="sidebarRef"
         :style="{ width: sidebarWidth + 'px' }"
         @mousedown="onSidebarMouseDown"
+        @click="hideSearchBars"
       >
         <!-- 
           分组区域头部
@@ -1062,13 +1210,28 @@ watch(
           </div>
         </div>
 
+        <!-- 分组搜索框：简单 includes 匹配，高亮匹配的分组项 -->
+        <div class="search-bars-wrapper" :class="{ 'search-visible': searchBarsVisible }" @click.stop>
+          <div class="group-search-bar" :class="{ 'has-match': displayGroups.some(g => isGroupMatched(g.groupName)) }">
+            <el-input
+              ref="groupSearchInputRef"
+              v-model="groupSearchKeyword"
+              :placeholder="t('mods.searchGroupPlaceholder')"
+              clearable
+              :prefix-icon="Search"
+              size="small"
+              @keydown.esc.prevent="hideSearchBars"
+            />
+          </div>
+        </div>
+
         <!--
           分组列表容器（树形结构）
           数据来源：displayGroups 提供分组数据
           加载状态：v-loading 在 isLoading 为 true 时显示加载动画
           交互行为：每个分组项支持点击选中、右键菜单、展开/折叠
         -->
-        <div v-loading="isLoading" class="groups-list">
+        <div v-loading="isLoading" class="groups-list" ref="groupListRef">
           <!--
             树形分组节点
             数据来源：v-for 遍历 displayGroups（顶层分组），递归渲染子节点
@@ -1092,6 +1255,7 @@ watch(
             :is-expanded="game.expandedPaths.value.has(group.groupPath)"
             :expanded-paths="game.expandedPaths.value"
             :current-group-path="game.currentGroupPath.value"
+            :search-keyword="groupSearchKeyword"
             @select="selectGroup"
             @contextmenu="showGroupContextMenu"
             @toggle-expand="toggleExpand"
@@ -1120,13 +1284,30 @@ watch(
         拖拽行为：@dragover/@dragleave/@drop 处理拖拽文件/目录添加 Mod
       -->
       <div class="mods-display" :class="{ 'drag-over': isDraggingOver }" @dragover="onDragOver" @dragleave="onDragLeave"
-        @drop="onDrop">
+        @drop="onDrop" @click="hideSearchBars">
         <!-- 
           模组容器
           加载状态：v-loading 在 isLoading 为 true 时显示加载动画
         -->
         <div v-loading="isLoading" class="mods-container" ref="modsContainerRef" @mousedown="onModsContainerMouseDown">
-          <!-- 
+          <!--
+            模组搜索框
+            作用：纯前端模糊匹配当前分组内的模组名称
+            交互行为：v-model 绑定 modSearchKeyword，clearable 支持一键清空
+          -->
+          <div class="search-bars-wrapper" :class="{ 'search-visible': searchBarsVisible }" @click.stop>
+            <div class="mod-search-bar">
+              <el-input
+                ref="modSearchInputRef"
+                v-model="modSearchKeyword"
+                :placeholder="t('mods.searchPlaceholder')"
+                clearable
+                :prefix-icon="Search"
+                @keydown.esc.prevent="hideSearchBars"
+              />
+            </div>
+          </div>
+          <!--
             网格布局模式
             条件渲染：v-if="isGridLayout" 当布局模式为 Grid 时显示
             布局方式：CSS Grid 自适应列数，每列最小 140px
@@ -1149,14 +1330,14 @@ watch(
                   - @dblclick 调用 onModDoubleClick(mod, index) 切换启用/禁用
                   - @contextmenu 调用 showModContextMenu 打开右键菜单
               -->
-              <div v-for="(mod, index) in displayMods" :key="mod.modPath" class="mod-card" :class="{
+              <div v-for="(mod, index) in filteredMods" :key="mod.modPath" class="mod-card" :class="{
                 selected: selectedModIndex === index,
                 disabled: mod.isDisabled,
                 'none-slot': mod.realIndex === 0,
                 'mod-selected': isModSelected(mod)
               }" @click="selectMod(index)" @dblclick="onModDoubleClick(mod, index)"
                 @contextmenu="showModContextMenu($event, mod)">
-                <!-- 
+                <!--
                   模组图标区域
                   数据来源：
                     - mod.iconPath 存在时显示自定义图标
@@ -1166,10 +1347,10 @@ watch(
                 -->
                 <div class="mod-icon">
                   <!-- 自定义模组图标 -->
-                  <img 
-                    v-if="mod.iconPath" 
-                    :src="convertToAssetUrl(mod.iconPath)" 
-                    alt="mod icon" 
+                  <img
+                    v-if="mod.iconPath"
+                    :src="convertToAssetUrl(mod.iconPath)"
+                    alt="mod icon"
                     loading="lazy"
                     @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
                   />
@@ -1182,12 +1363,16 @@ watch(
                     <View />
                   </el-icon>
                 </div>
-                <!-- 
-                  模组名称
-                  数据来源：mod.modName
+                <!--
+                  模组名称（按搜索关键字分段高亮）
+                  数据来源：mod.modName 经 getModNameSegments 拆分
                   样式：最多显示 2 行，超出显示省略号
                 -->
-                <div class="mod-name">{{ mod.modName }}</div>
+                <div class="mod-name">
+                  <template v-for="(seg, i) in getModNameSegments(mod.modName)" :key="i">
+                    <span :class="{ 'highlight-char': seg.highlight }">{{ seg.text }}</span>
+                  </template>
+                </div>
                 <!-- 
                   模组状态图标区域
                   数据来源：mod 的各种状态标志位
@@ -1277,8 +1462,8 @@ watch(
               数据来源：displayMods 遍历渲染卡片
               布局：flex-wrap，卡片固定宽度，纵向滚动
             -->
-            <div class="mods-list" v-if="displayMods.length > 0">
-              <div v-for="(mod, index) in displayMods" :key="mod.modPath" class="list-mod-card" :class="{
+            <div class="mods-list" v-if="filteredMods.length > 0">
+              <div v-for="(mod, index) in filteredMods" :key="mod.modPath" class="list-mod-card" :class="{
                 selected: selectedModIndex === index,
                 disabled: mod.isDisabled,
                 'none-slot': mod.realIndex === 0,
@@ -1287,10 +1472,10 @@ watch(
                 @contextmenu="showModContextMenu($event, mod)">
                 <!-- 模组图标 -->
                 <div class="list-mod-icon">
-                  <img 
-                    v-if="mod.iconPath" 
-                    :src="convertToAssetUrl(mod.iconPath)" 
-                    alt="mod icon" 
+                  <img
+                    v-if="mod.iconPath"
+                    :src="convertToAssetUrl(mod.iconPath)"
+                    alt="mod icon"
                     loading="lazy"
                     @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
                   />
@@ -1301,8 +1486,12 @@ watch(
                     <View />
                   </el-icon>
                 </div>
-                <!-- 模组名称 -->
-                <div class="list-mod-name">{{ mod.modName }}</div>
+                <!-- 模组名称（按搜索关键字分段高亮） -->
+                <div class="list-mod-name">
+                  <template v-for="(seg, i) in getModNameSegments(mod.modName)" :key="i">
+                    <span :class="{ 'highlight-char': seg.highlight }">{{ seg.text }}</span>
+                  </template>
+                </div>
                 <!-- 状态图标 -->
                 <div class="list-mod-status-icons">
                   <el-tooltip v-if="mod.isOldAutoFixed"
@@ -1338,13 +1527,13 @@ watch(
             </div>
           </template>
 
-          <!-- 
+          <!--
             空状态提示
-            条件渲染：v-if 在 !isLoading && displayMods.length === 0 时显示
-            数据来源：isLoading (加载状态), displayMods.length (模组数量)
-            作用：当没有模组时提示用户
+            条件渲染：v-if 在 !isLoading && filteredMods.length === 0 时显示
+            数据来源：isLoading (加载状态), filteredMods.length (过滤后模组数量)
+            作用：当没有模组或搜索无结果时提示用户
           -->
-          <el-empty v-if="!isLoading && displayMods.length === 0" :description="t('No mods found')" :image-size="100" />
+          <el-empty v-if="!isLoading && filteredMods.length === 0" :description="t('No mods found')" :image-size="100" />
         </div>
 
       </div>
@@ -1689,6 +1878,22 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.group-search-bar {
+  padding: 8px;
+}
+
+.search-bars-wrapper {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease, opacity 0.25s ease;
+}
+
+.search-bars-wrapper.search-visible {
+  max-height: 80px;
+  opacity: 1;
 }
 
 .group-item {
@@ -2116,5 +2321,17 @@ watch(
 
 .context-menu-item :deep(.el-icon) {
   font-size: 16px;
+}
+
+/* ===== 模组搜索框样式 ===== */
+.mod-search-bar {
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+/* 搜索关键字高亮字符 */
+.highlight-char {
+  color: var(--el-color-primary);
+  font-weight: bold;
 }
 </style>

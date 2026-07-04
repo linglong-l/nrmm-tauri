@@ -32,6 +32,7 @@ const props = defineProps<{
   isExpanded: boolean;
   expandedPaths: Set<string>;
   currentGroupPath: string;
+  searchKeyword?: string;
 }>();
 
 const emit = defineEmits<{
@@ -45,6 +46,12 @@ const { t } = useI18n();
 // 是否有子节点（仅 isTreeNode=true 的分组才有子节点）
 const hasChildren = computed(() => {
   return props.group.isTreeNode && props.group.children && props.group.children.length > 0;
+});
+
+// 判断当前分组是否匹配搜索关键字（用于高亮显示）
+const isHighlighted = computed(() => {
+  if (!props.searchKeyword) return false;
+  return props.group.groupName.toLowerCase().includes(props.searchKeyword.toLowerCase());
 });
 
 // 判断指定分组是否为当前激活的分组（用于高亮显示）
@@ -98,7 +105,7 @@ function toggleExpand(event: MouseEvent) {
     <!-- 分组节点项 -->
     <div
       class="group-item"
-      :class="{ active: isActive, 'tree-node': group.isTreeNode, 'virtual-node': group.isVirtual }"
+      :class="{ active: isActive, 'tree-node': group.isTreeNode, 'virtual-node': group.isVirtual, 'group-highlight': isHighlighted }"
       :style="indentStyle"
       @click="handleClick"
       @contextmenu="handleContextMenu($event)"
@@ -156,6 +163,7 @@ function toggleExpand(event: MouseEvent) {
         :is-expanded="expandedPaths.has(child.groupPath)"
         :expanded-paths="expandedPaths"
         :current-group-path="currentGroupPath"
+        :search-keyword="searchKeyword"
         @select="emit('select', $event)"
         @contextmenu="(e, g) => emit('contextmenu', e, g)"
         @toggle-expand="emit('toggle-expand', $event)"
@@ -189,6 +197,12 @@ function toggleExpand(event: MouseEvent) {
 
 .group-item.active {
   background-color: rgba(64, 158, 255, 0.2);
+}
+
+/* 搜索关键字匹配的分组项高亮样式 */
+.group-item.group-highlight {
+  border: 1px solid var(--el-color-primary);
+  border-radius: 12px;
 }
 
 /* 左侧内容容器（图标 + 信息 + 收藏） */

@@ -42,6 +42,14 @@ pub struct Settings {
     #[serde(default = "default_hotkey_gamepad")]
     pub hotkey_gamepad: String,
 
+    /// 分组搜索快捷键（窗口内绑定，前端 keydown 监听）。默认 "altG"。
+    #[serde(default = "default_group_search_hotkey")]
+    pub group_search_hotkey: String,
+
+    /// 模组搜索快捷键（窗口内绑定，前端 keydown 监听）。默认 "altF"。
+    #[serde(default = "default_mod_search_hotkey")]
+    pub mod_search_hotkey: String,
+
     /// 鸣潮（Wuthering Waves）目标进程名，用于进程匹配。
     #[serde(default = "default_target_process_wuwa")]
     pub target_process_wuwa: String,
@@ -157,6 +165,16 @@ fn default_hotkey_keyboard() -> String {
 /// 默认手柄热键：禁用。
 fn default_hotkey_gamepad() -> String {
     "none".to_string()
+}
+
+/// 分组搜索快捷键默认值。
+fn default_group_search_hotkey() -> String {
+    "altG".to_string()
+}
+
+/// 模组搜索快捷键默认值。
+fn default_mod_search_hotkey() -> String {
+    "altF".to_string()
 }
 
 /// 默认鸣潮进程名。
@@ -443,6 +461,8 @@ impl Default for Settings {
         Self {
             hotkey_keyboard: default_hotkey_keyboard(),
             hotkey_gamepad: default_hotkey_gamepad(),
+            group_search_hotkey: default_group_search_hotkey(),
+            mod_search_hotkey: default_mod_search_hotkey(),
             target_process_wuwa: default_target_process_wuwa(),
             target_process_genshin: default_target_process_genshin(),
             target_process_hsr: default_target_process_hsr(),

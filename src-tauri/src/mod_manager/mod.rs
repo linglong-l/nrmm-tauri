@@ -1076,6 +1076,9 @@ impl ModManager {
             path: PathBuf,
             child_paths: Vec<PathBuf>,
             mod_paths: Vec<PathBuf>,
+            // 模组 real_index 映射表：key 为模组目录路径，value 为目录列表原始顺序位置（1-indexed）
+            // 与 NRMM 的 `realIndex: index + 1` 一致，real_index 来自原始目录列表顺序而非排序后顺序
+            mod_original_indices: std::collections::HashMap<PathBuf, i32>,
             is_disabled: bool,
         }
 
@@ -1132,6 +1135,14 @@ impl ModManager {
                 }
             }
 
+            // 在排序前记录每个模组目录的原始顺序索引（与 NRMM 的 realIndex: index + 1 一致）
+            // real_index 必须来自 fs::read_dir 原始返回顺序，而非排序后顺序
+            let mut mod_original_indices: std::collections::HashMap<PathBuf, i32> =
+                std::collections::HashMap::new();
+            for (i, mp) in mod_paths.iter().enumerate() {
+                mod_original_indices.insert(mp.clone(), (i as i32) + 1);
+            }
+
             mod_paths.sort_by(|a, b| {
                 let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let b_name = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -1164,6 +1175,7 @@ impl ModManager {
                     path: path.clone(),
                     child_paths: child_paths.clone(),
                     mod_paths,
+                    mod_original_indices,
                     is_disabled,
                 },
             );
@@ -1215,7 +1227,6 @@ impl ModManager {
                     favorite_date_time: None,
                 });
 
-                let mut mod_real_index: i32 = 1;
                 for mod_path in &info.mod_paths {
                     let mod_path_str = mod_path.to_string_lossy().to_string();
                     let mod_name = Self::get_mod_name(&mod_path_str).unwrap_or_else(|_| {
@@ -1230,11 +1241,19 @@ impl ModManager {
                     let mod_dir_name = mod_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     let mod_is_disabled = mod_dir_name.starts_with(DISABLED_PREFIX);
 
+                    // real_index 来自目录列表原始顺序（与 NRMM 一致），从 mod_original_indices 查表获取
+                    // 注意：此处遍历的是已排序的 mod_paths（用于显示顺序），但 real_index 值来自排序前的原始位置
+                    let real_index = info
+                        .mod_original_indices
+                        .get(mod_path)
+                        .copied()
+                        .unwrap_or(0);
+
                     mods_in_group.push(ModData {
                         mod_path: mod_path_str,
                         icon_path: mod_icon,
                         mod_name,
-                        real_index: mod_real_index,
+                        real_index,
                         is_old_auto_fixed: mod_path.join("modforced").exists(),
                         is_syntax_error_removed: mod_path.join("modsyntaxerrorremoved").exists(),
                         is_unoptimized: mod_path.join("modunoptimized").exists(),
@@ -1242,8 +1261,6 @@ impl ModManager {
                         is_disabled: mod_is_disabled,
                         favorite_date_time: mod_favorite,
                     });
-
-                    mod_real_index += 1;
                 }
             }
 
@@ -1507,29 +1524,6 @@ impl ModManager {
             }
         }
 
-        // 多级排序：禁用状态 → 收藏状态 → 名称字母序
-        dir_entries.sort_by(|a, b| {
-            let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let b_name = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            let a_disabled = a_name.starts_with(DISABLED_PREFIX);
-            let b_disabled = b_name.starts_with(DISABLED_PREFIX);
-            match (a_disabled, b_disabled) {
-                // 启用 < 禁用
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                _ => {
-                    let a_fav = a.join(FAVORITE_FILE).exists();
-                    let b_fav = b.join(FAVORITE_FILE).exists();
-                    match (a_fav, b_fav) {
-                        // 收藏 < 未收藏
-                        (true, false) => std::cmp::Ordering::Less,
-                        (false, true) => std::cmp::Ordering::Greater,
-                        _ => a_name.to_lowercase().cmp(&b_name.to_lowercase()),
-                    }
-                }
-            }
-        });
-
         // 插入 None 槽位（索引 0），表示不启用任何模组
         let none_icon_path = group_path.join(NONE_SLOT_ICON);
         mods.push(ModData {
@@ -1549,8 +1543,11 @@ impl ModManager {
             favorite_date_time: None,
         });
 
-        // 遍历排序后的子目录，构建 ModData
-        for dir_path in dir_entries {
+        // 1. 先按目录列表原始顺序构建 ModData，分配 real_index
+        //    与 NRMM 的 `realIndex: index + 1` 一致，real_index 来自 fs::read_dir 原始返回顺序
+        //    （fs::read_dir 与 Dart Directory.list 在 Windows 上底层均为 FindFirstFile/FindNextFile）
+        let mut mod_datas: Vec<ModData> = Vec::new();
+        for dir_path in &dir_entries {
             let dir_name = dir_path
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1581,7 +1578,7 @@ impl ModManager {
             let is_unoptimized = dir_path.join("modunoptimized").exists();
             let is_namespaced = dir_path.join("modnamespaced").exists();
 
-            let mod_data = ModData {
+            mod_datas.push(ModData {
                 mod_path: dir_path_str,
                 icon_path,
                 mod_name,
@@ -1592,20 +1589,54 @@ impl ModManager {
                 is_namespaced,
                 is_disabled,
                 favorite_date_time,
-            };
+            });
 
-            mods.push(mod_data);
             real_index += 1;
         }
+
+        // 2. 再排序 ModData 向量（用于显示顺序，与 NRMM 排序逻辑一致）
+        //    排序规则：禁用状态 → 收藏状态 → 名称字母序
+        //    注意：排序仅改变数组顺序，不改变已分配的 real_index 值
+        mod_datas.sort_by(|a, b| {
+            let a_name = Path::new(&a.mod_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let b_name = Path::new(&b.mod_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let a_disabled = a_name.starts_with(DISABLED_PREFIX);
+            let b_disabled = b_name.starts_with(DISABLED_PREFIX);
+            match (a_disabled, b_disabled) {
+                // 启用 < 禁用
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                _ => {
+                    let a_fav = Path::new(&a.mod_path).join(FAVORITE_FILE).exists();
+                    let b_fav = Path::new(&b.mod_path).join(FAVORITE_FILE).exists();
+                    match (a_fav, b_fav) {
+                        // 收藏 < 未收藏
+                        (true, false) => std::cmp::Ordering::Less,
+                        (false, true) => std::cmp::Ordering::Greater,
+                        _ => a_name.to_lowercase().cmp(&b_name.to_lowercase()),
+                    }
+                }
+            }
+        });
+
+        // 3. 将排序后的 mod_datas 追加到 mods（None 槽位已在最前）
+        mods.extend(mod_datas);
 
         Ok(mods)
     }
 
     /// 对分组列表进行排序。
     ///
-    /// 排序规则：
+    /// 排序规则（与NRMM一致）：
     /// 1. 收藏的分组始终排在未收藏的分组之前。
-    /// 2. 同等收藏状态下，按 `sort_method` 指定的方式排序：
+    /// 2. 收藏分组内按 `favorite_date_time` 降序（最近收藏的在前）。
+    /// 3. 未收藏分组按 `sort_method` 指定的方式排序：
     ///    - `ByIndex`：按 `real_index` 升序。
     ///    - `ByName`：按 `group_name`（小写）字母序。
     fn sort_groups(groups: &mut Vec<ModGroupData>, sort_method: SortGroupMethod) {
@@ -1616,6 +1647,13 @@ impl ModManager {
                 (true, false) => return std::cmp::Ordering::Less,
                 (false, true) => return std::cmp::Ordering::Greater,
                 _ => {}
+            }
+
+            if a_fav && b_fav {
+                match (&a.favorite_date_time, &b.favorite_date_time) {
+                    (Some(ad), Some(bd)) => return bd.cmp(ad),
+                    _ => {}
+                }
             }
 
             match sort_method {
@@ -3362,6 +3400,119 @@ mod tests {
 
         let success = LogEntry::success("success");
         assert_eq!(success.level, "success");
+    }
+
+    #[test]
+    fn test_real_index_from_directory_listing_order() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let group_path = dir.path();
+
+        // Create mod directories where sort order differs from raw directory listing order.
+        // "zmod" is enabled; "DISABLED_amod" is disabled.
+        // Raw alphabetical order (NTFS): "DISABLED_amod" < "zmod"
+        // Sort order (enabled-first): "zmod" < "DISABLED_amod"
+        fs::create_dir_all(group_path.join("zmod")).unwrap();
+        fs::create_dir_all(group_path.join("DISABLED_amod")).unwrap();
+
+        // Get raw directory listing order (matching what fs::read_dir returns)
+        let raw_order: Vec<String> = fs::read_dir(group_path)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+
+        // Verify test setup: raw order must differ from sort order
+        let mut sorted_order = raw_order.clone();
+        sorted_order.sort_by(|a, b| {
+            let a_disabled = a.starts_with(DISABLED_PREFIX);
+            let b_disabled = b.starts_with(DISABLED_PREFIX);
+            match (a_disabled, b_disabled) {
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                _ => a.to_lowercase().cmp(&b.to_lowercase()),
+            }
+        });
+        assert_ne!(
+            raw_order, sorted_order,
+            "Test setup error: raw directory order must differ from sort order"
+        );
+
+        let mods = ModManager::get_mods_on_group(group_path.to_str().unwrap()).unwrap();
+
+        // mods[0] is None with real_index=0
+        assert_eq!(mods[0].mod_path, "None");
+        assert_eq!(mods[0].real_index, 0);
+
+        // Each non-None mod's real_index must match its position in raw directory listing (1-indexed)
+        for mod_data in mods.iter().skip(1) {
+            let dir_name = Path::new(&mod_data.mod_path)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let raw_position = raw_order.iter().position(|n| *n == dir_name).unwrap() + 1;
+            assert_eq!(
+                mod_data.real_index, raw_position as i32,
+                "Mod '{}' has real_index={} but expected {} from raw directory listing order",
+                dir_name, mod_data.real_index, raw_position
+            );
+        }
+    }
+
+    #[test]
+    fn test_none_slot_always_index_zero() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("amod")).unwrap();
+
+        let mods = ModManager::get_mods_on_group(dir.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(mods.len(), 2);
+        assert_eq!(mods[0].mod_path, "None");
+        assert_eq!(mods[0].real_index, 0);
+    }
+
+    #[test]
+    fn test_empty_group_returns_only_none() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+
+        let mods = ModManager::get_mods_on_group(dir.path().to_str().unwrap()).unwrap();
+
+        assert_eq!(mods.len(), 1);
+        assert_eq!(mods[0].mod_path, "None");
+        assert_eq!(mods[0].real_index, 0);
+    }
+
+    #[test]
+    fn test_mods_returned_in_sorted_order() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let group_path = dir.path();
+
+        fs::create_dir_all(group_path.join("zmod")).unwrap();
+        fs::create_dir_all(group_path.join("amod")).unwrap();
+        fs::create_dir_all(group_path.join("DISABLED_bmod")).unwrap();
+
+        let mods = ModManager::get_mods_on_group(group_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(mods[0].mod_path, "None");
+        assert!(mods[1].mod_path.ends_with("amod"));
+        assert!(!mods[1].is_disabled);
+        assert!(mods[2].mod_path.ends_with("zmod"));
+        assert!(!mods[2].is_disabled);
+        assert!(mods[3].mod_path.ends_with("DISABLED_bmod"));
+        assert!(mods[3].is_disabled);
     }
 
 }

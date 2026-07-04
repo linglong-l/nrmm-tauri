@@ -13,6 +13,7 @@
 //! [`HotkeyManager::handle_out_of_game_hotkey`]。
 
 use anyhow::{Context, Result};
+use serde_json;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -25,13 +26,18 @@ use crate::window_manager::WindowManager;
 /// - 第一项：设置文件与命令中使用的内部标识（小写无分隔，如 `"altW"`）；
 /// - 第二项：传给 `tauri_plugin_global_shortcut` 的加速器字符串（如 `"Alt+W"`）。
 ///
-/// 新增热键时只需在此处追加一项，其余逻辑自动适配。
-const HOTKEY_MAP: &[(&str, &str)] = &[
-    ("altW", "Alt+W"),
-    ("altS", "Alt+S"),
-    ("altA", "Alt+A"),
-    ("altD", "Alt+D"),
-];
+/// 通过宏 `hotkey_map!` 在编译期生成 Alt+A ~ Alt+Z 共 26 项映射，避免手写重复。
+/// 新增热键时只需在宏调用中追加字母，其余逻辑自动适配。
+macro_rules! hotkey_map {
+    ($($letter:literal),* $(,)?) => {
+        &[$((concat!("alt", $letter), concat!("Alt+", $letter)),)*]
+    };
+}
+
+const HOTKEY_MAP: &[(&str, &str)] = hotkey_map!(
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+    "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+);
 
 /// 热键管理器（无状态）。
 ///
@@ -164,23 +170,27 @@ impl HotkeyManager {
     /// # 业务逻辑
     /// 1. 先调用 [`Self::unregister_all`] 清空旧热键，避免重复注册；
     /// 2. 读取 `settings.hotkey_keyboard`，若不为 `"none"` 则尝试注册；
-    /// 3. 单个热键注册失败仅记录警告，不阻断其余流程。
+    /// 3. 读取 `settings.hotkey_gamepad`，若不为 `"none"` 则记录（待实现）；
+    /// 4. 注册失败时返回错误，确保调用方能感知失败。
     ///
     /// # 参数
     /// - `app`：Tauri 应用句柄；
     /// - `settings`：用户设置。
     ///
     /// # 返回值
-    /// 清空阶段失败返回错误；注册阶段失败仅在内部记录警告。
+    /// 成功返回 `Ok(())`，注册失败返回错误。
     pub fn register_from_settings(app: &AppHandle, settings: &Settings) -> Result<()> {
         // 先清空再注册，确保最终状态与设置一致
         Self::unregister_all(app)?;
 
         let hotkey_keyboard = &settings.hotkey_keyboard;
         if hotkey_keyboard != "none" {
-            if let Err(e) = Self::register_hotkey(app, hotkey_keyboard) {
-                log::warn!("Failed to register keyboard hotkey '{}': {}", hotkey_keyboard, e);
-            }
+            Self::register_hotkey(app, hotkey_keyboard)?;
+        }
+
+        let hotkey_gamepad = &settings.hotkey_gamepad;
+        if hotkey_gamepad != "none" {
+            log::info!("Gamepad hotkey '{}' configured (not yet implemented)", hotkey_gamepad);
         }
 
         Ok(())
@@ -240,9 +250,9 @@ impl HotkeyManager {
 
         // 执行热键处理
         if is_in_game {
-            Self::handle_in_game_hotkey(app, &settings);
+            Self::handle_in_game_hotkey(app, &settings, &hotkey_type);
         } else {
-            Self::handle_out_of_game_hotkey(app, &settings);
+            Self::handle_out_of_game_hotkey(app, &settings, &hotkey_type);
         }
     }
 
@@ -251,12 +261,13 @@ impl HotkeyManager {
     /// # 业务逻辑
     /// 1. 切换主窗口显示状态（可见↔隐藏）；
     /// 2. 若窗口变为可见且 `is_auto_pin_window` 开启，则设置窗口置顶；
-    /// 3. 向前端发送 `hotkey-pressed` 事件（payload 为 `"in-game"`），便于前端做后续处理。
+    /// 3. 向前端发送 `hotkey-pressed` 事件（包含热键标识和来源），便于前端做后续处理。
     ///
     /// # 参数
     /// - `app`：Tauri 应用句柄；
-    /// - `settings`：用户设置（用于判断是否自动置顶）。
-    fn handle_in_game_hotkey(app: &AppHandle, settings: &Settings) {
+    /// - `settings`：用户设置（用于判断是否自动置顶）；
+    /// - `hotkey_type`：触发的热键标识（如 `"altW"`）。
+    fn handle_in_game_hotkey(app: &AppHandle, settings: &Settings, hotkey_type: &str) {
         match WindowManager::toggle_window(app) {
             Ok(shown) => {
                 log::info!("Window toggled, now visible: {}", shown);
@@ -272,8 +283,11 @@ impl HotkeyManager {
             }
         }
 
-        // 通知前端热键来源（用于触发 UI 反馈等）
-        let _ = app.emit("hotkey-pressed", "in-game");
+        // 通知前端热键来源和标识（用于触发 UI 反馈等）
+        let _ = app.emit("hotkey-pressed", serde_json::json!({
+            "key": hotkey_type,
+            "source": "in-game"
+        }));
     }
 
     /// 处理“在游戏外”触发的热键。
@@ -281,13 +295,14 @@ impl HotkeyManager {
     /// # 业务逻辑
     /// - 若 `show_menu_when_toggling_outside_game` 为真，则显示主窗口；
     /// - 否则不做任何窗口操作（仅记录 debug 日志）；
-    /// - 无论如何都向前端发送 `hotkey-pressed` 事件（payload 为 `"outside-game"`），
+    /// - 无论如何都向前端发送 `hotkey-pressed` 事件（包含热键标识和来源），
     ///   以便前端按需响应。
     ///
     /// # 参数
     /// - `app`：Tauri 应用句柄；
-    /// - `settings`：用户设置。
-    fn handle_out_of_game_hotkey(app: &AppHandle, settings: &Settings) {
+    /// - `settings`：用户设置；
+    /// - `hotkey_type`：触发的热键标识（如 `"altW"`）。
+    fn handle_out_of_game_hotkey(app: &AppHandle, settings: &Settings, hotkey_type: &str) {
         if settings.show_menu_when_toggling_outside_game {
             log::info!("Showing window (outside game)");
             if let Err(e) = WindowManager::show_window(app) {
@@ -297,7 +312,10 @@ impl HotkeyManager {
             log::debug!("Hotkey pressed outside game, no action configured");
         }
 
-        let _ = app.emit("hotkey-pressed", "outside-game");
+        let _ = app.emit("hotkey-pressed", serde_json::json!({
+            "key": hotkey_type,
+            "source": "outside-game"
+        }));
     }
 }
 

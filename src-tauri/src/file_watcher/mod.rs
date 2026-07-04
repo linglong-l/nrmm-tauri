@@ -158,11 +158,11 @@ impl FileWatcher {
                         if sampler.should_log("file_event") {
                             debug!("File system event: {:?}", event);
                         }
-                        let tx = debounce_tx_clone.clone();
-                        // 异步发送防抖信号，不阻塞 watcher 线程
-                        tokio::spawn(async move {
-                            let _ = tx.send(()).await;
-                        });
+                        // 同步发送防抖信号：try_send 不阻塞、不依赖 Tokio 运行时上下文，
+                        // 通道满时直接丢弃（事件丢失无妨，防抖会合并处理）。
+                        // 注意：notify 回调运行在 notify crate 的内部线程上，
+                        // 不在 Tokio 运行时上下文中，禁止使用 tokio::spawn（会 panic）。
+                        let _ = debounce_tx_clone.try_send(());
                     }
                 }
                 Err(e) => {

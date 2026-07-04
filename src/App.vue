@@ -12,7 +12,6 @@
 import { onMounted, watch, computed, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElConfigProvider } from 'element-plus';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import zhCn from 'element-plus/es/locale/lang/zh-cn';
 import zhTw from 'element-plus/es/locale/lang/zh-tw';
 import en from 'element-plus/es/locale/lang/en';
@@ -22,13 +21,13 @@ import { TitleBar, StatusBar } from './components';
 import IndexPage from './pages/index/index.vue';
 import { useSettingsStore } from './stores/settings';
 import { useGameStore } from './stores/game';
+import { EventNames, eventManager } from './utils/events';
 
 const { locale } = useI18n();
 const settingsStore = useSettingsStore();
 const gameStore = useGameStore();
 
-// 用于在组件卸载时取消 Tauri 事件监听的句柄；null 表示尚未注册或已注销
-let unlistenHotkey: UnlistenFn | null = null;
+let unlistenHotkey: (() => void) | null = null;
 
 /**
  * 根据设置中的语言代码返回对应的 Element Plus 语言包。
@@ -82,11 +81,16 @@ async function initApp() {
 
 /**
  * 全局热键按下事件的回调。
- * 窗口切换已由后端 HotkeyManager 统一处理，此处仅接收事件通知，便于后续扩展 UI 反馈等。
- * @param _event Tauri 事件对象，payload 为热键标识字符串（此处未使用）
+ * 窗口切换已由后端 HotkeyManager 统一处理，此处接收事件通知用于 UI 反馈。
+ * @param payload 事件载荷，包含热键标识和来源
  */
-function handleHotkeyPressed(_event: { payload: string }) {
-  // 窗口切换逻辑由后端 HotkeyManager::handle_in_game_hotkey 统一处理
+function handleHotkeyPressed(payload: { key: string; source: 'in-game' | 'outside-game'; timestamp?: number }) {
+  const { key, source } = payload;
+  logHotkeyPressed(key, source);
+}
+
+function logHotkeyPressed(key: string, source: 'in-game' | 'outside-game') {
+  console.debug('[Hotkey] Pressed:', key, 'from:', source);
 }
 
 // 监听语言变化，实时同步到 i18n，使界面文案立即切换
@@ -119,19 +123,19 @@ function handleContextMenu(e: MouseEvent) {
   e.preventDefault();
 }
 
-// 组件挂载：初始化应用，并注册 Tauri 全局热键事件监听
+// 组件挂载：初始化应用，并注册全局热键事件监听
 onMounted(() => {
   // 全局禁用默认右键菜单，防止与自定义右键功能冲突
   document.addEventListener('contextmenu', handleContextMenu);
 
   initApp();
 
-  listen('hotkey-pressed', handleHotkeyPressed).then((unlisten) => {
+  eventManager.on(EventNames.HOTKEY_PRESSED, handleHotkeyPressed).then((unlisten) => {
     unlistenHotkey = unlisten;
   }).catch(() => {});
 });
 
-// 组件卸载：注销 Tauri 事件监听和全局右键菜单禁用，避免内存泄漏与重复触发
+// 组件卸载：注销事件监听和全局右键菜单禁用，避免内存泄漏与重复触发
 onUnmounted(() => {
   // 移除全局右键菜单禁用事件监听
   document.removeEventListener('contextmenu', handleContextMenu);

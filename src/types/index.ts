@@ -76,14 +76,58 @@ export enum TargetGame {
  * 均为 Alt + 字母 的组合，避免与游戏内按键冲突。
  */
 export enum HotkeyKeyboard {
-  /** Alt + W */
-  altW = 'altW',
-  /** Alt + S */
-  altS = 'altS',
   /** Alt + A */
   altA = 'altA',
+  /** Alt + B */
+  altB = 'altB',
+  /** Alt + C */
+  altC = 'altC',
   /** Alt + D */
-  altD = 'altD'
+  altD = 'altD',
+  /** Alt + E */
+  altE = 'altE',
+  /** Alt + F */
+  altF = 'altF',
+  /** Alt + G */
+  altG = 'altG',
+  /** Alt + H */
+  altH = 'altH',
+  /** Alt + I */
+  altI = 'altI',
+  /** Alt + J */
+  altJ = 'altJ',
+  /** Alt + K */
+  altK = 'altK',
+  /** Alt + L */
+  altL = 'altL',
+  /** Alt + M */
+  altM = 'altM',
+  /** Alt + N */
+  altN = 'altN',
+  /** Alt + O */
+  altO = 'altO',
+  /** Alt + P */
+  altP = 'altP',
+  /** Alt + Q */
+  altQ = 'altQ',
+  /** Alt + R */
+  altR = 'altR',
+  /** Alt + S */
+  altS = 'altS',
+  /** Alt + T */
+  altT = 'altT',
+  /** Alt + U */
+  altU = 'altU',
+  /** Alt + V */
+  altV = 'altV',
+  /** Alt + W */
+  altW = 'altW',
+  /** Alt + X */
+  altX = 'altX',
+  /** Alt + Y */
+  altY = 'altY',
+  /** Alt + Z */
+  altZ = 'altZ'
 }
 
 /**
@@ -186,6 +230,10 @@ export interface AppSettings {
   hotkeyKeyboard: HotkeyKeyboard;
   /** 手柄热键 */
   hotkeyGamepad: HotkeyGamepad;
+  /** 分组搜索快捷键（窗口内绑定） */
+  groupSearchHotkey: string;
+  /** 模组搜索快捷键（窗口内绑定） */
+  modSearchHotkey: string;
   /** 鸣潮目标进程名 */
   targetProcessWuwa: string;
   /** 原神目标进程名 */

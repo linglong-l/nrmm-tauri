@@ -205,10 +205,32 @@ export const GAME_SHORT_NAMES: Record<TargetGame, string> = {
  * 键盘热键枚举到可读名称的映射，用于设置界面下拉框展示。
  */
 export const HOTKEY_KEYBOARD_NAMES: Record<HotkeyKeyboard, string> = {
-  [HotkeyKeyboard.altW]: 'Alt + W',
-  [HotkeyKeyboard.altS]: 'Alt + S',
   [HotkeyKeyboard.altA]: 'Alt + A',
-  [HotkeyKeyboard.altD]: 'Alt + D'
+  [HotkeyKeyboard.altB]: 'Alt + B',
+  [HotkeyKeyboard.altC]: 'Alt + C',
+  [HotkeyKeyboard.altD]: 'Alt + D',
+  [HotkeyKeyboard.altE]: 'Alt + E',
+  [HotkeyKeyboard.altF]: 'Alt + F',
+  [HotkeyKeyboard.altG]: 'Alt + G',
+  [HotkeyKeyboard.altH]: 'Alt + H',
+  [HotkeyKeyboard.altI]: 'Alt + I',
+  [HotkeyKeyboard.altJ]: 'Alt + J',
+  [HotkeyKeyboard.altK]: 'Alt + K',
+  [HotkeyKeyboard.altL]: 'Alt + L',
+  [HotkeyKeyboard.altM]: 'Alt + M',
+  [HotkeyKeyboard.altN]: 'Alt + N',
+  [HotkeyKeyboard.altO]: 'Alt + O',
+  [HotkeyKeyboard.altP]: 'Alt + P',
+  [HotkeyKeyboard.altQ]: 'Alt + Q',
+  [HotkeyKeyboard.altR]: 'Alt + R',
+  [HotkeyKeyboard.altS]: 'Alt + S',
+  [HotkeyKeyboard.altT]: 'Alt + T',
+  [HotkeyKeyboard.altU]: 'Alt + U',
+  [HotkeyKeyboard.altV]: 'Alt + V',
+  [HotkeyKeyboard.altW]: 'Alt + W',
+  [HotkeyKeyboard.altX]: 'Alt + X',
+  [HotkeyKeyboard.altY]: 'Alt + Y',
+  [HotkeyKeyboard.altZ]: 'Alt + Z'
 };
 
 /**

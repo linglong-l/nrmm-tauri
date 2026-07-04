@@ -32,6 +32,7 @@ import {
   LAYOUT_MODE_NAMES, SORT_GROUP_METHOD_NAMES, SUPPORTED_LANGUAGES,
   MODS_PATH_STATUS_DESCRIPTIONS, getGameNameKey
 } from '../utils/constants';
+import { validateHotkeys } from '../utils/hotkeyValidator';
 import { EventNames, eventManager } from '../utils/events';
 import { getVersion } from '@tauri-apps/api/app';
 
@@ -69,11 +70,7 @@ const games = [
   TargetGame.Arknights_Endfield
 ];
 
-// 键盘热键可选项（基于枚举生成）
-const hotkeyKeyboardOptions = Object.values(HotkeyKeyboard).map(key => ({
-  value: key,
-  label: HOTKEY_KEYBOARD_NAMES[key as HotkeyKeyboard]
-}));
+// 键盘热键可选项：模板中直接遍历 HOTKEY_KEYBOARD_NAMES 生成，无需在此预构选项数组。
 
 // 手柄热键可选项
 const hotkeyGamepadOptions = Object.values(HotkeyGamepad).map(key => ({
@@ -161,6 +158,37 @@ const selectedGame = computed({
   set: (val: TargetGame) => {
     handleGameChange(val);
   }
+});
+
+/**
+ * 分组搜索快捷键双向绑定代理。
+ * getter 从 settingsStore 读取，setter 调用 setGroupSearchHotkey 写回内存值。
+ */
+const groupSearchHotkeyProxy = computed({
+  get: () => settingsStore.groupSearchHotkey,
+  set: (val: string) => settingsStore.setGroupSearchHotkey(val),
+});
+
+/**
+ * 模组搜索快捷键双向绑定代理。
+ * getter 从 settingsStore 读取，setter 调用 setModSearchHotkey 写回内存值。
+ */
+const modSearchHotkeyProxy = computed({
+  get: () => settingsStore.modSearchHotkey,
+  set: (val: string) => settingsStore.setModSearchHotkey(val),
+});
+
+/**
+ * 快捷键冲突检测结果。
+ * 基于窗口切换、分组搜索、模组搜索三类快捷键计算冲突列表，
+ * 用于在界面中以 el-alert 形式逐条提示。
+ */
+const hotkeyConflicts = computed(() => {
+  return validateHotkeys(
+    settingsStore.settings?.hotkeyKeyboard ?? 'altW',
+    settingsStore.groupSearchHotkey,
+    settingsStore.modSearchHotkey
+  ).conflicts;
 });
 
 /**
@@ -341,6 +369,14 @@ async function handleHotkeyKeyboardChange(value: HotkeyKeyboard) {
 /** 手柄热键变更处理 */
 async function handleHotkeyGamepadChange(value: HotkeyGamepad) {
   settingsStore.setHotkeyGamepad(value);
+  await settingsStore.saveSettings();
+}
+
+/**
+ * 搜索快捷键变更处理。
+ * 仅保存设置到后端，无需向后端注册热键（窗口内快捷键由前端监听）。
+ */
+async function handleSearchHotkeyChange() {
   await settingsStore.saveSettings();
 }
 
@@ -831,81 +867,111 @@ watch(
         <div class="tab-content-inner">
           <!-- 热键设置表单 -->
           <el-form label-position="top" :disabled="settingsStore.isSaving">
-            <!-- 
-              窗口切换热键表单项
-              布局：两列布局（键盘和手柄）
+            <!--
+              手柄热键表单项
+              数据来源：v-model 绑定 settingsStore.settings.hotkeyGamepad
+              交互行为：@change 选择后调用 handleHotkeyGamepadChange 保存
             -->
-            <el-form-item :label="t('Window Toggle Hotkeys')">
-              <el-row :gutter="16">
-                <!-- 键盘热键列 -->
-                <el-col :span="12">
-                  <!-- 
-                    键盘热键表单项
-                    数据来源：v-model 绑定 settingsStore.settings.hotkeyKeyboard
-                    交互行为：@change 选择后调用 handleHotkeyKeyboardChange 保存
-                  -->
-                  <el-form-item :label="t('Keyboard Toggle')" class="nested-label">
-                    <!-- 键盘热键选择下拉框 -->
-                    <el-select
-                      v-model="settingsStore.settings.hotkeyKeyboard"
-                      style="width: 100%"
-                      @change="handleHotkeyKeyboardChange"
-                    >
-                      <!-- 键盘热键选项列表 -->
-                      <el-option
-                        v-for="opt in hotkeyKeyboardOptions"
-                        :key="opt.value"
-                        :label="opt.label"
-                        :value="opt.value"
-                      />
-                    </el-select>
-                  </el-form-item>
-                </el-col>
-                <!-- 手柄热键列 -->
-                <el-col :span="12">
-                  <!-- 
-                    手柄热键表单项
-                    数据来源：v-model 绑定 settingsStore.settings.hotkeyGamepad
-                    交互行为：@change 选择后调用 handleHotkeyGamepadChange 保存
-                  -->
-                  <el-form-item :label="t('Gamepad(XInput) Toggle')" class="nested-label">
-                    <!-- 手柄热键选择下拉框 -->
-                    <el-select
-                      v-model="settingsStore.settings.hotkeyGamepad"
-                      style="width: 100%"
-                      @change="handleHotkeyGamepadChange"
-                    >
-                      <!-- 手柄热键选项列表 -->
-                      <el-option
-                        v-for="opt in hotkeyGamepadOptions"
-                        :key="opt.value"
-                        :label="opt.label"
-                        :value="opt.value"
-                      />
-                    </el-select>
-                  </el-form-item>
-                </el-col>
-              </el-row>
+            <el-form-item :label="t('Gamepad(XInput) Toggle')">
+              <!-- 手柄热键选择下拉框 -->
+              <el-select
+                v-model="settingsStore.settings.hotkeyGamepad"
+                style="width: 100%"
+                @change="handleHotkeyGamepadChange"
+              >
+                <!-- 手柄热键选项列表 -->
+                <el-option
+                  v-for="opt in hotkeyGamepadOptions"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
             </el-form-item>
 
             <!-- 分隔线 -->
             <div class="settings-divider" />
 
-            <!-- 
-              导航热键提示表单项
-              作用：显示导航热键的默认配置（只读提示）
+            <!--
+              快捷键网格区域
+              作用：以响应式 CSS Grid 布局展示 4 个键盘快捷键配置项
+              布局：默认每行 3 个，窗口缩窄时自适应
+              包含：窗口切换、分组搜索、模组搜索、切换搜索栏
             -->
-            <el-form-item :label="t('Navigation Hotkeys')">
-              <!-- 热键提示文本区域 -->
-              <div class="hotkey-hint">
-                <!-- 各导航热键提示 -->
-                <span>{{ t('Navigation: WASD / D-Pad') }}</span>
-                <span>{{ t('Select: F / A') }}</span>
-                <span>{{ t('Keybind: R / X') }}</span>
-                <span>{{ t('Tab: Q-E / LB-RB') }}</span>
-                <span>{{ t('Search: Space') }}</span>
+            <div class="hotkey-grid">
+              <!-- 窗口切换键盘热键 -->
+              <div class="hotkey-grid-item">
+                <label class="hotkey-grid-label">{{ t('Keyboard Toggle') }}</label>
+                <el-select
+                  v-model="settingsStore.settings.hotkeyKeyboard"
+                  style="width: 100%"
+                  @change="handleHotkeyKeyboardChange"
+                >
+                  <el-option
+                    v-for="(label, key) in HOTKEY_KEYBOARD_NAMES"
+                    :key="key"
+                    :label="label"
+                    :value="key"
+                  />
+                </el-select>
               </div>
-            </el-form-item>
+              <!-- 分组搜索快捷键 -->
+              <div class="hotkey-grid-item">
+                <label class="hotkey-grid-label">{{ t('settings.groupSearchHotkey') }}</label>
+                <el-select
+                  v-model="groupSearchHotkeyProxy"
+                  style="width: 100%"
+                  @change="handleSearchHotkeyChange"
+                >
+                  <el-option
+                    v-for="(label, key) in HOTKEY_KEYBOARD_NAMES"
+                    :key="key"
+                    :label="label"
+                    :value="key"
+                  />
+                </el-select>
+              </div>
+              <!-- 模组搜索快捷键 -->
+              <div class="hotkey-grid-item">
+                <label class="hotkey-grid-label">{{ t('settings.modSearchHotkey') }}</label>
+                <el-select
+                  v-model="modSearchHotkeyProxy"
+                  style="width: 100%"
+                  @change="handleSearchHotkeyChange"
+                >
+                  <el-option
+                    v-for="(label, key) in HOTKEY_KEYBOARD_NAMES"
+                    :key="key"
+                    :label="label"
+                    :value="key"
+                  />
+                </el-select>
+              </div>
+            </div>
+
+            <!--
+              快捷键冲突提示区域
+              作用：当三类快捷键之间存在重复时，逐条展示冲突信息
+            -->
+            <el-alert
+              v-for="(conflict, index) in hotkeyConflicts"
+              :key="index"
+              :title="conflict.message"
+              type="error"
+              :closable="false"
+              show-icon
+              style="margin-bottom: 8px;"
+            />
+
+            <!--
+              快捷键说明提示区域
+              作用：分别说明窗口切换、分组搜索、模组搜索三类快捷键的作用
+            -->
+            <div class="hotkey-hint">
+              <p>{{ t('settings.hotkeyHintWindow') }}</p>
+              <p>{{ t('settings.hotkeyHintGroupSearch') }}</p>
+              <p>{{ t('settings.hotkeyHintModSearch') }}</p>
+            </div>
           </el-form>
         </div>
       </el-tab-pane>
@@ -1476,6 +1542,23 @@ watch(
   font-size: 13px;
   color: rgba(255, 255, 255, 0.55);
   line-height: 1.4;
+}
+
+/* 快捷键网格布局 */
+.hotkey-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.hotkey-grid-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hotkey-grid-label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 
 /* 热键提示 */

@@ -57,11 +57,11 @@ pub async fn load_mods(
     if let Some(ref g) = game {
         use crate::process::TargetGame;
         let target = match g.as_str() {
-            "Wuthering_Waves" => TargetGame::WutheringWaves,
-            "Genshin_Impact" => TargetGame::GenshinImpact,
-            "Honkai_Star_Rail" => TargetGame::HonkaiStarRail,
-            "Zenless_Zone_Zero" => TargetGame::ZenlessZoneZero,
-            "Arknights_Endfield" => TargetGame::ArknightsEndfield,
+            "Wuthering_Waves" | "WutheringWaves" => TargetGame::WutheringWaves,
+            "Genshin_Impact" | "GenshinImpact" => TargetGame::GenshinImpact,
+            "Honkai_Star_Rail" | "HonkaiStarRail" => TargetGame::HonkaiStarRail,
+            "Zenless_Zone_Zero" | "ZenlessZoneZero" => TargetGame::ZenlessZoneZero,
+            "Arknights_Endfield" | "ArknightsEndfield" => TargetGame::ArknightsEndfield,
             e => {
                 log::error!(
                     "[load_mods] Unknown game string: {:?}, defaulting to None",
@@ -151,11 +151,11 @@ pub async fn refresh_mods(
     if let Some(g) = game {
         use crate::process::TargetGame;
         let target = match g.as_str() {
-            "Wuthering_Waves" => TargetGame::WutheringWaves,
-            "Genshin_Impact" => TargetGame::GenshinImpact,
-            "Honkai_Star_Rail" => TargetGame::HonkaiStarRail,
-            "Zenless_Zone_Zero" => TargetGame::ZenlessZoneZero,
-            "Arknights_Endfield" => TargetGame::ArknightsEndfield,
+            "Wuthering_Waves" | "WutheringWaves" => TargetGame::WutheringWaves,
+            "Genshin_Impact" | "GenshinImpact" => TargetGame::GenshinImpact,
+            "Honkai_Star_Rail" | "HonkaiStarRail" => TargetGame::HonkaiStarRail,
+            "Zenless_Zone_Zero" | "ZenlessZoneZero" => TargetGame::ZenlessZoneZero,
+            "Arknights_Endfield" | "ArknightsEndfield" => TargetGame::ArknightsEndfield,
             _ => TargetGame::None,
         };
         settings.target_game = target;
@@ -1375,11 +1375,11 @@ pub async fn open_mod_folder(state: State<'_, AppState>, game: String) -> Result
     use crate::process::TargetGame;
 
     let target_game = match game.as_str() {
-        "Wuthering_Waves" => TargetGame::WutheringWaves,
-        "Genshin_Impact" => TargetGame::GenshinImpact,
-        "Honkai_Star_Rail" => TargetGame::HonkaiStarRail,
-        "Zenless_Zone_Zero" => TargetGame::ZenlessZoneZero,
-        "Arknights_Endfield" => TargetGame::ArknightsEndfield,
+        "Wuthering_Waves" | "WutheringWaves" => TargetGame::WutheringWaves,
+        "Genshin_Impact" | "GenshinImpact" => TargetGame::GenshinImpact,
+        "Honkai_Star_Rail" | "HonkaiStarRail" => TargetGame::HonkaiStarRail,
+        "Zenless_Zone_Zero" | "ZenlessZoneZero" => TargetGame::ZenlessZoneZero,
+        "Arknights_Endfield" | "ArknightsEndfield" => TargetGame::ArknightsEndfield,
         _ => TargetGame::None,
     };
 

@@ -75,8 +75,8 @@ export interface EventPayloadMap {
   [EventNames.MOD_GROUPS_UPDATED]: ModGroupData[];
   /** 文件监听事件载荷：单次文件系统变化信息 */
   [EventNames.FILE_WATCHER_EVENT]: FileWatcherEvent;
-  /** 热键按下事件载荷：按键标识与时间戳 */
-  [EventNames.HOTKEY_PRESSED]: { key: string; timestamp: number };
+  /** 热键按下事件载荷：按键标识、来源（游戏中/游戏外）与时间戳 */
+  [EventNames.HOTKEY_PRESSED]: { key: string; source: 'in-game' | 'outside-game'; timestamp?: number };
   /** 热键注册结果载荷：按键标识与是否成功 */
   [EventNames.HOTKEY_REGISTERED]: { key: string; success: boolean };
   /** 热键注销结果载荷：按键标识与是否成功 */
