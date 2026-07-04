@@ -20,7 +20,6 @@ import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
 import { Folder, Delete } from '@element-plus/icons-vue';
 import { useSettingsStore } from '../stores/settings';
 import { useGameStore } from '../stores/game';
-import { useHotkeyStore } from '../stores/hotkey';
 import {
   invokeUpdateModData, invokeValidateModsPath, invokeOpenModFolder,
   invokeSelectDirectory, invokeLoadMods,
@@ -39,7 +38,6 @@ import { getVersion } from '@tauri-apps/api/app';
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
 const gameStore = useGameStore();
-const hotkeyStore = useHotkeyStore();
 
 // 当前激活的设置 Tab（默认游戏设置）
 const activeTab = ref('game');
@@ -358,12 +356,10 @@ const debouncedHandleTargetProcessChange = createDebounce(handleTargetProcessCha
 async function handleHotkeyKeyboardChange(value: HotkeyKeyboard) {
   settingsStore.setHotkeyKeyboard(value);
   await settingsStore.saveSettings();
-  // 重新注册热键到后端
-  try {
-    await hotkeyStore.registerHotkeyBackend(value);
-  } catch (error) {
-    console.error('Failed to register new hotkey:', error);
-  }
+  // SETTINGS_UPDATED 事件会触发 index.vue 的 registerHotkeys()
+  // 该函数已执行 unregisterAllHotkeys() + registerHotkeyBackend() 完整流程
+  // 此处无需重复注册，避免与事件驱动流程竞争导致旧键残留
+  ElMessage.success(t('Hotkey updated, old hotkey has been unregistered'));
 }
 
 /** 手柄热键变更处理 */

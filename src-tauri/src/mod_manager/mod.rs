@@ -16,7 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use log::{info, warn};
+use log::{error, info, warn};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -754,12 +754,16 @@ impl ModManager {
     pub fn toggle_mod_disabled(mod_path: &str) -> Result<bool> {
         let path = Path::new(mod_path);
         if !path.exists() || !path.is_dir() {
+            error!("toggle_mod_disabled failed: mod path does not exist or is not a directory: {:?}", path);
             anyhow::bail!("Mod path does not exist: {:?}", path);
         }
 
         let parent = match path.parent() {
             Some(p) => p,
-            None => anyhow::bail!("Invalid mod path: no parent directory"),
+            None => {
+                error!("toggle_mod_disabled failed: mod path has no parent directory: {:?}", path);
+                anyhow::bail!("Invalid mod path: no parent directory");
+            }
         };
 
         let dir_name = path
@@ -778,11 +782,14 @@ impl ModManager {
 
         let new_path = parent.join(&new_name);
         if new_path.exists() {
+            error!("toggle_mod_disabled failed: destination path already exists: {:?}", new_path);
             anyhow::bail!("Destination path already exists: {:?}", new_path);
         }
 
-        fs::rename(path, &new_path)
-            .with_context(|| format!("Failed to rename mod: {:?} -> {:?}", path, new_path))?;
+        if let Err(e) = fs::rename(path, &new_path) {
+            error!("toggle_mod_disabled failed to rename mod: {:?} -> {:?}: {}", path, new_path, e);
+            return Err(e).with_context(|| format!("Failed to rename mod: {:?} -> {:?}", path, new_path));
+        }
 
         // 返回操作后的禁用状态（与原状态相反）
         Ok(!is_disabled)
@@ -2159,12 +2166,12 @@ impl ModManager {
 
                 // 删除分组目录下旧的 INI 文件
                 if let Err(e) = Self::delete_group_ini_files(group_path) {
-                    warn!("Failed to delete group INI files for {}: {}", group_path, e);
+                    error!("update_mod_data: failed to delete group INI files for {}: {}", group_path, e);
                 }
 
                 // 创建新的分组 INI 文件（包含 active_slot 变量与切换快捷键）
                 if let Err(e) = Self::create_group_ini(group_path, &group_name, *group_index) {
-                    warn!("Failed to create group INI for {}: {}", group_path, e);
+                    error!("update_mod_data: failed to create group INI for {}: {}", group_path, e);
                 }
 
                 // 管理分组内的每个模组
@@ -2187,12 +2194,12 @@ impl ModManager {
                                 mod_data.real_index,
                                 *group_index,
                             ) {
-                                warn!("Failed to manage mod {}: {}", mod_data.mod_path, e);
+                                error!("update_mod_data: failed to manage mod {}: {}", mod_data.mod_path, e);
                             }
                         });
                     }
                     Err(e) => {
-                        warn!("Failed to get mods for group {}: {}", group_path, e);
+                        error!("update_mod_data: failed to get mods for group {}: {}", group_path, e);
                     }
                 }
             });
@@ -2390,14 +2397,14 @@ impl ModManager {
         let mods_root = match mod_path.parent().and_then(|p| p.parent()) {
             Some(p) => p,
             None => {
-                warn!("Skipping mod with invalid parent path: {:?}", mod_path);
+                error!("manage_mod skipped: mod path has invalid parent path: {:?}", mod_path);
                 return Ok(());
             }
         };
 
         if !Self::is_valid_mod_path(mods_root, mod_path) {
-            warn!(
-                "Skipping mod with invalid path (outside _MANAGED_/group_xx or contains #): {:?}",
+            error!(
+                "manage_mod skipped: mod path is outside _MANAGED_/group_xx or contains #: {:?}",
                 mod_path
             );
             return Ok(());
@@ -2423,7 +2430,7 @@ impl ModManager {
             if let Err(e) =
                 Self::modify_ini_file(ini_file, group_folder_name, mod_index, group_index)
             {
-                warn!("Failed to modify INI file {:?}: {}", ini_file, e);
+                error!("manage_mod failed to modify INI file {:?}: {}", ini_file, e);
             }
         }
 

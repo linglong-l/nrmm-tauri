@@ -2,10 +2,12 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { ModData, ModGroupData, ModsPathStatus, TargetGame, ModKeybindInfo } from '../types';
 import { invoke } from '@tauri-apps/api/core';
-import { invokeToggleModFavorite, invokeToggleGroupFavorite, invokeSearchMods } from '../utils/invoke';
+import { invokeToggleModFavorite, invokeToggleGroupFavorite, invokeSearchMods, invokeSetSelectedMod } from '../utils/invoke';
 import { EventNames, eventManager } from '../utils/events';
 import { useSettingsStore } from './settings';
 import { getModsCache, setModsCache, removeModsCache } from '../utils/cache';
+import { ElMessage } from 'element-plus';
+import { i18n } from '../locales';
 
 /**
  * 游戏 / Mods 数据 Store
@@ -436,6 +438,8 @@ export const useGameStore = defineStore('game', () => {
 
     // 初始化各分组的选中模组路径映射（使用栈进行 DFS 迭代，避免递归）
     const newSelectedMap = new Map<string, string>();
+    // 收集加载时发现的"选中项为禁用模组"冲突，加载完成后统一告知用户
+    const disabledSelectionConflicts: Array<{ groupName: string; modName: string; groupPath: string }> = [];
     const initStack: ModGroupData[] = [...newGroups];
     while (initStack.length > 0) {
       const group = initStack.pop()!;
@@ -443,7 +447,13 @@ export const useGameStore = defineStore('game', () => {
       if (idx >= 0 && idx < group.modsInGroup.length) {
         const selectedMod = group.modsInGroup[idx];
         if (selectedMod) {
-          newSelectedMap.set(group.groupPath, selectedMod.modPath);
+          // 与点击路径（selectModInGroup）保持一致：禁用模组不可被选中
+          if (selectedMod.isDisabled) {
+            console.warn(`[ModSelection] Group '${group.groupName}': selected mod '${selectedMod.modName}' is disabled, deselecting.`);
+            disabledSelectionConflicts.push({ groupName: group.groupName, modName: selectedMod.modName, groupPath: group.groupPath });
+          } else {
+            newSelectedMap.set(group.groupPath, selectedMod.modPath);
+          }
         }
       }
       // 将子分组压入栈中继续处理
@@ -452,6 +462,25 @@ export const useGameStore = defineStore('game', () => {
       }
     }
     selectedModPaths.value = newSelectedMap;
+
+    // 对加载到禁用模组的分组，异步重置 selectedindex 文件为 0
+    // 确保下次重启时不再加载到禁用模组
+    for (const conflict of disabledSelectionConflicts) {
+      invokeSetSelectedMod(conflict.groupPath, 0).catch((e) => {
+        console.error(`[ModSelection] Failed to reset selectedindex for group '${conflict.groupName}':`, e);
+      });
+    }
+
+    // 统一告知用户（系统只负责告知，具体处理由用户决定）
+    if (disabledSelectionConflicts.length > 0) {
+      const t = i18n.global.t;
+      const message = disabledSelectionConflicts.length === 1
+        ? t('Selected mod "{modName}" in group "{groupName}" is disabled, selection has been reset',
+            { modName: disabledSelectionConflicts[0].modName, groupName: disabledSelectionConflicts[0].groupName })
+        : t('{count} selected mods are disabled and have been reset',
+            { count: disabledSelectionConflicts.length });
+      ElMessage.warning(message);
+    }
 
     if (newGroups.length === 0) {
       currentGroupIndex.value = 0;
@@ -809,18 +838,15 @@ function removeModFromGroup(groupPath: string, modIndex: number) {
  * @returns 排序后的新数组（不修改原数组）
  */
 export function sortModsForDisplay(mods: ModData[], selectedPath: string | null): ModData[] {
-  // 为每个模组附加原始数组索引，按数组位置排序而非 realIndex
   const indexed = mods.map((mod, idx) => ({ mod, idx }));
   indexed.sort((a, b) => {
-    // None 占位模组始终最前
     if (a.mod.realIndex === 0) return -1;
     if (b.mod.realIndex === 0) return 1;
-    // 选中模组排在未选中模组之前
-    const aSelected = a.mod.modPath === selectedPath;
-    const bSelected = b.mod.modPath === selectedPath;
+    // 仅对已启用且被选中的模组执行置顶操作
+    const aSelected = !a.mod.isDisabled && a.mod.modPath === selectedPath;
+    const bSelected = !b.mod.isDisabled && b.mod.modPath === selectedPath;
     if (aSelected && !bSelected) return -1;
     if (!aSelected && bSelected) return 1;
-    // 其余模组按原始数组位置排序（保持后端返回的排序顺序）
     return a.idx - b.idx;
   });
   return indexed.map(item => item.mod);

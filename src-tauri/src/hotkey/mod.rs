@@ -303,13 +303,22 @@ impl HotkeyManager {
     /// - `settings`：用户设置；
     /// - `hotkey_type`：触发的热键标识（如 `"altW"`）。
     fn handle_out_of_game_hotkey(app: &AppHandle, settings: &Settings, hotkey_type: &str) {
-        if settings.show_menu_when_toggling_outside_game {
-            log::info!("Showing window (outside game)");
-            if let Err(e) = WindowManager::show_window(app) {
-                log::warn!("Failed to show window: {}", e);
+        // 游戏外也调用 toggle_window，与游戏内行为统一
+        // 平台兼容性：toggle_window 使用 Tauri 的 window.hide()/show()/set_focus()，
+        // 在 Windows 11 和 Linux 上均受支持
+        match WindowManager::toggle_window(app) {
+            Ok(shown) => {
+                log::info!("Window toggled (outside game), now visible: {}", shown);
+                if shown && settings.is_auto_pin_window {
+                    if let Err(e) = WindowManager::set_always_on_top(app, true) {
+                        log::warn!("Failed to set window always on top: {}", e);
+                    }
+                }
             }
-        } else {
-            log::debug!("Hotkey pressed outside game, no action configured");
+            Err(e) => {
+                // 严重错误：记录 error 级别日志
+                log::error!("Failed to toggle window (outside game): {}", e);
+            }
         }
 
         let _ = app.emit("hotkey-pressed", serde_json::json!({

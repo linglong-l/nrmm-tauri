@@ -352,6 +352,10 @@
   "Invalid archive file: {name}": "无效的压缩包文件：{name}",
   "RAR format is not supported for extraction": "不支持 RAR 格式解压",
   "Failed to extract archive: {name}": "解压失败：{name}",
+  "Selected mod \"{modName}\" in group \"{groupName}\" is disabled, selection has been reset": "选中的模组 \"{modName}\"（分组 \"{groupName}\"）已禁用，已自动取消选中",
+  "{count} selected mods are disabled and have been reset": "{count} 个已选中的模组处于禁用状态，已自动取消选中",
+  "Hotkey conflict: {key} is used by window toggle": "快捷键冲突：{key} 已被窗口切换功能占用",
+  "Hotkey updated, old hotkey has been unregistered": "快捷键已更新，旧快捷键已注销",
   "settings": {
     "groupSearchHotkey": "分组搜索快捷键",
     "modSearchHotkey": "模组搜索快捷键",

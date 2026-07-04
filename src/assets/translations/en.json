@@ -352,6 +352,10 @@
   "Invalid archive file: {name}": "Invalid archive file: {name}",
   "RAR format is not supported for extraction": "RAR format is not supported for extraction",
   "Failed to extract archive: {name}": "Failed to extract archive: {name}",
+  "Selected mod \"{modName}\" in group \"{groupName}\" is disabled, selection has been reset": "Selected mod \"{modName}\" in group \"{groupName}\" is disabled, selection has been reset",
+  "{count} selected mods are disabled and have been reset": "{count} selected mods are disabled and have been reset",
+  "Hotkey conflict: {key} is used by window toggle": "Hotkey conflict: {key} is used by window toggle",
+  "Hotkey updated, old hotkey has been unregistered": "Hotkey updated, old hotkey has been unregistered",
   "settings": {
     "groupSearchHotkey": "Group Search Hotkey",
     "modSearchHotkey": "Mod Search Hotkey",

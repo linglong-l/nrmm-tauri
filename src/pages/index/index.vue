@@ -12,7 +12,7 @@
  */
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { ElEmpty } from 'element-plus';
+import { ElEmpty, ElMessage } from 'element-plus';
 import { SideNav } from '../../components';
 import ModsTab from './tabs/ModsTab.vue';
 import SettingsView from '../../views/SettingsView.vue';
@@ -132,14 +132,23 @@ function handleSearchHotkey(event: KeyboardEvent): void {
 
   const pressedHotkey = `alt${key}`;
 
-  // 检查是否与全局热键冲突，若是则交由后端处理
+  // 诊断日志：记录按键输入和当前配置
+  console.debug('[SearchHotkey] Pressed:', pressedHotkey,
+    'groupSearch:', settingsStore.groupSearchHotkey,
+    'modSearch:', settingsStore.modSearchHotkey,
+    'windowHotkey:', settingsStore.hotkeyKeyboard);
+
+  // 检查是否与全局热键冲突 — 告知用户
   if (pressedHotkey === settingsStore.hotkeyKeyboard.toLowerCase()) {
+    console.warn('[SearchHotkey] Conflict with window hotkey:', pressedHotkey);
+    ElMessage.warning(t('Hotkey conflict: {key} is used by window toggle', { key: pressedHotkey }));
     return;
   }
 
   // 匹配分组搜索快捷键（统一小写比较）— toggle 显示/隐藏
   if (pressedHotkey === settingsStore.groupSearchHotkey.toLowerCase()) {
     event.preventDefault();
+    console.debug('[SearchHotkey] Triggering group search');
     modsTabRef.value?.toggleGroupSearch();
     return;
   }
@@ -147,6 +156,7 @@ function handleSearchHotkey(event: KeyboardEvent): void {
   // 匹配模组搜索快捷键（统一小写比较）— toggle 显示/隐藏
   if (pressedHotkey === settingsStore.modSearchHotkey.toLowerCase()) {
     event.preventDefault();
+    console.debug('[SearchHotkey] Triggering mod search');
     modsTabRef.value?.toggleModSearch();
     return;
   }

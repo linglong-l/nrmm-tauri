@@ -352,6 +352,10 @@
   "Invalid archive file: {name}": "Недействительный архив: {name}",
   "RAR format is not supported for extraction": "Формат RAR не поддерживается для распаковки",
   "Failed to extract archive: {name}": "Не удалось распаковать архив: {name}",
+  "Selected mod \"{modName}\" in group \"{groupName}\" is disabled, selection has been reset": "Выбранный мод \"{modName}\" в группе \"{groupName}\" отключён, выбор сброшен",
+  "{count} selected mods are disabled and have been reset": "{count} выбранных модов отключены, выбор сброшен",
+  "Hotkey conflict: {key} is used by window toggle": "Конфликт горячих клавиш: {key} используется переключением окна",
+  "Hotkey updated, old hotkey has been unregistered": "Горячая клавиша обновлена, старая клавиша отменена",
   "settings": {
     "groupSearchHotkey": "Горячая клавиша поиска группы",
     "modSearchHotkey": "Горячая клавиша поиска мода",

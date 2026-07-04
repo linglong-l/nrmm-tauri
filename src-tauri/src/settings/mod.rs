@@ -157,9 +157,10 @@ pub struct Settings {
 // ===== 各字段默认值函数 =====
 // 独立函数而非闭包，便于在 serde 属性与 Default impl 中复用。
 
-/// 默认键盘热键：`Alt+W`。
+/// 默认键盘热键：`Alt+D`。
+/// 注意：此默认值仅影响新创建的配置文件；已有配置文件不受影响（serde default 仅在字段缺失时调用）。
 fn default_hotkey_keyboard() -> String {
-    "altW".to_string()
+    "altD".to_string()
 }
 
 /// 默认手柄热键：禁用。

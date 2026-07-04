@@ -352,6 +352,10 @@
   "Invalid archive file: {name}": "File arsip tidak valid: {name}",
   "RAR format is not supported for extraction": "Format RAR tidak didukung untuk ekstraksi",
   "Failed to extract archive: {name}": "Gagal mengekstrak arsip: {name}",
+  "Selected mod \"{modName}\" in group \"{groupName}\" is disabled, selection has been reset": "Mod terpilih \"{modName}\" di grup \"{groupName}\" dinonaktifkan, pilihan telah direset",
+  "{count} selected mods are disabled and have been reset": "{count} mod terpilih dinonaktifkan dan telah direset",
+  "Hotkey conflict: {key} is used by window toggle": "Konflik hotkey: {key} digunakan oleh toggle jendela",
+  "Hotkey updated, old hotkey has been unregistered": "Hotkey diperbarui, hotkey lama telah dibatalkan",
   "settings": {
     "groupSearchHotkey": "Pintasan Pencarian Grup",
     "modSearchHotkey": "Pintasan Pencarian Mod",

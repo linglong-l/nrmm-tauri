@@ -282,7 +282,8 @@ const groupListRef = ref<HTMLElement | null>(null);
 const groupSearchInputRef = ref<InputInstance | null>(null);
 const modSearchInputRef = ref<InputInstance | null>(null);
 // 搜索栏显示/隐藏状态（通过快捷键切换）
-const searchBarsVisible = ref(false);
+const groupSearchVisible = ref(false);
+const modSearchVisible = ref(false);
 
 /**
  * 判断分组名称是否匹配搜索关键字。
@@ -323,11 +324,13 @@ function getModNameSegments(modName: string): TextSegment[] {
 
 /**
  * 判断指定模组是否为当前分组的选中模组（用于紫色描边显示）。
+ * 仅对已启用且被用户明确选择的模组显示紫色描边效果。
  * @param mod 待判断的模组
- * @returns true 表示该模组为当前分组的选中模组
+ * @returns true 表示该模组为当前分组的已启用选中模组
  */
 function isModSelected(mod: ModData): boolean {
   if (mod.realIndex === 0) return false;
+  if (mod.isDisabled) return false;
   const selectedPath = game.getSelectedModPath(game.currentGroupPath.value);
   return mod.modPath === selectedPath;
 }
@@ -1076,7 +1079,7 @@ watch(
  * 聚焦分组搜索框（供父组件通过 ref 调用）。
  */
 function focusGroupSearch(): void {
-  searchBarsVisible.value = true;
+  groupSearchVisible.value = true;
   // 延迟 focus 以等待 CSS max-height 过渡完成（过渡时间 250ms）
   setTimeout(() => {
     groupSearchInputRef.value?.focus();
@@ -1087,7 +1090,7 @@ function focusGroupSearch(): void {
  * 聚焦模组搜索框（供父组件通过 ref 调用）。
  */
 function focusModSearch(): void {
-  searchBarsVisible.value = true;
+  modSearchVisible.value = true;
   setTimeout(() => {
     modSearchInputRef.value?.focus();
   }, 300);
@@ -1098,28 +1101,35 @@ function focusModSearch(): void {
  * 隐藏时清空搜索关键字；显示时自动聚焦模组搜索框。
  */
 function toggleSearchBars(): void {
-  searchBarsVisible.value = !searchBarsVisible.value;
-  if (searchBarsVisible.value) {
+  // Alt+S 同时切换两个搜索框（保持兼容）
+  const anyVisible = groupSearchVisible.value || modSearchVisible.value;
+  if (anyVisible) {
+    groupSearchVisible.value = false;
+    modSearchVisible.value = false;
+    groupSearchKeyword.value = '';
+    modSearchKeyword.value = '';
+  } else {
+    modSearchVisible.value = true;
     setTimeout(() => {
       modSearchInputRef.value?.focus();
     }, 300);
-  } else {
-    groupSearchKeyword.value = '';
-    modSearchKeyword.value = '';
   }
 }
 
 /**
  * 切换分组搜索框显示/隐藏（供父组件通过 ref 调用）。
  * 已显示时隐藏并清空关键字；隐藏时显示并聚焦分组搜索框。
+ * 两个搜索框互斥：打开一个时关闭另一个。
  */
 function toggleGroupSearch(): void {
-  if (searchBarsVisible.value) {
-    searchBarsVisible.value = false;
+  if (groupSearchVisible.value) {
+    groupSearchVisible.value = false;
     groupSearchKeyword.value = '';
-    modSearchKeyword.value = '';
   } else {
-    searchBarsVisible.value = true;
+    // 关闭另一个搜索框（互斥）
+    modSearchVisible.value = false;
+    modSearchKeyword.value = '';
+    groupSearchVisible.value = true;
     setTimeout(() => {
       groupSearchInputRef.value?.focus();
     }, 300);
@@ -1129,14 +1139,17 @@ function toggleGroupSearch(): void {
 /**
  * 切换模组搜索框显示/隐藏（供父组件通过 ref 调用）。
  * 已显示时隐藏并清空关键字；隐藏时显示并聚焦模组搜索框。
+ * 两个搜索框互斥：打开一个时关闭另一个。
  */
 function toggleModSearch(): void {
-  if (searchBarsVisible.value) {
-    searchBarsVisible.value = false;
-    groupSearchKeyword.value = '';
+  if (modSearchVisible.value) {
+    modSearchVisible.value = false;
     modSearchKeyword.value = '';
   } else {
-    searchBarsVisible.value = true;
+    // 关闭另一个搜索框（互斥）
+    groupSearchVisible.value = false;
+    groupSearchKeyword.value = '';
+    modSearchVisible.value = true;
     setTimeout(() => {
       modSearchInputRef.value?.focus();
     }, 300);
@@ -1147,8 +1160,9 @@ function toggleModSearch(): void {
  * 隐藏搜索栏并清空关键字（点击外部区域或按 Esc 时调用）。
  */
 function hideSearchBars(): void {
-  if (!searchBarsVisible.value) return;
-  searchBarsVisible.value = false;
+  if (!groupSearchVisible.value && !modSearchVisible.value) return;
+  groupSearchVisible.value = false;
+  modSearchVisible.value = false;
   groupSearchKeyword.value = '';
   modSearchKeyword.value = '';
 }
@@ -1157,7 +1171,7 @@ function hideSearchBars(): void {
  * 全局键盘事件处理：按 Esc 退出搜索。
  */
 function handleEscKey(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && searchBarsVisible.value) {
+  if (event.key === 'Escape' && (groupSearchVisible.value || modSearchVisible.value)) {
     event.preventDefault();
     hideSearchBars();
     (document.activeElement as HTMLElement)?.blur();
@@ -1211,7 +1225,7 @@ defineExpose({ focusGroupSearch, focusModSearch, toggleSearchBars, toggleGroupSe
         </div>
 
         <!-- 分组搜索框：简单 includes 匹配，高亮匹配的分组项 -->
-        <div class="search-bars-wrapper" :class="{ 'search-visible': searchBarsVisible }" @click.stop>
+        <div class="search-bars-wrapper" :class="{ 'search-visible': groupSearchVisible }" @click.stop>
           <div class="group-search-bar" :class="{ 'has-match': displayGroups.some(g => isGroupMatched(g.groupName)) }">
             <el-input
               ref="groupSearchInputRef"
@@ -1295,7 +1309,7 @@ defineExpose({ focusGroupSearch, focusModSearch, toggleSearchBars, toggleGroupSe
             作用：纯前端模糊匹配当前分组内的模组名称
             交互行为：v-model 绑定 modSearchKeyword，clearable 支持一键清空
           -->
-          <div class="search-bars-wrapper" :class="{ 'search-visible': searchBarsVisible }" @click.stop>
+          <div class="search-bars-wrapper" :class="{ 'search-visible': modSearchVisible }" @click.stop>
             <div class="mod-search-bar">
               <el-input
                 ref="modSearchInputRef"
@@ -2080,11 +2094,6 @@ defineExpose({ focusGroupSearch, focusModSearch, toggleSearchBars, toggleGroupSe
   box-shadow: 0 0 0 3px #ef4444, 0 8px 24px rgba(239, 68, 68, 0.3);
 }
 
-/* 禁用且选中状态：紫色描边优先 */
-.mod-card.disabled.mod-selected .mod-icon {
-  box-shadow: 0 0 0 3px #a855f7, 0 0 12px rgba(168, 85, 247, 0.4);
-}
-
 .mod-card.disabled {
   opacity: 1;
 }
@@ -2217,11 +2226,6 @@ defineExpose({ focusGroupSearch, focusModSearch, toggleSearchBars, toggleGroupSe
 
 .list-mod-card.disabled.selected .list-mod-icon {
   box-shadow: 0 0 0 3px #ef4444, 0 8px 24px rgba(239, 68, 68, 0.3);
-}
-
-/* 禁用且选中状态：紫色描边优先 */
-.list-mod-card.disabled.mod-selected .list-mod-icon {
-  box-shadow: 0 0 0 3px #a855f7, 0 0 12px rgba(168, 85, 247, 0.4);
 }
 
 .list-mod-card.disabled {
