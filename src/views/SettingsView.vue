@@ -18,12 +18,14 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
 import { Folder, Delete } from '@element-plus/icons-vue';
+import appLogo from '@/assets/images/app-icon-128.png?inline';
 import { useSettingsStore } from '../stores/settings';
 import { useGameStore } from '../stores/game';
 import {
   invokeUpdateModData, invokeValidateModsPath, invokeOpenModFolder,
   invokeSelectDirectory, invokeLoadMods,
-  invokeFindIniFiles, invokeProcessIniFiles
+  invokeFindIniFiles, invokeProcessIniFiles,
+  invokeOpenUrl
 } from '../utils/invoke';
 import { TargetGame, HotkeyKeyboard, HotkeyGamepad, LayoutMode, SortGroupMethod, ModsPathStatus } from '../types';
 import {
@@ -670,9 +672,14 @@ async function handleOpenModFolder() {
   }
 }
 
-/** 在新标签页打开 GitHub 仓库链接 */
+/** 在系统默认浏览器中打开 GitHub 仓库链接 */
 function openGitHubLink() {
-  window.open('https://github.com/Aglglg/No-Reload-Mod-Manager', '_blank');
+  invokeOpenUrl('https://github.com/');
+}
+
+/** 在系统默认浏览器中打开 Gitee 仓库链接 */
+function openGiteeLink() {
+  invokeOpenUrl('https://gitee.com/Yezi26/nrmm-tauri');
 }
 
 /**
@@ -1212,7 +1219,7 @@ watch(
         <div class="tab-content-inner">
           <div class="about-section">
             <div class="app-logo">
-              <img src="/tauri.svg" alt="Logo" class="logo-img" />
+              <img :src="appLogo" alt="Logo" class="logo-img" />
             </div>
             <h2 class="app-title">XXMI-NRMM</h2>
             <p class="app-version">{{ appVersion }}</p>
@@ -1223,6 +1230,9 @@ watch(
             <div class="about-links">
               <el-button link type="primary" @click="openGitHubLink">
                 GitHub
+              </el-button>
+              <el-button link type="primary" @click="openGiteeLink">
+                Gitee
               </el-button>
             </div>
             <p class="copyright">

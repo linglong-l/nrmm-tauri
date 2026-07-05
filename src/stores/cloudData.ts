@@ -8,7 +8,7 @@ import { EventNames, eventManager } from '../utils/events';
 /**
  * 云数据 Store
  *
- * 管理从远端（GitHub 仓库）拉取的各类动态数据，包括：
+ * 管理从远端（Gitee 仓库）拉取的各类动态数据，包括：
  * - 支持链接 / 教程链接 / 联系链接及其图标（默认图标先内置，链接后由云端填充）
  * - 各游戏的公告消息（wuwa / genshin / hsr / zzz / endfield）
  * - 各游戏的自动图标数据（用于自动为模组匹配图标）

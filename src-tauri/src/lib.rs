@@ -77,6 +77,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(app_state) // 将 AppState 注入 Tauri 状态管理
         .plugin(tauri_plugin_dialog::init()) // 前端需要对话框（选择目录/文件）
+        .plugin(tauri_plugin_shell::init()) // 前端需要打开外部 URL（Gitee/GitHub 链接）
         .plugin(
             // 全局快捷键插件：所有快捷键事件统一路由到 HotkeyManager::handle_hotkey_event
             tauri_plugin_global_shortcut::Builder::new()
@@ -294,6 +295,7 @@ pub fn run() {
             commands::extract_archive,
             commands::export_mod,
             commands::export_group,
+            commands::open_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

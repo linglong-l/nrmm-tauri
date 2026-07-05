@@ -18,6 +18,7 @@
  */
 import { ref, onMounted, computed } from 'vue';
 import { Minus, Close, Crop } from '@element-plus/icons-vue';
+import appIcon from '@/assets/images/app-icon-32.png';
 
 type Platform = 'windows' | 'macos' | 'linux' | 'unknown';
 
@@ -119,7 +120,7 @@ async function close() {
     </div>
     <!-- 左侧：应用图标与名称（macOS 下在控制按钮右侧） -->
     <div class="title-bar-left" data-tauri-drag-region>
-      <img src="/tauri.svg" class="app-icon" alt="app icon" />
+      <img :src="appIcon" class="app-icon" alt="app icon" />
       <span class="app-title">XXMI-NRMM</span>
     </div>
     <!-- 右侧：窗口控制按钮（Windows/Linux 风格） -->

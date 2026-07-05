@@ -688,3 +688,12 @@ export async function invokeExportMod(mod_path: string, dest_dir: string): Promi
 export async function invokeExportGroup(group_path: string, dest_dir: string): Promise<string> {
   return invoke('export_group', { group_path, dest_dir });
 }
+
+/**
+ * 在系统默认浏览器中打开指定 URL。
+ * 对应后端命令：`open_url`。
+ * @param url 要打开的 URL（必须包含协议，如 `https://`）
+ */
+export async function invokeOpenUrl(url: string): Promise<void> {
+  return invoke('open_url', { url });
+}

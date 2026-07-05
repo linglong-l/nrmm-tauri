@@ -8,11 +8,21 @@
  *      2) i18n：多语言国际化（locales/*）。
  *  - Element Plus 组件和样式通过 unplugin-auto-import + unplugin-vue-components
  *    按需自动导入，无需在此处全量注册。
+ *  - 动态注入 favicon：构建时 appIcon 会被 Vite 内联为 base64 data URL，
+ *    确保构建后不依赖外部图标文件。
  */
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import App from './App.vue';
 import { i18n } from './locales';
+import appIcon from '@/assets/images/app-icon-32.png';
+
+// 动态注入 favicon（构建时 appIcon 会被 Vite 内联为 base64 data URL）
+const faviconLink = document.createElement('link');
+faviconLink.rel = 'icon';
+faviconLink.type = 'image/png';
+faviconLink.href = appIcon;
+document.head.appendChild(faviconLink);
 
 // 创建 Vue 应用实例与 Pinia 实例
 const app = createApp(App);

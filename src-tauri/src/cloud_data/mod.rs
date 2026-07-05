@@ -48,6 +48,8 @@ pub struct CloudData {
 pub struct CloudLinks {
     /// GitHub 仓库地址。
     pub github: String,
+    /// Gitee 仓库地址。
+    pub gitee: String,
     /// Discord 社区邀请链接。
     pub discord: String,
     /// Ko-fi 赞助页面链接。
@@ -223,6 +225,7 @@ impl CloudData {
         Self {
             links: CloudLinks {
                 github: "https://github.com/".to_string(),
+                gitee: "https://gitee.com/".to_string(),
                 discord: "https://discord.gg/".to_string(),
                 kofi: "https://ko-fi.com/".to_string(),
             },

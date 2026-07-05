@@ -1734,3 +1734,18 @@ pub async fn export_group(state: State<'_, AppState>, group_path: String, dest_d
     .await
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
+
+/// 在系统默认浏览器中打开指定 URL。
+///
+/// 参数：
+/// - `url`: 要打开的 URL 字符串（必须包含协议，如 `https://`）。
+///
+/// 返回：成功返回 `Ok(())`，失败返回 `Err(String)` 错误信息。
+#[tauri::command]
+pub async fn open_url(url: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        open::that(&url).map_err(|e| format!("Failed to open URL: {}", e))
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
