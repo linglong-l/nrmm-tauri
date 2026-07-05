@@ -416,6 +416,9 @@ impl Settings {
     }
 
     /// 将当前设置重置为默认值（原地替换）。
+    ///
+    /// 当前未暴露到 UI，保留用于后续「恢复默认设置」功能。
+    #[allow(dead_code)]
     pub fn reset_to_default(&mut self) {
         *self = Self::default();
     }
@@ -430,6 +433,9 @@ impl Settings {
     ///
     /// # 返回值
     /// 返回加载后的 [`Settings`]；若线程 join 失败则返回默认值。
+    ///
+    /// 当前启动流程使用同步 [`Settings::load`]，本函数保留用于后续异步初始化场景。
+    #[allow(dead_code)]
     pub async fn load_async(app_data_dir: &Path) -> Self {
         let app_data_dir = app_data_dir.to_path_buf();
         tokio::task::spawn_blocking(move || Self::load(&app_data_dir))

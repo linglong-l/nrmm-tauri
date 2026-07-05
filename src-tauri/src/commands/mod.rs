@@ -836,7 +836,17 @@ pub async fn register_hotkey(
     key: String,
 ) -> Result<(), String> {
     let _ = state;
-    crate::hotkey::HotkeyManager::register_hotkey(&app, &key).map_err(|e| e.to_string())
+    log::debug!("[register_hotkey] Received request: key={}", key);
+    match crate::hotkey::HotkeyManager::register_hotkey(&app, &key) {
+        Ok(()) => {
+            log::debug!("[register_hotkey] Succeeded: key={}", key);
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("[register_hotkey] Failed: key={}, error={}", key, e);
+            Err(e.to_string())
+        }
+    }
 }
 
 /// 注销指定快捷键。
@@ -852,7 +862,17 @@ pub async fn unregister_hotkey(
     key: String,
 ) -> Result<(), String> {
     let _ = state;
-    crate::hotkey::HotkeyManager::unregister_hotkey(&app, &key).map_err(|e| e.to_string())
+    log::debug!("[unregister_hotkey] Received request: key={}", key);
+    match crate::hotkey::HotkeyManager::unregister_hotkey(&app, &key) {
+        Ok(()) => {
+            log::debug!("[unregister_hotkey] Succeeded: key={}", key);
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("[unregister_hotkey] Failed: key={}, error={}", key, e);
+            Err(e.to_string())
+        }
+    }
 }
 
 /// 注销所有已注册的快捷键。
@@ -866,7 +886,17 @@ pub async fn unregister_all_hotkeys(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let _ = state;
-    crate::hotkey::HotkeyManager::unregister_all(&app).map_err(|e| e.to_string())
+    log::debug!("[unregister_all_hotkeys] Received request");
+    match crate::hotkey::HotkeyManager::unregister_all(&app) {
+        Ok(()) => {
+            log::debug!("[unregister_all_hotkeys] Succeeded");
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("[unregister_all_hotkeys] Failed: error={}", e);
+            Err(e.to_string())
+        }
+    }
 }
 
 /// 查询指定快捷键是否已注册。
@@ -922,7 +952,17 @@ pub async fn toggle_window(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     let _ = state;
-    crate::window_manager::WindowManager::toggle_window(&app).map_err(|e| e.to_string())
+    log::debug!("[toggle_window] Received request");
+    match crate::window_manager::WindowManager::toggle_window(&app) {
+        Ok(shown) => {
+            log::debug!("[toggle_window] Succeeded, visible: {}", shown);
+            Ok(shown)
+        }
+        Err(e) => {
+            log::warn!("[toggle_window] Failed: {}", e);
+            Err(e.to_string())
+        }
+    }
 }
 
 /// 设置窗口是否置顶。
@@ -1154,20 +1194,46 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<crate::settings:
     Ok(state.settings.read().clone())
 }
 
+/// 检测当前应用是否以管理员权限运行。
+///
+/// 前端可调用此命令在设置页或启动时展示权限提示。
+///
+/// 返回：当前进程是否拥有管理员/Root 权限。
+#[tauri::command]
+pub fn is_admin() -> bool {
+    crate::admin_check::is_admin()
+}
+
 /// 保存设置到内存并持久化到文件。
 ///
+/// 若设置中的热键配置（`hotkey_keyboard` / `hotkey_gamepad`）发生变化，
+/// 后端会自动调用 `HotkeyManager::register_from_settings` 重新注册全局热键，
+/// 使系统级快捷键与设置保持一致。
+///
 /// 参数：
-/// - `app`: Tauri 应用句柄。
+/// - `app`: Tauri 应用句柄，用于热键重注册。
 /// - `state`: 应用全局状态。
 /// - `settings`: 新的设置内容。
 #[tauri::command]
 pub async fn save_settings(
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     settings: crate::settings::Settings,
 ) -> Result<(), String> {
     let app_data_dir =
         crate::get_app_data_dir().ok_or_else(|| "Failed to get app data dir".to_string())?;
+
+    // 在覆盖前记录旧热键配置，用于判断是否需要重新注册全局热键
+    let old_hotkey_keyboard = {
+        let current = state.settings.read();
+        current.hotkey_keyboard.clone()
+    };
+    let old_hotkey_gamepad = {
+        let current = state.settings.read();
+        current.hotkey_gamepad.clone()
+    };
+    let hotkeys_changed = old_hotkey_keyboard != settings.hotkey_keyboard
+        || old_hotkey_gamepad != settings.hotkey_gamepad;
 
     {
         let mut current = state.settings.write();
@@ -1185,6 +1251,22 @@ pub async fn save_settings(
             log::error!("Failed to save settings: {}", e);
         }
     });
+
+    // 若热键配置发生变化，由后端自动重新注册，确保系统级快捷键与设置保持一致
+    if hotkeys_changed {
+        log::debug!(
+            "[save_settings] Hotkey config changed (keyboard: {} -> {}, gamepad: {} -> {}), re-registering from backend",
+            old_hotkey_keyboard,
+            settings.hotkey_keyboard,
+            old_hotkey_gamepad,
+            settings.hotkey_gamepad
+        );
+        if let Err(e) = crate::hotkey::HotkeyManager::register_from_settings(&app, &settings) {
+            log::error!("[save_settings] Failed to re-register hotkeys after settings change: {}", e);
+        } else {
+            log::debug!("[save_settings] Hotkeys re-registered successfully");
+        }
+    }
 
     Ok(())
 }
@@ -1328,6 +1410,11 @@ pub async fn check_ini_syntax(
 #[tauri::command]
 pub async fn open_path(state: State<'_, AppState>, path: String) -> Result<(), String> {
     let _ = state;
+
+    if path.trim().is_empty() {
+        return Err("Path is empty, cannot open".to_string());
+    }
+
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {

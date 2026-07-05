@@ -124,11 +124,13 @@ export const useGameStore = defineStore('game', () => {
    * @param groupPath 分组路径
    */
   function toggleExpandPath(groupPath: string) {
-    if (expandedPaths.value.has(groupPath)) {
-      expandedPaths.value.delete(groupPath);
+    const next = new Set(expandedPaths.value);
+    if (next.has(groupPath)) {
+      next.delete(groupPath);
     } else {
-      expandedPaths.value.add(groupPath);
+      next.add(groupPath);
     }
+    expandedPaths.value = next;
   }
 
   /**
@@ -168,9 +170,12 @@ export const useGameStore = defineStore('game', () => {
    */
   function expandParentPaths(groupPath: string) {
     const ancestors = findAncestorPaths(groupPath);
+    if (ancestors.length === 0) return;
+    const next = new Set(expandedPaths.value);
     for (const ancestorPath of ancestors) {
-      expandedPaths.value.add(ancestorPath);
+      next.add(ancestorPath);
     }
+    expandedPaths.value = next;
   }
 
   /**

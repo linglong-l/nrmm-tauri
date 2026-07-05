@@ -2585,6 +2585,7 @@ dependencies = [
  "fern",
  "image",
  "ini",
+ "libc",
  "log",
  "notify",
  "parking_lot",

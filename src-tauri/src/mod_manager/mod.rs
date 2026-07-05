@@ -24,7 +24,6 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 use sevenz_rust::decompress_file;
 
-use crate::commands::get_icon_path;
 use crate::ini_handler::error_detection::ErroredLinesReport;
 use crate::ini_handler::{
     get_section_type, is_comment_line, is_section_header, parse_section_name, SectionType,
@@ -39,6 +38,9 @@ const DISABLED_PREFIX: &str = "DISABLED";
 /// 收藏标记文件名。在模组/分组目录下存在该文件即表示已被收藏，
 /// 文件内容为收藏时的时间戳字符串（用于排序）。
 const FAVORITE_FILE: &str = ".favorite";
+
+/// NRMM 使用的收藏标记文件名。NRMM 以该文件的存在表示收藏，并以文件修改时间作为收藏时间。
+const NRMM_FAVORITE_FILE: &str = "fav";
 
 /// 支持的图标文件扩展名列表。扫描图标时会按此列表的顺序优先匹配 `icon.<ext>`，
 /// 找不到时再回退到目录中任意一个匹配扩展名的文件。
@@ -314,6 +316,15 @@ impl ModManager {
         Self
     }
 
+    /// 判断目录名是否以 DISABLED 前缀开头（不区分大小写）。
+    ///
+    /// NRMM 在 Linux/macOS 上可能使用小写 "disabled" 前缀，
+    /// 因此判断逻辑需放宽，但输出仍保持大写 `DISABLED_` 以保持一致。
+    fn is_disabled_name(name: &str) -> bool {
+        name.get(..DISABLED_PREFIX.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(DISABLED_PREFIX))
+    }
+
     /// 校验传入的 Mods 路径是否为合法的 3DMigoto Mods 目录。
     ///
     /// 校验顺序：
@@ -496,8 +507,8 @@ impl ModManager {
                 .and_then(|n| n.to_str())
                 .unwrap_or("mod")
                 .to_string();
-            let display_name = if folder_name.starts_with(DISABLED_PREFIX) {
-                folder_name.trim_start_matches(DISABLED_PREFIX).to_string()
+            let display_name = if Self::is_disabled_name(&folder_name) {
+                folder_name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string()
             } else {
                 folder_name.clone()
             };
@@ -596,32 +607,51 @@ impl ModManager {
 
     /// 判断指定路径是否已收藏，并返回收藏时间戳。
     ///
-    /// 读取路径下的 `.favorite` 文件：
-    /// - 文件存在且内容非空：返回 `Some(内容)`。
-    /// - 文件存在但内容为空或读取失败：返回 `Some(当前UTC时间)`（兼容旧数据）。
-    /// - 文件不存在：返回 `None`（未收藏）。
+    /// 读取顺序：
+    /// 1. 优先读取 XXMI-NRMM 原生 `.favorite` 文件：
+    ///    - 文件存在且内容非空：返回 `Some(内容)`。
+    ///    - 文件存在但内容为空或读取失败：返回 `Some(当前UTC时间)`（兼容旧数据）。
+    /// 2. 若 `.favorite` 不存在，回退读取 NRMM 的 `fav` 文件：
+    ///    - 文件存在：以文件修改时间作为收藏时间，返回 `Some(UTC时间)`。
+    /// 3. 两个文件都不存在：返回 `None`（未收藏）。
     ///
     /// 参数：
     /// - `path`: 模组或分组目录路径。
     pub fn is_favorite(path: &str) -> Result<Option<String>> {
         let path = Path::new(path);
+
+        // 优先读取 XXMI-NRMM 原生 .favorite 文件
         let fav_path = path.join(FAVORITE_FILE);
         if fav_path.exists() {
             match fs::read_to_string(&fav_path) {
                 Ok(content) => {
                     let trimmed = content.trim();
                     if !trimmed.is_empty() {
-                        Ok(Some(trimmed.to_string()))
-                    } else {
-                        // 旧版数据可能写入空内容，回退到当前时间
-                        Ok(Some(Self::current_datetime_string()))
+                        return Ok(Some(trimmed.to_string()));
                     }
+                    // 旧版数据可能写入空内容，回退到当前时间
+                    return Ok(Some(Self::current_datetime_string()));
                 }
-                Err(_) => Ok(Some(Self::current_datetime_string())),
+                Err(_) => return Ok(Some(Self::current_datetime_string())),
             }
-        } else {
-            Ok(None)
         }
+
+        // 兼容 NRMM 的 fav 文件：以文件修改时间作为收藏时间
+        let nrmm_fav_path = path.join(NRMM_FAVORITE_FILE);
+        if nrmm_fav_path.exists() {
+            let metadata = fs::metadata(&nrmm_fav_path)
+                .with_context(|| format!("Failed to read fav file metadata: {:?}", nrmm_fav_path))?;
+            let mtime = metadata
+                .modified()
+                .with_context(|| format!("Failed to get fav file mtime: {:?}", nrmm_fav_path))?;
+            let datetime = OffsetDateTime::from(mtime);
+            let formatted = datetime
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_else(|_| format!("{}", datetime));
+            return Ok(Some(formatted));
+        }
+
+        Ok(None)
     }
 
     /// 切换路径的收藏状态（收藏 ↔ 取消收藏）。
@@ -772,10 +802,10 @@ impl ModManager {
             .unwrap_or("")
             .to_string();
 
-        let is_disabled = dir_name.starts_with(DISABLED_PREFIX);
+        let is_disabled = Self::is_disabled_name(&dir_name);
         // 计算新目录名：禁用 → 启用（移除前缀），启用 → 禁用（添加前缀）
         let new_name = if is_disabled {
-            dir_name.trim_start_matches(DISABLED_PREFIX).to_string()
+            dir_name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string()
         } else {
             format!("{}{}", DISABLED_PREFIX, dir_name)
         };
@@ -846,7 +876,7 @@ impl ModManager {
             .unwrap_or("")
             .to_string();
 
-        let is_disabled = dir_name.starts_with(DISABLED_PREFIX);
+        let is_disabled = Self::is_disabled_name(&dir_name);
 
         if is_disabled {
             // 禁用 -> 启用：先禁用同目录下所有其他启用的模组，再启用目标
@@ -867,7 +897,7 @@ impl ModManager {
                     // 跳过 # 子目录、隐藏目录、已经禁用的目录
                     if entry_name.starts_with('#')
                         || entry_name.starts_with('.')
-                        || entry_name.starts_with(DISABLED_PREFIX)
+                        || Self::is_disabled_name(entry_name)
                     {
                         continue;
                     }
@@ -885,7 +915,7 @@ impl ModManager {
             }
 
             // 第二步：启用目标模组（移除 DISABLED 前缀）
-            let new_name = dir_name.trim_start_matches(DISABLED_PREFIX).to_string();
+            let new_name = dir_name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string();
             let new_path = parent.join(&new_name);
             if new_path.exists() {
                 anyhow::bail!("Destination path already exists: {:?}", new_path);
@@ -1013,6 +1043,9 @@ impl ModManager {
     /// - `base_path`: 起始目录路径（应为 `#` 开头目录）。
     ///
     /// 返回：所有 `#` 开头子目录的路径列表（包含 `base_path` 自身）。
+    ///
+    /// 当前未使用，保留作为 BFS 扫描的备用实现。
+    #[allow(dead_code)]
     fn scan_recursive_with_queue(base_path: &Path) -> Vec<PathBuf> {
         let mut result = Vec::new();
         let mut queue = std::collections::VecDeque::new();
@@ -1080,6 +1113,8 @@ impl ModManager {
     /// 返回：构建完成的 ModGroupData（树形结构）。
     fn scan_tree_node(base_path: &Path) -> Option<ModGroupData> {
         struct NodeInfo {
+            /// 当前节点路径（保留用于调试，当前未读取）。
+            #[allow(dead_code)]
             path: PathBuf,
             child_paths: Vec<PathBuf>,
             mod_paths: Vec<PathBuf>,
@@ -1114,7 +1149,7 @@ impl ModManager {
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
-            let is_disabled = dir_name.starts_with(DISABLED_PREFIX);
+            let is_disabled = Self::is_disabled_name(&dir_name);
 
             let mut mod_paths: Vec<PathBuf> = Vec::new();
             let mut child_paths: Vec<PathBuf> = Vec::new();
@@ -1153,8 +1188,8 @@ impl ModManager {
             mod_paths.sort_by(|a, b| {
                 let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let b_name = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                let a_disabled = a_name.starts_with(DISABLED_PREFIX);
-                let b_disabled = b_name.starts_with(DISABLED_PREFIX);
+                let a_disabled = Self::is_disabled_name(a_name);
+                let b_disabled = Self::is_disabled_name(b_name);
                 match (a_disabled, b_disabled) {
                     (true, false) => std::cmp::Ordering::Greater,
                     (false, true) => std::cmp::Ordering::Less,
@@ -1246,7 +1281,7 @@ impl ModManager {
                     let mod_icon = Self::get_icon_path(mod_path);
                     let mod_favorite = Self::is_favorite(&mod_path_str).unwrap_or(None);
                     let mod_dir_name = mod_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    let mod_is_disabled = mod_dir_name.starts_with(DISABLED_PREFIX);
+                    let mod_is_disabled = Self::is_disabled_name(mod_dir_name);
 
                     // real_index 来自目录列表原始顺序（与 NRMM 一致），从 mod_original_indices 查表获取
                     // 注意：此处遍历的是已排序的 mod_paths（用于显示顺序），但 real_index 值来自排序前的原始位置
@@ -1361,6 +1396,9 @@ impl ModManager {
     /// - `path`: 待判定的目录路径。
     ///
     /// 返回：是模组目录返回 `true`，否则返回 `false`。
+    ///
+    /// 当前未使用，保留作为放宽判定策略的备用实现。
+    #[allow(dead_code)]
     fn is_mod_directory_relaxed(path: &Path) -> bool {
         if !path.exists() || !path.is_dir() {
             return false;
@@ -1566,12 +1604,12 @@ impl ModManager {
                 continue;
             }
 
-            let is_disabled = dir_name.starts_with(DISABLED_PREFIX);
+            let is_disabled = Self::is_disabled_name(&dir_name);
             let dir_path_str = dir_path.to_string_lossy().to_string();
             let mod_name = Self::get_mod_name(&dir_path_str).unwrap_or_else(|_| {
                 // 读取 modname 失败时回退到目录名（去除禁用前缀）
                 if is_disabled {
-                    dir_name.trim_start_matches(DISABLED_PREFIX).to_string()
+                    dir_name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string()
                 } else {
                     dir_name.clone()
                 }
@@ -1613,8 +1651,8 @@ impl ModManager {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("");
-            let a_disabled = a_name.starts_with(DISABLED_PREFIX);
-            let b_disabled = b_name.starts_with(DISABLED_PREFIX);
+            let a_disabled = Self::is_disabled_name(a_name);
+            let b_disabled = Self::is_disabled_name(b_name);
             match (a_disabled, b_disabled) {
                 // 启用 < 禁用
                 (true, false) => std::cmp::Ordering::Greater,
@@ -1905,7 +1943,7 @@ impl ModManager {
             None => anyhow::bail!("Invalid mod path: no file name"),
         };
 
-        let is_disabled = dir_name.starts_with(DISABLED_PREFIX);
+        let is_disabled = Self::is_disabled_name(dir_name);
 
         let parent = match path.parent() {
             Some(p) => p,
@@ -3147,7 +3185,11 @@ impl ModManager {
             .and_then(|n| n.to_str())
             .unwrap_or("mod");
 
-        let clean_name = mod_name.trim_start_matches(DISABLED_PREFIX);
+        let clean_name = if Self::is_disabled_name(mod_name) {
+            &mod_name[DISABLED_PREFIX.len()..].trim_start_matches('_')
+        } else {
+            mod_name
+        };
         let dest_file = dest_dir.join(format!("{}.7z", clean_name));
 
         // 创建临时目录用于存放还原后的模组副本
@@ -3436,8 +3478,8 @@ mod tests {
         // Verify test setup: raw order must differ from sort order
         let mut sorted_order = raw_order.clone();
         sorted_order.sort_by(|a, b| {
-            let a_disabled = a.starts_with(DISABLED_PREFIX);
-            let b_disabled = b.starts_with(DISABLED_PREFIX);
+            let a_disabled = ModManager::is_disabled_name(a);
+            let b_disabled = ModManager::is_disabled_name(b);
             match (a_disabled, b_disabled) {
                 (true, false) => std::cmp::Ordering::Greater,
                 (false, true) => std::cmp::Ordering::Less,
@@ -3520,6 +3562,84 @@ mod tests {
         assert!(!mods[2].is_disabled);
         assert!(mods[3].mod_path.ends_with("DISABLED_bmod"));
         assert!(mods[3].is_disabled);
+    }
+
+    #[test]
+    fn test_is_disabled_name_case_insensitive() {
+        assert!(ModManager::is_disabled_name("DISABLED_mod"));
+        assert!(ModManager::is_disabled_name("disabled_mod"));
+        assert!(ModManager::is_disabled_name("Disabled_mod"));
+        assert!(ModManager::is_disabled_name("DISABLEDmod"));
+        assert!(!ModManager::is_disabled_name("mod"));
+        assert!(!ModManager::is_disabled_name("DIS"));
+        assert!(!ModManager::is_disabled_name(""));
+    }
+
+    #[test]
+    fn test_is_disabled_name_does_not_panic_on_multibyte() {
+        // 中文字符为 multi-byte UTF-8，直接按字节切片会导致 panic；
+        // 此处验证使用 char boundary 安全的 get() 后不会崩溃。
+        assert!(!ModManager::is_disabled_name("和"));
+        assert!(!ModManager::is_disabled_name("中文模组"));
+        assert!(!ModManager::is_disabled_name("DISABLE和"));
+        assert!(ModManager::is_disabled_name("DISABLED_中文"));
+    }
+
+    #[test]
+    fn test_lowercase_disabled_prefix_recognized() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let group_path = dir.path();
+
+        fs::create_dir_all(group_path.join("amod")).unwrap();
+        fs::create_dir_all(group_path.join("disabled_bmod")).unwrap();
+
+        let mods = ModManager::get_mods_on_group(group_path.to_str().unwrap()).unwrap();
+
+        assert_eq!(mods[0].mod_path, "None");
+        assert!(mods[1].mod_path.ends_with("amod"));
+        assert!(!mods[1].is_disabled);
+        assert!(mods[2].mod_path.ends_with("disabled_bmod"));
+        assert!(mods[2].is_disabled);
+    }
+
+    #[test]
+    fn test_is_favorite_reads_nrmm_fav_file() {
+        use std::fs;
+        use tempfile::tempdir;
+        use time::OffsetDateTime;
+
+        let temp = tempdir().unwrap();
+        let fav_path = temp.path().join("fav");
+        fs::write(&fav_path, "").unwrap();
+        let expected_time = fav_path.metadata().unwrap().modified().unwrap();
+
+        let result = ModManager::is_favorite(temp.path().to_str().unwrap()).unwrap();
+        assert!(result.is_some());
+
+        let parsed = OffsetDateTime::parse(
+            &result.unwrap(),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+        let expected = OffsetDateTime::from(expected_time);
+        // 允许 1 秒内误差
+        assert!((parsed.unix_timestamp() - expected.unix_timestamp()).abs() <= 1);
+    }
+
+    #[test]
+    fn test_is_favorite_prefers_dot_favorite_over_fav() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let temp = tempdir().unwrap();
+        fs::write(temp.path().join(".favorite"), "2024-01-15T10:30:00Z").unwrap();
+        fs::write(temp.path().join("fav"), "").unwrap();
+
+        let result = ModManager::is_favorite(temp.path().to_str().unwrap()).unwrap();
+        assert_eq!(result, Some("2024-01-15T10:30:00Z".to_string()));
     }
 
 }

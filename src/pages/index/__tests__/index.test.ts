@@ -31,15 +31,19 @@ vi.mock('../../../utils/events', () => ({
 }));
 
 /**
- * Mock vue-i18n，避免测试中需要提供完整的 i18n 实例。
+ * Mock vue-i18n，保留真实的 createI18n 导出，仅覆盖 useI18n。
  * t 函数直接返回原始 key 作为翻译结果。
  */
-vi.mock('vue-i18n', () => ({
-  useI18n: () => ({
-    t: (key: string) => key,
-    locale: { value: 'en' },
-  }),
-}));
+vi.mock('vue-i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vue-i18n')>();
+  return {
+    ...actual,
+    useI18n: () => ({
+      t: (key: string) => key,
+      locale: { value: 'en' },
+    }),
+  };
+});
 
 /**
  * Mock 子组件，避免其副作用（如 Tauri invoke、文件监听等）。

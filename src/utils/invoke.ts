@@ -8,7 +8,7 @@ import type {
   ModsPathStatus,
   UpdateModDataResult,
   IniSyntaxError,
-  ModArchiveInfo,
+  IniFileData,
   WindowPosition,
   TrayMenuItem,
   CloudData,
@@ -76,6 +76,26 @@ export async function invokeLoadIni(path: string): Promise<void> {
  */
 export async function invokeSaveIni(path: string): Promise<void> {
   return invoke('save_ini', { path });
+}
+
+/**
+ * 查找指定模组目录下的所有 .ini 文件。
+ * 对应后端命令：`find_ini_files`。
+ * @param path 模组目录绝对路径
+ * @returns INI 文件绝对路径数组
+ */
+export async function invokeFindModIniFiles(path: string): Promise<string[]> {
+  return invoke('find_ini_files', { path });
+}
+
+/**
+ * 加载指定 INI 文件并返回完整数据结构。
+ * 对应后端命令：`load_ini`。
+ * @param path INI 文件绝对路径
+ * @returns INI 文件数据结构
+ */
+export async function invokeLoadIniData(path: string): Promise<IniFileData> {
+  return invoke('load_ini', { path });
 }
 
 /**
@@ -487,58 +507,6 @@ export async function invokeSetTrayMenu(items: TrayMenuItem[]): Promise<void> {
  */
 export async function invokeSetTrayTooltip(tooltip: string): Promise<void> {
   return invoke('set_tray_tooltip', { tooltip });
-}
-
-/**
- * 获取指定压缩包的归档信息（不进行解压）。
- * 对应后端命令：`get_archive_info`。
- * @param archivePath 压缩包绝对路径
- * @returns 压缩包元数据
- */
-export async function invokeGetArchiveInfo(archivePath: string): Promise<ModArchiveInfo> {
-  return invoke('get_archive_info', { archivePath });
-}
-
-/**
- * 将压缩包解压到指定目录。
- * 对应后端命令：`extract_mod_archive`。
- * @param archivePath 压缩包绝对路径
- * @param targetPath 目标目录绝对路径
- * @returns 是否解压成功
- */
-export async function invokeExtractModArchive(archivePath: string, targetPath: string): Promise<boolean> {
-  return invoke('extract_mod_archive', { archivePath, targetPath });
-}
-
-/**
- * 从压缩包安装 Mod 到指定游戏的 Mods 目录。
- * 对应后端命令：`install_mod_from_archive`。
- * @param archivePath 压缩包绝对路径
- * @param game 目标游戏
- * @returns 是否安装成功
- */
-export async function invokeInstallModFromArchive(archivePath: string, game: TargetGame): Promise<boolean> {
-  return invoke('install_mod_from_archive', { archivePath, game });
-}
-
-/**
- * 从备份恢复指定 Mod。
- * 对应后端命令：`restore_mod`。
- * @param modPath Mod 绝对路径
- * @returns 是否恢复成功
- */
-export async function invokeRestoreMod(modPath: string): Promise<boolean> {
-  return invoke('restore_mod', { modPath });
-}
-
-/**
- * 备份指定 Mod。
- * 对应后端命令：`backup_mod`。
- * @param modPath Mod 绝对路径
- * @returns 备份文件路径，失败时为 null
- */
-export async function invokeBackupMod(modPath: string): Promise<string | null> {
-  return invoke('backup_mod', { modPath });
 }
 
 /**

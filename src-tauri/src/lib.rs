@@ -10,6 +10,7 @@
 //! Tauri Builder 装配插件 → setup 回调加载设置/窗口/热键/托盘 → 注册命令并启动事件循环。
 
 // 子模块声明：每个模块对应一类业务能力
+mod admin_check; // 管理员权限检测
 mod cloud_data; // 云端数据同步
 mod commands;
 mod file_watcher; // 文件系统监听（Mods 目录变更通知）
@@ -24,7 +25,10 @@ mod state; // 全局应用状态容器 AppState
 mod task_queue; // 后台任务队列
 mod tray; // 系统托盘菜单与图标事件
 mod utils; // 通用工具集（日志采样器等）
-mod window_manager; // 主窗口的显示/隐藏/尺寸/置顶等管理 // 暴露给前端的 Tauri 命令
+mod window_manager; // 主窗口的显示/隐藏/尺寸/置顶等管理
+mod image_converter; // PNG 转 ICO 图像格式转换
+
+// 暴露给前端的 Tauri 命令
 
 use fern::Dispatch;
 use state::AppState;
@@ -180,11 +184,10 @@ pub fn run() {
                             }
                         }
                         // 窗口移动：防抖 500ms 后保存窗口状态
-                        // 使用 tauri::async_runtime::spawn + tokio::time::sleep，
-                        // 避免每次事件都创建 OS 线程导致线程泄漏
+                        // 使用 std::thread::spawn + sleep，避免在窗口事件回调中引入 Tokio 运行时
                         tauri::WindowEvent::Moved(_) => {
-                            tauri::async_runtime::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
                                 if let Err(e) =
                                     crate::window_manager::WindowManager::save_window_state(
                                         &app, &settings,
@@ -195,11 +198,10 @@ pub fn run() {
                             });
                         }
                         // 窗口尺寸变化：防抖 500ms 后保存窗口状态
-                        // 使用 tauri::async_runtime::spawn + tokio::time::sleep，
-                        // 避免每次事件都创建 OS 线程导致线程泄漏
+                        // 使用 std::thread::spawn + sleep，避免在窗口事件回调中引入 Tokio 运行时
                         tauri::WindowEvent::Resized(_) => {
-                            tauri::async_runtime::spawn(async move {
-                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(500));
                                 if let Err(e) =
                                     crate::window_manager::WindowManager::save_window_state(
                                         &app, &settings,
@@ -272,6 +274,7 @@ pub fn run() {
             commands::get_foreground_game,
             commands::get_settings,
             commands::save_settings,
+            commands::is_admin,
             commands::get_cloud_data,
             commands::fetch_cloud_data,
             commands::sync_cloud_data,
@@ -347,6 +350,15 @@ fn init_logging() {
         let app_log_dir = log_dir.join("xxmi-nrmm").join("logs");
         // 确保日志根目录存在
         if std::fs::create_dir_all(&app_log_dir).is_ok() {
+            // 启动时清理超过保留期的旧日志，防止磁盘无限增长
+            // 注意：init_logging 在 tokio 运行时启动前调用，使用同步 IO 安全
+            let removed_count = init_xx::logger::cleanup_old_logs(&app_log_dir, init_xx::logger::LOG_RETENTION);
+            let (log_count, log_bytes) = init_xx::logger::get_log_dir_stats(&app_log_dir);
+            log::info!(
+                "Log directory: {} file(s), {} byte(s); cleaned up {} old file(s)",
+                log_count, log_bytes, removed_count
+            );
+
             // 按日期生成日志文件路径：logs/2026/06/30.log
             let now = time::OffsetDateTime::now_local()
                 .unwrap_or_else(|_| time::OffsetDateTime::now_utc());

@@ -365,5 +365,13 @@
     "hotkeyHintWindow": "Window Toggle: Global hotkey, Alt+letter to toggle window visibility",
     "hotkeyHintGroupSearch": "Group Search: In-app hotkey, Alt+letter to focus group search box",
     "hotkeyHintModSearch": "Mod Search: In-app hotkey, Alt+letter to focus mod search box"
+  },
+  "keybinds": {
+    "emptySelectMod": "Please select a mod in the Mods tab to view keybinds.",
+    "noKeybinds": "No keybinds found for the selected mod.",
+    "keys": "Keys",
+    "back": "Back",
+    "condition": "Condition",
+    "type": "Type"
   }
 }

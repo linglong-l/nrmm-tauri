@@ -365,5 +365,13 @@
     "hotkeyHintWindow": "視窗切換：全域快捷鍵，Alt+字母切換視窗顯隱",
     "hotkeyHintGroupSearch": "分組搜尋：視窗內快捷鍵，Alt+字母聚焦分組搜尋框",
     "hotkeyHintModSearch": "模組搜尋：視窗內快捷鍵，Alt+字母聚焦模組搜尋框"
+  },
+  "keybinds": {
+    "emptySelectMod": "請在「模組」標籤頁選擇一個模組以查看快捷鍵。",
+    "noKeybinds": "所選模組沒有快捷鍵配置。",
+    "keys": "按鍵",
+    "back": "返回鍵",
+    "condition": "條件",
+    "type": "類型"
   }
 }

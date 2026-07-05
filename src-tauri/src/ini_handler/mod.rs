@@ -50,6 +50,8 @@ pub struct IniSection {
     pub lines: Vec<IniLine>,
     /// 该段头在原始文件中的行号（从 0 开始）。
     pub line_index: usize,
+    /// 该段内所有原始行（包括注释、空行、非键值对行），用于写回时格式无损。
+    pub raw_lines: Vec<String>,
 }
 
 /// 完整的 INI 文件结构。
@@ -89,6 +91,31 @@ pub enum SectionType {
     Resource,
 }
 
+/// Key 段快捷键绑定信息。
+///
+/// 从 INI 文件中 `[Key.*]` 类型的段提取出的结构化快捷键信息，
+/// 包含按键列表、回退键、条件和类型等字段。
+///
+/// 当前由前端直接解析展示，后端提取函数保留以备后续复用。
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct IniKeybind {
+    /// 段全名（如 "Key.Toggle"）。
+    pub section_name: String,
+    /// 命名空间（从段名解析，如 "Toggle"）。
+    pub namespace: String,
+    /// 所有 `key =` 行的值列表（支持多个 key 绑定）。
+    pub keys: Vec<String>,
+    /// `back =` 字段值（可选）。
+    pub back: Option<String>,
+    /// `condition =` 字段值（可选）。
+    pub condition: Option<String>,
+    /// `type =` 字段值（可选，如 "keypress", "sequence"）。
+    pub type_: Option<String>,
+    /// 段起始行号（从 0 开始）。
+    pub line_index: usize,
+}
+
 /// 流程控制关键字类型枚举（用于错误检测中的 if/elif/else/endif 匹配）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlowControlType {
@@ -108,8 +135,14 @@ pub fn section_name_to_lower(name: &str) -> String {
 }
 
 /// 判断一行是否为注释行（以 `;` 或 `//` 开头，忽略前导空白）。
+///
+/// 注意：`;-;` 前缀是 NRMM 的"解除注释"标记，需要交给后续解析流程处理，
+/// 因此不算作普通注释。
 pub fn is_comment_line(line: &str) -> bool {
     let trimmed = line.trim_start();
+    if trimmed.starts_with(";-;") {
+        return false;
+    }
     trimmed.starts_with(';') || trimmed.starts_with("//")
 }
 
@@ -154,6 +187,18 @@ pub fn parse_key_value(line: &str) -> Option<(String, String)> {
     }
 }
 
+/// 若行以 NRMM 的 `;-;` 解除注释标记开头，则去掉该标记并返回剩余内容。
+///
+/// 注意返回的是原始行切片，调用方需自行决定是用于解析还是保留原始文本。
+fn strip_uncomment_prefix(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with(";-;") {
+        trimmed.strip_prefix(";-;").unwrap_or(trimmed).trim_start()
+    } else {
+        trimmed
+    }
+}
+
 /// 从段名中检测命名空间。
 ///
 /// 对于带命名空间的段名（如 `TextureOverride.MyMod`），
@@ -167,9 +212,9 @@ pub fn detect_namespace(section_name: &str) -> Option<String> {
     let lower_name = section_name_to_lower(section_name);
     let prefixes = [
         "textureoverride",
-        "commandlist",
         "commandlistpost",
         "commandlistpre",
+        "commandlist",
         "shaderoverride",
         "resource",
         "key",
@@ -179,11 +224,14 @@ pub fn detect_namespace(section_name: &str) -> Option<String> {
         "builtincustomshader",
     ];
 
-    for prefix in &prefixes {
-        if let Some(rest) = lower_name.strip_prefix(prefix) {
-            if let Some(dot_pos) = rest.find('.') {
-                // 注意：使用原始（未转小写）的 section_name 截取，保留原始大小写
-                let namespace = &section_name[prefix.len()..prefix.len() + dot_pos];
+    // 同时支持 `.` 和 `\` 作为命名空间分隔符
+    let separator_pos = lower_name.find('.').or_else(|| lower_name.find('\\'));
+
+    if let Some(pos) = separator_pos {
+        let prefix_part = &lower_name[..pos];
+        for prefix in &prefixes {
+            if prefix_part == *prefix {
+                let namespace = &section_name[pos + 1..];
                 return Some(namespace.to_string());
             }
         }
@@ -225,12 +273,15 @@ pub fn get_namespaced_section_name(section: &str, namespace: &str) -> String {
 
 /// 根据段名识别段类型。
 ///
-/// 先取段名中 `.` 之前的部分（去除命名空间），再根据前缀匹配类型。
-/// 例如 `TextureOverride.MyMod` → `TextureOverride`，`CommandListPost.X` → `CommandListPost`。
+/// 先取段名中 `.` 或 `\` 之前的部分（去除命名空间），再根据前缀匹配类型。
+/// 例如 `TextureOverride.MyMod` → `TextureOverride`，`CommandListPost.X` → `CommandListPost`，
+/// `TextureOverride\MyMod` → `TextureOverride`。
 pub fn get_section_type(section_name: &str) -> SectionType {
     let lower = section_name_to_lower(section_name);
     let name = if let Some(dot_pos) = lower.find('.') {
         &lower[..dot_pos]
+    } else if let Some(backslash_pos) = lower.find('\\') {
+        &lower[..backslash_pos]
     } else {
         lower.as_str()
     };
@@ -277,14 +328,15 @@ pub fn parse_content(content: &str) -> Result<IniFile> {
     
     for (line_index, line) in content.lines().enumerate() {
         let raw_line = line.to_string();
-        
-        if is_section_header(line) {
+        let parse_line = strip_uncomment_prefix(line);
+
+        if is_section_header(parse_line) {
             // 遇到新段头时，将上一段存入列表
             if let Some(section) = current_section.take() {
                 sections.push(section);
             }
-            
-            if let Some(section_name) = parse_section_name(line) {
+
+            if let Some(section_name) = parse_section_name(parse_line) {
                 // 解析新段的命名空间
                 current_namespace = detect_namespace(&section_name).unwrap_or_default();
                 current_section = Some(IniSection {
@@ -292,11 +344,14 @@ pub fn parse_content(content: &str) -> Result<IniFile> {
                     namespace: current_namespace.clone(),
                     lines: Vec::new(),
                     line_index,
+                    raw_lines: Vec::new(),
                 });
             }
         } else if let Some(section) = current_section.as_mut() {
+            // 保存所有原始行，确保写回时格式无损
+            section.raw_lines.push(raw_line.clone());
             // 仅当处于某个段内时才解析键值对
-            if let Some((key, value)) = parse_key_value(line) {
+            if let Some((key, value)) = parse_key_value(parse_line) {
                 section.lines.push(IniLine {
                     key,
                     value,
@@ -340,6 +395,75 @@ pub fn extract_namespaces(ini_file: &IniFile) -> Vec<String> {
     namespaces
 }
 
+/// 从单个段提取快捷键信息（仅 Key 类型段）。
+///
+/// 如果该段不是 Key 类型，则返回 `None`。
+/// 对于 Key 段，会收集所有 `key =` 行的值，以及可选的
+/// `back`、`condition`、`type` 等字段。
+///
+/// 参数：
+/// - `section`: 要提取的 INI 段引用。
+///
+/// 返回：提取到的快捷键信息，若段类型不是 Key 则为 `None`。
+#[allow(dead_code)]
+pub fn extract_keybind_from_section(section: &IniSection) -> Option<IniKeybind> {
+    if get_section_type(&section.name) != SectionType::Key {
+        return None;
+    }
+
+    let mut keys = Vec::new();
+    let mut back = None;
+    let mut condition = None;
+    let mut type_ = None;
+
+    for line in &section.lines {
+        let key_lower = line.key.to_lowercase();
+        match key_lower.as_str() {
+            "key" => {
+                keys.push(line.value.clone());
+            }
+            "back" => {
+                back = Some(line.value.clone());
+            }
+            "condition" => {
+                condition = Some(line.value.clone());
+            }
+            "type" => {
+                type_ = Some(line.value.clone());
+            }
+            _ => {}
+        }
+    }
+
+    Some(IniKeybind {
+        section_name: section.name.clone(),
+        namespace: section.namespace.clone(),
+        keys,
+        back,
+        condition,
+        type_,
+        line_index: section.line_index,
+    })
+}
+
+/// 从整个 INI 文件提取所有 Key 段的快捷键。
+///
+/// 遍历文件中所有段，对每个 Key 类型的段调用 `extract_keybind_from_section`，
+/// 并将结果收集为向量返回。
+///
+/// 参数：
+/// - `ini_file`: 要提取的 INI 文件引用。
+///
+/// 返回：所有 Key 段的快捷键信息列表（按段出现顺序）。
+#[allow(dead_code)]
+pub fn extract_keybinds(ini_file: &IniFile) -> Vec<IniKeybind> {
+    ini_file
+        .sections
+        .iter()
+        .filter_map(extract_keybind_from_section)
+        .collect()
+}
+
 /// 从文件路径读取并解析 INI 文件。
 ///
 /// 参数：
@@ -358,8 +482,8 @@ pub fn parse_file(path: &str) -> Result<IniFile> {
 
 /// 将 `IniFile` 结构写回文件。
 ///
-/// 输出格式：每个段头单独一行，其后依次输出所有键值对的原始行文本。
-/// 行尾使用 CRLF（`\r\n`），符合 Windows 与 3DMigoto 的惯例。
+/// 输出格式：每个段头单独一行，其后依次输出段内所有原始行（包括注释、空行等），
+/// 保证格式无损。行尾使用 CRLF（`\r\n`），符合 Windows 与 3DMigoto 的惯例。
 ///
 /// 参数：
 /// - `ini_file`: 要写入的 INI 文件结构。
@@ -369,8 +493,8 @@ pub fn write_ini_file(ini_file: &IniFile, path: &str) -> Result<()> {
     
     for section in &ini_file.sections {
         lines.push(format!("[{}]", section.name));
-        for line in &section.lines {
-            lines.push(line.raw_line.clone());
+        for raw_line in &section.raw_lines {
+            lines.push(raw_line.clone());
         }
     }
     
@@ -421,7 +545,11 @@ pub fn detect_flow_control(line: &str) -> Option<FlowControlType> {
     let trimmed = line.trim().to_lowercase();
     if trimmed.starts_with("if ") || trimmed == "if" {
         Some(FlowControlType::If)
-    } else if trimmed.starts_with("elif ") || trimmed.starts_with("else if ") {
+    } else if trimmed.starts_with("elif ")
+        || trimmed == "elif"
+        || trimmed.starts_with("else if ")
+        || trimmed == "else if"
+    {
         Some(FlowControlType::ElseIf)
     } else if trimmed == "else" {
         Some(FlowControlType::Else)
@@ -462,6 +590,8 @@ pub struct IniSectionData {
     pub lines: Vec<IniLineData>,
     /// 段头行号。
     pub line_index: usize,
+    /// 段内所有原始行（包括注释、空行等），用于写回时格式无损。
+    pub raw_lines: Vec<String>,
 }
 
 /// INI 文件的可序列化数据结构（用于前后端 JSON 传输）。
@@ -498,6 +628,7 @@ impl From<&IniSection> for IniSectionData {
             namespace: section.namespace.clone(),
             lines: section.lines.iter().map(IniLineData::from).collect(),
             line_index: section.line_index,
+            raw_lines: section.raw_lines.clone(),
         }
     }
 }
@@ -534,6 +665,7 @@ impl From<IniFileData> for IniFile {
                         })
                         .collect(),
                     line_index: s.line_index,
+                    raw_lines: s.raw_lines,
                 })
                 .collect(),
             namespaces: data.namespaces,
@@ -781,9 +913,10 @@ x = 1
         let ini_file = parse_content(content).unwrap();
         let namespaces = extract_namespaces(&ini_file);
         
-        assert_eq!(namespaces.len(), 2);
-        assert!(namespaces.iter().any(|n| n == "Mod1"));
-        assert!(namespaces.iter().any(|n| n == "Mod2"));
+        assert_eq!(namespaces.len(), 3);
+        assert!(namespaces.iter().any(|n| n == "Mod1Tex"));
+        assert!(namespaces.iter().any(|n| n == "Mod1Shader"));
+        assert!(namespaces.iter().any(|n| n == "Mod2Tex"));
     }
 
     #[test]
@@ -828,5 +961,338 @@ key = value
         assert_eq!(ini_file.sections[0].name, "EmptySection");
         assert_eq!(ini_file.sections[0].lines.len(), 0);
         assert_eq!(ini_file.sections[1].lines.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_keybind_from_section_basic() {
+        let content = r#"[Key.Toggle]
+key = VK_F1
+back = 1
+condition = $toggle
+type = keypress
+"#;
+        let ini_file = parse_content(content).unwrap();
+        let section = &ini_file.sections[0];
+        let keybind = extract_keybind_from_section(section).unwrap();
+
+        assert_eq!(keybind.section_name, "Key.Toggle");
+        assert_eq!(keybind.namespace, "Toggle");
+        assert_eq!(keybind.keys, vec!["VK_F1"]);
+        assert_eq!(keybind.back, Some("1".to_string()));
+        assert_eq!(keybind.condition, Some("$toggle".to_string()));
+        assert_eq!(keybind.type_, Some("keypress".to_string()));
+        assert_eq!(keybind.line_index, 0);
+    }
+
+    #[test]
+    fn test_extract_keybind_multiple_keys() {
+        let content = r#"[Key.MultiBind]
+key = VK_F1
+key = VK_F2
+key = VK_CONTROL + VK_F3
+"#;
+        let ini_file = parse_content(content).unwrap();
+        let section = &ini_file.sections[0];
+        let keybind = extract_keybind_from_section(section).unwrap();
+
+        assert_eq!(keybind.keys.len(), 3);
+        assert_eq!(keybind.keys[0], "VK_F1");
+        assert_eq!(keybind.keys[1], "VK_F2");
+        assert_eq!(keybind.keys[2], "VK_CONTROL + VK_F3");
+    }
+
+    #[test]
+    fn test_extract_keybind_optional_fields_missing() {
+        let content = r#"[Key.Simple]
+key = VK_SPACE
+"#;
+        let ini_file = parse_content(content).unwrap();
+        let section = &ini_file.sections[0];
+        let keybind = extract_keybind_from_section(section).unwrap();
+
+        assert_eq!(keybind.keys, vec!["VK_SPACE"]);
+        assert_eq!(keybind.back, None);
+        assert_eq!(keybind.condition, None);
+        assert_eq!(keybind.type_, None);
+    }
+
+    #[test]
+    fn test_extract_keybind_non_key_section_returns_none() {
+        let content = r#"[Constants]
+x = 1
+"#;
+        let ini_file = parse_content(content).unwrap();
+        let section = &ini_file.sections[0];
+        let result = extract_keybind_from_section(section);
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_keybinds_multiple_sections() {
+        let content = r#"[Constants]
+x = 1
+
+[Key.Toggle]
+key = VK_F1
+
+[TextureOverride.Test]
+hash = 0x1234
+
+[Key.Next]
+key = VK_F2
+back = 0
+"#;
+        let ini_file = parse_content(content).unwrap();
+        let keybinds = extract_keybinds(&ini_file);
+
+        assert_eq!(keybinds.len(), 2);
+        assert_eq!(keybinds[0].section_name, "Key.Toggle");
+        assert_eq!(keybinds[0].namespace, "Toggle");
+        assert_eq!(keybinds[0].keys, vec!["VK_F1"]);
+        assert_eq!(keybinds[1].section_name, "Key.Next");
+        assert_eq!(keybinds[1].namespace, "Next");
+        assert_eq!(keybinds[1].keys, vec!["VK_F2"]);
+        assert_eq!(keybinds[1].back, Some("0".to_string()));
+    }
+
+    #[test]
+    fn test_extract_keybinds_empty_when_no_key_sections() {
+        let content = r#"[Constants]
+x = 1
+
+[TextureOverride.Test]
+hash = 0x1234
+"#;
+        let ini_file = parse_content(content).unwrap();
+        let keybinds = extract_keybinds(&ini_file);
+
+        assert!(keybinds.is_empty());
+    }
+
+    #[test]
+    fn test_raw_lines_preserves_comments_and_empty_lines() {
+        let content = r#"[Key.Test]
+; this is a comment
+key = VK_F1
+
+// another comment
+back = 1
+
+"#;
+        let ini_file = parse_content(content).unwrap();
+        let section = &ini_file.sections[0];
+
+        assert_eq!(section.raw_lines.len(), 6);
+        assert_eq!(section.raw_lines[0], "; this is a comment");
+        assert_eq!(section.raw_lines[1], "key = VK_F1");
+        assert_eq!(section.raw_lines[2], "");
+        assert_eq!(section.raw_lines[3], "// another comment");
+        assert_eq!(section.raw_lines[4], "back = 1");
+        assert_eq!(section.raw_lines[5], "");
+    }
+
+    #[test]
+    fn test_write_ini_file_round_trip() {
+        let original = r#"; Header comment
+[Constants]
+global persist $var = 100
+
+; Key section with comments
+[Key.Toggle]
+key = VK_F1
+; inline comment
+back = 1
+
+[TextureOverride.TestTex]
+hash = 0x12345678
+run = CommandList.Test
+"#;
+        let ini_file = parse_content(original).unwrap();
+
+        let mut lines = Vec::new();
+        for section in &ini_file.sections {
+            lines.push(format!("[{}]", section.name));
+            for raw_line in &section.raw_lines {
+                lines.push(raw_line.clone());
+            }
+        }
+
+        let reconstructed = lines.join("\n");
+        let expected = r#"[Constants]
+global persist $var = 100
+
+; Key section with comments
+[Key.Toggle]
+key = VK_F1
+; inline comment
+back = 1
+
+[TextureOverride.TestTex]
+hash = 0x12345678
+run = CommandList.Test"#;
+
+        assert_eq!(reconstructed, expected);
+    }
+
+    #[test]
+    fn test_round_trip_full_content() {
+        let original = r#"; Test INI file
+[Constants]
+global persist $myVar = 100
+
+[TextureOverride.TestTex]
+hash = 0x12345678
+run = CommandList.TestCmd
+
+[CommandList.TestCmd]
+if $myVar > 50
+    x = 100
+else
+    x = 0
+endif
+
+[Key.Toggle]
+key = VK_F1
+back = 1
+condition = $toggle
+"#;
+        let ini_file = parse_content(original).unwrap();
+        let ini_file_2 = parse_content(original).unwrap();
+
+        assert_eq!(ini_file.sections.len(), ini_file_2.sections.len());
+        for i in 0..ini_file.sections.len() {
+            assert_eq!(ini_file.sections[i].name, ini_file_2.sections[i].name);
+            assert_eq!(ini_file.sections[i].raw_lines, ini_file_2.sections[i].raw_lines);
+            assert_eq!(ini_file.sections[i].lines.len(), ini_file_2.sections[i].lines.len());
+        }
+    }
+
+    #[test]
+    fn test_keybind_case_insensitive_keys() {
+        let content = r#"[Key.Test]
+Key = VK_F1
+BACK = 1
+Condition = $test
+Type = keypress
+"#;
+        let ini_file = parse_content(content).unwrap();
+        let keybind = extract_keybind_from_section(&ini_file.sections[0]).unwrap();
+
+        assert_eq!(keybind.keys, vec!["VK_F1"]);
+        assert_eq!(keybind.back, Some("1".to_string()));
+        assert_eq!(keybind.condition, Some("$test".to_string()));
+        assert_eq!(keybind.type_, Some("keypress".to_string()));
+    }
+
+    #[test]
+    fn test_keybind_namespace_without_dot() {
+        let content = r#"[Key1]
+key = VK_F1
+"#;
+        let ini_file = parse_content(content).unwrap();
+        let keybind = extract_keybind_from_section(&ini_file.sections[0]).unwrap();
+
+        assert_eq!(keybind.section_name, "Key1");
+        assert_eq!(keybind.namespace, "");
+    }
+
+    #[test]
+    fn test_detect_namespace_backslash() {
+        assert_eq!(
+            detect_namespace("TextureOverride\\MyMod\\Tex"),
+            Some("MyMod\\Tex".to_string())
+        );
+        assert_eq!(
+            detect_namespace("TextureOverride\\MyMod"),
+            Some("MyMod".to_string())
+        );
+        assert_eq!(
+            detect_namespace("textureoverride.mymod"),
+            Some("mymod".to_string())
+        );
+        assert_eq!(detect_namespace("Constants"), None);
+    }
+
+    #[test]
+    fn test_section_type_backslash() {
+        assert_eq!(get_section_type("TextureOverride\\MyMod"), SectionType::TextureOverride);
+        assert_eq!(get_section_type("Key\\Toggle"), SectionType::Key);
+        assert_eq!(get_section_type("CommandListPost\\Post"), SectionType::CommandListPost);
+    }
+
+    #[test]
+    fn test_parse_content_backslash_namespace() {
+        let content = r#"[TextureOverride\MyMod]
+hash = 0x1234
+
+[Key\Toggle]
+key = VK_F1
+"#;
+        let ini_file = parse_content(content).unwrap();
+
+        assert_eq!(ini_file.sections.len(), 2);
+        assert_eq!(ini_file.sections[0].name, "TextureOverride\\MyMod");
+        assert_eq!(ini_file.sections[0].namespace, "MyMod");
+        assert_eq!(ini_file.sections[0].lines[0].key, "hash");
+        assert_eq!(ini_file.sections[1].name, "Key\\Toggle");
+        assert_eq!(ini_file.sections[1].namespace, "Toggle");
+    }
+
+    #[test]
+    fn test_performance_1000_lines() {
+        let mut content = String::with_capacity(20000);
+        for i in 0..100 {
+            content.push_str(&format!("[Key.Section{}]\n", i));
+            for j in 0..8 {
+                content.push_str(&format!("key = VK_F{}\n", j));
+            }
+            content.push_str("back = 1\n");
+            content.push_str("condition = $test\n");
+        }
+
+        let start = std::time::Instant::now();
+        let ini_file = parse_content(&content).unwrap();
+        let keybinds = extract_keybinds(&ini_file);
+        let elapsed = start.elapsed();
+
+        assert_eq!(ini_file.sections.len(), 100);
+        assert_eq!(keybinds.len(), 100);
+        assert!(
+            elapsed.as_millis() < 50,
+            "Parsing 1000 lines took {}ms, expected < 50ms",
+            elapsed.as_millis()
+        );
+    }
+
+    #[test]
+    fn test_uncomment_prefix_parsed_as_section() {
+        let content = ";-;[TextureOverride.MyMod]\n;-;hash = 1234\n";
+        let ini = parse_content(content).unwrap();
+
+        assert_eq!(ini.sections.len(), 1);
+        assert_eq!(ini.sections[0].name, "TextureOverride.MyMod");
+        assert_eq!(ini.sections[0].lines.len(), 1);
+        assert_eq!(ini.sections[0].lines[0].key, "hash");
+        assert_eq!(ini.sections[0].lines[0].value, "1234");
+        // raw_lines 必须保留原始前缀，写回时不改变格式
+        assert_eq!(ini.sections[0].raw_lines[0], ";-;hash = 1234");
+    }
+
+    #[test]
+    fn test_uncomment_prefix_mixed_with_comments() {
+        let content = r#"
+[Constants]
+;-;hash = 1234
+; real comment
+x = 1
+"#;
+        let ini = parse_content(content).unwrap();
+
+        let section = ini.sections.iter().find(|s| s.name == "Constants").unwrap();
+        assert_eq!(section.lines.len(), 2);
+        assert_eq!(section.lines[0].key, "hash");
+        assert_eq!(section.lines[0].value, "1234");
+        assert_eq!(section.lines[1].key, "x");
     }
 }

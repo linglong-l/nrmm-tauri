@@ -356,9 +356,9 @@ const debouncedHandleTargetProcessChange = createDebounce(handleTargetProcessCha
 async function handleHotkeyKeyboardChange(value: HotkeyKeyboard) {
   settingsStore.setHotkeyKeyboard(value);
   await settingsStore.saveSettings();
-  // SETTINGS_UPDATED 事件会触发 index.vue 的 registerHotkeys()
-  // 该函数已执行 unregisterAllHotkeys() + registerHotkeyBackend() 完整流程
-  // 此处无需重复注册，避免与事件驱动流程竞争导致旧键残留
+  // 保存设置后，后端 save_settings 命令会检测热键配置变化并自动调用
+  // HotkeyManager::register_from_settings() 完成系统级热键重注册。
+  // 前端无需再调用 index.vue 的 registerHotkeys()，避免与后端管理流程竞争导致旧键残留。
   ElMessage.success(t('Hotkey updated, old hotkey has been unregistered'));
 }
 

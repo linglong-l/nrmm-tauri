@@ -68,7 +68,7 @@ export function useWindow() {
     try {
       await invokeShowWindow();
       uiStore.setWindowVisible(true);
-      emit(EventNames.WINDOW_SHOWN, undefined);
+      emit(EventNames.WINDOW_SHOWN, { visible: true, source: 'frontend' });
     } catch {
       // ignore
     }
@@ -83,7 +83,7 @@ export function useWindow() {
     try {
       await invokeHideWindow();
       uiStore.setWindowVisible(false);
-      emit(EventNames.WINDOW_HIDDEN, undefined);
+      emit(EventNames.WINDOW_HIDDEN, { visible: false, source: 'frontend' });
     } catch {
       // ignore
     }

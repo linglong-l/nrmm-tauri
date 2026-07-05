@@ -20,7 +20,7 @@ use walkdir::WalkDir;
 
 use super::{
     detect_flow_control, get_section_type, is_comment_line, parse_file, FlowControlType, IniFile,
-    SectionType,
+    IniSection, SectionType,
 };
 
 #[cfg(test)]
@@ -73,6 +73,142 @@ fn is_flow_control_section(section_type: SectionType) -> bool {
     )
 }
 
+/// 分析单个段内的 if/elif/else/endif 流程控制结构，返回所有语法错误。
+///
+/// 检测项：
+/// - `if` 条件为空
+/// - `elif` 出现在 `if` 之外，或出现在 `else` 之后
+/// - `else` 出现在 `if` 之外，或重复出现
+/// - `endif` 出现在 `if` 之外
+/// - `if` 块未闭合（缺少 `endif`）
+///
+/// 参数：
+/// - `section`: 要分析的 INI 段引用。
+/// - `file_path`: 所属文件路径（用于错误报告）。
+///
+/// 返回：该段内所有流程控制错误列表。若该段类型不支持流程控制则返回空列表。
+///
+/// 当前未消费，保留用于后续按段细粒度流程控制分析。
+#[allow(dead_code)]
+pub fn analyze_flow_control_section(section: &IniSection, file_path: &str) -> Vec<IniSyntaxError> {
+    let mut errors = Vec::new();
+
+    let section_type = get_section_type(&section.name);
+    if !is_flow_control_section(section_type) {
+        return errors;
+    }
+
+    let mut stack: Vec<(usize, String)> = Vec::new();
+    let mut else_found = false;
+
+    for (i, raw_line) in section.raw_lines.iter().enumerate() {
+        let trimmed = raw_line.trim();
+        if is_comment_line(trimmed) || trimmed.is_empty() {
+            continue;
+        }
+
+        let line_index = section.line_index + 1 + i;
+
+        if let Some(flow_type) = detect_flow_control(trimmed) {
+            match flow_type {
+                FlowControlType::If => {
+                    let condition = trimmed
+                        .trim_start_matches(|c: char| c.is_whitespace() || c == 'i' || c == 'f')
+                        .trim();
+                    if condition.is_empty() {
+                        errors.push(IniSyntaxError {
+                            file_path: file_path.to_string(),
+                            line_index,
+                            trimmed_line: trimmed.to_string(),
+                            reason: "Empty condition".to_string(),
+                        });
+                    }
+                    stack.push((line_index, trimmed.to_string()));
+                    else_found = false;
+                }
+                FlowControlType::ElseIf => {
+                    if stack.is_empty() {
+                        errors.push(IniSyntaxError {
+                            file_path: file_path.to_string(),
+                            line_index,
+                            trimmed_line: trimmed.to_string(),
+                            reason: "Unexpected \"elif\"".to_string(),
+                        });
+                    } else if else_found {
+                        errors.push(IniSyntaxError {
+                            file_path: file_path.to_string(),
+                            line_index,
+                            trimmed_line: trimmed.to_string(),
+                            reason: "Unexpected \"elif\" after \"else\"".to_string(),
+                        });
+                    } else {
+                        let condition = trimmed
+                            .trim_start_matches(|c: char| {
+                                c.is_whitespace()
+                                    || c == 'e'
+                                    || c == 'l'
+                                    || c == 'i'
+                                    || c == 'f'
+                            })
+                            .trim();
+                        if condition.is_empty() {
+                            errors.push(IniSyntaxError {
+                                file_path: file_path.to_string(),
+                                line_index,
+                                trimmed_line: trimmed.to_string(),
+                                reason: "Empty condition".to_string(),
+                            });
+                        }
+                    }
+                }
+                FlowControlType::Else => {
+                    if stack.is_empty() {
+                        errors.push(IniSyntaxError {
+                            file_path: file_path.to_string(),
+                            line_index,
+                            trimmed_line: trimmed.to_string(),
+                            reason: "Unexpected \"else\"".to_string(),
+                        });
+                    } else if else_found {
+                        errors.push(IniSyntaxError {
+                            file_path: file_path.to_string(),
+                            line_index,
+                            trimmed_line: trimmed.to_string(),
+                            reason: "Duplicate \"else\"".to_string(),
+                        });
+                    } else {
+                        else_found = true;
+                    }
+                }
+                FlowControlType::EndIf => {
+                    if stack.is_empty() {
+                        errors.push(IniSyntaxError {
+                            file_path: file_path.to_string(),
+                            line_index,
+                            trimmed_line: trimmed.to_string(),
+                            reason: "Unexpected \"endif\"".to_string(),
+                        });
+                    } else {
+                        stack.pop();
+                        else_found = false;
+                    }
+                }
+            }
+        }
+    }
+
+    for (line_idx, line_text) in &stack {
+        errors.push(IniSyntaxError {
+            file_path: file_path.to_string(),
+            line_index: *line_idx,
+            trimmed_line: line_text.clone(),
+            reason: "Missing \"endif\"".to_string(),
+        });
+    }
+
+    errors
+}
+
 /// 检查 INI 文件中所有支持流程控制的段内的 if/elif/else/endif 匹配性。
 ///
 /// 检测项：
@@ -100,12 +236,14 @@ pub fn check_flow_control(ini_file: &IniFile) -> Vec<IniSyntaxError> {
         let mut stack: Vec<(usize, String)> = Vec::new();
         let mut else_found = false;
 
-        for line in &section.lines {
-            let trimmed = line.raw_line.trim();
+        for (i, raw_line) in section.raw_lines.iter().enumerate() {
+            let trimmed = raw_line.trim();
             // 跳过注释行和空行
             if is_comment_line(trimmed) || trimmed.is_empty() {
                 continue;
             }
+
+            let line_index = section.line_index + 1 + i;
 
             if let Some(flow_type) = detect_flow_control(trimmed) {
                 match flow_type {
@@ -117,12 +255,12 @@ pub fn check_flow_control(ini_file: &IniFile) -> Vec<IniSyntaxError> {
                         if condition.is_empty() {
                             errors.push(IniSyntaxError {
                                 file_path: ini_file.path.clone(),
-                                line_index: line.line_index,
+                                line_index,
                                 trimmed_line: trimmed.to_string(),
                                 reason: "Empty condition".to_string(),
                             });
                         }
-                        stack.push((line.line_index, trimmed.to_string()));
+                        stack.push((line_index, trimmed.to_string()));
                         // 新的 if 块重置 else 标记
                         else_found = false;
                     }
@@ -131,7 +269,7 @@ pub fn check_flow_control(ini_file: &IniFile) -> Vec<IniSyntaxError> {
                             // elif 出现在 if 之外
                             errors.push(IniSyntaxError {
                                 file_path: ini_file.path.clone(),
-                                line_index: line.line_index,
+                                line_index,
                                 trimmed_line: trimmed.to_string(),
                                 reason: "Unexpected \"elif\"".to_string(),
                             });
@@ -139,7 +277,7 @@ pub fn check_flow_control(ini_file: &IniFile) -> Vec<IniSyntaxError> {
                             // elif 出现在 else 之后
                             errors.push(IniSyntaxError {
                                 file_path: ini_file.path.clone(),
-                                line_index: line.line_index,
+                                line_index,
                                 trimmed_line: trimmed.to_string(),
                                 reason: "Unexpected \"elif\" after \"else\"".to_string(),
                             });
@@ -157,7 +295,7 @@ pub fn check_flow_control(ini_file: &IniFile) -> Vec<IniSyntaxError> {
                             if condition.is_empty() {
                                 errors.push(IniSyntaxError {
                                     file_path: ini_file.path.clone(),
-                                    line_index: line.line_index,
+                                    line_index,
                                     trimmed_line: trimmed.to_string(),
                                     reason: "Empty condition".to_string(),
                                 });
@@ -169,7 +307,7 @@ pub fn check_flow_control(ini_file: &IniFile) -> Vec<IniSyntaxError> {
                             // else 出现在 if 之外
                             errors.push(IniSyntaxError {
                                 file_path: ini_file.path.clone(),
-                                line_index: line.line_index,
+                                line_index,
                                 trimmed_line: trimmed.to_string(),
                                 reason: "Unexpected \"else\"".to_string(),
                             });
@@ -177,7 +315,7 @@ pub fn check_flow_control(ini_file: &IniFile) -> Vec<IniSyntaxError> {
                             // 重复的 else
                             errors.push(IniSyntaxError {
                                 file_path: ini_file.path.clone(),
-                                line_index: line.line_index,
+                                line_index,
                                 trimmed_line: trimmed.to_string(),
                                 reason: "Duplicate \"else\"".to_string(),
                             });
@@ -190,7 +328,7 @@ pub fn check_flow_control(ini_file: &IniFile) -> Vec<IniSyntaxError> {
                             // endif 出现在 if 之外
                             errors.push(IniSyntaxError {
                                 file_path: ini_file.path.clone(),
-                                line_index: line.line_index,
+                                line_index,
                                 trimmed_line: trimmed.to_string(),
                                 reason: "Unexpected \"endif\"".to_string(),
                             });

@@ -37,6 +37,12 @@ const DEBOUNCE_DURATION: Duration = Duration::from_millis(500);
 /// 仅对 `debug!("File system event: ...")` 这一类高频日志生效，抑制窗口期内的重复输出。
 static FILE_EVENT_SAMPLER: OnceLock<LogSampler> = OnceLock::new();
 
+/// 防抖重置日志采样器全局实例。
+///
+/// 文件系统事件密集时，防抖计时器会被连续重置；使用采样器在 1 秒窗口内仅输出首次
+/// "Debounce reset due to new event" 日志，避免日志风暴。
+static DEBOUNCE_RESET_SAMPLER: OnceLock<LogSampler> = OnceLock::new();
+
 /// Windows 路径长度阈值（260 字符，即 MAX_PATH）。
 ///
 /// 当路径长度达到或超过该值时，会自动添加 `\\?\` 前缀以支持长路径。
@@ -313,7 +319,11 @@ impl FileWatcher {
                                     }
                                     _ = rx.recv() => {
                                         // 收到新信号，重置计时器
-                                        debug!("Debounce reset due to new event");
+                                        // 高频日志采样：事件密集时 1 秒窗口内仅输出首次
+                                        let sampler = DEBOUNCE_RESET_SAMPLER.get_or_init(LogSampler::new);
+                                        if sampler.should_log("debounce_reset") {
+                                            debug!("Debounce reset due to new event");
+                                        }
                                     }
                                 }
                             }

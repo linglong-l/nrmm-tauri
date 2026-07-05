@@ -118,8 +118,14 @@ let modsScrollDragState: {
   startScrollTop: number;
   startScrollLeft: number;
   active: boolean;
-  moved: boolean;
+  hasDragged: boolean;
 } | null = null;
+// 用于在拖动结束后阻止一次点击/右键误触发
+let suppressNextModsContainerClick = false;
+// requestAnimationFrame ID，用于取消未完成的滚动更新
+let modsScrollDragRaf: number | null = null;
+// 拖动前容器的 scroll-behavior，拖动结束后恢复
+let modsContainerOriginalScrollBehavior: string = '';
 
 // 鼠标按下：启动手机风格拖动滚动
 function onSidebarMouseDown(e: MouseEvent) {
@@ -151,25 +157,47 @@ function onSidebarMouseUp() {
 
 // 右侧模组容器：鼠标按下启动拖动滚动
 function onModsContainerMouseDown(e: MouseEvent) {
-  if (!modsContainerRef.value) return;
+  if (e.button !== 0 || !modsContainerRef.value) return;
   // 排除交互元素：按钮、输入框、模组卡片上的收藏图标等
   const target = e.target as HTMLElement;
-  if (target.closest('button') ||
-      target.closest('.el-button') ||
-      target.closest('.mod-favorite') ||
-      target.closest('input') ||
-      target.closest('textarea')) return;
+  if (
+    target.closest('button') ||
+    target.closest('.el-button') ||
+    target.closest('.mod-favorite') ||
+    target.closest('input') ||
+    target.closest('textarea') ||
+    target.closest('select') ||
+    target.closest('[contenteditable]') ||
+    target.closest('.el-input') ||
+    target.closest('.el-textarea')
+  ) return;
+
+  console.debug('[ModsDrag] Mouse down', {
+    targetTag: target.tagName,
+    targetClass: target.className,
+    clientX: e.clientX,
+    clientY: e.clientY
+  });
+
+  // 清除可能存在的文本选中，避免拖动时产生文字拖拽残影
+  window.getSelection()?.removeAllRanges();
+
+  const container = modsContainerRef.value;
+  modsContainerOriginalScrollBehavior = container.style.scrollBehavior || '';
+  container.style.scrollBehavior = 'auto';
+  container.classList.add('dragging');
 
   modsScrollDragState = {
     startY: e.clientY,
     startX: e.clientX,
-    startScrollTop: modsContainerRef.value.scrollTop,
-    startScrollLeft: modsContainerRef.value.scrollLeft,
+    startScrollTop: container.scrollTop,
+    startScrollLeft: container.scrollLeft,
     active: true,
-    moved: false,
+    hasDragged: false,
   };
   document.addEventListener('mousemove', onModsContainerMouseMove);
   document.addEventListener('mouseup', onModsContainerMouseUp);
+  window.addEventListener('mouseleave', onModsContainerMouseLeave);
 }
 
 function onModsContainerMouseMove(e: MouseEvent) {
@@ -179,24 +207,79 @@ function onModsContainerMouseMove(e: MouseEvent) {
 
   // 位移超过 5px 视为拖动
   if (Math.abs(dy) > 5 || Math.abs(dx) > 5) {
-    modsScrollDragState.moved = true;
+    if (!modsScrollDragState.hasDragged) {
+      modsScrollDragState.hasDragged = true;
+      e.preventDefault();
+      window.getSelection()?.removeAllRanges();
+      console.debug('[ModsDrag] Drag started', { dx, dy });
+    }
   }
 
-  if (modsScrollDragState.moved) {
-    modsContainerRef.value.scrollTop = modsScrollDragState.startScrollTop - dy;
-    modsContainerRef.value.scrollLeft = modsScrollDragState.startScrollLeft - dx;
+  if (modsScrollDragState.hasDragged) {
+    if (modsScrollDragRaf) cancelAnimationFrame(modsScrollDragRaf);
+    modsScrollDragRaf = requestAnimationFrame(() => {
+      if (!modsScrollDragState || !modsContainerRef.value) return;
+      modsContainerRef.value.scrollTop = modsScrollDragState.startScrollTop - dy;
+      modsContainerRef.value.scrollLeft = modsScrollDragState.startScrollLeft - dx;
+      modsScrollDragRaf = null;
+    });
   }
 }
 
 function onModsContainerMouseUp() {
+  endModsContainerDrag();
+}
+
+function onModsContainerMouseLeave() {
+  endModsContainerDrag();
+}
+
+function endModsContainerDrag() {
+  const hadDragged = modsScrollDragState?.hasDragged ?? false;
+  if (modsScrollDragState?.active && modsScrollDragState.hasDragged) {
+    suppressNextModsContainerClick = true;
+  }
+
+  console.debug('[ModsDrag] Drag ended', { hasDragged: hadDragged, suppressClick: suppressNextModsContainerClick });
+
+  if (modsScrollDragRaf) {
+    cancelAnimationFrame(modsScrollDragRaf);
+    modsScrollDragRaf = null;
+  }
+
+  const container = modsContainerRef.value;
+  if (container) {
+    container.style.scrollBehavior = modsContainerOriginalScrollBehavior;
+    container.classList.remove('dragging');
+  }
+
   modsScrollDragState = null;
   document.removeEventListener('mousemove', onModsContainerMouseMove);
   document.removeEventListener('mouseup', onModsContainerMouseUp);
+  window.removeEventListener('mouseleave', onModsContainerMouseLeave);
 }
 
-// 检查模组容器是否处于拖动状态（用于阻止点击事件）
-function isModsContainerDragging(): boolean {
-  return modsScrollDragState?.moved === true;
+// 捕获阶段阻止拖动结束后产生的点击/右键事件（仅针对模组卡片）
+function onModsContainerClick(e: MouseEvent) {
+  if (!suppressNextModsContainerClick) return;
+  const target = e.target as HTMLElement;
+  if (target.closest('.mod-card') || target.closest('.list-mod-card')) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    console.debug('[ModsDrag] Suppressed card click after drag');
+  }
+  suppressNextModsContainerClick = false;
+}
+
+function onModsContainerContextMenu(e: MouseEvent) {
+  if (!suppressNextModsContainerClick) return;
+  const target = e.target as HTMLElement;
+  if (target.closest('.mod-card') || target.closest('.list-mod-card')) {
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    console.debug('[ModsDrag] Suppressed card contextmenu after drag');
+  }
+  suppressNextModsContainerClick = false;
 }
 
 // 分隔条拖拽调节宽度
@@ -428,7 +511,6 @@ function toggleExpand(groupPath: string) {
  * @param index displayMods 中的索引
  */
 function selectMod(index: number) {
-  if (isModsContainerDragging()) return;
   selectedModIndex.value = index;
 }
 
@@ -722,7 +804,14 @@ async function handleRemoveGroup() {
  */
 function openModFolder(mod: ModData) {
   if (mod.realIndex === 0) return;
-  invokeOpenPath(mod.modPath).catch(console.error);
+  if (!mod.modPath || !mod.modPath.trim()) {
+    ElMessage.warning(t('Mod path is empty, cannot open'));
+    return;
+  }
+  invokeOpenPath(mod.modPath).catch((err) => {
+    console.error('Failed to open mod folder:', err);
+    ElMessage.error(t('Failed to open folder'));
+  });
 }
 
 /**
@@ -730,7 +819,14 @@ function openModFolder(mod: ModData) {
  * @param group 目标分组
  */
 function openGroupFolder(group: ModGroupData) {
-  invokeOpenPath(group.groupPath).catch(console.error);
+  if (!group.groupPath || !group.groupPath.trim()) {
+    ElMessage.warning(t('Group path is empty, cannot open'));
+    return;
+  }
+  invokeOpenPath(group.groupPath).catch((err) => {
+    console.error('Failed to open group folder:', err);
+    ElMessage.error(t('Failed to open folder'));
+  });
 }
 
 /**
@@ -1005,6 +1101,9 @@ onMounted(async () => {
   await setupFileWatcher();
   document.addEventListener('click', hideContextMenu);
   document.addEventListener('keydown', handleEscKey);
+  // 捕获阶段监听容器点击/右键，用于阻止拖动结束后的误触发
+  modsContainerRef.value?.addEventListener('click', onModsContainerClick, true);
+  modsContainerRef.value?.addEventListener('contextmenu', onModsContainerContextMenu, true);
 });
 
 // 组件卸载：取消事件监听、停止文件监听、移除全局点击监听、清理防抖定时器
@@ -1036,6 +1135,9 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', onSidebarMouseUp);
   document.removeEventListener('mousemove', onModsContainerMouseMove);
   document.removeEventListener('mouseup', onModsContainerMouseUp);
+  window.removeEventListener('mouseleave', onModsContainerMouseLeave);
+  modsContainerRef.value?.removeEventListener('click', onModsContainerClick, true);
+  modsContainerRef.value?.removeEventListener('contextmenu', onModsContainerContextMenu, true);
 });
 
 // 监听布局模式变化（占位 watcher，预留用于未来扩展，如布局切换动画等）
@@ -2023,8 +2125,15 @@ defineExpose({ focusGroupSearch, focusModSearch, toggleSearchBars, toggleGroupSe
   user-select: none;
 }
 
+.mods-container.dragging,
 .mods-container:active {
   cursor: grabbing;
+}
+
+.mods-container.dragging *,
+.mods-container.dragging *::before,
+.mods-container.dragging *::after {
+  user-select: none !important;
 }
 
 /* Android 风格滚动条：隐藏原生滚动条 */

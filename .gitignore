@@ -51,3 +51,5 @@ src-tauri/WixTools/
 # Temporary files
 *.tmp
 *.temp
+
+/docs/*

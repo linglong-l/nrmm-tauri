@@ -17,7 +17,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use parking_lot::RwLock;
-use tauri::{AppHandle, Manager};
+use serde_json::json;
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::settings::Settings;
 
@@ -67,9 +68,14 @@ impl WindowManager {
     /// # 返回值
     /// 成功返回 `Ok(())`，显示或聚焦失败返回封装后的错误。
     pub fn show_window(app: &AppHandle) -> Result<()> {
+        log::debug!("[WindowManager] Showing main window");
         let window = Self::get_main_window(app)?;
         window.show().context("Failed to show window")?;
         window.set_focus().context("Failed to focus window")?;
+        let payload = json!({ "visible": true, "source": "command" });
+        log::debug!("[WindowManager] Emitting window-shown: {}", payload);
+        let _ = app.emit("window-shown", payload);
+        log::debug!("[WindowManager] Main window shown and focused");
         Ok(())
     }
 
@@ -81,8 +87,13 @@ impl WindowManager {
     /// # 返回值
     /// 成功返回 `Ok(())`，失败返回封装后的错误。
     pub fn hide_window(app: &AppHandle) -> Result<()> {
+        log::debug!("[WindowManager] Hiding main window");
         let window = Self::get_main_window(app)?;
         window.hide().context("Failed to hide window")?;
+        let payload = json!({ "visible": false, "source": "command" });
+        log::debug!("[WindowManager] Emitting window-hidden: {}", payload);
+        let _ = app.emit("window-hidden", payload);
+        log::debug!("[WindowManager] Main window hidden");
         Ok(())
     }
 
@@ -100,14 +111,34 @@ impl WindowManager {
     pub fn toggle_window(app: &AppHandle) -> Result<bool> {
         let window = Self::get_main_window(app)?;
         let is_visible = window.is_visible().context("Failed to check window visibility")?;
-        if is_visible {
+        log::debug!("[WindowManager] Toggling window visibility, currently visible: {}", is_visible);
+        let result = if is_visible {
             window.hide().context("Failed to hide window")?;
-            Ok(false)
+            false
         } else {
             window.show().context("Failed to show window")?;
             window.set_focus().context("Failed to focus window")?;
-            Ok(true)
-        }
+            true
+        };
+        let (event_name, payload) = if result {
+            (
+                "window-shown",
+                json!({ "visible": true, "source": "toggle" }),
+            )
+        } else {
+            (
+                "window-hidden",
+                json!({ "visible": false, "source": "toggle" }),
+            )
+        };
+        log::debug!(
+            "[WindowManager] Emitting {}: {}",
+            event_name,
+            payload
+        );
+        let _ = app.emit(event_name, payload);
+        log::debug!("[WindowManager] Window toggled, now visible: {}", result);
+        Ok(result)
     }
 
     /// 设置主窗口是否始终置顶。

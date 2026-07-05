@@ -8,10 +8,104 @@
 //! 时间使用本地时区（无法获取时回退到 UTC），精确到秒。
 
 use std::fmt::Arguments;
+use std::fs;
+use std::path::Path;
+use std::time::{Duration, SystemTime};
 // logger.rs
 use time::{format_description, OffsetDateTime};
 // 使用 fern::FormatCallback 替代不存在的 tauri_plugin_log::format::FormatCallback
 use fern::FormatCallback;
+
+/// 日志文件最长保留时间。
+///
+/// 超过该时间的日志文件会在启动时被清理，防止长期累积占用磁盘空间。
+/// 当前设置为 30 天，兼顾问题追溯与磁盘占用控制。
+pub const LOG_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+/// 清理超过保留期限的日志文件。
+///
+/// 遍历 `logs` 目录下的所有 `.log` 文件，删除修改时间超过 `retention` 的文件。
+/// 该函数在 `init_logging` 中同步调用，此时 tokio 异步运行时尚未启动，
+/// 因此使用标准库同步 IO 是安全的。
+///
+/// 参数：
+/// - `log_dir`: 日志根目录（如 `%LOCALAPPDATA%\xxmi-nrmm\logs`）。
+/// - `retention`: 保留期限，超过该时间的日志文件会被删除。
+///
+/// 返回：
+/// 被删除的文件数量。清理失败时返回 0，不中断应用启动。
+pub fn cleanup_old_logs(log_dir: &Path, retention: Duration) -> usize {
+    let now = SystemTime::now();
+    let mut removed = 0usize;
+
+    fn visit_dir(dir: &Path, now: SystemTime, retention: Duration, removed: &mut usize) {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let metadata = match fs::metadata(&path) {
+                Ok(meta) => meta,
+                Err(_) => continue,
+            };
+
+            if metadata.is_dir() {
+                visit_dir(&path, now, retention, removed);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("log") {
+                let modified = metadata.modified().unwrap_or(now);
+                if now.duration_since(modified).unwrap_or(Duration::ZERO) > retention {
+                    if fs::remove_file(&path).is_ok() {
+                        *removed += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    visit_dir(log_dir, now, retention, &mut removed);
+    removed
+}
+
+/// 获取日志目录统计信息。
+///
+/// 用于启动时输出一次日志目录状态，便于后续复查日志增长趋势。
+///
+/// 参数：
+/// - `log_dir`: 日志根目录。
+///
+/// 返回：
+/// 元组 `(文件数量, 总字节数)`。遍历失败时返回 `(0, 0)`。
+pub fn get_log_dir_stats(log_dir: &Path) -> (usize, u64) {
+    let mut count = 0usize;
+    let mut total_bytes = 0u64;
+
+    fn visit_dir(dir: &Path, count: &mut usize, total_bytes: &mut u64) {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let metadata = match fs::metadata(&path) {
+                Ok(meta) => meta,
+                Err(_) => continue,
+            };
+
+            if metadata.is_dir() {
+                visit_dir(&path, count, total_bytes);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("log") {
+                *count += 1;
+                *total_bytes += metadata.len();
+            }
+        }
+    }
+
+    visit_dir(log_dir, &mut count, &mut total_bytes);
+    (count, total_bytes)
+}
 
 /// 自定义的日志格式化函数。
 ///
@@ -61,4 +155,53 @@ pub fn custom_log_format(out: FormatCallback, message: &Arguments, record: &log:
         line,
         message
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_log_dir() -> (std::path::PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        (dir.path().join("logs"), dir)
+    }
+
+    #[test]
+    fn test_cleanup_old_logs_removes_only_old_log_files() {
+        // 使用 retention = 0 秒来模拟"所有文件都过期"；
+        // 该测试主要验证递归遍历、按扩展名过滤、返回计数等逻辑正确。
+        let (log_dir, _temp) = temp_log_dir();
+        fs::create_dir_all(&log_dir).unwrap();
+
+        let sub_dir = log_dir.join("2026").join("07");
+        fs::create_dir_all(&sub_dir).unwrap();
+        fs::write(sub_dir.join("05.log"), "old log").unwrap();
+        fs::write(sub_dir.join("04.log"), "old log 2").unwrap();
+        fs::write(sub_dir.join("not-a-log.txt"), "keep me").unwrap();
+
+        let removed = cleanup_old_logs(&log_dir, Duration::ZERO);
+        assert_eq!(removed, 2);
+
+        // 非 .log 文件应保留
+        assert!(sub_dir.join("not-a-log.txt").exists());
+        assert!(!sub_dir.join("05.log").exists());
+        assert!(!sub_dir.join("04.log").exists());
+    }
+
+    #[test]
+    fn test_get_log_dir_stats_counts_log_files_and_bytes() {
+        let (log_dir, _temp) = temp_log_dir();
+        fs::create_dir_all(&log_dir).unwrap();
+
+        let sub_dir = log_dir.join("2026").join("07");
+        fs::create_dir_all(&sub_dir).unwrap();
+        fs::write(sub_dir.join("05.log"), "hello").unwrap();
+        fs::write(sub_dir.join("04.log"), "world").unwrap();
+        fs::write(sub_dir.join("ignore.txt"), "ignored").unwrap();
+
+        let (count, bytes) = get_log_dir_stats(&log_dir);
+        assert_eq!(count, 2);
+        assert_eq!(bytes, 10); // "hello" + "world" = 5 + 5
+    }
 }

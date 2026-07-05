@@ -365,5 +365,13 @@
     "hotkeyHintWindow": "窗口切换：全局快捷键，Alt+字母切换窗口显隐",
     "hotkeyHintGroupSearch": "分组搜索：窗口内快捷键，Alt+字母聚焦分组搜索框",
     "hotkeyHintModSearch": "模组搜索：窗口内快捷键，Alt+字母聚焦模组搜索框"
+  },
+  "keybinds": {
+    "emptySelectMod": "请在「模组」标签页选择一个模组以查看快捷键。",
+    "noKeybinds": "所选模组没有快捷键配置。",
+    "keys": "按键",
+    "back": "返回键",
+    "condition": "条件",
+    "type": "类型"
   }
 }

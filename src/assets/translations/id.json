@@ -365,5 +365,13 @@
     "hotkeyHintWindow": "Beralih Jendela: Pintasan global, Alt+huruf untuk beralih visibilitas jendela",
     "hotkeyHintGroupSearch": "Pencarian Grup: Pintasan dalam aplikasi, Alt+huruf untuk fokus kotak pencarian grup",
     "hotkeyHintModSearch": "Pencarian Mod: Pintasan dalam aplikasi, Alt+huruf untuk fokus kotak pencarian mod"
+  },
+  "keybinds": {
+    "emptySelectMod": "Silakan pilih mod di tab Mod untuk melihat keybind.",
+    "noKeybinds": "Tidak ada keybind untuk mod yang dipilih.",
+    "keys": "Tombol",
+    "back": "Kembali",
+    "condition": "Kondisi",
+    "type": "Tipe"
   }
 }

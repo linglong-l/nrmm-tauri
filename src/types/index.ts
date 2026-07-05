@@ -76,6 +76,8 @@ export enum TargetGame {
  * 均为 Alt + 字母 的组合，避免与游戏内按键冲突。
  */
 export enum HotkeyKeyboard {
+  /** 不使用键盘热键 */
+  none = 'none',
   /** Alt + A */
   altA = 'altA',
   /** Alt + B */
@@ -395,23 +397,47 @@ export interface IniSyntaxError {
 }
 
 /**
- * Mod 压缩包归档信息，描述待安装或预览的压缩包内容元数据。
+ * INI 文件中的单行键值对数据（后端 `IniLineData` 的 camelCase 映射）。
  */
-export interface ModArchiveInfo {
-  /** 压缩包完整路径 */
-  archivePath: string;
-  /** 压缩包文件名 */
-  archiveName: string;
-  /** 压缩包内文件数量 */
-  fileCount: number;
-  /** 压缩包总大小（字节） */
-  totalSize: number;
-  /** Mod 名称（从压缩包内元数据读取，可能为 null） */
-  modName: string | null;
-  /** Mod 作者（从压缩包内元数据读取，可能为 null） */
-  modAuthor: string | null;
-  /** Mod 版本（从压缩包内元数据读取，可能为 null） */
-  modVersion: string | null;
+export interface IniLineData {
+  /** 键名 */
+  key: string;
+  /** 值 */
+  value: string;
+  /** 原始行文本 */
+  rawLine: string;
+  /** 所属命名空间 */
+  namespace: string;
+  /** 行号（0-based） */
+  lineIndex: number;
+}
+
+/**
+ * INI 文件中的段数据（后端 `IniSectionData` 的 camelCase 映射）。
+ */
+export interface IniSectionData {
+  /** 段名 */
+  name: string;
+  /** 命名空间 */
+  namespace: string;
+  /** 段内所有键值对行 */
+  lines: IniLineData[];
+  /** 段头行号（0-based） */
+  lineIndex: number;
+  /** 段内所有原始行（含注释、空行） */
+  rawLines: string[];
+}
+
+/**
+ * 完整 INI 文件数据（后端 `IniFileData` 的 camelCase 映射）。
+ */
+export interface IniFileData {
+  /** 文件路径 */
+  path: string;
+  /** 所有段 */
+  sections: IniSectionData[];
+  /** 文件中出现的所有命名空间 */
+  namespaces: string[];
 }
 
 /**
@@ -533,6 +559,8 @@ export interface HotkeyState {
   isRegistered: boolean;
   /** 热键当前是否启用 */
   isEnabled: boolean;
+  /** 窗口内搜索快捷键是否可用（窗口聚焦且位于 mods 标签页时为 true） */
+  isSearchHotkeysEnabled: boolean;
   /** 最近一次按下的键（字符串描述），未触发时为 null */
   lastPressed: string | null;
   /** 最近一次按下的时间戳（毫秒），未触发时为 null */
