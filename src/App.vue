@@ -11,7 +11,6 @@
  */
 import { onMounted, watch, computed, onUnmounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { ElConfigProvider } from 'element-plus';
 import zhCn from 'element-plus/es/locale/lang/zh-cn';
 import zhTw from 'element-plus/es/locale/lang/zh-tw';
 import en from 'element-plus/es/locale/lang/en';

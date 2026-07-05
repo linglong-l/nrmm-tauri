@@ -5,9 +5,15 @@
  * 1. 创建 Pinia 实例（测试中需手动 setActivePinia）
  * 2. 重置 localStorage 模拟状态
  * 3. Mock Tauri invoke 调用（避免测试依赖真实后端）
+ * 4. 全局注册 Element Plus（测试环境不使用 unplugin-vue-components）
  */
 import { createPinia, setActivePinia } from 'pinia';
 import { vi, beforeEach } from 'vitest';
+import { config } from '@vue/test-utils';
+import ElementPlus from 'element-plus';
+
+// 测试环境全局注册 Element Plus（生产构建通过 unplugin-vue-components 按需导入）
+config.global.plugins = [ElementPlus];
 
 // 每个测试前重置 Pinia 实例，确保 store 状态隔离
 beforeEach(() => {

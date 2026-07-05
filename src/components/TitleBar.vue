@@ -17,7 +17,6 @@
  *  - 最大化状态由 isMaximized 本地维护，仅用于图标切换的视觉反馈（实际窗口状态以 Tauri 为准）。
  */
 import { ref, onMounted, computed } from 'vue';
-import { ElButton } from 'element-plus';
 import { Minus, Close, Crop } from '@element-plus/icons-vue';
 
 type Platform = 'windows' | 'macos' | 'linux' | 'unknown';

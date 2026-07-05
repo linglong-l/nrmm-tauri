@@ -693,13 +693,13 @@ function formatTransparencyTooltip(val: number): string {
 
 /**
  * 获取应用版本号并填充到 appVersion。
- * 异常处理：获取失败时回退到 v0.1.0。
+ * 异常处理：获取失败时回退到 v0.1.1。
  */
 function getAppVersion() {
   getVersion().then(version => {
     appVersion.value = `v${version}`;
   }).catch(() => {
-    appVersion.value = 'v0.1.0';
+    appVersion.value = 'v0.1.1';
   });
 }
 

@@ -11,7 +11,6 @@
  */
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { ElSelect, ElOption } from 'element-plus';
 import { useGame } from '../composables/useGame';
 import { TargetGame } from '../types';
 import { getGameNameKey } from '../utils/constants';

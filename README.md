@@ -2,7 +2,7 @@
 
 ## 基于 [No Reload Mod Manager](https://github.com/Aglglg/No-Reload-Mod-Manager)
 
-> XXMI 模组管理器（NR Mod Manager）的桌面客户端 v0.1.0
+> XXMI 模组管理器（NR Mod Manager）的桌面客户端 v0.1.1
 
 一款基于 Tauri 2 + Vue 3 的轻量级模组管理工具，为游戏玩家提供模组的浏览、启用/禁用、分组管理、收藏等核心功能。支持 Windows 11 和 Linux 平台。
 

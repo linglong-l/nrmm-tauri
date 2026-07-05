@@ -1,5 +1,8 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
+import AutoImport from 'unplugin-auto-import/vite';
+import Components from 'unplugin-vue-components/vite';
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers';
 import { resolve } from "path";
 
 // @ts-expect-error process is a nodejs global
@@ -7,7 +10,17 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // Element Plus 服务组件（ElMessage/ElMessageBox/ElNotification）按需自动导入
+    AutoImport({
+      resolvers: [ElementPlusResolver()],
+    }),
+    // Element Plus 模板组件（ElButton/ElSelect 等）按需自动注册
+    Components({
+      resolvers: [ElementPlusResolver()],
+    }),
+  ],
 
   resolve: {
     alias: {
@@ -50,12 +63,6 @@ export default defineConfig(async () => ({
           }
           if (id.includes('node_modules/vue') || id.includes('node_modules/vue-router') || id.includes('node_modules/pinia')) {
             return 'vue-core';
-          }
-          if (id.includes('node_modules/vue-i18n')) {
-            return 'vue-i18n';
-          }
-          if (id.includes('node_modules/@vueuse')) {
-            return 'vueuse';
           }
         },
       },
