@@ -42,7 +42,7 @@ const hotkeyStatus = computed(() => {
 });
 
 // 应用版本号（硬编码，仅状态栏展示用）
-const version = '0.1.0';
+const version = '0.1.1';
 </script>
 
 <template>
@@ -107,7 +107,7 @@ const version = '0.1.0';
       <!--
         应用版本号显示项
         数据来源：
-          - version (const) 硬编码版本号 '0.1.0'
+          - version (const) 硬编码版本号 '0.1.1'
         显示格式：前缀 "v" + 版本号
       -->
       <span class="status-item">

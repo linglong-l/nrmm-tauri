@@ -13,18 +13,12 @@ import { EventNames, eventManager } from '../utils/events';
  * 注册/注销分为两层：
  * - registerHotkey / unregisterHotkey：仅维护前端内存中的已注册列表；
  * - registerHotkeyBackend / unregisterHotkeyBackend：同步调用 Tauri 后端完成系统级注册/注销。
- *
- * 注意：窗口切换全局热键的生命周期主要由后端在设置保存时自动管理。
- * 此处的后端调用更多作为低层原语保留；HOTKEY_REGISTERED / HOTKEY_UNREGISTERED
- * 事件由后端 HotkeyManager 在注册/注销成功后发出，前端 Store 不再重复发射。
  */
 export const useHotkeyStore = defineStore('hotkey', () => {
   // 已注册的热键标识列表（前端内存态）。仅反映前端认知，未必与系统级注册完全同步。
   const registeredHotkeys = ref<string[]>([]);
   // 热键总开关。为 false 时即便已注册也不会响应（业务层判断使用）。
   const isHotkeyEnabled = ref(true);
-  // 窗口内搜索快捷键（Alt+G/Alt+F）是否可用，由 index.vue 根据窗口聚焦状态控制。
-  const isSearchHotkeysEnabled = ref(true);
   // 最近一次被按下的热键标识；尚未按下时为 null。
   const lastHotkeyPressed = ref<string | null>(null);
   // 最近一次按下热键的时间戳（Date.now()）；用于防抖或展示。
@@ -37,21 +31,12 @@ export const useHotkeyStore = defineStore('hotkey', () => {
   const leftThumbWasTriggered = ref(false);
 
   /**
-   * 统一打印热键 Store 调试日志。
-   * 使用 [HotkeyStore] 前缀，便于在浏览器 DevTools 中过滤。
-   */
-  function logHotkeyEvent(type: string, payload?: unknown) {
-    console.debug(`[HotkeyStore] ${type}`, payload !== undefined ? payload : '');
-  }
-
-  /**
    * 热键整体状态的聚合视图。
-   * 便于订阅方一次性拿到 isRegistered / isEnabled / isSearchHotkeysEnabled / lastPressed / lastPressedTime。
+   * 便于订阅方一次性拿到 isRegistered / isEnabled / lastPressed / lastPressedTime。
    */
   const hotkeyState = computed<HotkeyState>(() => ({
     isRegistered: registeredHotkeys.value.length > 0,
     isEnabled: isHotkeyEnabled.value,
-    isSearchHotkeysEnabled: isSearchHotkeysEnabled.value,
     lastPressed: lastHotkeyPressed.value,
     lastPressedTime: lastHotkeyPressedTime.value
   }));
@@ -85,23 +70,19 @@ export const useHotkeyStore = defineStore('hotkey', () => {
    * 通过 Tauri 后端注册系统级热键。
    * 业务逻辑：
    * 1. 调用 invokeRegisterHotkey 完成系统注册；
-   * 2. 成功后同步前端列表（registerHotkey）；
-   * 3. 失败时返回 false，不抛出。
-   *
-   * 注意：HOTKEY_REGISTERED 事件由后端 HotkeyManager 在注册成功后发出，
-   * 前端 Store 不再重复发射，避免前后端事件重复。
+   * 2. 成功后同步前端列表（registerHotkey）并广播 HOTKEY_REGISTERED 事件（success:true）；
+   * 3. 失败时广播 success:false 事件并返回 false，不抛出。
    * @param key 热键标识
    * @returns 是否注册成功
    */
   async function registerHotkeyBackend(key: string): Promise<boolean> {
-    logHotkeyEvent('Backend register requested', { key });
     try {
       await invokeRegisterHotkey(key);
       registerHotkey(key);
-      logHotkeyEvent('Backend register succeeded', { key });
+      eventManager.emit(EventNames.HOTKEY_REGISTERED, { key, success: true });
       return true;
-    } catch (error) {
-      logHotkeyEvent('Backend register failed', { key, error });
+    } catch {
+      eventManager.emit(EventNames.HOTKEY_REGISTERED, { key, success: false });
       return false;
     }
   }
@@ -110,23 +91,19 @@ export const useHotkeyStore = defineStore('hotkey', () => {
    * 通过 Tauri 后端注销系统级热键。
    * 业务逻辑：
    * 1. 调用 invokeUnregisterHotkey 完成系统注销；
-   * 2. 成功后同步前端列表（unregisterHotkey）；
-   * 3. 失败时返回 false，不抛出。
-   *
-   * 注意：HOTKEY_UNREGISTERED 事件由后端 HotkeyManager 在注销成功后发出，
-   * 前端 Store 不再重复发射，避免前后端事件重复。
+   * 2. 成功后同步前端列表（unregisterHotkey）并广播 HOTKEY_UNREGISTERED 事件（success:true）；
+   * 3. 失败时广播 success:false 事件并返回 false，不抛出。
    * @param key 热键标识
    * @returns 是否注销成功
    */
   async function unregisterHotkeyBackend(key: string): Promise<boolean> {
-    logHotkeyEvent('Backend unregister requested', { key });
     try {
       await invokeUnregisterHotkey(key);
       unregisterHotkey(key);
-      logHotkeyEvent('Backend unregister succeeded', { key });
+      eventManager.emit(EventNames.HOTKEY_UNREGISTERED, { key, success: true });
       return true;
-    } catch (error) {
-      logHotkeyEvent('Backend unregister failed', { key, error });
+    } catch {
+      eventManager.emit(EventNames.HOTKEY_UNREGISTERED, { key, success: false });
       return false;
     }
   }
@@ -134,13 +111,6 @@ export const useHotkeyStore = defineStore('hotkey', () => {
   /** 设置热键总开关。 */
   function setHotkeyEnabled(enabled: boolean) {
     isHotkeyEnabled.value = enabled;
-    logHotkeyEvent('Global hotkey enabled state changed', { enabled });
-  }
-
-  /** 设置窗口内搜索快捷键开关（由 index.vue 根据窗口聚焦状态更新）。 */
-  function setSearchHotkeysEnabled(enabled: boolean) {
-    isSearchHotkeysEnabled.value = enabled;
-    logHotkeyEvent('Search hotkeys enabled state changed', { enabled });
   }
 
   /**
@@ -151,7 +121,7 @@ export const useHotkeyStore = defineStore('hotkey', () => {
   function setLastHotkeyPressed(key: string) {
     lastHotkeyPressed.value = key;
     lastHotkeyPressedTime.value = Date.now();
-    eventManager.emit(EventNames.HOTKEY_PRESSED, { key, source: 'in-game' as const, matchedGame: null, timestamp: Date.now() });
+    eventManager.emit(EventNames.HOTKEY_PRESSED, { key, source: 'in-game' as const, timestamp: Date.now() });
   }
 
   /** 清除最近一次按下热键的记录（标识与时间戳均置空）。 */
@@ -204,7 +174,6 @@ export const useHotkeyStore = defineStore('hotkey', () => {
   return {
     registeredHotkeys,
     isHotkeyEnabled,
-    isSearchHotkeysEnabled,
     lastHotkeyPressed,
     lastHotkeyPressedTime,
     currentKeyboardHotkey,
@@ -217,7 +186,6 @@ export const useHotkeyStore = defineStore('hotkey', () => {
     registerHotkeyBackend,
     unregisterHotkeyBackend,
     setHotkeyEnabled,
-    setSearchHotkeysEnabled,
     setLastHotkeyPressed,
     clearLastHotkeyPressed,
     setKeyboardHotkey,

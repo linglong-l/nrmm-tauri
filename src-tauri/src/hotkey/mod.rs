@@ -12,8 +12,6 @@
 //! 任意目标游戏来分发到 [`HotkeyManager::handle_in_game_hotkey`] 或
 //! [`HotkeyManager::handle_out_of_game_hotkey`]。
 
-use std::sync::OnceLock;
-
 use anyhow::{Context, Result};
 use serde_json;
 use tauri::{AppHandle, Emitter, Manager};
@@ -21,14 +19,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::process::{ProcessDetector, TargetGame};
 use crate::settings::Settings;
-use crate::utils::log_sampler::LogSampler;
 use crate::window_manager::WindowManager;
-
-/// 热键事件日志采样器全局实例。
-///
-/// 全局快捷键可能非常频繁触发（如 Alt+D 切换窗口、Alt+G/F 搜索），
-/// 使用 1 秒窗口采样避免日志风暴。
-static HOTKEY_EVENT_SAMPLER: OnceLock<LogSampler> = OnceLock::new();
 
 /// 内部热键标识 ↔ Tauri 加速器字符串的映射表。
 ///
@@ -83,31 +74,10 @@ impl HotkeyManager {
     /// # 返回值
     /// 找到时返回 `Some(标识)`；未找到返回 `None`（用于在事件回调中过滤未知快捷键）。
     fn accelerator_to_hotkey_type(accelerator: &str) -> Option<String> {
-        let normalized = Self::normalize_accelerator(accelerator);
         HOTKEY_MAP
             .iter()
-            .find(|(_, v)| v.eq_ignore_ascii_case(&normalized))
+            .find(|(_, v)| *v == accelerator)
             .map(|(k, _)| k.to_string())
-    }
-
-    /// 将 Tauri 插件报告的快捷键格式（如 `alt+KeyA`）规范化为主流格式（如 `Alt+A`）。
-    ///
-    /// 去除 `Key` 前缀并将修饰键首字母大写，确保与 HOTKEY_MAP 中的加速器格式一致。
-    fn normalize_accelerator(acc: &str) -> String {
-        let lower = acc.to_lowercase();
-        let parts: Vec<&str> = lower.split('+').collect();
-        let normalized: Vec<String> = parts
-            .iter()
-            .map(|part| {
-                let cleaned = part.trim().strip_prefix("key").unwrap_or(part);
-                let mut chars = cleaned.chars();
-                match chars.next() {
-                    None => String::new(),
-                    Some(first) => first.to_uppercase().to_string() + chars.as_str(),
-                }
-            })
-            .collect();
-        normalized.join("+")
     }
 
     /// 注册单个全局热键。
@@ -124,58 +94,18 @@ impl HotkeyManager {
     /// # 返回值
     /// 成功返回 `Ok(())`，任一步骤失败返回封装后的错误。
     pub fn register_hotkey(app: &AppHandle, hotkey_type: &str) -> Result<()> {
-        log::debug!(
-            "[HotkeyManager::register_hotkey] Start: hotkey_type={}",
-            hotkey_type
-        );
         let accelerator = Self::hotkey_type_to_accelerator(hotkey_type)?;
-        log::debug!(
-            "[HotkeyManager::register_hotkey] Resolved accelerator: {} -> {}",
-            hotkey_type,
-            accelerator
-        );
 
         let shortcut: Shortcut = accelerator
             .parse()
             .with_context(|| format!("Failed to parse accelerator: {}", accelerator))?;
 
-        let result = app
-            .global_shortcut()
+        app.global_shortcut()
             .register(shortcut)
-            .with_context(|| format!("Failed to register hotkey: {}", hotkey_type));
+            .with_context(|| format!("Failed to register hotkey: {}", hotkey_type))?;
 
-        match result {
-            Ok(()) => {
-                // 二次确认注册结果，便于排查系统级注册是否真正生效
-                let confirmed = app.global_shortcut().is_registered(shortcut);
-                log::info!(
-                    "Hotkey registered: {} ({}) confirmed={}",
-                    hotkey_type,
-                    accelerator,
-                    confirmed
-                );
-                let payload = serde_json::json!({ "key": hotkey_type, "success": true });
-                log::debug!(
-                    "[HotkeyManager::register_hotkey] Emitting hotkey-registered: {}",
-                    payload
-                );
-                let _ = app.emit("hotkey-registered", payload);
-                Ok(())
-            }
-            Err(e) => {
-                let payload = serde_json::json!({
-                    "key": hotkey_type,
-                    "success": false,
-                    "error": e.to_string()
-                });
-                log::debug!(
-                    "[HotkeyManager::register_hotkey] Emitting hotkey-registered: {}",
-                    payload
-                );
-                let _ = app.emit("hotkey-registered", payload);
-                Err(e)
-            }
-        }
+        log::info!("Hotkey registered: {} ({})", hotkey_type, accelerator);
+        Ok(())
     }
 
     /// 注销单个全局热键。
@@ -190,60 +120,24 @@ impl HotkeyManager {
     /// # 返回值
     /// 成功返回 `Ok(())`，失败返回封装后的错误。
     pub fn unregister_hotkey(app: &AppHandle, hotkey_type: &str) -> Result<()> {
-        log::debug!(
-            "[HotkeyManager::unregister_hotkey] Start: hotkey_type={}",
-            hotkey_type
-        );
         let accelerator = Self::hotkey_type_to_accelerator(hotkey_type)?;
 
         let shortcut: Shortcut = accelerator
             .parse()
             .with_context(|| format!("Failed to parse accelerator: {}", accelerator))?;
 
-        let result = app
-            .global_shortcut()
+        app.global_shortcut()
             .unregister(shortcut)
-            .with_context(|| format!("Failed to unregister hotkey: {}", hotkey_type));
+            .with_context(|| format!("Failed to unregister hotkey: {}", hotkey_type))?;
 
-        match result {
-            Ok(()) => {
-                // 二次确认注销结果
-                let still_registered = app.global_shortcut().is_registered(shortcut);
-                log::info!(
-                    "Hotkey unregistered: {} ({}) still_registered={}",
-                    hotkey_type,
-                    accelerator,
-                    still_registered
-                );
-                let payload = serde_json::json!({ "key": hotkey_type, "success": true });
-                log::debug!(
-                    "[HotkeyManager::unregister_hotkey] Emitting hotkey-unregistered: {}",
-                    payload
-                );
-                let _ = app.emit("hotkey-unregistered", payload);
-                Ok(())
-            }
-            Err(e) => {
-                let payload = serde_json::json!({
-                    "key": hotkey_type,
-                    "success": false,
-                    "error": e.to_string()
-                });
-                log::debug!(
-                    "[HotkeyManager::unregister_hotkey] Emitting hotkey-unregistered: {}",
-                    payload
-                );
-                let _ = app.emit("hotkey-unregistered", payload);
-                Err(e)
-            }
-        }
+        log::info!("Hotkey unregistered: {} ({})", hotkey_type, accelerator);
+        Ok(())
     }
 
     /// 注销所有已注册的全局热键。
     ///
     /// 用于应用退出、热键重置等场景，确保不残留系统级快捷键。
     pub fn unregister_all(app: &AppHandle) -> Result<()> {
-        log::debug!("[HotkeyManager::unregister_all] Start");
         app.global_shortcut()
             .unregister_all()
             .context("Failed to unregister all hotkeys")?;
@@ -286,29 +180,19 @@ impl HotkeyManager {
     /// # 返回值
     /// 成功返回 `Ok(())`，注册失败返回错误。
     pub fn register_from_settings(app: &AppHandle, settings: &Settings) -> Result<()> {
-        log::debug!(
-            "[HotkeyManager::register_from_settings] Start: keyboard={}, gamepad={}",
-            settings.hotkey_keyboard,
-            settings.hotkey_gamepad
-        );
         // 先清空再注册，确保最终状态与设置一致
         Self::unregister_all(app)?;
 
         let hotkey_keyboard = &settings.hotkey_keyboard;
         if hotkey_keyboard != "none" {
             Self::register_hotkey(app, hotkey_keyboard)?;
-        } else {
-            log::debug!("[HotkeyManager::register_from_settings] Keyboard hotkey set to 'none', skipping");
         }
 
         let hotkey_gamepad = &settings.hotkey_gamepad;
         if hotkey_gamepad != "none" {
             log::info!("Gamepad hotkey '{}' configured (not yet implemented)", hotkey_gamepad);
-        } else {
-            log::debug!("[HotkeyManager::register_from_settings] Gamepad hotkey set to 'none', skipping");
         }
 
-        log::debug!("[HotkeyManager::register_from_settings] Done");
         Ok(())
     }
 
@@ -331,19 +215,10 @@ impl HotkeyManager {
     pub fn handle_hotkey_event(app: &AppHandle, shortcut: &Shortcut, state: ShortcutState) {
         // 只处理按下事件，避免一次按下触发两次
         if state != ShortcutState::Pressed {
-            log::debug!(
-                "[HotkeyManager::handle_hotkey_event] Ignoring non-pressed state: {:?}",
-                state
-            );
             return;
         }
 
         let accelerator = shortcut.to_string();
-        log::debug!(
-            "[HotkeyManager::handle_hotkey_event] Raw shortcut: {}",
-            accelerator
-        );
-
         // 反查内部标识，未在映射表中的快捷键直接忽略
         let hotkey_type = match Self::accelerator_to_hotkey_type(&accelerator) {
             Some(t) => t,
@@ -352,54 +227,32 @@ impl HotkeyManager {
                 return;
             }
         };
-        log::debug!(
-            "[HotkeyManager::handle_hotkey_event] Mapped shortcut: accelerator={} -> hotkey_type={}",
-            accelerator,
-            hotkey_type
-        );
 
-        // 热键触发可能非常频繁，使用采样在 1 秒窗口内仅输出首次日志
-        let sampler = HOTKEY_EVENT_SAMPLER.get_or_init(LogSampler::new);
-        if sampler.should_log("hotkey_pressed") {
-            log::info!("Hotkey pressed: {} ({})", hotkey_type, accelerator);
-        }
+        log::info!("Hotkey pressed: {} ({})", hotkey_type, accelerator);
 
         // 尝试获取 AppState，如果失败则使用默认设置
-        let (settings, matched_game) = match app.try_state::<crate::state::AppState>() {
+        let (settings, is_in_game) = match app.try_state::<crate::state::AppState>() {
             Some(state) => {
                 let settings = state.settings.read().clone();
                 // 获取前台进程名，失败时返回 "unknown"（不会匹配任何游戏）
                 let foreground_process = ProcessDetector::get_foreground_process_name()
                     .unwrap_or_else(|_| "unknown".to_string());
                 let game = ProcessDetector::match_game_process(&foreground_process, &settings);
-                let is_in_game = game != TargetGame::None;
-                log::debug!(
-                    "[HotkeyManager::handle_hotkey_event] Foreground process: {}, matched game: {:?}, is_in_game={}",
-                    foreground_process,
-                    game,
-                    is_in_game
-                );
-                (settings, game)
+                log::debug!("Foreground process: {}, matched game: {:?}", foreground_process, game);
+                (settings, game != TargetGame::None)
             }
             None => {
                 // 状态未注入（异常路径）：使用默认设置并假设在游戏中，确保热键可用
                 log::warn!("AppState not found, using default settings");
-                (Settings::default(), TargetGame::None) // 默认无匹配游戏
+                (Settings::default(), true) // 默认假设在游戏中
             }
         };
 
-        let is_in_game = matched_game != TargetGame::None;
-
         // 执行热键处理
-        log::debug!(
-            "[HotkeyManager::handle_hotkey_event] Dispatching hotkey={} to {}",
-            hotkey_type,
-            if is_in_game { "in-game" } else { "outside-game" }
-        );
         if is_in_game {
-            Self::handle_in_game_hotkey(app, &settings, &hotkey_type, matched_game);
+            Self::handle_in_game_hotkey(app, &settings, &hotkey_type);
         } else {
-            Self::handle_out_of_game_hotkey(app, &settings, &hotkey_type, matched_game);
+            Self::handle_out_of_game_hotkey(app, &settings, &hotkey_type);
         }
     }
 
@@ -413,53 +266,28 @@ impl HotkeyManager {
     /// # 参数
     /// - `app`：Tauri 应用句柄；
     /// - `settings`：用户设置（用于判断是否自动置顶）；
-    ///    - `hotkey_type`：触发的热键标识（如 `"altW"`）。
-    ///    - `matched_game`：前台进程匹配到的游戏（`TargetGame::None` 表示未匹配）。
-    fn handle_in_game_hotkey(app: &AppHandle, settings: &Settings, hotkey_type: &str, matched_game: TargetGame) {
-        log::debug!(
-            "[HotkeyManager::handle_in_game_hotkey] key={}",
-            hotkey_type
-        );
-
+    /// - `hotkey_type`：触发的热键标识（如 `"altW"`）。
+    fn handle_in_game_hotkey(app: &AppHandle, settings: &Settings, hotkey_type: &str) {
         match WindowManager::toggle_window(app) {
             Ok(shown) => {
-                log::debug!(
-                    "[HotkeyManager::handle_in_game_hotkey] Window toggled, now visible: {}",
-                    shown
-                );
+                log::info!("Window toggled, now visible: {}", shown);
                 // 仅在显示且配置允许时设置置顶
                 if shown && settings.is_auto_pin_window {
                     if let Err(e) = WindowManager::set_always_on_top(app, true) {
-                        log::warn!(
-                            "[HotkeyManager::handle_in_game_hotkey] Failed to set window always on top: {}",
-                            e
-                        );
+                        log::warn!("Failed to set window always on top: {}", e);
                     }
                 }
             }
             Err(e) => {
-                log::error!(
-                    "[HotkeyManager::handle_in_game_hotkey] Failed to toggle window: {}",
-                    e
-                );
+                log::error!("Failed to toggle window: {}", e);
             }
         }
 
         // 通知前端热键来源和标识（用于触发 UI 反馈等）
-        let matched_game_str = match matched_game {
-            TargetGame::None => serde_json::Value::Null,
-            _ => serde_json::json!(matched_game.as_str()),
-        };
-        let payload = serde_json::json!({
+        let _ = app.emit("hotkey-pressed", serde_json::json!({
             "key": hotkey_type,
-            "source": "in-game",
-            "matchedGame": matched_game_str
-        });
-        log::debug!(
-            "[HotkeyManager::handle_in_game_hotkey] Emitting hotkey-pressed: {}",
-            payload
-        );
-        let _ = app.emit("hotkey-pressed", payload);
+            "source": "in-game"
+        }));
     }
 
     /// 处理“在游戏外”触发的热键。
@@ -473,51 +301,30 @@ impl HotkeyManager {
     /// # 参数
     /// - `app`：Tauri 应用句柄；
     /// - `settings`：用户设置；
-    ///    - `hotkey_type`：触发的热键标识（如 `"altW"`）。
-    ///    - `matched_game`：前台进程匹配到的游戏（`TargetGame::None` 表示未匹配）。
-    fn handle_out_of_game_hotkey(app: &AppHandle, settings: &Settings, hotkey_type: &str, _matched_game: TargetGame) {
-        log::debug!(
-            "[HotkeyManager::handle_out_of_game_hotkey] key={}",
-            hotkey_type
-        );
-
+    /// - `hotkey_type`：触发的热键标识（如 `"altW"`）。
+    fn handle_out_of_game_hotkey(app: &AppHandle, settings: &Settings, hotkey_type: &str) {
         // 游戏外也调用 toggle_window，与游戏内行为统一
         // 平台兼容性：toggle_window 使用 Tauri 的 window.hide()/show()/set_focus()，
         // 在 Windows 11 和 Linux 上均受支持
         match WindowManager::toggle_window(app) {
             Ok(shown) => {
-                log::debug!(
-                    "[HotkeyManager::handle_out_of_game_hotkey] Window toggled, now visible: {}",
-                    shown
-                );
+                log::info!("Window toggled (outside game), now visible: {}", shown);
                 if shown && settings.is_auto_pin_window {
                     if let Err(e) = WindowManager::set_always_on_top(app, true) {
-                        log::warn!(
-                            "[HotkeyManager::handle_out_of_game_hotkey] Failed to set window always on top: {}",
-                            e
-                        );
+                        log::warn!("Failed to set window always on top: {}", e);
                     }
                 }
             }
             Err(e) => {
                 // 严重错误：记录 error 级别日志
-                log::error!(
-                    "[HotkeyManager::handle_out_of_game_hotkey] Failed to toggle window: {}",
-                    e
-                );
+                log::error!("Failed to toggle window (outside game): {}", e);
             }
         }
 
-        let payload = serde_json::json!({
+        let _ = app.emit("hotkey-pressed", serde_json::json!({
             "key": hotkey_type,
-            "source": "outside-game",
-            "matchedGame": null
-        });
-        log::debug!(
-            "[HotkeyManager::handle_out_of_game_hotkey] Emitting hotkey-pressed: {}",
-            payload
-        );
-        let _ = app.emit("hotkey-pressed", payload);
+            "source": "outside-game"
+        }));
     }
 }
 

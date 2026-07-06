@@ -162,7 +162,7 @@ export function useHotkey() {
    * @param key 热键标识字符串
    */
   function emitHotkeyPressed(key: string) {
-    emit(EventNames.HOTKEY_PRESSED, { key, source: 'in-game' as const, matchedGame: null, timestamp: Date.now() });
+    emit(EventNames.HOTKEY_PRESSED, { key, source: 'in-game' as const, timestamp: Date.now() });
   }
 
   // 统一返回响应式状态与方法，供调用方按需解构使用

@@ -75,16 +75,16 @@ export interface EventPayloadMap {
   [EventNames.MOD_GROUPS_UPDATED]: ModGroupData[];
   /** 文件监听事件载荷：单次文件系统变化信息 */
   [EventNames.FILE_WATCHER_EVENT]: FileWatcherEvent;
-  /** 热键按下事件载荷：按键标识、来源（游戏中/游戏外）、匹配到的游戏（null 表示未匹配）与时间戳 */
-  [EventNames.HOTKEY_PRESSED]: { key: string; source: 'in-game' | 'outside-game'; matchedGame: string | null; timestamp?: number };
-  /** 热键注册结果载荷：按键标识、是否成功及可选错误信息 */
-  [EventNames.HOTKEY_REGISTERED]: { key: string; success: boolean; error?: unknown };
-  /** 热键注销结果载荷：按键标识、是否成功及可选错误信息 */
-  [EventNames.HOTKEY_UNREGISTERED]: { key: string; success: boolean; error?: unknown };
-  /** 窗口显示事件载荷：当前可见状态与触发来源 */
-  [EventNames.WINDOW_SHOWN]: { visible: boolean; source: string };
-  /** 窗口隐藏事件载荷：当前可见状态与触发来源 */
-  [EventNames.WINDOW_HIDDEN]: { visible: boolean; source: string };
+  /** 热键按下事件载荷：按键标识、来源（游戏中/游戏外）与时间戳 */
+  [EventNames.HOTKEY_PRESSED]: { key: string; source: 'in-game' | 'outside-game'; timestamp?: number };
+  /** 热键注册结果载荷：按键标识与是否成功 */
+  [EventNames.HOTKEY_REGISTERED]: { key: string; success: boolean };
+  /** 热键注销结果载荷：按键标识与是否成功 */
+  [EventNames.HOTKEY_UNREGISTERED]: { key: string; success: boolean };
+  /** 窗口显示事件载荷：无 */
+  [EventNames.WINDOW_SHOWN]: void;
+  /** 窗口隐藏事件载荷：无 */
+  [EventNames.WINDOW_HIDDEN]: void;
   /** 窗口位置变化载荷：完整位置与尺寸信息 */
   [EventNames.WINDOW_POSITION_CHANGED]: WindowPosition;
   /** 窗口尺寸变化载荷：宽高 */
