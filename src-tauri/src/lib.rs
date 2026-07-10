@@ -242,6 +242,7 @@ pub fn run() {
             commands::remove_icon,
             commands::toggle_mod_disabled,
             commands::toggle_tree_node_mod_disabled,
+            commands::toggle_tree_node_group_disabled,
             commands::add_group,
             commands::remove_group,
             commands::rename_group,

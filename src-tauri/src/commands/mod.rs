@@ -439,6 +439,27 @@ pub async fn toggle_group_favorite(
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
+/// 切换 # 目录分组的启用/禁用状态。
+///
+/// 通过在目录名前添加或移除 `DISABLED` 前缀实现状态切换。
+/// 该功能仅对 # 目录分组生效，group_xx 分组调用将返回错误。
+///
+/// 参数：
+/// - `group_path`: 目标分组目录路径。
+///
+/// 返回：操作后的禁用状态（true = 已禁用，false = 已启用）。
+#[tauri::command]
+pub async fn toggle_tree_node_group_disabled(
+    group_path: String,
+) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::toggle_tree_node_group_disabled(&group_path)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
 /// 切换模组的收藏状态（`toggle_favorite` 的模组专用别名）。
 ///
 /// 参数：
@@ -561,39 +582,73 @@ pub async fn toggle_tree_node_mod_disabled(
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
-/// 在 `_MANAGED_` 目录下新建一个分组。
+/// 在指定位置新建一个分组。
 ///
-/// 从全局设置中获取当前游戏的 Mods 路径，自动寻找最小可用索引创建分组。
+/// 根据 `target_group_path` 参数决定创建位置：
+/// - 未指定或指定的是 `_MANAGED_` 下的 `group_xx` 分组：在 `_MANAGED_` 目录下创建新的 `group_<index>` 分组
+/// - 指定的是 `#` 目录下的分组：在同一父目录下创建用户命名的分组目录
 ///
 /// 参数：
 /// - `state`: 应用全局状态。
 /// - `group_name`: 新分组的显示名称。
+/// - `target_group_path`: 目标分组路径（可选）。指定后新分组将与该分组处于同一目录层级。
 ///
-/// 返回：新分组的索引。
+/// 返回：新分组的索引（对于 group_xx 分组）或 0（对于 # 目录下的分组）。
 /// 错误：未配置 Mods 路径时返回 `"No mods path configured"`。
 #[tauri::command]
-pub async fn add_group(state: State<'_, AppState>, group_name: String) -> Result<i32, String> {
-    let managed_path = {
-        let settings = state.settings.read();
-        let mods_path =
-            crate::mod_manager::ModManager::get_mods_path_for_game(&settings, settings.target_game);
-
-        if mods_path.is_empty() {
-            return Err("No mods path configured".to_string());
+pub async fn add_group(
+    state: State<'_, AppState>,
+    group_name: String,
+    target_group_path: Option<String>,
+) -> Result<i32, String> {
+    match target_group_path {
+        Some(target_path) => {
+            let target_path = Path::new(&target_path);
+            if !target_path.exists() || !target_path.is_dir() {
+                return Err("Target group path does not exist".to_string());
+            }
+            
+            let parent_path = target_path.parent();
+            if parent_path.is_none() {
+                return Err("Invalid target group path".to_string());
+            }
+            
+            let parent_path_str = parent_path
+                .expect("parent_path should exist after None check")
+                .to_string_lossy()
+                .to_string();
+            
+            tokio::task::spawn_blocking(move || {
+                crate::mod_manager::ModManager::add_child_group(&parent_path_str, &group_name)
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
         }
+        None => {
+            let managed_path = {
+                let settings = state.settings.read();
+                let mods_path =
+                    crate::mod_manager::ModManager::get_mods_path_for_game(&settings, settings.target_game);
 
-        Path::new(&mods_path)
-            .join(crate::mod_manager::MANAGED_FOLDER)
-            .to_string_lossy()
-            .to_string()
-    };
+                if mods_path.is_empty() {
+                    return Err("No mods path configured".to_string());
+                }
 
-    tokio::task::spawn_blocking(move || {
-        crate::mod_manager::ModManager::add_group(&managed_path, &group_name)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+                Path::new(&mods_path)
+                    .join(crate::mod_manager::MANAGED_FOLDER)
+                    .to_string_lossy()
+                    .to_string()
+            };
+
+            tokio::task::spawn_blocking(move || {
+                crate::mod_manager::ModManager::add_group(&managed_path, &group_name)
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+        }
+    }
 }
 
 /// 移除分组（移动到 `_MANAGED_` 下并加时间戳后缀，便于恢复）。
@@ -699,11 +754,24 @@ pub async fn refresh_single_group(
 
         let icon_path = ModManager::get_icon_path(&group_path_str);
         let favorite_date_time = ModManager::is_favorite(&group_path_str).unwrap_or(None);
-        let mods_in_group =
-            ModManager::get_mods_on_group(&group_path_str).map_err(|e| e.to_string())?;
+        let is_under_hash_dir = crate::mod_manager::path_utils::is_path_under_hash_dir(path);
+        let mods_in_group = if is_under_hash_dir {
+            ModManager::get_mods_on_group_readonly(&group_path_str).map_err(|e| e.to_string())?
+        } else {
+            ModManager::get_mods_on_group(&group_path_str).map_err(|e| e.to_string())?
+        };
         let mods_count = mods_in_group.len();
-        let previous_selected_mod_on_group =
-            ModManager::get_selected_mod_in_group(&group_path_str, mods_count).unwrap_or(0);
+        // # 目录分组不使用 selectedindex 机制，跳过读取
+        let previous_selected_mod_on_group = if dir_name.starts_with('#')
+            || (ModManager::is_disabled_name(&dir_name)
+                && dir_name[crate::mod_manager::DISABLED_PREFIX.len()..]
+                    .trim_start_matches('_')
+                    .starts_with('#'))
+        {
+            0
+        } else {
+            ModManager::get_selected_mod_in_group(&group_path_str, mods_count).unwrap_or(0)
+        };
 
         Ok(ModGroupData {
             group_path: group_path_str,
@@ -1224,13 +1292,12 @@ pub async fn save_settings(
         crate::get_app_data_dir().ok_or_else(|| "Failed to get app data dir".to_string())?;
 
     // 在覆盖前记录旧热键配置，用于判断是否需要重新注册全局热键
-    let old_hotkey_keyboard = {
+    let (old_hotkey_keyboard, old_hotkey_gamepad) = {
         let current = state.settings.read();
-        current.hotkey_keyboard.clone()
-    };
-    let old_hotkey_gamepad = {
-        let current = state.settings.read();
-        current.hotkey_gamepad.clone()
+        (
+            current.hotkey_keyboard.clone(),
+            current.hotkey_gamepad.clone(),
+        )
     };
     let hotkeys_changed = old_hotkey_keyboard != settings.hotkey_keyboard
         || old_hotkey_gamepad != settings.hotkey_gamepad;

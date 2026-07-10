@@ -29,14 +29,17 @@ export const useHotkeyStore = defineStore('hotkey', () => {
   const currentGamepadHotkey = ref<HotkeyGamepad>('none' as HotkeyGamepad);
   // 手柄左摇杆是否已触发过的标志，用于避免长按时重复触发同一动作。
   const leftThumbWasTriggered = ref(false);
+  // 窗口内搜索快捷键是否可用（窗口聚焦且位于 mods 标签页时为 true）。
+  const isSearchHotkeysEnabled = ref(false);
 
   /**
    * 热键整体状态的聚合视图。
-   * 便于订阅方一次性拿到 isRegistered / isEnabled / lastPressed / lastPressedTime。
+   * 便于订阅方一次性拿到 isRegistered / isEnabled / isSearchHotkeysEnabled / lastPressed / lastPressedTime。
    */
   const hotkeyState = computed<HotkeyState>(() => ({
     isRegistered: registeredHotkeys.value.length > 0,
     isEnabled: isHotkeyEnabled.value,
+    isSearchHotkeysEnabled: isSearchHotkeysEnabled.value,
     lastPressed: lastHotkeyPressed.value,
     lastPressedTime: lastHotkeyPressedTime.value
   }));
@@ -145,6 +148,11 @@ export const useHotkeyStore = defineStore('hotkey', () => {
     leftThumbWasTriggered.value = triggered;
   }
 
+  /** 设置窗口内搜索快捷键是否可用。 */
+  function setSearchHotkeysEnabled(enabled: boolean) {
+    isSearchHotkeysEnabled.value = enabled;
+  }
+
   /**
    * 判断指定热键是否已在前端列表中注册。
    * @param key 热键标识
@@ -179,6 +187,7 @@ export const useHotkeyStore = defineStore('hotkey', () => {
     currentKeyboardHotkey,
     currentGamepadHotkey,
     leftThumbWasTriggered,
+    isSearchHotkeysEnabled,
     hotkeyState,
     hasRegisteredHotkeys,
     registerHotkey,
@@ -191,6 +200,7 @@ export const useHotkeyStore = defineStore('hotkey', () => {
     setKeyboardHotkey,
     setGamepadHotkey,
     setLeftThumbTriggered,
+    setSearchHotkeysEnabled,
     isHotkeyRegistered,
     clearAllHotkeys,
     unregisterAllHotkeys

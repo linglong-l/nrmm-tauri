@@ -316,34 +316,29 @@ impl WindowManager {
             .position()
             .context("Failed to get window position")?
             .to_logical::<f64>(scale_factor);
-        let is_on_top = window
-            .is_always_on_top()
-            .context("Failed to check always on top")?;
 
         let mut settings = settings.write();
 
         // 只在状态实际变化时记录日志和更新设置
-        // 比较 5 个关键字段：宽、高、X、Y、置顶状态
+        // 比较 4 个关键字段：宽、高、X、Y
+        // 注意：is_auto_pin_window 是用户偏好设置，不应被窗口状态覆盖
         let has_changes = settings.saved_window_width != size.width as i32
             || settings.saved_window_height != size.height as i32
             || settings.saved_window_x != Some(pos.x as i32)
-            || settings.saved_window_y != Some(pos.y as i32)
-            || settings.is_auto_pin_window != is_on_top;
+            || settings.saved_window_y != Some(pos.y as i32);
 
         if has_changes {
             settings.saved_window_width = size.width as i32;
             settings.saved_window_height = size.height as i32;
             settings.saved_window_x = Some(pos.x as i32);
             settings.saved_window_y = Some(pos.y as i32);
-            settings.is_auto_pin_window = is_on_top;
 
             log::debug!(
-                "Window state saved: size=({}, {}), position=({:?}, {:?}), on_top={}",
+                "Window state saved: size=({}, {}), position=({:?}, {:?})",
                 settings.saved_window_width,
                 settings.saved_window_height,
                 settings.saved_window_x,
-                settings.saved_window_y,
-                settings.is_auto_pin_window
+                settings.saved_window_y
             );
         }
 
@@ -492,7 +487,8 @@ impl WindowManager {
     /// # 业务逻辑
     /// 1. 调用 [`Self::apply_platform_window_config`] 应用平台特定配置；
     /// 2. 设置最小尺寸（[`DEFAULT_MIN_WIDTH`] × [`DEFAULT_MIN_HEIGHT`]），防止窗口过小；
-    /// 3. 调用 [`Self::restore_window_state`] 恢复上次保存的尺寸/位置/置顶。
+    /// 3. 调用 [`Self::restore_window_state`] 恢复上次保存的尺寸/位置/置顶；
+    /// 4. 调用 [`Self::show_window`] 确保窗口可见，即使上次退出时处于隐藏状态。
     ///
     /// # 参数
     /// - `app`：Tauri 应用句柄；
@@ -507,6 +503,10 @@ impl WindowManager {
         }
         Self::set_min_size(app, DEFAULT_MIN_WIDTH, DEFAULT_MIN_HEIGHT)?;
         Self::restore_window_state(app, settings)?;
+        // 启动时确保窗口可见，即使上次退出时通过关闭按钮隐藏到托盘
+        if let Err(e) = Self::show_window(app) {
+            log::warn!("Failed to show window on startup: {}", e);
+        }
         Ok(())
     }
 }

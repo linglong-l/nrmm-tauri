@@ -30,6 +30,21 @@ const iniFiles = ref<IniFileData[]>([]);
 const error = ref<string | null>(null);
 
 /**
+ * 检测路径是否位于 # 目录下。
+ * @param path 文件或目录路径
+ * @returns 位于 # 目录下返回 true
+ */
+function isPathUnderHashDir(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/');
+  return normalized.split('/').some(segment => {
+    const stripped = segment.startsWith('DISABLED')
+      ? segment.replace(/^DISABLED_?/, '')
+      : segment;
+    return stripped.startsWith('#');
+  });
+}
+
+/**
  * 当前选中模组的绝对路径。
  * 根据当前分组路径从 gameStore 中读取。
  */
@@ -101,6 +116,11 @@ async function loadKeybinds(path: string | null) {
   iniFiles.value = [];
   error.value = null;
   if (!path) return;
+
+  if (isPathUnderHashDir(path)) {
+    error.value = '# 目录下的模组不支持快捷键查看';
+    return;
+  }
 
   loading.value = true;
   try {

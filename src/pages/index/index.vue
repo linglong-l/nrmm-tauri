@@ -214,12 +214,22 @@ function handleSearchHotkey(event: KeyboardEvent): void {
   }
 
   // 焦点在 input/textarea/contenteditable 元素时不触发，避免干扰文字输入
+  // 例外：若搜索框已显示且焦点正好在对应的搜索输入框内，允许快捷键关闭搜索框
   const target = event.target as HTMLElement;
   if (target) {
     const tagName = target.tagName.toLowerCase();
     if (tagName === 'input' || tagName === 'textarea') {
-      console.debug('[SearchHotkey] Ignored: focus is in input/textarea');
-      return;
+      // 仅在焦点位于搜索输入框且对应搜索框可见时放行，以便快捷键关闭搜索框
+      const groupInputEl = modsTabRef.value?.getGroupSearchInputEl() ?? null;
+      const modInputEl = modsTabRef.value?.getModSearchInputEl() ?? null;
+      const isGroupSearchInput = groupInputEl !== null && target === groupInputEl;
+      const isModSearchInput = modInputEl !== null && target === modInputEl;
+      const groupVisible = modsTabRef.value?.isGroupSearchVisible() ?? false;
+      const modVisible = modsTabRef.value?.isModSearchVisible() ?? false;
+      if (!((isGroupSearchInput && groupVisible) || (isModSearchInput && modVisible))) {
+        console.debug('[SearchHotkey] Ignored: focus is in input/textarea');
+        return;
+      }
     }
     if (target.isContentEditable) {
       console.debug('[SearchHotkey] Ignored: focus is contenteditable');

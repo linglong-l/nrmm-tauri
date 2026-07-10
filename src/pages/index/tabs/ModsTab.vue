@@ -31,7 +31,8 @@ import {
   Operation,
   Timer,
   Top,
-  Search
+  Search,
+  Lock
 } from '@element-plus/icons-vue';
 import { useGame } from '../../../composables/useGame';
 import { sortModsForDisplay } from '../../../stores/game';
@@ -43,6 +44,7 @@ import {
   invokeRefreshSingleGroup,
   invokeToggleModDisabled,
   invokeToggleTreeNodeModDisabled,
+  invokeToggleTreeNodeGroupDisabled,
   invokeAddGroup,
   invokeAddMods,
   invokeRemoveGroup,
@@ -75,6 +77,7 @@ const dialogAddGroupVisible = ref(false);              // 新建分组对话框�
 const dialogRenameGroupVisible = ref(false);           // 重命名分组对话框可见性
 const dialogRenameModVisible = ref(false);             // 重命名模组对话框可见性
 const newGroupName = ref('');                          // 新建分组名称输入
+const targetGroupPath = ref<string | undefined>();      // 目标分组路径（右键点击时设置）
 const renameGroupName = ref('');                       // 重命名分组名称输入
 const renameModName = ref('');                         // 重命名模组名称输入
 const contextMenuVisible = ref(false);                 // 右键菜单可见性
@@ -572,6 +575,24 @@ async function toggleGroupFavorite(group: ModGroupData) {
   await game.toggleGroupFavorite(group.groupPath);
 }
 
+/**
+ * 切换 # 目录分组的启用/禁用状态。
+ * 仅对 isTreeNode 且非 isVirtual 的分组生效（即 # 目录分组）。
+ * 操作通过目录名 DISABLED 前缀控制，不涉及 INI 文件修改。
+ * @param group 待切换的分组
+ */
+async function toggleTreeNodeGroupDisabled(group: ModGroupData) {
+  if (!group.isTreeNode || group.isVirtual) return;
+  try {
+    await invokeToggleTreeNodeGroupDisabled(group.groupPath);
+    await refreshMods();
+    ElMessage.success(group.isDisabled ? t('Group enabled') : t('Group disabled'));
+  } catch (error) {
+    console.error('Failed to toggle group disabled:', error);
+    ElMessage.error(t('Failed to toggle group disabled'));
+  }
+}
+
 // ===== 拖拽添加 Mod =====
 
 const isImporting = ref(false);
@@ -681,9 +702,13 @@ async function onDrop(event: DragEvent) {
   }
 }
 
-/** 打开新建分组对话框，并清空输入框 */
-function showAddGroupDialog() {
+/** 
+ * 打开新建分组对话框，并清空输入框。
+ * @param targetPath 目标分组路径（可选）。右键点击分组时传入，新分组将与该分组处于同一目录层级。
+ */
+function showAddGroupDialog(targetPath?: string) {
   newGroupName.value = '';
+  targetGroupPath.value = targetPath;
   dialogAddGroupVisible.value = true;
 }
 
@@ -699,7 +724,7 @@ async function handleAddGroup() {
     return;
   }
   try {
-    await invokeAddGroup(newGroupName.value.trim());
+    await invokeAddGroup(newGroupName.value.trim(), targetGroupPath.value);
     await refreshMods();
     dialogAddGroupVisible.value = false;
     ElMessage.success(t('Group added successfully'));
@@ -899,6 +924,9 @@ async function handleContextMenuSelect(command: string) {
       case 'delete':
         handleRemoveGroup();
         break;
+      case 'toggle-disabled':
+        await toggleTreeNodeGroupDisabled(group);
+        break;
       case 'export':
         await exportGroup(group);
         break;
@@ -943,10 +971,14 @@ async function selectModInGroup(mod: ModData) {
   if (arrayIndex >= 0) {
     selectedModIndex.value = arrayIndex;
     game.setSelectedModPath(game.currentGroupPath.value, mod.modPath);
-    try {
-      await invokeSetSelectedMod(game.currentGroupPath.value, arrayIndex);
-    } catch (error) {
-      console.error('Failed to select mod:', error);
+    // # 目录分组不使用 selectedindex 机制，跳过持久化
+    const currentGroup = game.currentGroup.value;
+    if (currentGroup && !(currentGroup.isTreeNode && !currentGroup.isVirtual)) {
+      try {
+        await invokeSetSelectedMod(game.currentGroupPath.value, arrayIndex);
+      } catch (error) {
+        console.error('Failed to select mod:', error);
+      }
     }
   }
 }
@@ -1280,8 +1312,46 @@ function handleEscKey(event: KeyboardEvent): void {
   }
 }
 
+/**
+ * 获取分组搜索输入框的原生 DOM 元素。
+ * 用于父组件判断焦点是否在搜索输入框内，以便快捷键关闭搜索框。
+ * @returns 原生 input 元素，未挂载时返回 null
+ */
+function getGroupSearchInputEl(): HTMLInputElement | null {
+  return (groupSearchInputRef.value as any)?.ref ?? null;
+}
+
+/**
+ * 获取模组搜索输入框的原生 DOM 元素。
+ * 用于父组件判断焦点是否在搜索输入框内，以便快捷键关闭搜索框。
+ * @returns 原生 input 元素，未挂载时返回 null
+ */
+function getModSearchInputEl(): HTMLInputElement | null {
+  return (modSearchInputRef.value as any)?.ref ?? null;
+}
+
+/** 返回分组搜索框是否可见。 */
+function isGroupSearchVisible(): boolean {
+  return groupSearchVisible.value;
+}
+
+/** 返回模组搜索框是否可见。 */
+function isModSearchVisible(): boolean {
+  return modSearchVisible.value;
+}
+
 // 暴露搜索框聚焦方法供父组件通过组件 ref 调用，用于快捷键聚焦
-defineExpose({ focusGroupSearch, focusModSearch, toggleSearchBars, toggleGroupSearch, toggleModSearch });
+defineExpose({
+  focusGroupSearch,
+  focusModSearch,
+  toggleSearchBars,
+  toggleGroupSearch,
+  toggleModSearch,
+  getGroupSearchInputEl,
+  getModSearchInputEl,
+  isGroupSearchVisible,
+  isModSearchVisible
+});
 </script>
 
 <template>
@@ -1681,7 +1751,7 @@ defineExpose({ focusGroupSearch, focusModSearch, toggleSearchBars, toggleGroupSe
           交互行为：@click 调用 showAddGroupDialog 打开新建分组对话框
           图标：FolderAdd 图标
         -->
-        <div class="context-menu-item" @click="showAddGroupDialog">
+        <div class="context-menu-item" @click="showAddGroupDialog((contextMenuData as ModGroupData).groupPath)">
           <el-icon>
             <FolderAdd />
           </el-icon>
@@ -1711,6 +1781,23 @@ defineExpose({ focusGroupSearch, focusModSearch, toggleSearchBars, toggleGroupSe
             <Star />
           </el-icon>
           {{ (contextMenuData as ModGroupData)?.favoriteDateTime ? t('Unfavorite') : t('Favorite') }}
+        </div>
+        <!--
+          启用/禁用分组菜单项（仅 # 目录分组显示）
+          交互行为：@click 调用 handleContextMenuSelect('toggle-disabled')
+          动态文本：根据 isDisabled 显示"Enable group"或"Disable group"
+          图标：Lock 图标
+          条件渲染：仅 isTreeNode && !isVirtual 时显示
+        -->
+        <div
+          v-if="(contextMenuData as ModGroupData)?.isTreeNode && !(contextMenuData as ModGroupData)?.isVirtual"
+          class="context-menu-item"
+          @click="handleContextMenuSelect('toggle-disabled')"
+        >
+          <el-icon>
+            <Lock />
+          </el-icon>
+          {{ (contextMenuData as ModGroupData)?.isDisabled ? t('Enable group') : t('Disable group') }}
         </div>
         <!--
           置顶/取消置顶菜单项

@@ -105,7 +105,7 @@ function toggleExpand(event: MouseEvent) {
     <!-- 分组节点项 -->
     <div
       class="group-item"
-      :class="{ active: isActive, 'tree-node': group.isTreeNode, 'virtual-node': group.isVirtual, 'group-highlight': isHighlighted }"
+      :class="{ active: isActive, 'tree-node': group.isTreeNode, 'virtual-node': group.isVirtual, 'group-highlight': isHighlighted, 'group-disabled': group.isDisabled }"
       :style="indentStyle"
       @click="handleClick"
       @contextmenu="handleContextMenu($event)"
@@ -129,6 +129,7 @@ function toggleExpand(event: MouseEvent) {
         <!-- 分组信息区域 -->
         <div class="group-info">
           <span class="group-name">{{ group.groupName }}</span>
+          <span v-if="group.isDisabled" class="group-disabled-tag">{{ t('Disabled') }}</span>
           <!-- 模组数量统计（虚拟节点不显示） -->
           <span v-if="!group.isVirtual" class="group-count">{{ group.modsInGroup.length }} {{ t('Mods') }}</span>
         </div>
@@ -298,6 +299,25 @@ function toggleExpand(event: MouseEvent) {
 .group-favorite {
   flex-shrink: 0;
   font-size: 16px;
+}
+
+/* 禁用状态样式 */
+.group-item.group-disabled {
+  opacity: 0.5;
+}
+
+.group-item.group-disabled .group-name {
+  text-decoration: line-through;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.group-disabled-tag {
+  font-size: 10px;
+  color: #f56c6c;
+  background-color: rgba(245, 108, 108, 0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 4px;
 }
 
 /* 子节点容器 */

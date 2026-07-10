@@ -471,6 +471,9 @@ export const useGameStore = defineStore('game', () => {
     // 对加载到禁用模组的分组，异步重置 selectedindex 文件为 0
     // 确保下次重启时不再加载到禁用模组
     for (const conflict of disabledSelectionConflicts) {
+      // # 目录分组不使用 selectedindex 机制，跳过重置
+      const conflictGroup = findGroupByPath(conflict.groupPath);
+      if (conflictGroup && conflictGroup.isTreeNode && !conflictGroup.isVirtual) continue;
       invokeSetSelectedMod(conflict.groupPath, 0).catch((e) => {
         console.error(`[ModSelection] Failed to reset selectedindex for group '${conflict.groupName}':`, e);
       });

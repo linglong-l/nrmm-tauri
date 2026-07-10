@@ -298,13 +298,14 @@ export async function invokeToggleGroupFavorite(groupPath: string): Promise<bool
 }
 
 /**
- * 在指定 Managed 路径下新增一个分组。
+ * 在指定位置新增一个分组。
  * 对应后端命令：`add_group`。
- * @param managedPath Managed 目录绝对路径
+ * @param groupName 新分组的显示名称
+ * @param targetGroupPath 目标分组路径（可选）。指定后新分组将与该分组处于同一目录层级
  * @returns 新建分组在列表中的索引，失败时为 null
  */
-export async function invokeAddGroup(managedPath: string): Promise<number | null> {
-  return invoke('add_group', { managedPath });
+export async function invokeAddGroup(groupName: string, targetGroupPath?: string): Promise<number | null> {
+  return invoke('add_group', { groupName, targetGroupPath });
 }
 
 /**
@@ -380,6 +381,16 @@ export async function invokeToggleModDisabled(modPath: string): Promise<boolean>
  */
 export async function invokeToggleTreeNodeModDisabled(modPath: string): Promise<[string, boolean]> {
   return invoke('toggle_tree_node_mod_disabled', { modPath });
+}
+
+/**
+ * 切换 # 目录分组的启用/禁用状态。
+ * 对应后端命令：`toggle_tree_node_group_disabled`。
+ * @param groupPath 分组绝对路径
+ * @returns 切换后的禁用状态（true = 已禁用，false = 已启用）
+ */
+export async function invokeToggleTreeNodeGroupDisabled(groupPath: string): Promise<boolean> {
+  return invoke('toggle_tree_node_group_disabled', { groupPath });
 }
 
 /**

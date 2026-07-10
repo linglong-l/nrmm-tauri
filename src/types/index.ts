@@ -50,6 +50,8 @@ export interface ModGroupData {
   isTreeNode: boolean;
   /** 是否为虚拟分类节点（如 "Group" 主分类，无真实文件路径，仅作容器） */
   isVirtual: boolean;
+  /** 分组是否处于禁用状态（目录名以 DISABLED 开头，仅 # 目录分组适用） */
+  isDisabled: boolean;
 }
 
 /**

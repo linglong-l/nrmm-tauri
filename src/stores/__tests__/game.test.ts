@@ -32,6 +32,7 @@ function makeGroup(overrides: Partial<ModGroupData> = {}): ModGroupData {
     children: [],
     isTreeNode: false,
     isVirtual: false,
+    isDisabled: false,
     ...overrides,
   };
 }

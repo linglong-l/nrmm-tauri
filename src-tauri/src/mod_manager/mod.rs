@@ -11,6 +11,8 @@
 //! - 普通目录若符合「模组目录」特征（包含 icon.png 或 *.ini），也会被识别为单个分组。
 //! - 模组目录名以 `DISABLED` 前缀表示该模组处于禁用状态。
 
+pub mod path_utils;
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,7 +35,7 @@ use crate::settings::Settings;
 
 /// 禁用模组目录名前缀。被禁用的模组目录会被重命名为 `DISABLED<原名>`，
 /// 3DMigoto 框架会忽略此前缀开头的目录，从而实现「不删除文件即可禁用」的效果。
-const DISABLED_PREFIX: &str = "DISABLED";
+pub const DISABLED_PREFIX: &str = "DISABLED";
 
 /// 收藏标记文件名。在模组/分组目录下存在该文件即表示已被收藏，
 /// 文件内容为收藏时的时间戳字符串（用于排序）。
@@ -48,6 +50,9 @@ const ICON_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "ico", "webp", "bmp"];
 
 /// 管理文件夹名称。所有由 NRMM 自动生成的分组 INI 及管理性内容均存放于此。
 pub const MANAGED_FOLDER: &str = "_MANAGED_";
+
+/// 已被移除的 Managed 分组存放目录名。删除分组时，分组目录会被移动到此目录。
+pub const DISABLED_MANAGED_REMOVED: &str = "DISABLED_MANAGED_REMOVED";
 
 /// 分组显示名称持久化文件名。文件内容为该分组的可读名称（独立于 `group_<index>` 目录名）。
 const GROUP_NAME_FILE: &str = "groupname";
@@ -320,7 +325,7 @@ impl ModManager {
     ///
     /// NRMM 在 Linux/macOS 上可能使用小写 "disabled" 前缀，
     /// 因此判断逻辑需放宽，但输出仍保持大写 `DISABLED_` 以保持一致。
-    fn is_disabled_name(name: &str) -> bool {
+    pub fn is_disabled_name(name: &str) -> bool {
         name.get(..DISABLED_PREFIX.len())
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case(DISABLED_PREFIX))
     }
@@ -1271,7 +1276,7 @@ impl ModManager {
 
                 for mod_path in &info.mod_paths {
                     let mod_path_str = mod_path.to_string_lossy().to_string();
-                    let mod_name = Self::get_mod_name(&mod_path_str).unwrap_or_else(|_| {
+                    let mod_name = path_utils::get_mod_display_name_readonly(mod_path).unwrap_or_else(|_| {
                         mod_path
                             .file_name()
                             .and_then(|n| n.to_str())
@@ -1306,9 +1311,8 @@ impl ModManager {
                 }
             }
 
-            let mods_count = mods_in_group.len();
-            let previous_selected_mod_on_group =
-                Self::get_selected_mod_in_group(&group_path_str, mods_count).unwrap_or(0);
+            // # 目录分组不使用 selectedindex 机制（与 INI 修改无关），直接返回 0
+            let previous_selected_mod_on_group = 0;
 
             let mut children: Vec<ModGroupData> = Vec::new();
             for child_path in &info.child_paths {
@@ -1676,6 +1680,137 @@ impl ModManager {
         Ok(mods)
     }
 
+    /// 只读方式获取分组下的模组列表，不会写入 modname 文件。
+    ///
+    /// 该函数功能与 `get_mods_on_group` 一致，但使用只读方式获取模组名称，
+    /// 不会在模组目录下创建或修改 modname 文件。适用于不允许写入元数据的场景（如 # 目录下的模组）。
+    ///
+    /// 参数：
+    /// - `group_path`: 分组目录路径。
+    ///
+    /// 返回：模组数据列表（首位为 None 槽位）。
+    pub fn get_mods_on_group_readonly(group_path: &str) -> Result<Vec<ModData>> {
+        let group_path = Path::new(group_path);
+        if !group_path.exists() || !group_path.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut mods: Vec<ModData> = Vec::new();
+        let mut real_index = 1;
+
+        let entries = fs::read_dir(group_path)
+            .with_context(|| format!("Failed to read directory: {:?}", group_path))?;
+
+        let mut dir_entries: Vec<PathBuf> = Vec::new();
+        for entry in entries {
+            match entry {
+                Ok(e) => {
+                    let path = e.path();
+                    if path.is_dir() {
+                        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if !name.starts_with('#') {
+                            dir_entries.push(path);
+                        }
+                    }
+                }
+                Err(e) => warn!("Failed to read entry: {}", e),
+            }
+        }
+
+        let none_icon_path = group_path.join(NONE_SLOT_ICON);
+        mods.push(ModData {
+            mod_path: "None".to_string(),
+            icon_path: if none_icon_path.exists() {
+                Some(none_icon_path.to_string_lossy().to_string())
+            } else {
+                None
+            },
+            mod_name: "None".to_string(),
+            real_index: 0,
+            is_old_auto_fixed: false,
+            is_syntax_error_removed: false,
+            is_unoptimized: false,
+            is_namespaced: false,
+            is_disabled: false,
+            favorite_date_time: None,
+        });
+
+        let mut mod_datas: Vec<ModData> = Vec::new();
+        for dir_path in &dir_entries {
+            let dir_name = dir_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+
+            if dir_name.starts_with('.') {
+                continue;
+            }
+
+            let is_disabled = Self::is_disabled_name(&dir_name);
+            let dir_path_str = dir_path.to_string_lossy().to_string();
+            let mod_name = path_utils::get_mod_display_name_readonly(dir_path).unwrap_or_else(|_| {
+                if is_disabled {
+                    dir_name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string()
+                } else {
+                    dir_name.clone()
+                }
+            });
+
+            let icon_path = Self::get_icon_path(&dir_path_str);
+            let favorite_date_time = Self::is_favorite(&dir_path_str).unwrap_or(None);
+            let is_old_auto_fixed = dir_path.join("modforced").exists();
+            let is_syntax_error_removed = dir_path.join("modsyntaxerrorremoved").exists();
+            let is_unoptimized = dir_path.join("modunoptimized").exists();
+            let is_namespaced = dir_path.join("modnamespaced").exists();
+
+            mod_datas.push(ModData {
+                mod_path: dir_path_str,
+                icon_path,
+                mod_name,
+                real_index,
+                is_old_auto_fixed,
+                is_syntax_error_removed,
+                is_unoptimized,
+                is_namespaced,
+                is_disabled,
+                favorite_date_time,
+            });
+
+            real_index += 1;
+        }
+
+        mod_datas.sort_by(|a, b| {
+            let a_name = Path::new(&a.mod_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let b_name = Path::new(&b.mod_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let a_disabled = Self::is_disabled_name(a_name);
+            let b_disabled = Self::is_disabled_name(b_name);
+            match (a_disabled, b_disabled) {
+                (true, false) => std::cmp::Ordering::Greater,
+                (false, true) => std::cmp::Ordering::Less,
+                _ => {
+                    let a_fav = Path::new(&a.mod_path).join(FAVORITE_FILE).exists();
+                    let b_fav = Path::new(&b.mod_path).join(FAVORITE_FILE).exists();
+                    match (a_fav, b_fav) {
+                        (true, false) => std::cmp::Ordering::Less,
+                        (false, true) => std::cmp::Ordering::Greater,
+                        _ => a_name.to_lowercase().cmp(&b_name.to_lowercase()),
+                    }
+                }
+            }
+        });
+
+        mods.extend(mod_datas);
+
+        Ok(mods)
+    }
+
     /// 对分组列表进行排序。
     ///
     /// 排序规则（与NRMM一致）：
@@ -1711,6 +1846,85 @@ impl ModManager {
         });
     }
 
+    /// 验证目录名称是否符合平台文件系统命名规范。
+    ///
+    /// Windows 平台禁止的字符：`<`, `>`, `:`, `"`, `/`, `\`, `|`, `?`, `*`
+    /// Linux 平台禁止的字符：`/`, `\0`
+    /// 通用规则：名称不能为空，不能以 `.` 开头，不能以空格结尾
+    ///
+    /// 参数：
+    /// - `name`: 待验证的目录名称。
+    ///
+    /// 返回：成功返回 `Ok(())`，失败返回包含错误信息的 `Err`。
+    pub fn validate_directory_name(name: &str) -> Result<()> {
+        let trimmed = name.trim();
+        
+        if trimmed.is_empty() {
+            anyhow::bail!("Directory name cannot be empty");
+        }
+        
+        if trimmed.starts_with('.') {
+            anyhow::bail!("Directory name cannot start with '.'");
+        }
+        
+        if trimmed.ends_with(' ') {
+            anyhow::bail!("Directory name cannot end with space");
+        }
+        
+        #[cfg(windows)]
+        {
+            let forbidden_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+            if trimmed.chars().any(|c| forbidden_chars.contains(&c)) {
+                anyhow::bail!("Directory name contains invalid characters for Windows: < > : \" / \\ | ? *");
+            }
+        }
+        
+        #[cfg(not(windows))]
+        {
+            if trimmed.contains('/') {
+                anyhow::bail!("Directory name cannot contain '/'");
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// 在指定父目录下新建一个分组。
+    ///
+    /// 根据父目录类型决定创建方式：
+    /// - `_MANAGED_` 目录下：创建 `group_<index>` 格式的分组目录
+    /// - `#` 目录下：直接使用用户输入的名称作为目录名
+    ///
+    /// 参数：
+    /// - `parent_path`: 父目录路径。
+    /// - `group_name`: 新分组的显示名称。
+    ///
+    /// 返回：新分组的索引（对于 group_xx 分组）或 0（对于 # 目录下的分组）。
+    pub fn add_child_group(parent_path: &str, group_name: &str) -> Result<i32> {
+        let parent_path = Path::new(parent_path);
+        if !parent_path.exists() || !parent_path.is_dir() {
+            anyhow::bail!("Parent path does not exist: {:?}", parent_path);
+        }
+
+        let parent_name = parent_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        
+        if parent_name == MANAGED_FOLDER {
+            Self::add_group(parent_path.parent().unwrap().to_str().unwrap(), group_name)
+        } else {
+            Self::validate_directory_name(group_name)?;
+            
+            let group_path = parent_path.join(group_name);
+            if group_path.exists() {
+                anyhow::bail!("Group directory already exists: {:?}", group_path);
+            }
+            
+            fs::create_dir_all(&group_path)
+                .with_context(|| format!("Failed to create group directory: {:?}", group_path))?;
+            
+            Ok(0)
+        }
+    }
+
     /// 在 `_MANAGED_` 目录下新建一个分组。
     ///
     /// 自动寻找最小的可用索引（从 1 开始递增直到找到不存在的 `group_<index>`），
@@ -1728,11 +1942,9 @@ impl ModManager {
         }
 
         let managed_path = mods_path.join(MANAGED_FOLDER);
-        // 确保 _MANAGED_ 目录存在
         fs::create_dir_all(&managed_path)
             .with_context(|| format!("Failed to create managed folder: {:?}", managed_path))?;
 
-        // 寻找最小可用索引
         let mut new_index = 1;
         loop {
             let test_name = format!("group_{}", new_index);
@@ -1748,7 +1960,6 @@ impl ModManager {
         fs::create_dir_all(&group_path)
             .with_context(|| format!("Failed to create group directory: {:?}", group_path))?;
 
-        // 仅在名称非空时写入 groupname 文件
         if !group_name.is_empty() {
             let name_file = group_path.join(GROUP_NAME_FILE);
             let _ = fs::write(&name_file, group_name);
@@ -1862,36 +2073,93 @@ impl ModManager {
             anyhow::bail!("Group path does not exist: {:?}", path);
         }
 
-        // group_path = mods_root/_MANAGED_/group_xx
-        // parent() = mods_root/_MANAGED_ → 这就是 managed_path
-        let managed_path = match path.parent() {
-            Some(p) => p,
-            None => anyhow::bail!("Invalid group path: no parent directory"),
-        };
-
-        fs::create_dir_all(&managed_path)
-            .with_context(|| format!("Failed to create managed folder: {:?}", managed_path))?;
-
         let group_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("group");
 
-        // 生成时间戳后缀，避免多次移除同名分组时冲突
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
         let dest_name = format!("{}_removed_{}", group_name, timestamp);
-        let dest_path = managed_path.join(&dest_name);
+
+        let mods_path = match path.parent().and_then(|p| p.parent()) {
+            Some(p) => p,
+            None => anyhow::bail!("Invalid group path: cannot find mods root directory"),
+        };
+
+        let removed_path = mods_path.join(DISABLED_MANAGED_REMOVED);
+        fs::create_dir_all(&removed_path)
+            .with_context(|| format!("Failed to create removed folder: {:?}", removed_path))?;
+
+        let dest_path = removed_path.join(&dest_name);
 
         fs::rename(path, &dest_path).with_context(|| {
             format!(
-                "Failed to move group to _MANAGED_: {:?} -> {:?}",
+                "Failed to move group to DISABLED_MANAGED_REMOVED: {:?} -> {:?}",
                 path, dest_path
             )
         })?;
 
-        info!("Group removed to _MANAGED_: {:?}", dest_path);
+        info!("Group removed to DISABLED_MANAGED_REMOVED: {:?}", dest_path);
         Ok(())
+    }
+
+    /// 切换 # 目录分组的启用/禁用状态。
+    ///
+    /// 通过在目录名前添加或移除 `DISABLED` 前缀实现状态切换：
+    /// - 禁用 → 启用：移除 `DISABLED` 前缀（如 `DISABLED#角色` → `#角色`）
+    /// - 启用 → 禁用：添加 `DISABLED` 前缀（如 `#角色` → `DISABLED#角色`）
+    ///
+    /// 该功能与 `group_xx` 逻辑完全独立，不涉及 INI 文件修改，不使用 selectindex 机制。
+    ///
+    /// 参数：
+    /// - `group_path`: 目标分组目录的绝对路径。
+    ///
+    /// 返回：操作后的禁用状态（true = 已禁用，false = 已启用）。
+    pub fn toggle_tree_node_group_disabled(group_path: &str) -> Result<bool> {
+        let path = Path::new(group_path);
+        if !path.exists() || !path.is_dir() {
+            anyhow::bail!("Group path does not exist: {:?}", path);
+        }
+
+        let dir_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        // 仅对 # 目录分组生效：目录名以 # 开头或以 DISABLED# 开头
+        let is_hash_dir = dir_name.starts_with('#')
+            || (Self::is_disabled_name(&dir_name)
+                && dir_name[DISABLED_PREFIX.len()..].trim_start_matches('_').starts_with('#'));
+
+        if !is_hash_dir {
+            anyhow::bail!("This operation is only available for # directory groups, not for group_xx groups");
+        }
+
+        let parent = match path.parent() {
+            Some(p) => p,
+            None => anyhow::bail!("Invalid group path: no parent directory"),
+        };
+
+        let is_disabled = Self::is_disabled_name(&dir_name);
+        let new_name = if is_disabled {
+            dir_name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string()
+        } else {
+            format!("{}{}", DISABLED_PREFIX, dir_name)
+        };
+
+        let new_path = parent.join(&new_name);
+        if new_path.exists() {
+            anyhow::bail!("Destination path already exists: {:?}", new_path);
+        }
+
+        fs::rename(path, &new_path).with_context(|| {
+            format!("Failed to rename group: {:?} -> {:?}", path, new_path)
+        })?;
+
+        info!("Tree node group toggled: {:?} -> {:?}", path, new_path);
+        Ok(!is_disabled)
     }
 
     /// 重命名分组目录（直接修改目录名）。

@@ -7,7 +7,6 @@
 // 必须保留——在 debug 构建下仍保留控制台以便查看日志输出。
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// mod init_xx;
 
 /// 程序入口。
 ///

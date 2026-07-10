@@ -68,16 +68,69 @@ impl HotkeyManager {
 
     /// 将 Tauri 加速器字符串反向转换为内部热键标识。
     ///
+    /// 兼容多种格式：
+    /// - `"Alt+W"`：旧格式，直接匹配 `HOTKEY_MAP`；
+    /// - `"alt+KeyW"`：Tauri 2.3+ 插件格式，经规范化后匹配。
+    ///
     /// # 参数
-    /// - `accelerator`：加速器字符串（如 `"Alt+W"`）。
+    /// - `accelerator`：加速器字符串（如 `"Alt+W"` 或 `"alt+KeyW"`）。
     ///
     /// # 返回值
     /// 找到时返回 `Some(标识)`；未找到返回 `None`（用于在事件回调中过滤未知快捷键）。
     fn accelerator_to_hotkey_type(accelerator: &str) -> Option<String> {
-        HOTKEY_MAP
+        // 先尝试直接匹配（兼容旧格式 `Alt+W`）
+        if let Some(result) = HOTKEY_MAP
             .iter()
             .find(|(_, v)| *v == accelerator)
             .map(|(k, _)| k.to_string())
+        {
+            return Some(result);
+        }
+        // 规范化后重试（兼容 `alt+KeyW` 等 Tauri 2.3+ 格式）
+        let normalized = Self::normalize_accelerator(accelerator);
+        if normalized != accelerator {
+            return HOTKEY_MAP
+                .iter()
+                .find(|(_, v)| *v == normalized)
+                .map(|(k, _)| k.to_string());
+        }
+        None
+    }
+
+    /// 将 Tauri 2.3+ 插件返回的快捷键字符串规范化为 `Alt+X` 格式。
+    ///
+    /// 转换规则：
+    /// - `"alt+KeyD"` → `"Alt+D"`（小写修饰键 + `Key` 前缀 → 大写修饰键 + 纯字母）
+    /// - `"Alt+D"` → `"Alt+D"`（已符合格式，原样返回）
+    ///
+    /// # 参数
+    /// - `accelerator`：Tauri 插件返回的快捷键字符串。
+    ///
+    /// # 返回值
+    /// 规范化后的字符串（`Alt+X` 格式）。
+    fn normalize_accelerator(accelerator: &str) -> String {
+        let lower = accelerator.to_lowercase();
+        let parts: Vec<&str> = lower.split('+').collect();
+        if parts.len() != 2 {
+            return accelerator.to_string();
+        }
+        let modifier = parts[0].trim();
+        let key = parts[1].trim();
+        // 移除 "key" 前缀（如 "keyd" → "d"）
+        let key = key.strip_prefix("key").unwrap_or(key);
+        // 提取单个字母并转为大写
+        if key.len() == 1 && key.chars().all(|c| c.is_ascii_alphabetic()) {
+            let modifier_upper = match modifier {
+                "alt" => "Alt",
+                "ctrl" | "control" => "Ctrl",
+                "shift" => "Shift",
+                "meta" | "super" | "command" => "Meta",
+                _ => return accelerator.to_string(),
+            };
+            format!("{}+{}", modifier_upper, key.to_uppercase())
+        } else {
+            accelerator.to_string()
+        }
     }
 
     /// 注册单个全局热键。
@@ -303,9 +356,7 @@ impl HotkeyManager {
     /// - `settings`：用户设置；
     /// - `hotkey_type`：触发的热键标识（如 `"altW"`）。
     fn handle_out_of_game_hotkey(app: &AppHandle, settings: &Settings, hotkey_type: &str) {
-        // 游戏外也调用 toggle_window，与游戏内行为统一
-        // 平台兼容性：toggle_window 使用 Tauri 的 window.hide()/show()/set_focus()，
-        // 在 Windows 11 和 Linux 上均受支持
+    if settings.show_menu_when_toggling_outside_game {
         match WindowManager::toggle_window(app) {
             Ok(shown) => {
                 log::info!("Window toggled (outside game), now visible: {}", shown);
@@ -316,12 +367,14 @@ impl HotkeyManager {
                 }
             }
             Err(e) => {
-                // 严重错误：记录 error 级别日志
                 log::error!("Failed to toggle window (outside game): {}", e);
             }
         }
+    } else {
+        log::debug!("Hotkey pressed outside game, toggling disabled by settings");
+    }
 
-        let _ = app.emit("hotkey-pressed", serde_json::json!({
+    let _ = app.emit("hotkey-pressed", serde_json::json!({
             "key": hotkey_type,
             "source": "outside-game"
         }));
@@ -332,5 +385,138 @@ impl Default for HotkeyManager {
     /// 默认实现等价于 [`HotkeyManager::new`]。
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试 hotkey_type_to_accelerator：所有 26 个字母热键的映射
+    #[test]
+    fn test_hotkey_type_to_accelerator_all_letters() {
+        for letter in 'A'..='Z' {
+            let hotkey_type = format!("alt{}", letter);
+            let expected = format!("Alt+{}", letter);
+            let result = HotkeyManager::hotkey_type_to_accelerator(&hotkey_type).unwrap();
+            assert_eq!(result, expected, "Failed for hotkey_type: {}", hotkey_type);
+        }
+    }
+
+    /// 测试 accelerator_to_hotkey_type：所有 26 个字母热键的反向映射
+    #[test]
+    fn test_accelerator_to_hotkey_type_all_letters() {
+        for letter in 'A'..='Z' {
+            let accelerator = format!("Alt+{}", letter);
+            let expected = format!("alt{}", letter);
+            let result = HotkeyManager::accelerator_to_hotkey_type(&accelerator).unwrap();
+            assert_eq!(result, expected, "Failed for accelerator: {}", accelerator);
+        }
+    }
+
+    /// 测试往返转换：hotkey_type → accelerator → hotkey_type
+    #[test]
+    fn test_roundtrip_conversion() {
+        for letter in 'A'..='Z' {
+            let original = format!("alt{}", letter);
+            let accelerator = HotkeyManager::hotkey_type_to_accelerator(&original).unwrap();
+            let roundtrip = HotkeyManager::accelerator_to_hotkey_type(&accelerator).unwrap();
+            assert_eq!(
+                roundtrip, original,
+                "Roundtrip failed for letter: {}", letter
+            );
+        }
+    }
+
+    /// 测试未知热键类型返回错误
+    #[test]
+    fn test_unknown_hotkey_type() {
+        let result = HotkeyManager::hotkey_type_to_accelerator("invalid_hotkey");
+        assert!(result.is_err());
+    }
+
+    /// 测试未知加速器返回 None
+    #[test]
+    fn test_unknown_accelerator() {
+        let result = HotkeyManager::accelerator_to_hotkey_type("Invalid+Accelerator");
+        assert!(result.is_none());
+    }
+
+    /// 测试 "none" 特殊值
+    #[test]
+    fn test_none_hotkey_type() {
+        let result = HotkeyManager::hotkey_type_to_accelerator("none");
+        assert!(result.is_err());
+    }
+
+    /// 测试 normalize_accelerator：`alt+KeyD` → `Alt+D`
+    #[test]
+    fn test_normalize_accelerator_alt_key_prefix() {
+        assert_eq!(
+            HotkeyManager::normalize_accelerator("alt+KeyD"),
+            "Alt+D"
+        );
+        assert_eq!(
+            HotkeyManager::normalize_accelerator("alt+KeyA"),
+            "Alt+A"
+        );
+        assert_eq!(
+            HotkeyManager::normalize_accelerator("alt+KeyZ"),
+            "Alt+Z"
+        );
+    }
+
+    /// 测试 normalize_accelerator：已是标准格式，原样返回
+    #[test]
+    fn test_normalize_accelerator_already_standard() {
+        assert_eq!(
+            HotkeyManager::normalize_accelerator("Alt+D"),
+            "Alt+D"
+        );
+        assert_eq!(
+            HotkeyManager::normalize_accelerator("Alt+W"),
+            "Alt+W"
+        );
+    }
+
+    /// 测试 normalize_accelerator：大小写混合输入
+    #[test]
+    fn test_normalize_accelerator_mixed_case() {
+        assert_eq!(
+            HotkeyManager::normalize_accelerator("ALT+KEYD"),
+            "Alt+D"
+        );
+        assert_eq!(
+            HotkeyManager::normalize_accelerator("Alt+keyG"),
+            "Alt+G"
+        );
+    }
+
+    /// 测试 accelerator_to_hotkey_type：Tauri 2.3+ `alt+KeyX` 格式
+    #[test]
+    fn test_accelerator_to_hotkey_type_alt_key_prefix() {
+        for letter in 'A'..='Z' {
+            let accelerator = format!("alt+Key{}", letter);
+            let expected = format!("alt{}", letter);
+            let result = HotkeyManager::accelerator_to_hotkey_type(&accelerator).unwrap();
+            assert_eq!(
+                result, expected,
+                "Failed for accelerator: {} (alt+Key{} format)", accelerator, letter
+            );
+        }
+    }
+
+    /// 测试 accelerator_to_hotkey_type：旧格式 `Alt+X` 仍然正常工作
+    #[test]
+    fn test_accelerator_to_hotkey_type_old_format() {
+        for letter in 'A'..='Z' {
+            let accelerator = format!("Alt+{}", letter);
+            let expected = format!("alt{}", letter);
+            let result = HotkeyManager::accelerator_to_hotkey_type(&accelerator).unwrap();
+            assert_eq!(
+                result, expected,
+                "Failed for accelerator: {} (Alt+{} format)", accelerator, letter
+            );
+        }
     }
 }

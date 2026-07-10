@@ -119,7 +119,7 @@ pub struct Settings {
     pub is_auto_pin_window: bool,
 
     /// 在游戏外按下热键时是否仍然显示菜单。
-    /// `false` 时游戏外热键不触发任何动作。
+    /// `true` 时游戏外热键仍然触发窗口切换。
     #[serde(default = "default_show_menu_when_toggling_outside_game")]
     pub show_menu_when_toggling_outside_game: bool,
 
@@ -263,9 +263,9 @@ fn default_is_auto_pin_window() -> bool {
     false
 }
 
-/// 默认在游戏外按热键时不显示菜单。
+/// 默认在游戏外按热键时显示菜单。
 fn default_show_menu_when_toggling_outside_game() -> bool {
-    false
+    true
 }
 
 /// 默认关闭按键模拟绑定。
