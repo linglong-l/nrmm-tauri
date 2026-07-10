@@ -10,6 +10,7 @@
 //! Tauri Builder 装配插件 → setup 回调加载设置/窗口/热键/托盘 → 注册命令并启动事件循环。
 
 // 子模块声明：每个模块对应一类业务能力
+mod desktop_entry; // 桌面入口创建（.desktop / .lnk）
 mod admin_check; // 管理员权限检测
 mod cloud_data; // 云端数据同步
 mod commands;
@@ -297,6 +298,7 @@ pub fn run() {
             commands::export_mod,
             commands::export_group,
             commands::open_url,
+            commands::create_desktop_icon,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

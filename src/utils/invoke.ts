@@ -708,3 +708,8 @@ export async function invokeExportGroup(group_path: string, dest_dir: string): P
 export async function invokeOpenUrl(url: string): Promise<void> {
   return invoke('open_url', { url });
 }
+
+/** 创建桌面快捷方式（Linux 为 .desktop，Windows 为 .lnk）。 */
+export async function invokeCreateDesktopIcon(name?: string): Promise<void> {
+  return invoke('create_desktop_icon', { name });
+}

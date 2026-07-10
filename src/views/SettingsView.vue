@@ -25,7 +25,7 @@ import {
   invokeUpdateModData, invokeValidateModsPath, invokeOpenModFolder,
   invokeSelectDirectory, invokeLoadMods,
   invokeFindIniFiles, invokeProcessIniFiles,
-  invokeOpenUrl
+  invokeOpenUrl, invokeCreateDesktopIcon
 } from '../utils/invoke';
 import { TargetGame, HotkeyKeyboard, HotkeyGamepad, LayoutMode, SortGroupMethod, ModsPathStatus } from '../types';
 import {
@@ -516,6 +516,8 @@ async function handleUpdateModData() {
 const isRestoreZoneDragging = ref(false);
 const restoreZoneFiles = ref<Array<{ name: string; path: string }>>([]);
 const isProcessingRestore = ref(false);
+// 桌面图标创建状态
+const isCreatingDesktopIcon = ref(false);
 
 /**
  * 处理还原区文件拖拽悬停事件。
@@ -652,6 +654,33 @@ async function processRestoreZoneFiles() {
     ElMessage.error(t('Failed to process files'));
   } finally {
     isProcessingRestore.value = false;
+  }
+}
+
+/**
+ * 创建桌面快捷方式。
+ * 弹出输入框让用户自定义名称，默认值为程序名称。
+ */
+async function handleCreateDesktopIcon() {
+  try {
+    const { value: name } = await ElMessageBox.prompt(
+      t('Enter shortcut name'),
+      t('Add Desktop Icon'),
+      {
+        confirmButtonText: t('Confirm'),
+        cancelButtonText: t('Cancel'),
+        inputValue: 'NRMM-Rust',
+        inputPlaceholder: t('Desktop icon name'),
+      }
+    );
+    isCreatingDesktopIcon.value = true;
+    await invokeCreateDesktopIcon(name || undefined);
+    ElMessage.success(t('Desktop icon created'));
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return;
+    ElMessage.error(t('Failed to create desktop icon') + ': ' + (error?.toString() || ''));
+  } finally {
+    isCreatingDesktopIcon.value = false;
   }
 }
 
@@ -1172,6 +1201,23 @@ watch(
               <el-button @click="handleOpenModFolder" style="width: 100%">
                 {{ t('Open {game} working directory', { game: gameStore.targetGame !== TargetGame.none ? t(getGameNameKey(gameStore.targetGame)) : t('Game') }) }}
               </el-button>
+            </el-form-item>
+
+            <div class="settings-divider" />
+
+            <div class="settings-section-title">{{ t('Add Desktop Icon') }}</div>
+            <el-form-item>
+              <el-button
+                type="primary"
+                :loading="isCreatingDesktopIcon"
+                @click="handleCreateDesktopIcon"
+                style="width: 100%"
+              >
+                {{ t('Add Desktop Icon') }}
+              </el-button>
+              <div class="description">
+                {{ t('Create a desktop shortcut to quickly launch the application') }}
+              </div>
             </el-form-item>
 
             <div class="settings-divider" />

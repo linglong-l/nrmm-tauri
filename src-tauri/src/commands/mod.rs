@@ -1816,3 +1816,14 @@ pub async fn open_url(url: String) -> Result<(), String> {
     .await
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
+
+/// 创建桌面快捷方式（Linux 为 .desktop 文件，Windows 为 .lnk 文件）。
+///
+/// 参数：
+/// - `name`: 可选的快捷方式显示名称，未提供时使用默认程序名 "NRMM-Rust"。
+///
+/// 返回：成功返回 Ok(())，若文件已存在则返回错误信息。
+#[tauri::command]
+pub async fn create_desktop_icon(name: Option<String>) -> Result<(), String> {
+    crate::desktop_entry::DesktopEntryManager::create_desktop_entry(name)
+}
