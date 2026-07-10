@@ -128,6 +128,18 @@ function setupEventListeners() {
 
   eventManager.on(EventNames.WINDOW_SHOWN, (payload) => {
     console.debug('[GlobalHotkey] Window shown event:', payload);
+    // 校验已选择游戏是否合法，若合法且模组未加载则立即触发加载
+    const currentGame = gameStore.targetGame;
+    if (!currentGame || currentGame === 'none') {
+      console.error('[Index] Window shown but no valid game selected, current game:', currentGame);
+      return;
+    }
+    if (!gameStore.isModsLoaded) {
+      console.debug('[Index] Window shown, triggering mod load for game:', currentGame);
+      gameStore.loadModsForGame(currentGame as TargetGame).catch((e) => {
+        console.error('[Index] Failed to load mods on window shown:', e);
+      });
+    }
   }).then((unlisten) => {
     unlistenWindowShown = unlisten;
   }).catch(() => {});
