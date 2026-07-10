@@ -1121,12 +1121,14 @@ async function setupEventListeners() {
       clearTimeout(gameSwitchDebounceTimer);
     }
     gameSwitchDebounceTimer = setTimeout(async () => {
-      // loadModsForGame（后端读取模组）与 setupFileWatcher（注册文件监听）无数据依赖，
-      // 并行执行可使总耗时由两者之和降为两者之最大值，缩短游戏切换响应时间。
-      await Promise.all([
-        game.loadModsForGame(newGame as TargetGame),
-        setupFileWatcher()
-      ]);
+      // 直接更新 gameStore 的目标游戏状态（不触发事件，避免循环触发）
+      // 前端 setTargetGame 调用 emitLocal 时，targetGame 已更新，此处赋值相同值无副作用
+      // 后端托盘 emit 时，targetGame 未更新，此处修复游戏选择器显示为空的问题
+      game.targetGame.value = newGame as TargetGame;
+      game.modsPath.value = settings.getModsPath(newGame as TargetGame);
+      // 先加载模组，完成后再启动文件监听，避免监听器在加载期间触发不必要的 refreshMods
+      await game.loadModsForGame(newGame as TargetGame);
+      await setupFileWatcher();
     }, GAME_SWITCH_DEBOUNCE_DELAY);
   });
 }
