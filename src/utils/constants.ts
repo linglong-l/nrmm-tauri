@@ -186,7 +186,8 @@ export const GAME_NAMES: Record<TargetGame, string> = {
  * @returns i18n 翻译键（如 "game.wuwa", "game.hsr"）
  */
 export function getGameNameKey(game: TargetGame): string {
-  return `game.${GAME_SHORT_NAMES[game]}`;
+  const name = GAME_SHORT_NAMES[game];
+  return `game.${name ?? 'none'}`;
 }
 
 /**

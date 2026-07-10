@@ -431,12 +431,17 @@ export const useGameStore = defineStore('game', () => {
   }
 
   /**
-   * 替换整个分组列表，并设置默认选中的分组。
-   * 默认选中第一个非虚拟、realIndex 最小的真实分组（跳过虚拟分类节点），
-   * 以保证左侧高亮分组与右侧展示内容同步。
+   * 替换整个分组列表，并恢复或设置默认选中的分组。
+   *
+   * 优先恢复重载前用户选中的分组（通过 currentGroupPath 查找），
+   * 若分组在新数据中不存在（如已被删除）则回退到默认选中逻辑：
+   * 第一个非虚拟、realIndex 最小的真实分组（跳过虚拟分类节点）。
    * currentGroupPath 是唯一真相源，currentGroupIndex 仅作辅助。
    */
   function setModGroups(newGroups: ModGroupData[]) {
+    // 保存重载前的当前选中分组路径，用于后续恢复
+    const previousGroupPath = currentGroupPath.value;
+
     modGroups.value = newGroups;
     // 同步更新 cachedGame：当前 modGroups 数据实际所属的游戏
     cachedGame.value = targetGame.value;
@@ -490,12 +495,26 @@ export const useGameStore = defineStore('game', () => {
       ElMessage.warning(message);
     }
 
+    // 恢复选中分组：优先查找之前的分组，找不到时回退到默认
+    if (previousGroupPath) {
+      const previousGroup = findGroupByPath(previousGroupPath, newGroups);
+      if (previousGroup) {
+        // 之前的选中分组在新数据中仍然存在，恢复选择
+        currentGroupPath.value = previousGroupPath;
+        const idx = newGroups.findIndex(g => g.groupPath === previousGroupPath);
+        currentGroupIndex.value = idx !== -1 ? idx : 0;
+        // 展开父节点确保选中分组可见
+        expandParentPaths(previousGroupPath);
+        return;
+      }
+    }
+
+    // 回退：选择第一个非虚拟、realIndex 最小的顶层分组作为默认选中
     if (newGroups.length === 0) {
       currentGroupIndex.value = 0;
       currentGroupPath.value = '';
       return;
     }
-    // 找到第一个非虚拟、realIndex 最小的顶层分组作为默认选中
     let selectedPath = '';
     let minRealIndex = Infinity;
     let minIndex = 0;

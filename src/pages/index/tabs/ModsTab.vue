@@ -459,16 +459,22 @@ function isGroupActive(group: ModGroupData): boolean {
  * 与 loadMods 的区别：refreshMods 用于文件变化后的重新扫描，不会重置 modsLoaded 标记。
  */
 async function refreshMods() {
-  isLoading.value = true;
-  try {
-    const groups = await invokeRefreshMods(game.targetGame.value);
-    game.setModGroups(groups);
-  } catch (error) {
-    console.error('Failed to refresh mods:', error);
-  } finally {
-    isLoading.value = false;
+    isLoading.value = true;
+    try {
+      const groups = await invokeRefreshMods(game.targetGame.value);
+      game.setModGroups(groups);
+    } catch (error) {
+      // 任务取消是 TaskQueue 的正常行为（新请求取消旧请求），不作为错误
+      const errMsg = String(error);
+      if (errMsg.includes('was cancelled')) {
+        console.debug('[RefreshMods] Task cancelled by newer request, skipping');
+      } else {
+        console.error('Failed to refresh mods:', error);
+      }
+    } finally {
+      isLoading.value = false;
+    }
   }
-}
 
 /**
  * 防抖刷新：合并 500ms 内的多次文件变化事件为一次刷新调用。
@@ -487,17 +493,24 @@ function debouncedRefresh() {
 /**
  * 选中指定分组。
  * 业务逻辑：通过 groupPath 定位分组，并更新 currentGroupPath 和 currentGroupIndex。
- * 同时从后端记录的 previousSelectedModOnGroup 同步选中模组索引。
+ * 同时从 store 的 selectedModPaths 中恢复该分组的选中模组索引，确保高亮与持久化状态一致。
  * @param group 选中的分组数据
  */
 function selectGroup(group: ModGroupData) {
   game.setCurrentGroupByPath(group.groupPath);
-  // 从后端记录的选中索引恢复高亮状态
-  const selectedIdx = group.previousSelectedModOnGroup;
-  if (selectedIdx >= 0 && selectedIdx < group.modsInGroup.length) {
-    selectedModIndex.value = selectedIdx;
+  // 优先从 store 的 selectedModPaths 中获取该分组的选中模组
+  const selectedModPath = game.getSelectedModPath(group.groupPath);
+  if (selectedModPath) {
+    const idx = group.modsInGroup.findIndex(m => m.modPath === selectedModPath);
+    selectedModIndex.value = idx >= 0 ? idx : 0;
   } else {
-    selectedModIndex.value = 0;
+    // 回退到 previousSelectedModOnGroup（兼容旧逻辑）
+    const selectedIdx = group.previousSelectedModOnGroup;
+    if (selectedIdx >= 0 && selectedIdx < group.modsInGroup.length) {
+      selectedModIndex.value = selectedIdx;
+    } else {
+      selectedModIndex.value = 0;
+    }
   }
 }
 

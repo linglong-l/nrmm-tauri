@@ -166,7 +166,7 @@ pub async fn refresh_mods(
 
     Ok(state
         .task_queue
-        .run_task("load_mods", async move {
+        .run_task("refresh_mods", async move {
             mod_manager.refresh_mods(&settings_clone).await
         })
         .await
