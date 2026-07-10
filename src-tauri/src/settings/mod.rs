@@ -179,26 +179,41 @@ fn default_mod_search_hotkey() -> String {
 }
 
 /// 默认鸣潮进程名。
+///
+/// 注意：Linux 用户通过 Wine/Proton 运行游戏时进程名与 Windows 不同，
+/// 需在设置中手动配置目标进程名。
 fn default_target_process_wuwa() -> String {
     "Wuthering Waves.exe".to_string()
 }
 
 /// 默认原神进程名。
+///
+/// 注意：Linux 用户通过 Wine/Proton 运行游戏时进程名与 Windows 不同，
+/// 需在设置中手动配置目标进程名。
 fn default_target_process_genshin() -> String {
     "GenshinImpact.exe".to_string()
 }
 
 /// 默认星铁进程名。
+///
+/// 注意：Linux 用户通过 Wine/Proton 运行游戏时进程名与 Windows 不同，
+/// 需在设置中手动配置目标进程名。
 fn default_target_process_hsr() -> String {
     "StarRail.exe".to_string()
 }
 
 /// 默认绝区零进程名。
+///
+/// 注意：Linux 用户通过 Wine/Proton 运行游戏时进程名与 Windows 不同，
+/// 需在设置中手动配置目标进程名。
 fn default_target_process_zzz() -> String {
     "ZenlessZoneZero.exe".to_string()
 }
 
 /// 默认终末地进程名。
+///
+/// 注意：Linux 用户通过 Wine/Proton 运行游戏时进程名与 Windows 不同，
+/// 需在设置中手动配置目标进程名。
 fn default_target_process_endfield() -> String {
     "Endfield-Win64-Shipping.exe".to_string()
 }
