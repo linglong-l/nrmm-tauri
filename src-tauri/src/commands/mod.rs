@@ -1491,7 +1491,7 @@ pub async fn open_path(state: State<'_, AppState>, path: String) -> Result<(), S
     #[cfg(windows)]
     {
         std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path_buf.display()))
+            .arg(format!("/select,\"{}\"", path_buf.display()))
             .spawn()
             .map_err(|e| format!("Failed to open explorer: {}", e))?;
     }
@@ -1548,7 +1548,7 @@ pub async fn open_mod_folder(state: State<'_, AppState>, game: String) -> Result
     #[cfg(windows)]
     {
         std::process::Command::new("explorer")
-            .arg(&mods_path)
+            .arg(format!("\"{}\"", mods_path))
             .spawn()
             .map_err(|e| format!("Failed to open explorer: {}", e))?;
     }

@@ -2,7 +2,7 @@
 name = "nrmm-rust"
 version = "0.1.1"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["ye"]
 edition = "2021"
 
 [lib]
