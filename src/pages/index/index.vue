@@ -23,6 +23,7 @@ import { useGameStore } from '../../stores/game';
 import { useSettingsStore } from '../../stores/settings';
 import { useHotkeyStore } from '../../stores/hotkey';
 import { EventNames, eventManager } from '../../utils/events';
+import { createLogger } from '../../utils/logger';
 import type { TabType } from '../../types';
 import { TargetGame } from '../../types';
 
@@ -44,6 +45,7 @@ const uiStore = useUiStore();
 const gameStore = useGameStore();
 const settingsStore = useSettingsStore();
 const hotkeyStore = useHotkeyStore();
+const log = createLogger('Index');
 
 // 当前激活的标签页（读写均委托给 uiStore，便于全局共享状态）
 const activeTab = computed({
@@ -69,7 +71,7 @@ let unlistenWindowHidden: (() => void) | null = null;
  * 解决分组展开后树形组件拦截 Alt+G/Alt+F 的问题。
  */
 function registerSearchHotkeys(): void {
-  console.debug('[SearchHotkey] Registering window-scope search hotkeys (capture phase)');
+  log.debug('Registering window-scope search hotkeys (capture phase)');
   window.addEventListener('keydown', handleSearchHotkey, true);
 }
 
@@ -77,7 +79,7 @@ function registerSearchHotkeys(): void {
  * 注销窗口内搜索快捷键监听器。
  */
 function unregisterSearchHotkeys(): void {
-  console.debug('[SearchHotkey] Unregistering window-scope search hotkeys');
+  log.debug('Unregistering window-scope search hotkeys');
   window.removeEventListener('keydown', handleSearchHotkey, true);
 }
 
@@ -99,19 +101,19 @@ function setupEventListeners() {
   }).catch(() => {});
 
   eventManager.on(EventNames.HOTKEY_REGISTERED, (payload) => {
-    console.debug('[GlobalHotkey] Registered event:', payload);
+    log.debug('Registered event', { payload });
   }).then((unlisten) => {
     unlistenHotkeyRegistered = unlisten;
   }).catch(() => {});
 
   eventManager.on(EventNames.HOTKEY_UNREGISTERED, (payload) => {
-    console.debug('[GlobalHotkey] Unregistered event:', payload);
+    log.debug('Unregistered event', { payload });
   }).then((unlisten) => {
     unlistenHotkeyUnregistered = unlisten;
   }).catch(() => {});
 
   eventManager.on(EventNames.HOTKEY_PRESSED, (payload) => {
-    console.debug('[GlobalHotkey] Pressed event:', payload);
+    log.debug('Pressed event', { payload });
     // 全局热键唤起窗口后，WebView 可能未立即触发 focus 事件，手动启用搜索快捷键
     setSearchHotkeysEnabled(true, 'hotkey-pressed');
     // 将后端游戏名（PascalCase，如 "WutheringWaves"）映射为前端 TargetGame 枚举值（snake_case，如 "Wuthering_Waves"）
@@ -119,7 +121,7 @@ function setupEventListeners() {
       ? (BACKEND_GAME_TO_TARGET_GAME[payload.matchedGame] ?? null)
       : null;
     if (matchedGame && matchedGame !== gameStore.targetGame) {
-      console.debug('[GlobalHotkey] Auto-switching game to:', matchedGame);
+      log.debug('Auto-switching game', { matchedGame });
       gameStore.setTargetGame(matchedGame);
     }
   }).then((unlisten) => {
@@ -127,17 +129,17 @@ function setupEventListeners() {
   }).catch(() => {});
 
   eventManager.on(EventNames.WINDOW_SHOWN, (payload) => {
-    console.debug('[GlobalHotkey] Window shown event:', payload);
+    log.debug('Window shown event', { payload });
     // 校验已选择游戏是否合法，若合法且模组未加载则立即触发加载
     const currentGame = gameStore.targetGame;
     if (!currentGame || currentGame === 'none') {
-      console.error('[Index] Window shown but no valid game selected, current game:', currentGame);
+      log.error('Window shown but no valid game selected', undefined, { trigger: 'WINDOW_SHOWN', env: { currentGame } });
       return;
     }
     if (!gameStore.isModsLoaded) {
-      console.debug('[Index] Window shown, triggering mod load for game:', currentGame);
+      log.debug('Window shown, triggering mod load', { game: currentGame });
       gameStore.loadModsForGame(currentGame as TargetGame).catch((e) => {
-        console.error('[Index] Failed to load mods on window shown:', e);
+        log.error('Failed to load mods on window shown', e, { trigger: 'WINDOW_SHOWN' });
       });
     }
   }).then((unlisten) => {
@@ -145,7 +147,7 @@ function setupEventListeners() {
   }).catch(() => {});
 
   eventManager.on(EventNames.WINDOW_HIDDEN, (payload) => {
-    console.debug('[GlobalHotkey] Window hidden event:', payload);
+    log.debug('Window hidden event', { payload });
   }).then((unlisten) => {
     unlistenWindowHidden = unlisten;
   }).catch(() => {});
@@ -205,23 +207,23 @@ function cleanupEventListeners() {
  */
 function handleSearchHotkey(event: KeyboardEvent): void {
   // 诊断日志：确认事件已到达顶层捕获阶段处理器
-  console.debug('[SearchHotkey] Event reached window handler');
+  log.debug('Event reached window handler');
 
   // 窗口失焦时不响应窗口内热键
   if (!hotkeyStore.isSearchHotkeysEnabled) {
-    console.debug('[SearchHotkey] Ignored: search hotkeys disabled');
+    log.debug('Ignored: search hotkeys disabled');
     return;
   }
 
   // 仅在 mods 标签页激活时响应
   if (uiStore.activeTab !== 'mods') {
-    console.debug('[SearchHotkey] Ignored: active tab is not mods');
+    log.debug('Ignored: active tab is not mods');
     return;
   }
 
   // 必须按住 Alt 键
   if (!event.altKey) {
-    console.debug('[SearchHotkey] Ignored: Alt key not pressed');
+    log.debug('Ignored: Alt key not pressed');
     return;
   }
 
@@ -239,12 +241,12 @@ function handleSearchHotkey(event: KeyboardEvent): void {
       const groupVisible = modsTabRef.value?.isGroupSearchVisible() ?? false;
       const modVisible = modsTabRef.value?.isModSearchVisible() ?? false;
       if (!((isGroupSearchInput && groupVisible) || (isModSearchInput && modVisible))) {
-        console.debug('[SearchHotkey] Ignored: focus is in input/textarea');
+        log.debug('Ignored: focus is in input/textarea');
         return;
       }
     }
     if (target.isContentEditable) {
-      console.debug('[SearchHotkey] Ignored: focus is contenteditable');
+      log.debug('Ignored: focus is contenteditable');
       return;
     }
   }
@@ -253,7 +255,7 @@ function handleSearchHotkey(event: KeyboardEvent): void {
   const key = event.key.toLowerCase();
   // 仅匹配单个字母键（a-z），忽略其他功能键
   if (key.length !== 1 || !/[a-z]/.test(key)) {
-    console.debug('[SearchHotkey] Ignored: key is not a single letter:', event.key);
+    log.debug('Ignored: key is not a single letter', { key: event.key });
     return;
   }
 
@@ -261,7 +263,7 @@ function handleSearchHotkey(event: KeyboardEvent): void {
 
   // 诊断日志：记录事件路径，便于排查分组展开后未触发的问题
   const pathTarget = event.composedPath()[0] as HTMLElement | undefined;
-  console.debug('[SearchHotkey] Keydown target path:', {
+  log.debug('Keydown target path', {
     targetTag: (event.target as HTMLElement | null)?.tagName,
     targetClass: (event.target as HTMLElement | null)?.className,
     composedPathTag: pathTarget?.tagName,
@@ -271,14 +273,16 @@ function handleSearchHotkey(event: KeyboardEvent): void {
   });
 
   // 诊断日志：记录按键输入和当前配置
-  console.debug('[SearchHotkey] Pressed:', pressedHotkey,
-    'groupSearch:', settingsStore.groupSearchHotkey,
-    'modSearch:', settingsStore.modSearchHotkey,
-    'windowHotkey:', settingsStore.hotkeyKeyboard);
+  log.debug('Pressed hotkey', {
+    pressedHotkey,
+    groupSearch: settingsStore.groupSearchHotkey,
+    modSearch: settingsStore.modSearchHotkey,
+    windowHotkey: settingsStore.hotkeyKeyboard
+  });
 
   // 检查是否与全局热键冲突 — 告知用户
   if (pressedHotkey === settingsStore.hotkeyKeyboard.toLowerCase()) {
-    console.warn('[SearchHotkey] Conflict with window hotkey:', pressedHotkey);
+    log.warn('Conflict with window hotkey', { reason: `Search hotkey ${pressedHotkey} conflicts with window toggle hotkey`, impact: 'Search hotkey blocked to prevent accidental window toggle' });
     ElMessage.warning(t('Hotkey conflict: {key} is used by window toggle', { key: pressedHotkey }));
     return;
   }
@@ -286,22 +290,22 @@ function handleSearchHotkey(event: KeyboardEvent): void {
   // 匹配分组搜索快捷键（统一小写比较）— toggle 显示/隐藏
   if (pressedHotkey === settingsStore.groupSearchHotkey.toLowerCase()) {
     event.preventDefault();
-    console.debug('[SearchHotkey] Triggering group search');
+    log.debug('Triggering group search');
     modsTabRef.value?.toggleGroupSearch();
-    console.debug('[SearchHotkey] Group search toggled');
+    log.debug('Group search toggled');
     return;
   }
 
   // 匹配模组搜索快捷键（统一小写比较）— toggle 显示/隐藏
   if (pressedHotkey === settingsStore.modSearchHotkey.toLowerCase()) {
     event.preventDefault();
-    console.debug('[SearchHotkey] Triggering mod search');
+    log.debug('Triggering mod search');
     modsTabRef.value?.toggleModSearch();
-    console.debug('[SearchHotkey] Mod search toggled');
+    log.debug('Mod search toggled');
     return;
   }
 
-  console.debug('[SearchHotkey] Ignored: no matching search hotkey for', pressedHotkey);
+  log.debug('Ignored: no matching search hotkey', { pressedHotkey });
 }
 
 
@@ -334,7 +338,7 @@ function setSearchHotkeysEnabled(enabled: boolean, source: string) {
   const previous = hotkeyStore.isSearchHotkeysEnabled;
   hotkeyStore.setSearchHotkeysEnabled(enabled);
   if (previous !== enabled) {
-    console.debug(`[SearchHotkey] Search hotkeys ${enabled ? 'enabled' : 'disabled'} (source: ${source})`);
+    log.debug(`Search hotkeys ${enabled ? 'enabled' : 'disabled'}`, { source });
   }
 }
 
@@ -363,16 +367,16 @@ onMounted(async () => {
       setSearchHotkeysEnabled(focused, 'tauri-focus-changed');
     });
     tauriFocusAttached = true;
-    console.debug('[SearchHotkey] Tauri window focus listener attached');
+    log.debug('Tauri window focus listener attached');
   } catch (error) {
-    console.debug('[SearchHotkey] Failed to attach Tauri window focus listener:', error);
+    log.debug('Failed to attach Tauri window focus listener', { error });
   }
 
   // Tauri API 不可用时降级使用 WebView 的 focus/blur 事件
   if (!tauriFocusAttached) {
     window.addEventListener('focus', handleWindowFocus);
     window.addEventListener('blur', handleWindowBlur);
-    console.debug('[SearchHotkey] Fallback to WebView focus/blur listeners');
+    log.debug('Fallback to WebView focus/blur listeners');
   }
 });
 

@@ -12,3 +12,4 @@ export { useGame } from './useGame';
 export { useHotkey } from './useHotkey';
 export { useWindow } from './useWindow';
 export { useCloudData } from './useCloudData';
+export { useHashConflict } from './useHashConflict';

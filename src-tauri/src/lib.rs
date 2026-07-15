@@ -244,6 +244,7 @@ pub fn run() {
             commands::toggle_mod_disabled,
             commands::toggle_tree_node_mod_disabled,
             commands::toggle_tree_node_group_disabled,
+            commands::check_hash_conflicts,
             commands::add_group,
             commands::remove_group,
             commands::rename_group,

@@ -340,6 +340,8 @@
   "Open {game} working directory": "Open {game} working directory",
   "Restore Zone": "Restore Zone",
   "Drop .ini files here": "Drop .ini files here",
+  "Browse directory": "Browse directory",
+  "Drag or click to add files": "Drag or click to add files",
   "Drag files or directories here": "Drag files or directories here",
   "Only .ini files will be processed": "Only .ini files will be processed",
   "Process": "Process",
@@ -387,5 +389,19 @@
     "back": "Back",
     "condition": "Condition",
     "type": "Type"
-  }
+  },
+  "Hash conflict detected: {count} group(s)": "Hash conflict detected: {count} group(s)",
+  "No hash conflicts": "No hash conflicts",
+  "Checking for hash conflicts...": "Checking for hash conflicts...",
+  "Hash conflict check failed": "Hash conflict check failed",
+  "{mod1} and {mod2} conflict, hash: {hash}": "{mod1} and {mod2} conflict, hash: {hash}",
+  "{mods} and {lastMod} conflict, hash: {hash}": "{mods} and {lastMod} conflict, hash: {hash}",
+  "View location": "View location",
+  "Ignore": "Ignore",
+  "Conflict resolution suggestion": "Conflict resolution suggestion",
+  "Conflict resolution suggestion text": "Detected mods with identical content. We recommend keeping only one and disabling the rest to avoid in-game behavior conflicts.",
+  "Hash conflict check in progress...": "Hash conflict check in progress...",
+  "Hash conflict check cancelled": "Hash conflict check cancelled",
+  "Hash conflict check failed: {error}": "Hash conflict check failed: {error}",
+  "Close": "Close"
 }

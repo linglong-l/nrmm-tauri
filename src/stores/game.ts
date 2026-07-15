@@ -6,6 +6,7 @@ import { invokeToggleModFavorite, invokeToggleGroupFavorite, invokeSearchMods, i
 import { EventNames, eventManager } from '../utils/events';
 import { useSettingsStore } from './settings';
 import { getModsCache, setModsCache, removeModsCache } from '../utils/cache';
+import { createLogger } from '../utils/logger';
 import { ElMessage } from 'element-plus';
 import { i18n } from '../locales';
 
@@ -19,6 +20,7 @@ import { i18n } from '../locales';
  * 由调用方通过 invoke 与后端交互后再调用本 Store 的 setter 注入数据。
  */
 export const useGameStore = defineStore('game', () => {
+  const log = createLogger('GameStore');
   // 当前选中的目标游戏。'none' 表示未选择任何游戏。
   const targetGame = ref<TargetGame>('none' as TargetGame);
   // 当前游戏下扫描到的全部 Mod 列表（扁平结构，未按分组聚合）。
@@ -244,13 +246,14 @@ export const useGameStore = defineStore('game', () => {
    * @param game 新的目标游戏
    */
   function setTargetGame(game: TargetGame) {
+    log.debug('Game switched', { from: targetGame.value, to: game });
     targetGame.value = game;
     const settingsStore = useSettingsStore();
     modsPath.value = settingsStore.getModsPath(game);
     // 同步更新 settings 中的 targetGame 并持久化
     settingsStore.setTargetGame(game);
     settingsStore.saveSettings().catch(() => {
-      console.warn('[gameStore] Failed to save settings after game change');
+      log.warn('Failed to save settings after game change', { reason: 'saveSettings failed', impact: 'Game preference may not persist on restart' });
     });
     eventManager.emitLocal(EventNames.GAME_SWITCHED, { game });
   }
@@ -343,6 +346,8 @@ export const useGameStore = defineStore('game', () => {
         loadStatus.value = 'completed';
         // 更新 localStorage 缓存
         setModsCache(game, groups);
+        const totalMods = groups.reduce((sum, g) => sum + g.modsInGroup.length, 0);
+        log.debug('Mods loaded', { game, groupCount: groups.length, totalMods });
       } else {
         // 数据已过时（用户已切换到其他游戏），标记为已取消
         loadStatus.value = 'cancelled';
@@ -356,7 +361,7 @@ export const useGameStore = defineStore('game', () => {
         modGroups.value = [];
         isModsLoaded.value = false;
         loadStatus.value = 'error';
-        console.error('[gameStore] loadModsForGame failed:', error);
+        log.error('loadModsForGame failed', error, { trigger: 'loadModsForGame', suggestion: 'Check backend logs or retry' });
       }
     } finally {
       isLoading.value = false;
@@ -459,7 +464,7 @@ export const useGameStore = defineStore('game', () => {
         if (selectedMod) {
           // 与点击路径（selectModInGroup）保持一致：禁用模组不可被选中
           if (selectedMod.isDisabled) {
-            console.warn(`[ModSelection] Group '${group.groupName}': selected mod '${selectedMod.modName}' is disabled, deselecting.`);
+            log.warn(`Group '${group.groupName}': selected mod '${selectedMod.modName}' is disabled, deselecting.`, { reason: 'Selected mod is disabled', impact: 'Selection will be reset' });
             disabledSelectionConflicts.push({ groupName: group.groupName, modName: selectedMod.modName, groupPath: group.groupPath });
           } else {
             newSelectedMap.set(group.groupPath, selectedMod.modPath);
@@ -480,7 +485,7 @@ export const useGameStore = defineStore('game', () => {
       const conflictGroup = findGroupByPath(conflict.groupPath);
       if (conflictGroup && conflictGroup.isTreeNode && !conflictGroup.isVirtual) continue;
       invokeSetSelectedMod(conflict.groupPath, 0).catch((e) => {
-        console.error(`[ModSelection] Failed to reset selectedindex for group '${conflict.groupName}':`, e);
+        log.error(`Failed to reset selectedindex for group '${conflict.groupName}'`, e, { trigger: 'setModGroups', suggestion: 'Check file permissions or disk space' });
       });
     }
 

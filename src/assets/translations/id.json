@@ -326,6 +326,8 @@
   "Open {game} working directory": "Buka direktori kerja {game}",
   "Restore Zone": "Zona Pemulihan",
   "Drop .ini files here": "Letakkan file .ini di sini",
+  "Browse directory": "Pilih direktori",
+  "Drag or click to add files": "Seret atau klik untuk menambah file",
   "Drag files or directories here": "Seret file atau direktori ke sini",
   "Only .ini files will be processed": "Hanya file .ini yang akan diproses",
   "Process": "Proses",
@@ -373,5 +375,19 @@
     "back": "Kembali",
     "condition": "Kondisi",
     "type": "Tipe"
-  }
+  },
+  "Hash conflict detected: {count} group(s)": "Terdeteksi {count} konflik hash",
+  "No hash conflicts": "Tidak ada konflik hash",
+  "Checking for hash conflicts...": "Memeriksa konflik hash...",
+  "Hash conflict check failed": "Pemeriksaan konflik hash gagal",
+  "{mod1} and {mod2} conflict, hash: {hash}": "{mod1} dan {mod2} konflik, hash: {hash}",
+  "{mods} and {lastMod} conflict, hash: {hash}": "{mods} dan {lastMod} konflik, hash: {hash}",
+  "View location": "Lihat lokasi",
+  "Ignore": "Abaikan",
+  "Conflict resolution suggestion": "Saran resolusi",
+  "Conflict resolution suggestion text": "Terdeteksi mod dengan konten yang sama. Disarankan untuk mempertahankan satu dan menonaktifkan yang lain untuk menghindari konflik perilaku dalam game.",
+  "Hash conflict check in progress...": "Pemeriksaan konflik hash sedang berjalan...",
+  "Hash conflict check cancelled": "Pemeriksaan konflik hash dibatalkan",
+  "Hash conflict check failed: {error}": "Pemeriksaan konflik hash gagal: {error}",
+  "Close": "Tutup"
 }

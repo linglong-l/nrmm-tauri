@@ -213,17 +213,38 @@ pub struct HashedModInfo {
     pub hash: String,
 }
 
+/// 单组 hash 冲突条目。
+///
+/// 将 `HashConflictReport.enabled_mod_hashes` 中按 hash 分组后的模组集合
+/// 抽取为一条结构化记录，便于前端渲染（如「mod_a 与 mod_b 冲突，hash: a1b2c3d4」）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashConflictEntry {
+    /// 冲突的 hash 字符串（完整长度）。
+    pub hash: String,
+    /// 共享该 hash 的模组显示名称列表。
+    pub mod_names: Vec<String>,
+    /// 共享该 hash 的模组目录路径列表，与 `mod_names` 一一对应。
+    pub mod_paths: Vec<String>,
+    /// 共享该 hash 的模组所属分组名称列表，与 `mod_names` 一一对应。
+    pub group_names: Vec<String>,
+}
+
 /// Hash 冲突检测报告。
 ///
-/// 由 `update_mod_data` 流程生成，包含启用模组的内容 hash 冲突信息，
-/// 用于在前端提示用户可能存在重复的模组。
+/// 由 `update_mod_data` 流程或独立的 `check_hash_conflicts` 命令生成，
+/// 包含启用模组的内容 hash 冲突信息，用于在前端提示用户可能存在重复的模组。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HashConflictReport {
-    /// 启用的 mod hash 冲突：hash -> 具有相同 hash 的模组列表
+    /// 启用的 mod hash 冲突：hash -> 具有相同 hash 的模组列表（旧字段，保持向后兼容）
     pub enabled_mod_hashes: HashMap<String, Vec<HashedModInfo>>,
     /// 命名空间 hash：namespace hash -> 文件路径列表
     pub namespace_hashes: HashMap<String, Vec<String>>,
+    /// 结构化冲突条目列表：每个条目对应一组共享相同 hash 的模组。
+    /// 与 `enabled_mod_hashes` 内容保持一致（前者按 hash 分组，后者按条目扁平化）。
+    #[serde(default)]
+    pub conflicts: Vec<HashConflictEntry>,
 }
 
 /// `update_mod_data` 命令的返回结果，包含执行状态、日志、耗时及各项检测报告。
@@ -1048,62 +1069,6 @@ impl ModManager {
     /// - `base_path`: 起始目录路径（应为 `#` 开头目录）。
     ///
     /// 返回：所有 `#` 开头子目录的路径列表（包含 `base_path` 自身）。
-    ///
-    /// 当前未使用，保留作为 BFS 扫描的备用实现。
-    #[allow(dead_code)]
-    fn scan_recursive_with_queue(base_path: &Path) -> Vec<PathBuf> {
-        let mut result = Vec::new();
-        let mut queue = std::collections::VecDeque::new();
-        // 已访问路径集合（使用 canonical 路径去重，避免循环引用）
-        let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-
-        queue.push_back(base_path.to_path_buf());
-
-        while let Some(current) = queue.pop_front() {
-            // 解析符号链接，获取真实路径
-            let canonical = match current.canonicalize() {
-                Ok(p) => p,
-                Err(_) => current.clone(),
-            };
-
-            // 去重：已访问过的路径跳过（避免循环引用死循环）
-            if visited.contains(&canonical) {
-                continue;
-            }
-            visited.insert(canonical.clone());
-
-            if let Ok(entries) = fs::read_dir(&current) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-
-                    // 仅处理目录
-                    if path.is_dir() {
-                        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-                        if name.starts_with('#') {
-                            // 处理符号链接：解析真实路径后检查是否重复
-                            let resolved = if path.is_symlink() {
-                                match path.canonicalize() {
-                                    Ok(p) => p,
-                                    Err(_) => path.clone(),
-                                }
-                            } else {
-                                path.clone()
-                            };
-
-                            // 符号链接去重检查
-                            if !visited.contains(&resolved) {
-                                queue.push_back(path.clone());
-                                result.push(path);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        result
-    }
-
     /// 使用显式栈（非递归）扫描目录树，构建树形嵌套结构。
     ///
     /// 所有子目录均参与分类：
@@ -2307,12 +2272,58 @@ impl ModManager {
         Ok(groups)
     }
 
-    /// 刷新 Mods 数据（与 `load_mods` 等价，语义上表示强制重新加载）。
+    /// 独立执行 Hash 冲突检测（不依赖 `update_mod_data`）。
+    ///
+    /// 流程：
+    /// 1. 根据目标游戏从设置中获取 Mods 路径。
+    /// 2. 校验路径有效性，无效时返回空报告。
+    /// 3. 在阻塞线程中扫描分组并计算 hash 冲突。
+    ///
+    /// 该方法专为独立的 `check_hash_conflicts` Tauri 命令设计，
+    /// 通过 `TaskQueue` 互斥执行，避免与 `update_mod_data` 阻塞。
     ///
     /// 参数：
     /// - `settings`: 全局设置。
-    pub async fn refresh_mods(&self, settings: &Settings) -> Result<Vec<ModGroupData>> {
-        self.load_mods(settings).await
+    ///
+    /// 返回：`HashConflictReport`（包含 `enabled_mod_hashes` 与 `conflicts`）。
+    pub async fn check_hash_conflicts_async(
+        &self,
+        settings: &Settings,
+    ) -> Result<HashConflictReport> {
+        let target_game: TargetGame = settings.target_game;
+        let mods_path: String = Self::get_mods_path_for_game(settings, target_game);
+
+        if mods_path.is_empty() {
+            warn!("No mods path configured for game: {:?}", target_game);
+            return Ok(HashConflictReport::default());
+        }
+
+        let status: ModsPathStatus = Self::validate_mods_path(&mods_path);
+        if status != ModsPathStatus::Valid {
+            warn!(
+                "Mods path is not valid: {:?}, status: {:?}",
+                mods_path, status
+            );
+            return Ok(HashConflictReport::default());
+        }
+
+        let managed_path: PathBuf = Path::new(&mods_path).join(MANAGED_FOLDER);
+        let managed_path_str: String = managed_path.to_string_lossy().to_string();
+        let sort_method: SortGroupMethod = SortGroupMethod::from_i32(settings.sort_group_method);
+
+        // 在阻塞线程中执行扫描 + hash 检测，避免阻塞 Tokio 运行时
+        let report = tokio::task::spawn_blocking(move || -> Result<HashConflictReport> {
+            let groups = Self::scan_groups(&managed_path_str, sort_method)?;
+            Self::check_enabled_mod_hash_conflicts(&managed_path_str, &groups)
+        })
+        .await
+        .with_context(|| "Failed to spawn blocking task for hash conflict check")??;
+
+        info!(
+            "Independent hash conflict check: {} conflicts found",
+            report.conflicts.len()
+        );
+        Ok(report)
     }
 
     /// 根据指定的 Mods 路径刷新模组数据（不依赖全局设置）。
@@ -2539,13 +2550,8 @@ impl ModManager {
             }
         }
 
-        let (_hash_conflict_count, hash_logs) =
+        let (_hash_conflict_count, hash_logs, hash_conflict_report) =
             Self::check_and_report_hash_conflicts(&managed_path_str, &groups_for_hash_check);
-
-        // 计算 hash 冲突报告
-        let hash_conflict_report =
-            Self::check_enabled_mod_hash_conflicts(&managed_path_str, &groups_for_hash_check)
-                .unwrap_or_default();
 
         logs.extend(hash_logs);
 
@@ -3074,23 +3080,71 @@ impl ModManager {
         format!("{:x}", hasher.finish())
     }
 
+    /// 一次性扫描整个 `_MANAGED_` 目录树，收集所有 INI 文件的路径。
+    /// 返回 `模组根路径 → INI 文件路径列表` 的映射表。
+    /// 相比逐个模组调用 `find_ini_files_recursive`，此方法将 N 次 WalkDir 合并为 1 次。
+    fn scan_all_ini_files_in_managed(managed_path: &str) -> HashMap<String, Vec<PathBuf>> {
+        let mut result: HashMap<String, Vec<PathBuf>> = HashMap::new();
+        let managed = Path::new(managed_path);
+        if !managed.exists() {
+            return result;
+        }
+
+        let walker = WalkDir::new(managed).follow_links(false).into_iter();
+        for entry in walker.filter_map(|e| e.ok()) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("ini") {
+                continue;
+            }
+
+            // 找到该文件在 _MANAGED_ 下的直接子目录（模组根目录）
+            let mut ancestors = path.ancestors();
+            let mut mod_root = None;
+            while let Some(ancestor) = ancestors.next() {
+                if ancestor == managed {
+                    break;
+                }
+                mod_root = Some(ancestor);
+            }
+
+            if let Some(root) = mod_root {
+                let key = root.to_string_lossy().to_string();
+                result.entry(key).or_default().push(path.to_path_buf());
+            }
+        }
+
+        // 排序确保 hash 计算一致性
+        for files in result.values_mut() {
+            files.sort();
+        }
+        result
+    }
+
     /// 检测启用的 mod 的 hash 冲突
     /// 返回 HashConflictReport，其中 enabled_mod_hashes 只包含有冲突的 hash
     ///
     /// 流程：
-    /// 1. 遍历所有分组中启用的模组（跳过 None 槽位和禁用模组）。
-    /// 2. 将每个模组下所有 INI 文件内容合并后计算 hash。
-    /// 3. 按 hash 分组，仅保留出现次数 > 1 的 hash（即存在冲突）。
+    /// 1. 一次性扫描整个 _MANAGED_ 目录树收集所有 INI 文件（1 次 WalkDir）。
+    /// 2. 遍历所有分组中启用的模组（跳过 None 槽位和禁用模组）。
+    /// 3. 将每个模组下所有 INI 文件内容合并后计算 hash。
+    /// 4. 按 hash 分组，仅保留出现次数 > 1 的 hash（即存在冲突）。
+    /// 5. 同时构建 `conflicts` 结构化条目，便于前端直接渲染。
     ///
     /// 参数：
-    /// - `_managed_path`: `_MANAGED_` 目录路径（当前未使用）。
+    /// - `managed_path`: `_MANAGED_` 目录路径。
     /// - `groups`: 分组数据列表。
     pub fn check_enabled_mod_hash_conflicts(
-        _managed_path: &str,
+        managed_path: &str,
         groups: &[ModGroupData],
     ) -> Result<HashConflictReport> {
         let mut report = HashConflictReport::default();
         let mut content_by_hash: HashMap<String, Vec<HashedModInfo>> = HashMap::new();
+
+        // 一次性预扫描所有 INI 文件，避免 N 次 WalkDir 遍历
+        let all_ini_files = Self::scan_all_ini_files_in_managed(managed_path);
 
         // 收集所有启用的 mod 的内容 hash
         for group in groups {
@@ -3105,9 +3159,15 @@ impl ModManager {
                     continue;
                 }
 
+                // 从预扫描结果中获取该模组的 INI 文件列表
+                let mod_key = mod_path.to_string_lossy().to_string();
+                let ini_files = match all_ini_files.get(&mod_key) {
+                    Some(files) => files.clone(),
+                    None => continue,
+                };
+
                 // 收集该模组下所有 INI 文件内容
                 let mut combined_content = String::new();
-                let ini_files = Self::find_ini_files_recursive(Path::new(&mod_data.mod_path));
                 for ini_path in &ini_files {
                     if let Ok(content) = fs::read_to_string(ini_path) {
                         combined_content.push_str(&content);
@@ -3132,7 +3192,15 @@ impl ModManager {
         // 找出有冲突的 hash（同一个 hash 有多个 mod）
         for (hash, mods) in content_by_hash {
             if mods.len() > 1 {
-                report.enabled_mod_hashes.insert(hash, mods);
+                report.enabled_mod_hashes.insert(hash.clone(), mods.clone());
+                // 同时填充结构化冲突条目
+                let entry = HashConflictEntry {
+                    hash,
+                    mod_names: mods.iter().map(|m| m.mod_name.clone()).collect(),
+                    mod_paths: mods.iter().map(|m| m.mod_path.clone()).collect(),
+                    group_names: mods.iter().map(|m| m.group_name.clone()).collect(),
+                };
+                report.conflicts.push(entry);
             }
         }
 
@@ -3159,7 +3227,7 @@ impl ModManager {
     pub fn check_and_report_hash_conflicts(
         managed_path: &str,
         groups: &[ModGroupData],
-    ) -> (usize, Vec<LogEntry>) {
+    ) -> (usize, Vec<LogEntry>, HashConflictReport) {
         match Self::check_enabled_mod_hash_conflicts(managed_path, groups) {
             Ok(report) => {
                 let conflict_count = report.enabled_mod_hashes.len();
@@ -3186,13 +3254,14 @@ impl ModManager {
                     }
                 }
 
-                (conflict_count, logs)
+                (conflict_count, logs, report)
             }
             Err(e) => {
                 warn!("Failed to check hash conflicts: {}", e);
                 (
                     0,
                     vec![LogEntry::warn(format!("Hash conflict check failed: {}", e))],
+                    HashConflictReport::default(),
                 )
             }
         }

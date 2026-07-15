@@ -11,3 +11,4 @@ export { useUiStore } from './ui';
 export { useGameStore } from './game';
 export { useHotkeyStore } from './hotkey';
 export { useCloudDataStore } from './cloudData';
+export { useHashConflictStore } from './hashConflict';

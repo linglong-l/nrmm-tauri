@@ -340,6 +340,8 @@
   "Open {game} working directory": "打开{game}工作目录",
   "Restore Zone": "还原区",
   "Drop .ini files here": "将.ini文件拖放至此",
+  "Browse directory": "选择目录",
+  "Drag or click to add files": "拖拽或点击添加文件",
   "Drag files or directories here": "将文件或目录拖放至此",
   "Only .ini files will be processed": "仅处理.ini文件",
   "Process": "处理",
@@ -387,5 +389,19 @@
     "back": "返回键",
     "condition": "条件",
     "type": "类型"
-  }
+  },
+  "Hash conflict detected: {count} group(s)": "检测到 {count} 个分组的hash冲突",
+  "No hash conflicts": "无hash冲突",
+  "Checking for hash conflicts...": "正在检测hash冲突...",
+  "Hash conflict check failed": "hash冲突检测失败",
+  "{mod1} and {mod2} conflict, hash: {hash}": "{mod1} 与 {mod2} 冲突，hash: {hash}",
+  "{mods} and {lastMod} conflict, hash: {hash}": "{mods} 与 {lastMod} 冲突，hash: {hash}",
+  "View location": "查看位置",
+  "Ignore": "忽略",
+  "Conflict resolution suggestion": "解决建议",
+  "Conflict resolution suggestion text": "检测到内容相同的模组，建议保留其中一个并禁用其余，以避免游戏内行为冲突。",
+  "Hash conflict check in progress...": "Hash 冲突检测中...",
+  "Hash conflict check cancelled": "Hash 冲突检测已取消",
+  "Hash conflict check failed: {error}": "Hash 冲突检测失败：{error}",
+  "Close": "关闭"
 }

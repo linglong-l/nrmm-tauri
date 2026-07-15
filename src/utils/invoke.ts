@@ -13,10 +13,14 @@ import type {
   TrayMenuItem,
   CloudData,
   HotkeyKeyboard,
-  HotkeyGamepad
+  HotkeyGamepad,
+  HashConflictReport
 } from '../types';
 import { TargetGame } from '../types';
 import { CONSTANTS } from './constants';
+
+// 显式重新导出 HashConflictReport 类型以解决 vue-tsc 命名空间问题
+export type { HashConflictReport };
 
 /**
  * 将本地文件系统路径转换为 WebView 可访问的 URL。
@@ -712,4 +716,19 @@ export async function invokeOpenUrl(url: string): Promise<void> {
 /** 创建桌面快捷方式（Linux 为 .desktop，Windows 为 .lnk）。 */
 export async function invokeCreateDesktopIcon(name?: string): Promise<void> {
   return invoke('create_desktop_icon', { name });
+}
+
+/**
+ * 独立执行 Hash 冲突检测。
+ *
+ * 调用后端的 `check_hash_conflicts` Tauri 命令：
+ * - 通过 `TaskQueue` 任务类型 `"check_hash_conflicts"` 互斥执行。
+ * - 同类型并发时新请求会取消旧请求。
+ * - 与 `update_mod_data` 互不阻塞（不同任务类型）。
+ *
+ * @returns `HashConflictReport`（包含 `enabledModHashes` 与 `conflicts` 字段）。
+ *          若任务被取消则返回 rejected Promise，错误信息以 `Task 'check_hash_conflicts' was cancelled` 开头。
+ */
+export async function invokeCheckHashConflicts(): Promise<HashConflictReport> {
+  return invoke<HashConflictReport>('check_hash_conflicts');
 }

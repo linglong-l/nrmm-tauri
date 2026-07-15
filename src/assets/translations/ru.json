@@ -326,6 +326,8 @@
   "Open {game} working directory": "Открыть рабочую директорию {game}",
   "Restore Zone": "Зона восстановления",
   "Drop .ini files here": "Перетащите .ini файлы сюда",
+  "Browse directory": "Выбрать директорию",
+  "Drag or click to add files": "Перетащите или нажмите для добавления",
   "Drag files or directories here": "Перетащите файлы или директории сюда",
   "Only .ini files will be processed": "Будут обработаны только .ini файлы",
   "Process": "Обработать",
@@ -373,5 +375,19 @@
     "back": "Назад",
     "condition": "Условие",
     "type": "Тип"
-  }
+  },
+  "Hash conflict detected: {count} group(s)": "Обнаружено {count} конфликт(ов) хеша",
+  "No hash conflicts": "Нет конфликтов hash",
+  "Checking for hash conflicts...": "Проверка конфликтов hash...",
+  "Hash conflict check failed": "Сбой проверки конфликтов hash",
+  "{mod1} and {mod2} conflict, hash: {hash}": "{mod1} и {mod2} конфликтуют, хеш: {hash}",
+  "{mods} and {lastMod} conflict, hash: {hash}": "{mods} и {lastMod} конфликтуют, хеш: {hash}",
+  "View location": "Показать расположение",
+  "Ignore": "Игнорировать",
+  "Conflict resolution suggestion": "Рекомендация по разрешению",
+  "Conflict resolution suggestion text": "Обнаружены моды с одинаковым содержимым. Рекомендуется оставить один и отключить остальные, чтобы избежать конфликтов в игре.",
+  "Hash conflict check in progress...": "Проверка конфликтов хеша...",
+  "Hash conflict check cancelled": "Проверка конфликтов хеша отменена",
+  "Hash conflict check failed: {error}": "Ошибка проверки конфликтов хеша: {error}",
+  "Close": "Закрыть"
 }

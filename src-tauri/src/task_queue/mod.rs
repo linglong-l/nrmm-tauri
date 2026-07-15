@@ -136,37 +136,9 @@ impl TaskQueue {
     ///
     /// 参数：
     /// - `task_type`: 任务类型标识。
-    ///
-    /// 返回：
-    /// - `true`：任务正在运行。
-    /// - `false`：任务未在运行。
-    ///
-    /// 当前未暴露到命令层，保留用于后续任务状态查询。
-    #[allow(dead_code)]
     pub async fn is_running(&self, task_type: &str) -> bool {
         let tasks = self.tasks.lock().await;
         tasks.contains_key(task_type)
-    }
-
-    /// 取消指定类型的正在运行的任务。
-    ///
-    /// 参数：
-    /// - `task_type`: 任务类型标识。
-    ///
-    /// 返回：
-    /// - `true`：任务已成功取消。
-    /// - `false`：任务不存在或未在运行。
-    ///
-    /// 当前未暴露到命令层，保留用于后续任务取消场景。
-    #[allow(dead_code)]
-    pub async fn cancel_task(&self, task_type: &str) -> bool {
-        let mut tasks = self.tasks.lock().await;
-        if let Some(handle) = tasks.remove(task_type) {
-            handle.abort();
-            true
-        } else {
-            false
-        }
     }
 }
 

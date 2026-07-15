@@ -35,11 +35,13 @@ import {
 } from '../utils/constants';
 import { validateHotkeys } from '../utils/hotkeyValidator';
 import { EventNames, eventManager } from '../utils/events';
+import { createLogger } from '../utils/logger';
 import { getVersion } from '@tauri-apps/api/app';
 
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
 const gameStore = useGameStore();
+const log = createLogger('SettingsView');
 
 // 当前激活的设置 Tab（默认游戏设置）
 const activeTab = ref('game');
@@ -333,7 +335,7 @@ async function browseFolder(game: TargetGame) {
       await handleModsPathChange(game, selected);
     }
   } catch (error) {
-    console.error('Failed to open folder dialog:', error);
+    log.error('Failed to open folder dialog:', error);
     ElMessage.error(t('Failed to open folder dialog'));
   } finally {
     isBrowsingFolder.value = false;
@@ -612,8 +614,32 @@ async function findIniFilesInPath(path: string): Promise<Array<{ name: string; p
       path: p
     }));
   } catch (error) {
-    console.error('Failed to find ini files:', error);
+    log.error('Failed to find ini files:', error);
     return [];
+  }
+}
+
+/**
+ * 通过系统目录选择对话框选择目录，并将目录下所有 .ini 文件加入还原区。
+ * 复用 findIniFilesInPath 扫描逻辑，与拖拽行为保持一致。
+ */
+async function handleSelectDirectoryForRestore() {
+  try {
+    const dirPath = await invokeSelectDirectory();
+    if (!dirPath) return;
+
+    const iniFiles = await findIniFilesInPath(dirPath);
+    if (iniFiles.length === 0) {
+      ElMessage.warning(t('No valid .ini files found'));
+      return;
+    }
+
+    restoreZoneFiles.value = [...restoreZoneFiles.value, ...iniFiles];
+    ElMessage.success(t(`${iniFiles.length} file(s) added to restore zone`));
+    log.debug('Directory selected for restore', { selectedPath: dirPath, iniFileCount: iniFiles.length });
+  } catch (error) {
+    log.error('Failed to select directory for restore:', error);
+    ElMessage.error(t('Failed to open folder dialog'));
   }
 }
 
@@ -638,6 +664,7 @@ function clearRestoreZone() {
  */
 async function processRestoreZoneFiles() {
   if (restoreZoneFiles.value.length === 0) return;
+  log.debug('Processing restore zone files', { fileCount: restoreZoneFiles.value.length });
 
   isProcessingRestore.value = true;
   try {
@@ -650,7 +677,7 @@ async function processRestoreZoneFiles() {
       ElMessage.error(t('Failed to process files'));
     }
   } catch (error) {
-    console.error('Failed to process ini files:', error);
+    log.error('Failed to process ini files:', error);
     ElMessage.error(t('Failed to process files'));
   } finally {
     isProcessingRestore.value = false;
@@ -1227,9 +1254,10 @@ watch(
               <div class="restore-zone" :class="{ 'drag-over': isRestoreZoneDragging }"
                 @dragover.prevent="onRestoreZoneDragOver"
                 @dragleave="onRestoreZoneDragLeave"
-                @drop.prevent="onRestoreZoneDrop">
+                @drop.prevent="onRestoreZoneDrop"
+                @click="handleSelectDirectoryForRestore">
                 <div class="restore-zone-header">
-                  <span class="restore-zone-hint">{{ t('Drop .ini files here') }}</span>
+                  <span class="restore-zone-hint">{{ t('Drag or click to add files') }}</span>
                 </div>
                 <div class="restore-zone-content">
                   <div v-if="!isRestoreZoneDragging && restoreZoneFiles.length === 0" class="restore-zone-empty">
@@ -1774,11 +1802,14 @@ watch(
 
 /* 还原区样式 */
 .restore-zone {
+  width: 90%;
+  margin: 0 auto;
   border: 2px dashed rgba(255, 255, 255, 0.2);
   border-radius: 8px;
   padding: 16px;
   transition: all 0.3s ease;
   background-color: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
 }
 
 .restore-zone:hover {

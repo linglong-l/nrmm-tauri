@@ -326,6 +326,8 @@
   "Open {game} working directory": "開啟{game}工作目錄",
   "Restore Zone": "還原區",
   "Drop .ini files here": "將.ini檔案拖放至此處",
+  "Browse directory": "選擇目錄",
+  "Drag or click to add files": "拖曳或點擊新增檔案",
   "Drag files or directories here": "將檔案或目錄拖放至此處",
   "Only .ini files will be processed": "僅處理.ini檔案",
   "Process": "處理",
@@ -373,5 +375,19 @@
     "back": "返回鍵",
     "condition": "條件",
     "type": "類型"
-  }
+  },
+  "Hash conflict detected: {count} group(s)": "檢測到 {count} 個分組的hash衝突",
+  "No hash conflicts": "無hash衝突",
+  "Checking for hash conflicts...": "正在檢測hash衝突...",
+  "Hash conflict check failed": "hash衝突檢測失敗",
+  "{mod1} and {mod2} conflict, hash: {hash}": "{mod1} 與 {mod2} 衝突，hash: {hash}",
+  "{mods} and {lastMod} conflict, hash: {hash}": "{mods} 與 {lastMod} 衝突，hash: {hash}",
+  "View location": "查看位置",
+  "Ignore": "忽略",
+  "Conflict resolution suggestion": "解決建議",
+  "Conflict resolution suggestion text": "檢測到內容相同的模組，建議保留其中一個並停用其餘，以避免遊戲內行為衝突。",
+  "Hash conflict check in progress...": "Hash 衝突檢測中...",
+  "Hash conflict check cancelled": "Hash 衝突檢測已取消",
+  "Hash conflict check failed: {error}": "Hash 衝突檢測失敗：{error}",
+  "Close": "關閉"
 }

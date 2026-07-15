@@ -10,6 +10,7 @@ import type {
   CloudData,
   IniSyntaxError
 } from '../types';
+import type { HashConflictReport } from '../types';
 
 /**
  * 全局事件名称常量集合。
@@ -58,7 +59,9 @@ export const EventNames = {
   /** 目标进程已退出 */
   PROCESS_STOPPED: 'process-stopped',
   /** 当前目标游戏已切换 */
-  GAME_SWITCHED: 'game-switched'
+  GAME_SWITCHED: 'game-switched',
+  /** Hash 冲突检测完成（与后端 HASH_CONFLICTS_DETECTED_EVENT 常量保持一致） */
+  HASH_CONFLICTS_DETECTED: 'hash-conflicts-detected'
 } as const;
 
 /** 事件名称类型，取自 EventNames 常量的所有值的联合类型。 */
@@ -111,6 +114,12 @@ export interface EventPayloadMap {
   [EventNames.PROCESS_STOPPED]: { processName: string };
   /** 游戏切换载荷：游戏标识字符串 */
   [EventNames.GAME_SWITCHED]: { game: string };
+  /** Hash 冲突检测完成（由后端在 toggle_mod_disabled 等操作完成后 emit） */
+  [EventNames.HASH_CONFLICTS_DETECTED]: {
+    game: string;
+    report: HashConflictReport;
+    completedAt: number;
+  };
 }
 
 /** 通用事件回调类型，接收一个载荷参数。 */

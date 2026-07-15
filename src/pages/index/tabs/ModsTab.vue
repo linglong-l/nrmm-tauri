@@ -36,6 +36,7 @@ import {
 } from '@element-plus/icons-vue';
 import { useGame } from '../../../composables/useGame';
 import { sortModsForDisplay } from '../../../stores/game';
+import { useHashConflictStore } from '../../../stores/hashConflict';
 import { fuzzyMatch, splitByIndices } from '../../../utils/fuzzyMatch';
 import type { TextSegment } from '../../../utils/fuzzyMatch';
 import { useSettings } from '../../../composables/useSettings';
@@ -64,10 +65,13 @@ import { EventNames, eventManager } from '../../../utils/events';
 import type { ModData, ModGroupData, LayoutMode, TargetGame } from '../../../types';
 import { LayoutMode as LayoutModeEnum } from '../../../types';
 import GroupTreeNode from './GroupTreeNode.vue';
+import { createLogger } from '../../../utils/logger';
 
 const { t } = useI18n();
 const game = useGame();
 const settings = useSettings();
+const hashConflictStore = useHashConflictStore();
+const log = createLogger('ModsTab');
 
 // ===== 响应式状态 =====
 const isLoading = ref(false);                          // 全局加载指示
@@ -175,7 +179,7 @@ function onModsContainerMouseDown(e: MouseEvent) {
     target.closest('.el-textarea')
   ) return;
 
-  console.debug('[ModsDrag] Mouse down', {
+  log.debug('Mouse down', {
     targetTag: target.tagName,
     targetClass: target.className,
     clientX: e.clientX,
@@ -214,7 +218,7 @@ function onModsContainerMouseMove(e: MouseEvent) {
       modsScrollDragState.hasDragged = true;
       e.preventDefault();
       window.getSelection()?.removeAllRanges();
-      console.debug('[ModsDrag] Drag started', { dx, dy });
+      log.debug('Drag started', { dx, dy });
     }
   }
 
@@ -243,7 +247,7 @@ function endModsContainerDrag() {
     suppressNextModsContainerClick = true;
   }
 
-  console.debug('[ModsDrag] Drag ended', { hasDragged: hadDragged, suppressClick: suppressNextModsContainerClick });
+  log.debug('Drag ended', { hasDragged: hadDragged, suppressClick: suppressNextModsContainerClick });
 
   if (modsScrollDragRaf) {
     cancelAnimationFrame(modsScrollDragRaf);
@@ -269,7 +273,7 @@ function onModsContainerClick(e: MouseEvent) {
   if (target.closest('.mod-card') || target.closest('.list-mod-card')) {
     e.stopImmediatePropagation();
     e.preventDefault();
-    console.debug('[ModsDrag] Suppressed card click after drag');
+    log.debug('Suppressed card click after drag');
   }
   suppressNextModsContainerClick = false;
 }
@@ -280,7 +284,7 @@ function onModsContainerContextMenu(e: MouseEvent) {
   if (target.closest('.mod-card') || target.closest('.list-mod-card')) {
     e.stopImmediatePropagation();
     e.preventDefault();
-    console.debug('[ModsDrag] Suppressed card contextmenu after drag');
+    log.debug('Suppressed card contextmenu after drag');
   }
   suppressNextModsContainerClick = false;
 }
@@ -467,13 +471,14 @@ async function refreshMods() {
       // 任务取消是 TaskQueue 的正常行为（新请求取消旧请求），不作为错误
       const errMsg = String(error);
       if (errMsg.includes('was cancelled')) {
-        console.debug('[RefreshMods] Task cancelled by newer request, skipping');
+        log.debug('Task cancelled by newer request, skipping');
       } else {
-        console.error('Failed to refresh mods:', error);
+        log.error('Failed to refresh mods', error);
       }
     } finally {
       isLoading.value = false;
     }
+    log.debug('Mods refreshed', { game: game.targetGame.value });
   }
 
 /**
@@ -565,7 +570,7 @@ async function toggleMod(mod: ModData) {
     const updatedGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
     game.updateGroup(game.currentGroupPath.value, updatedGroup);
   } catch (error) {
-    console.error('Failed to toggle mod:', error);
+    log.error('Failed to toggle mod', error);
     ElMessage.error(mod.isDisabled ? t('Failed to enable mod') : t('Failed to disable mod'));
   }
 }
@@ -601,7 +606,7 @@ async function toggleTreeNodeGroupDisabled(group: ModGroupData) {
     await refreshMods();
     ElMessage.success(group.isDisabled ? t('Group enabled') : t('Group disabled'));
   } catch (error) {
-    console.error('Failed to toggle group disabled:', error);
+    log.error('Failed to toggle group disabled', error);
     ElMessage.error(t('Failed to toggle group disabled'));
   }
 }
@@ -708,7 +713,7 @@ async function onDrop(event: DragEvent) {
       ElMessage.warning(t('No valid files to import'));
     }
   } catch (error) {
-    console.error('Failed to add mods:', error);
+    log.error('Failed to add mods', error);
     ElMessage.error(t('Failed to add mods'));
   } finally {
     isImporting.value = false;
@@ -742,7 +747,7 @@ async function handleAddGroup() {
     dialogAddGroupVisible.value = false;
     ElMessage.success(t('Group added successfully'));
   } catch (error) {
-    console.error('Failed to add group:', error);
+    log.error('Failed to add group', error);
     ElMessage.error(t('Failed to add group'));
   }
 }
@@ -773,7 +778,7 @@ async function handleRenameGroup() {
     dialogRenameGroupVisible.value = false;
     ElMessage.success(t('Group renamed successfully'));
   } catch (error) {
-    console.error('Failed to rename group:', error);
+    log.error('Failed to rename group', error);
     ElMessage.error(t('Failed to rename group'));
   }
 }
@@ -799,7 +804,7 @@ async function handleRenameMod() {
     dialogRenameModVisible.value = false;
     ElMessage.success(t('Mod renamed successfully'));
   } catch (error) {
-    console.error('Failed to rename mod:', error);
+    log.error('Failed to rename mod', error);
     ElMessage.error(t('Failed to rename mod'));
   }
 }
@@ -829,7 +834,7 @@ async function handleRemoveGroup() {
     ElMessage.success(t('Group removed successfully'));
   } catch (error) {
     if (error !== 'cancel') {
-      console.error('Failed to remove group:', error);
+      log.error('Failed to remove group', error);
       ElMessage.error(t('Failed to remove group'));
     }
   }
@@ -847,7 +852,7 @@ function openModFolder(mod: ModData) {
     return;
   }
   invokeOpenPath(mod.modPath).catch((err) => {
-    console.error('Failed to open mod folder:', err);
+    log.error('Failed to open mod folder', err);
     ElMessage.error(t('Failed to open folder'));
   });
 }
@@ -862,7 +867,7 @@ function openGroupFolder(group: ModGroupData) {
     return;
   }
   invokeOpenPath(group.groupPath).catch((err) => {
-    console.error('Failed to open group folder:', err);
+    log.error('Failed to open group folder', err);
     ElMessage.error(t('Failed to open folder'));
   });
 }
@@ -990,7 +995,7 @@ async function selectModInGroup(mod: ModData) {
       try {
         await invokeSetSelectedMod(game.currentGroupPath.value, arrayIndex);
       } catch (error) {
-        console.error('Failed to select mod:', error);
+        log.error('Failed to select mod', error);
       }
     }
   }
@@ -1016,7 +1021,7 @@ async function removeModFromGroup(mod: ModData) {
     }
   } catch (error) {
     if (error !== 'cancel') {
-      console.error('Failed to remove mod:', error);
+      log.error('Failed to remove mod', error);
       ElMessage.error(t('Failed to remove mod'));
     }
   }
@@ -1037,7 +1042,7 @@ async function exportMod(mod: ModData) {
     const exportPath = await invokeExportMod(mod.modPath, destDir);
     ElMessage.success(t('Mod exported to: {path}', { path: exportPath }));
   } catch (error) {
-    console.error('Failed to export mod:', error);
+    log.error('Failed to export mod', error);
     ElMessage.error(t('Failed to export mod'));
   }
 }
@@ -1055,7 +1060,7 @@ async function exportGroup(group: ModGroupData) {
     const exportPath = await invokeExportGroup(group.groupPath, destDir);
     ElMessage.success(t('Group exported to: {path}', { path: exportPath }));
   } catch (error) {
-    console.error('Failed to export group:', error);
+    log.error('Failed to export group', error);
     ElMessage.error(t('Failed to export group'));
   }
 }
@@ -1090,9 +1095,10 @@ async function setupFileWatcher() {
     }
     if (game.modsPath.value) {
       await invokeStartFileWatcher(game.modsPath.value);
+      log.debug('File watcher setup complete', { path: game.modsPath.value, game: game.targetGame.value });
     }
   } catch (error) {
-    console.error('[ModsTab] Failed to setup file watcher:', error);
+    log.error('Failed to setup file watcher', error);
   }
 }
 
@@ -1129,6 +1135,14 @@ async function setupEventListeners() {
       // 先加载模组，完成后再启动文件监听，避免监听器在加载期间触发不必要的 refreshMods
       await game.loadModsForGame(newGame as TargetGame);
       await setupFileWatcher();
+      // 模组加载完成后主动触发 hash 冲突检测（检测失败不影响主流程）
+      if (newGame !== 'none') {
+        try {
+          await hashConflictStore.checkHashConflicts();
+        } catch (e) {
+          log.warn('Hash conflict check after game switch failed', { reason: String(e) });
+        }
+      }
     }, GAME_SWITCH_DEBOUNCE_DELAY);
   });
 }
@@ -1146,6 +1160,14 @@ onMounted(async () => {
   }
   await setupEventListeners();
   await setupFileWatcher();
+  // 首次加载完成后主动触发 hash 冲突检测（检测失败不影响主流程）
+  if (game.targetGame.value !== 'none') {
+    try {
+      await hashConflictStore.checkHashConflicts();
+    } catch (e) {
+      log.warn('Initial hash conflict check failed', { reason: String(e) });
+    }
+  }
   document.addEventListener('click', hideContextMenu);
   document.addEventListener('keydown', handleEscKey);
   // 捕获阶段监听容器点击/右键，用于阻止拖动结束后的误触发
@@ -1164,7 +1186,7 @@ onUnmounted(() => {
   if (gameSwitchedUnlisten) {
     gameSwitchedUnlisten();
   }
-  invokeStopFileWatcher().catch(console.error);
+  invokeStopFileWatcher().catch((err) => log.error('Failed to stop file watcher on unmount', err));
   document.removeEventListener('click', hideContextMenu);
   document.removeEventListener('keydown', handleEscKey);
   if (resizeHandler) {

@@ -594,3 +594,50 @@ export interface ModSearchResult {
   /** 命中的字段名称列表（如 modName、groupName 等） */
   matchedFields: string[];
 }
+
+/**
+ * Hash 冲突检测中单个模组的信息（后端 `HashedModInfo` 的 camelCase 映射）。
+ */
+export interface HashedModInfo {
+  /** 模组目录路径 */
+  modPath: string;
+  /** 模组显示名称 */
+  modName: string;
+  /** 所属分组名称 */
+  groupName: string;
+  /** 该模组所有 INI 文件合并后计算得到的 hash 字符串 */
+  hash: string;
+}
+
+/**
+ * 单组 hash 冲突条目（后端 `HashConflictEntry` 的 camelCase 映射）。
+ *
+ * 用于描述一组共享相同内容 hash 的冲突模组，前端可直接渲染为
+ * 「mod_a 与 mod_b 冲突，hash: a1b2c3d4」格式的提示。
+ */
+export interface HashConflictEntry {
+  /** 冲突的 hash 字符串（完整长度） */
+  hash: string;
+  /** 共享该 hash 的模组显示名称列表 */
+  modNames: string[];
+  /** 共享该 hash 的模组目录路径列表，与 modNames 一一对应 */
+  modPaths: string[];
+  /** 共享该 hash 的模组所属分组名称列表，与 modNames 一一对应 */
+  groupNames: string[];
+}
+
+/**
+ * Hash 冲突检测报告（后端 `HashConflictReport` 的 camelCase 映射）。
+ *
+ * 由 `update_mod_data` 流程或独立的 `check_hash_conflicts` 命令生成。
+ * - `enabled_mod_hashes`：按 hash 分组的旧字段（向后兼容）。
+ * - `conflicts`：结构化冲突条目，每个条目对应一组共享相同 hash 的模组。
+ */
+export interface HashConflictReport {
+  /** 启用的 mod hash 冲突：hash -> 具有相同 hash 的模组列表（旧字段） */
+  enabledModHashes: Record<string, HashedModInfo[]>;
+  /** 命名空间 hash：namespace hash -> 文件路径列表 */
+  namespaceHashes: Record<string, string[]>;
+  /** 结构化冲突条目列表 */
+  conflicts: HashConflictEntry[];
+}

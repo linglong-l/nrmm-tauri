@@ -21,9 +21,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
-use crate::mod_manager::{ModGroupData, ModsPathStatus, UpdateModDataResult};
+use crate::mod_manager::{HashConflictReport, ModGroupData, ModsPathStatus, UpdateModDataResult};
 use crate::state::AppState;
 use crate::task_queue::TaskQueueError;
 
@@ -167,7 +167,7 @@ pub async fn refresh_mods(
     Ok(state
         .task_queue
         .run_task("refresh_mods", async move {
-            mod_manager.refresh_mods(&settings_clone).await
+            mod_manager.load_mods(&settings_clone).await
         })
         .await
         .map_err(|e| match e {
@@ -211,7 +211,7 @@ pub async fn refresh_mod_data(
 /// 返回：`UpdateModDataResult`，包含成功状态、日志、耗时及各项检测报告。
 #[tauri::command]
 pub async fn update_mod_data(
-    _app: AppHandle,
+    app: AppHandle,
     state: State<'_, AppState>,
     mods_path: String,
     known_libraries: HashMap<String, String>,
@@ -221,7 +221,7 @@ pub async fn update_mod_data(
     let mods_path_clone = mods_path.clone();
     let known_libraries_clone = known_libraries.clone();
 
-    Ok(state
+    let result = state
         .task_queue
         .run_task("update_mod_data", async move {
             mod_manager
@@ -232,7 +232,14 @@ pub async fn update_mod_data(
         .map_err(|e| match e {
             TaskQueueError::TaskCancelled(t) => format!("Task '{}' was cancelled", t),
             TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e),
-        })?)
+        })?;
+
+    // 更新完成后异步触发独立 Hash 冲突检测
+    // （`update_mod_data` 内部已包含 hash 检测，但独立检测可保证报告
+    //  通过事件推送给前端，并支持后续独立调用入口）
+    trigger_hash_conflict_check(&app, &state);
+
+    Ok(result)
 }
 
 /// 校验 Mods 路径是否为合法的 3DMigoto Mods 目录。
@@ -536,24 +543,76 @@ pub async fn remove_icon(state: State<'_, AppState>, path: String) -> Result<(),
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
-/// 切换模组的启用/禁用状态（通过重命名添加/移除 `DISABLED` 前缀）。
+/// Hash 冲突检测事件名（前后端共享）。
+///
+/// 在 `toggle_mod_disabled`、`toggle_tree_node_mod_disabled`、`refresh_mods`、
+/// `update_mod_data` 等命令完成后通过 `AppHandle::emit` 推送。
+pub const HASH_CONFLICTS_DETECTED_EVENT: &str = "hash-conflicts-detected";
+
+/// 在模组操作完成后异步触发 Hash 冲突检测。
+///
+/// 该函数不阻塞原命令返回：
+/// - 启动一个独立的 Tokio 任务在后台执行检测；
+/// - 检测完成后通过 `HASH_CONFLICTS_DETECTED_EVENT` 事件推送结果；
+/// - 检测失败仅记录错误日志，不推送事件，不影响原操作。
 ///
 /// 参数：
+/// - `app`: Tauri 应用句柄，用于 emit 事件。
+/// - `state`: 应用全局状态。
+fn trigger_hash_conflict_check(app: &AppHandle, state: &AppState) {
+    let app_clone = app.clone();
+    let mod_manager = state.mod_manager.clone();
+    let settings_clone = state.settings.read().clone();
+
+    tokio::spawn(async move {
+        match mod_manager.check_hash_conflicts_async(&settings_clone).await {
+            Ok(report) => {
+                let payload = serde_json::json!({
+                    "game": settings_clone.target_game,
+                    "report": report,
+                    "completedAt": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                });
+                if let Err(e) = app_clone.emit(HASH_CONFLICTS_DETECTED_EVENT, payload) {
+                    log::warn!("Failed to emit HASH_CONFLICTS_DETECTED event: {}", e);
+                }
+            }
+            Err(e) => {
+                log::error!("Auto hash conflict check failed: {}", e);
+            }
+        }
+    });
+}
+
+/// 切换模组的启用/禁用状态（通过重命名添加/移除 `DISABLED` 前缀）。
+///
+/// 操作成功后异步触发 Hash 冲突检测（不阻塞本命令返回）。
+///
+/// 参数：
+/// - `app`: Tauri 应用句柄。
 /// - `state`: 应用全局状态（当前未使用）。
 /// - `mod_path`: 模组目录路径。
 ///
 /// 返回：操作后该模组是否处于禁用状态（`true` 表示已禁用）。
 #[tauri::command]
 pub async fn toggle_mod_disabled(
+    app: AppHandle,
     state: State<'_, AppState>,
     mod_path: String,
 ) -> Result<bool, String> {
     let _ = state;
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::toggle_mod_disabled(&mod_path).map_err(|e| e.to_string())
     })
     .await
-    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))?;
+
+    // 操作成功后异步触发 Hash 冲突检测
+    trigger_hash_conflict_check(&app, &state);
+
+    Ok(result)
 }
 
 /// 切换树节点（# 目录）下模组的启用/禁用状态（互斥模式）。
@@ -563,23 +622,63 @@ pub async fn toggle_mod_disabled(
 /// - 禁用操作：直接禁用目标模组，不影响其他模组。
 /// - 不涉及 INI 文件修改，纯靠目录重命名实现。
 ///
+/// 操作成功后异步触发 Hash 冲突检测。
+///
 /// 参数：
+/// - `app`: Tauri 应用句柄。
 /// - `state`: 应用全局状态（当前未使用）。
 /// - `mod_path`: 目标模组目录路径。
 ///
 /// 返回：`(新模组路径, 操作后是否禁用)`。
 #[tauri::command]
 pub async fn toggle_tree_node_mod_disabled(
+    app: AppHandle,
     state: State<'_, AppState>,
     mod_path: String,
 ) -> Result<(String, bool), String> {
     let _ = state;
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::toggle_tree_node_mod_disabled(&mod_path)
             .map_err(|e| e.to_string())
     })
     .await
-    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))?;
+
+    trigger_hash_conflict_check(&app, &state);
+
+    Ok(result)
+}
+
+/// 独立执行 Hash 冲突检测。
+///
+/// 通过 `TaskQueue` 任务类型 `"check_hash_conflicts"` 互斥执行：
+/// - 同类型任务并发时，新请求会取消旧请求（最新请求优先）。
+/// - 与 `update_mod_data` 互不阻塞（不同任务类型）。
+///
+/// 参数：
+/// - `_app`: Tauri 应用句柄（当前未使用）。
+/// - `state`: 应用全局状态。
+///
+/// 返回：`HashConflictReport`（包含 `enabled_mod_hashes` 与 `conflicts` 字段）。
+/// 错误：任务被取消时返回 `"Task 'check_hash_conflicts' was cancelled"`。
+#[tauri::command]
+pub async fn check_hash_conflicts(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<HashConflictReport, String> {
+    let mod_manager = state.mod_manager.clone();
+    let settings_clone = state.settings.read().clone();
+
+    Ok(state
+        .task_queue
+        .run_task("check_hash_conflicts", async move {
+            mod_manager.check_hash_conflicts_async(&settings_clone).await
+        })
+        .await
+        .map_err(|e| match e {
+            TaskQueueError::TaskCancelled(t) => format!("Task '{}' was cancelled", t),
+            TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e),
+        })?)
 }
 
 /// 在指定位置新建一个分组。

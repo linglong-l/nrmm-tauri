@@ -16,15 +16,21 @@ import zhTw from 'element-plus/es/locale/lang/zh-tw';
 import en from 'element-plus/es/locale/lang/en';
 import ru from 'element-plus/es/locale/lang/ru';
 import id from 'element-plus/es/locale/lang/id';
-import { TitleBar, StatusBar } from './components';
+import { TitleBar, StatusBar, HashConflictFab } from './components';
 import IndexPage from './pages/index/index.vue';
 import { useSettingsStore } from './stores/settings';
 import { useGameStore } from './stores/game';
 import { EventNames, eventManager } from './utils/events';
+import { useHashConflict } from './composables';
+import { createLogger } from './utils/logger';
 
 const { locale } = useI18n();
 const settingsStore = useSettingsStore();
 const gameStore = useGameStore();
+const log = createLogger('App');
+
+// 注册全局 Hash 冲突事件监听（与 HashConflictFab 联动）
+useHashConflict();
 
 let unlistenHotkey: (() => void) | null = null;
 
@@ -89,7 +95,7 @@ function handleHotkeyPressed(payload: { key: string; source: 'in-game' | 'outsid
 }
 
 function logHotkeyPressed(key: string, source: 'in-game' | 'outside-game') {
-  console.debug('[Hotkey] Pressed:', key, 'from:', source);
+  log.debug('Hotkey pressed', { key, source });
 }
 
 // 监听语言变化，实时同步到 i18n，使界面文案立即切换
@@ -159,6 +165,13 @@ onUnmounted(() => {
         <IndexPage />
       </div>
       <StatusBar />
+      <!--
+        全局浮动 Hash 冲突入口：
+        - position: fixed 定位在右下角
+        - v-if="hashConflict.hasConflicts" 控制可见性
+        - 不受 Tab 切换影响
+      -->
+      <HashConflictFab />
     </div>
   </ElConfigProvider>
 </template>
