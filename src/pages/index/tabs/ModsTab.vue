@@ -49,6 +49,7 @@ import {
   invokeAddGroup,
   invokeAddMods,
   invokeRemoveGroup,
+  invokeRemoveMod,
   invokeRenameGroup,
   invokeRenameMod,
   invokeOpenPath,
@@ -846,7 +847,10 @@ async function handleRemoveGroup() {
  * 限制：realIndex === 0 的空槽位不可打开。
  */
 function openModFolder(mod: ModData) {
-  if (mod.realIndex === 0) return;
+  console.log('openModFolder', mod);
+  if (mod.realIndex === 0) {
+    return
+  };
   if (!mod.modPath || !mod.modPath.trim()) {
     ElMessage.warning(t('Mod path is empty, cannot open'));
     return;
@@ -923,6 +927,7 @@ function hideContextMenu() {
  * 业务逻辑：根据 contextMenuType 分发到 group 或 mod 的对应处理函数，最后统一隐藏菜单。
  */
 async function handleContextMenuSelect(command: string) {
+  // console.log("handleContextMenuSelect", command, contextMenuType.value, contextMenuData.value);
   if (contextMenuType.value === 'group') {
     const group = contextMenuData.value as ModGroupData;
     switch (command) {
@@ -951,6 +956,7 @@ async function handleContextMenuSelect(command: string) {
     }
   } else if (contextMenuType.value === 'mod') {
     const mod = contextMenuData.value as ModData;
+    // console.log("handleContextMenuSelect mod", command, mod);
     switch (command) {
       case 'select':
         selectModInGroup(mod);
@@ -1013,12 +1019,10 @@ async function removeModFromGroup(mod: ModData) {
         type: 'warning'
       }
     );
-    const realIndex = game.currentGroup.value?.modsInGroup.findIndex(m => m.modPath === mod.modPath) ?? -1;
-    if (realIndex >= 0) {
-      game.removeModFromGroup(game.currentGroupPath.value, realIndex);
-      await refreshMods();
-      ElMessage.success(t('Mod removed successfully'));
-    }
+    // 调用后端命令：先还原（启用）再移动到 DISABLED_MANAGED_REMOVED
+    await invokeRemoveMod(mod.modPath);
+    await refreshMods();
+    ElMessage.success(t('Mod removed successfully'));
   } catch (error) {
     if (error !== 'cancel') {
       log.error('Failed to remove mod', error);

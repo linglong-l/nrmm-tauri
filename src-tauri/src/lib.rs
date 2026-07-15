@@ -247,6 +247,7 @@ pub fn run() {
             commands::check_hash_conflicts,
             commands::add_group,
             commands::remove_group,
+            commands::remove_mod,
             commands::rename_group,
             commands::rename_mod,
             commands::search_mods,

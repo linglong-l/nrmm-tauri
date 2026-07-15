@@ -281,14 +281,15 @@ export function useWindow() {
 
   /**
    * 调用系统默认程序打开指定路径（文件或目录）。
-   * 失败时静默忽略。
+   * 失败时显示错误通知，避免静默失败。
    * @param path 待打开的路径
    */
   async function openPath(path: string): Promise<void> {
     try {
       await invokeOpenPath(path);
-    } catch {
-      // ignore
+    } catch (error) {
+      const errMsg = String(error);
+      addNotification('error', 'Failed to open folder', errMsg);
     }
   }
 

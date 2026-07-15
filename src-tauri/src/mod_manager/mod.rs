@@ -2069,6 +2069,71 @@ impl ModManager {
         Ok(())
     }
 
+    /// 移除单个模组：先还原（启用）再移动到 DISABLED_MANAGED_REMOVED 目录。
+    ///
+    /// 流程：
+    /// 1. 如果模组处于禁用状态（目录名以 DISABLED 开头），先还原为启用状态
+    /// 2. 将模组目录移动到 `mods/DISABLED_MANAGED_REMOVED/` 下，附加时间戳后缀
+    ///
+    /// 参数：
+    /// - `mod_path`: 模组目录路径
+    pub fn remove_mod(mod_path: &str) -> Result<()> {
+        let path = Path::new(mod_path);
+        if !path.exists() || !path.is_dir() {
+            anyhow::bail!("Mod path does not exist: {:?}", path);
+        }
+
+        let dir_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("mod")
+            .to_string();
+
+        let mods_root = path
+            .parent()  // group dir
+            .and_then(|p| p.parent())  // mods dir
+            .ok_or_else(|| anyhow::anyhow!("Invalid mod path: cannot find mods root"))?;
+
+        // 步骤 1：还原（如果处于禁用状态则启用）
+        let actual_path = if Self::is_disabled_name(&dir_name) {
+            let restored_name = dir_name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string();
+            let parent = path.parent().unwrap();
+            let restored_path = parent.join(&restored_name);
+            if restored_path.exists() {
+                anyhow::bail!("Cannot restore mod: destination path already exists: {:?}", restored_path);
+            }
+            fs::rename(path, &restored_path)
+                .with_context(|| format!("Failed to restore mod: {:?} -> {:?}", path, restored_path))?;
+            info!("Mod restored before removal: {:?} -> {:?}", path, restored_path);
+            restored_path
+        } else {
+            path.to_path_buf()
+        };
+
+        // 步骤 2：移动到 DISABLED_MANAGED_REMOVED
+        let actual_name = actual_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("mod");
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        let dest_name = format!("{}_removed_{}", actual_name, timestamp);
+        let removed_dir = mods_root.join(DISABLED_MANAGED_REMOVED);
+        fs::create_dir_all(&removed_dir)
+            .with_context(|| format!("Failed to create DISABLED_MANAGED_REMOVED: {:?}", removed_dir))?;
+
+        let dest_path = removed_dir.join(&dest_name);
+        fs::rename(&actual_path, &dest_path)
+            .with_context(|| format!("Failed to move mod to DISABLED_MANAGED_REMOVED: {:?} -> {:?}", actual_path, dest_path))?;
+
+        info!("Mod removed to DISABLED_MANAGED_REMOVED: {:?}", dest_path);
+        Ok(())
+    }
+
     /// 切换 # 目录分组的启用/禁用状态。
     ///
     /// 通过在目录名前添加或移除 `DISABLED` 前缀实现状态切换：

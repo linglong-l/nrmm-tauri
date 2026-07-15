@@ -96,7 +96,7 @@ pub async fn load_mods(
     // 计算耗时
     let duration = start_time.elapsed();
     match result {
-                Ok(groups) => {
+        Ok(groups) => {
             log::debug!(
                 "[load_mods] Success - game: {:?}, groups: {}, duration: {:?}",
                 game,
@@ -104,7 +104,6 @@ pub async fn load_mods(
                 duration
             );
             Ok(groups)
-            
         }
         Err(e) => {
             let error_msg = match e {
@@ -456,9 +455,7 @@ pub async fn toggle_group_favorite(
 ///
 /// 返回：操作后的禁用状态（true = 已禁用，false = 已启用）。
 #[tauri::command]
-pub async fn toggle_tree_node_group_disabled(
-    group_path: String,
-) -> Result<bool, String> {
+pub async fn toggle_tree_node_group_disabled(group_path: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::toggle_tree_node_group_disabled(&group_path)
             .map_err(|e| e.to_string())
@@ -565,7 +562,10 @@ fn trigger_hash_conflict_check(app: &AppHandle, state: &AppState) {
     let settings_clone = state.settings.read().clone();
 
     tokio::spawn(async move {
-        match mod_manager.check_hash_conflicts_async(&settings_clone).await {
+        match mod_manager
+            .check_hash_conflicts_async(&settings_clone)
+            .await
+        {
             Ok(report) => {
                 let payload = serde_json::json!({
                     "game": settings_clone.target_game,
@@ -672,7 +672,9 @@ pub async fn check_hash_conflicts(
     Ok(state
         .task_queue
         .run_task("check_hash_conflicts", async move {
-            mod_manager.check_hash_conflicts_async(&settings_clone).await
+            mod_manager
+                .check_hash_conflicts_async(&settings_clone)
+                .await
         })
         .await
         .map_err(|e| match e {
@@ -706,17 +708,17 @@ pub async fn add_group(
             if !target_path.exists() || !target_path.is_dir() {
                 return Err("Target group path does not exist".to_string());
             }
-            
+
             let parent_path = target_path.parent();
             if parent_path.is_none() {
                 return Err("Invalid target group path".to_string());
             }
-            
+
             let parent_path_str = parent_path
                 .expect("parent_path should exist after None check")
                 .to_string_lossy()
                 .to_string();
-            
+
             tokio::task::spawn_blocking(move || {
                 crate::mod_manager::ModManager::add_child_group(&parent_path_str, &group_name)
                     .map_err(|e| e.to_string())
@@ -727,8 +729,10 @@ pub async fn add_group(
         None => {
             let managed_path = {
                 let settings = state.settings.read();
-                let mods_path =
-                    crate::mod_manager::ModManager::get_mods_path_for_game(&settings, settings.target_game);
+                let mods_path = crate::mod_manager::ModManager::get_mods_path_for_game(
+                    &settings,
+                    settings.target_game,
+                );
 
                 if mods_path.is_empty() {
                     return Err("No mods path configured".to_string());
@@ -760,6 +764,21 @@ pub async fn remove_group(state: State<'_, AppState>, group_path: String) -> Res
     let _ = state;
     tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::remove_group(&group_path).map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
+/// 移除单个模组：先还原（启用）再移动到 DISABLED_MANAGED_REMOVED 目录。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `mod_path`: 待移除的模组目录路径。
+#[tauri::command]
+pub async fn remove_mod(state: State<'_, AppState>, mod_path: String) -> Result<(), String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::remove_mod(&mod_path).map_err(|e| e.to_string())
     })
     .await
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
@@ -1428,7 +1447,10 @@ pub async fn save_settings(
             settings.hotkey_gamepad
         );
         if let Err(e) = crate::hotkey::HotkeyManager::register_from_settings(&app, &settings) {
-            log::error!("[save_settings] Failed to re-register hotkeys after settings change: {}", e);
+            log::error!(
+                "[save_settings] Failed to re-register hotkeys after settings change: {}",
+                e
+            );
         } else {
             log::debug!("[save_settings] Hotkeys re-registered successfully");
         }
@@ -1565,8 +1587,10 @@ pub async fn check_ini_syntax(
 
 /// 在系统文件管理器中打开指定路径。
 ///
-/// Windows 下使用 explorer /select, 打开并选中目标文件/文件夹；
-/// Linux 下使用 xdg-open 打开所在文件夹。
+/// 对于目录：直接打开该目录（进入目录内部）；
+/// 对于文件：打开所在目录并选中该文件。
+/// Windows 下对文件使用 explorer /select, 选中目标；
+/// Linux 下文件场景使用 xdg-open 打开所在目录。
 ///
 /// 参数：
 /// - `state`: 应用全局状态（当前未使用）。
@@ -1584,35 +1608,54 @@ pub async fn open_path(state: State<'_, AppState>, path: String) -> Result<(), S
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
-        return Err(format!("Path does not exist: {}", path));
+        return Err(format!("Path does not exist: {}", &path));
     }
 
-    #[cfg(windows)]
-    {
-        std::process::Command::new("explorer")
-            .arg(format!("/select,\"{}\"", path_buf.display()))
-            .spawn()
-            .map_err(|e| format!("Failed to open explorer: {}", e))?;
-    }
+    let is_dir = path_buf.is_dir();
 
-    #[cfg(target_os = "linux")]
-    {
-        let parent = path_buf
-            .parent()
-            .unwrap_or_else(|| Path::new("/"))
-            .to_path_buf();
-        std::process::Command::new("xdg-open")
-            .arg(&parent)
-            .spawn()
-            .map_err(|e| format!("Failed to open xdg-open: {}", e))?;
-    }
+    tokio::task::spawn_blocking(move || {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            if is_dir {
+                std::process::Command::new("explorer")
+                    .arg(&path_buf)
+                    .spawn()
+                    .map_err(|e| format!("Failed to open explorer: {}", e))?;
+            } else {
+                let cmd_line = format!(r#"/select,"{}""#, path_buf.display());
+                std::process::Command::new("explorer")
+                    .raw_arg(&cmd_line)
+                    .spawn()
+                    .map_err(|e| format!("Failed to open explorer: {}", e))?;
+            }
+        }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        return Err("Unsupported platform".to_string());
-    }
+        #[cfg(target_os = "linux")]
+        {
+            let target = if is_dir {
+                path_buf.clone()
+            } else {
+                path_buf
+                    .parent()
+                    .unwrap_or_else(|| Path::new("/"))
+                    .to_path_buf()
+            };
+            std::process::Command::new("xdg-open")
+                .arg(&target)
+                .spawn()
+                .map_err(|e| format!("Failed to open xdg-open: {}", e))?;
+        }
 
-    Ok(())
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            return Err("Unsupported platform".to_string());
+        }
+
+        Ok(())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
 /// 打开指定游戏的 Mods 目录。
@@ -1636,36 +1679,42 @@ pub async fn open_mod_folder(state: State<'_, AppState>, game: String) -> Result
         _ => TargetGame::None,
     };
 
-    let settings = state.settings.read();
-    let mods_path = ModManager::get_mods_path_for_game(&settings, target_game);
+    let mods_path = {
+        let settings = state.settings.read();
+        ModManager::get_mods_path_for_game(&settings, target_game)
+    };
 
     let path_buf = PathBuf::from(&mods_path);
     if !path_buf.exists() {
         return Err(format!("Mods folder does not exist: {}", mods_path));
     }
 
-    #[cfg(windows)]
-    {
-        std::process::Command::new("explorer")
-            .arg(format!("\"{}\"", mods_path))
-            .spawn()
-            .map_err(|e| format!("Failed to open explorer: {}", e))?;
-    }
+    tokio::task::spawn_blocking(move || {
+        #[cfg(windows)]
+        {
+            std::process::Command::new("explorer")
+                .arg(&path_buf)
+                .spawn()
+                .map_err(|e| format!("Failed to open explorer: {}", e))?;
+        }
 
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&mods_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open xdg-open: {}", e))?;
-    }
+        #[cfg(target_os = "linux")]
+        {
+            std::process::Command::new("xdg-open")
+                .arg(&path_buf)
+                .spawn()
+                .map_err(|e| format!("Failed to open xdg-open: {}", e))?;
+        }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        return Err("Unsupported platform".to_string());
-    }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            return Err("Unsupported platform".to_string());
+        }
 
-    Ok(())
+        Ok(())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
 /// 检查当前游戏 Mods 目录下所有 INI 文件的语法错误。
@@ -1764,7 +1813,10 @@ pub async fn add_mods(
 ///
 /// 返回：INI 文件路径列表。
 #[tauri::command]
-pub async fn find_ini_files(state: State<'_, AppState>, path: String) -> Result<Vec<String>, String> {
+pub async fn find_ini_files(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Vec<String>, String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
         let path = Path::new(&path);
@@ -1786,7 +1838,10 @@ pub async fn find_ini_files(state: State<'_, AppState>, path: String) -> Result<
 ///
 /// 返回：是否处理成功。
 #[tauri::command]
-pub async fn process_ini_files(state: State<'_, AppState>, paths: Vec<String>) -> Result<bool, String> {
+pub async fn process_ini_files(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> Result<bool, String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::process_ini_files(&paths).map_err(|e| e.to_string())
@@ -1807,10 +1862,14 @@ pub async fn process_ini_files(state: State<'_, AppState>, paths: Vec<String>) -
 ///
 /// 返回：(是否有效, 文件类型字符串: "zip"/"7z"/"rar"/"unknown")。
 #[tauri::command]
-pub async fn validate_archive_file(state: State<'_, AppState>, path: String) -> Result<(bool, String), String> {
+pub async fn validate_archive_file(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(bool, String), String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
-        let (valid, archive_type) = crate::mod_manager::ModManager::validate_archive_file(Path::new(&path));
+        let (valid, archive_type) =
+            crate::mod_manager::ModManager::validate_archive_file(Path::new(&path));
         let type_str = match archive_type {
             crate::mod_manager::ArchiveType::Zip => "zip",
             crate::mod_manager::ArchiveType::SevenZip => "7z",
@@ -1831,7 +1890,10 @@ pub async fn validate_archive_file(state: State<'_, AppState>, path: String) -> 
 ///
 /// 返回：目录下所有文件的路径列表。
 #[tauri::command]
-pub async fn find_all_files(state: State<'_, AppState>, path: String) -> Result<Vec<String>, String> {
+pub async fn find_all_files(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Vec<String>, String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
         let files = crate::mod_manager::ModManager::find_all_files_bfs(Path::new(&path));
@@ -1853,7 +1915,11 @@ pub async fn find_all_files(state: State<'_, AppState>, path: String) -> Result<
 ///
 /// 返回：是否解压成功。
 #[tauri::command]
-pub async fn extract_archive(state: State<'_, AppState>, file_path: String, dest_dir: String) -> Result<bool, String> {
+pub async fn extract_archive(
+    state: State<'_, AppState>,
+    file_path: String,
+    dest_dir: String,
+) -> Result<bool, String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::extract_archive(Path::new(&file_path), Path::new(&dest_dir))
@@ -1872,11 +1938,14 @@ pub async fn extract_archive(state: State<'_, AppState>, file_path: String, dest
 ///
 /// 返回：导出文件的完整路径。
 #[tauri::command]
-pub async fn export_mod(state: State<'_, AppState>, mod_path: String, dest_dir: String) -> Result<String, String> {
+pub async fn export_mod(
+    state: State<'_, AppState>,
+    mod_path: String,
+    dest_dir: String,
+) -> Result<String, String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
-        crate::mod_manager::ModManager::export_mod(&mod_path, &dest_dir)
-            .map_err(|e| e.to_string())
+        crate::mod_manager::ModManager::export_mod(&mod_path, &dest_dir).map_err(|e| e.to_string())
     })
     .await
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
@@ -1891,7 +1960,11 @@ pub async fn export_mod(state: State<'_, AppState>, mod_path: String, dest_dir: 
 ///
 /// 返回：导出文件的完整路径。
 #[tauri::command]
-pub async fn export_group(state: State<'_, AppState>, group_path: String, dest_dir: String) -> Result<String, String> {
+pub async fn export_group(
+    state: State<'_, AppState>,
+    group_path: String,
+    dest_dir: String,
+) -> Result<String, String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
         crate::mod_manager::ModManager::export_group(&group_path, &dest_dir)

@@ -323,6 +323,14 @@ export async function invokeRemoveGroup(groupPath: string): Promise<boolean> {
 }
 
 /**
+ * 移除单个模组（先还原再移动到 DISABLED_MANAGED_REMOVED）。
+ * 对应后端命令：`remove_mod`。
+ */
+export async function invokeRemoveMod(modPath: string): Promise<void> {
+  return invoke('remove_mod', { modPath });
+}
+
+/**
  * 重命名指定分组。
  * 对应后端命令：`rename_group`。
  * @param groupPath 分组绝对路径
