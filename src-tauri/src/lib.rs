@@ -35,15 +35,42 @@ use fern::Dispatch;
 use state::AppState;
 use tauri::Manager;
 
-/// 获取应用数据目录（%LOCALAPPDATA%\xxmi-nrmm）。
+/// 获取应用数据目录（%LOCALAPPDATA%\xxmi-nrmm 或 ~/.local/share/xxmi-nrmm）。
 ///
 /// 用于统一配置文件、日志等所有应用数据的存储位置。
 /// 日志目录为 `app_data_dir()/logs`，配置文件为 `app_data_dir()/settings.json`。
 ///
 /// # 返回值
 /// 成功返回 `Some(PathBuf)`，失败返回 `None`（罕见平台差异）。
+///
+/// # 回退逻辑
+/// 按以下顺序尝试获取应用数据目录：
+/// 1. `dirs::data_local_dir()`（跨平台标准路径）
+/// 2. 环境变量 `XDG_DATA_HOME`（Linux 标准）
+/// 3. `~/.local/share`（Linux 备用）
 pub fn get_app_data_dir() -> Option<std::path::PathBuf> {
-    dirs::data_local_dir().map(|d| d.join("xxmi-nrmm"))
+    if let Some(dir) = dirs::data_local_dir() {
+        log::debug!("Using data_local_dir: {:?}", dir);
+        return Some(dir.join("xxmi-nrmm"));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
+            let dir = std::path::PathBuf::from(xdg_data_home);
+            log::debug!("Using XDG_DATA_HOME: {:?}", dir);
+            return Some(dir.join("xxmi-nrmm"));
+        }
+
+        if let Some(home) = dirs::home_dir() {
+            let dir = home.join(".local").join("share");
+            log::debug!("Using fallback ~/.local/share: {:?}", dir);
+            return Some(dir.join("xxmi-nrmm"));
+        }
+    }
+
+    log::warn!("Failed to get app data directory from all sources");
+    None
 }
 
 /// Tauri 应用启动入口。

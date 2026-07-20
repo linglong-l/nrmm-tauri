@@ -1409,7 +1409,6 @@ pub async fn save_settings(
     let app_data_dir =
         crate::get_app_data_dir().ok_or_else(|| "Failed to get app data dir".to_string())?;
 
-    // 在覆盖前记录旧热键配置，用于判断是否需要重新注册全局热键
     let (old_hotkey_keyboard, old_hotkey_gamepad) = {
         let current = state.settings.read();
         (
@@ -1425,19 +1424,26 @@ pub async fn save_settings(
         *current = settings.clone();
     }
 
-    let settings_arc = state.settings.clone();
     let app_data_dir_clone = app_data_dir.clone();
-    tokio::spawn(async move {
-        let settings_clone = {
-            let settings = settings_arc.read();
-            settings.clone()
-        };
-        if let Err(e) = settings_clone.save_async(&app_data_dir_clone).await {
-            log::error!("Failed to save settings: {}", e);
-        }
-    });
+    let settings_clone = settings.clone();
+    let save_result = tokio::task::spawn_blocking(move || {
+        settings_clone.save(&app_data_dir_clone)
+    }).await;
 
-    // 若热键配置发生变化，由后端自动重新注册，确保系统级快捷键与设置保持一致
+    match save_result {
+        Ok(Ok(())) => {
+            log::info!("Settings saved successfully to {:?}", app_data_dir);
+        }
+        Ok(Err(e)) => {
+            log::error!("Failed to save settings: {}", e);
+            return Err(format!("Failed to save settings: {}", e));
+        }
+        Err(e) => {
+            log::error!("Failed to join save settings task: {}", e);
+            return Err(format!("Failed to save settings: {}", e));
+        }
+    }
+
     if hotkeys_changed {
         log::debug!(
             "[save_settings] Hotkey config changed (keyboard: {} -> {}, gamepad: {} -> {}), re-registering from backend",

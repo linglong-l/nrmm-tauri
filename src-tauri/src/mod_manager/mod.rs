@@ -370,34 +370,51 @@ impl ModManager {
         let path = Path::new(mods_path);
 
         if !path.exists() || !path.is_dir() {
+            log::warn!("Mods path does not exist or is not a directory: {}", mods_path);
             return ModsPathStatus::InvalidNotExist;
         }
 
         let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if folder_name != "Mods" {
+            log::warn!("Mods path directory name is not 'Mods': {}", folder_name);
             return ModsPathStatus::InvalidNotModsFolder;
         }
 
         let parent = match path.parent() {
             Some(p) => p,
-            None => return ModsPathStatus::InvalidNotModsFolder,
+            None => {
+                log::warn!("Mods path has no parent directory: {}", mods_path);
+                return ModsPathStatus::InvalidNotModsFolder;
+            }
         };
 
-        let d3dx_path = parent.join("d3dx.ini");
-        if !d3dx_path.exists() {
-            return ModsPathStatus::InvalidMissingD3dx;
+        #[cfg(not(target_os = "linux"))]
+        {
+            let d3dx_path = parent.join("d3dx.ini");
+            if !d3dx_path.exists() {
+                log::warn!("d3dx.ini not found in parent directory: {:?}", d3dx_path);
+                return ModsPathStatus::InvalidMissingD3dx;
+            }
+
+            let dll_path = parent.join("d3d11.dll");
+            if !dll_path.exists() {
+                log::warn!("d3d11.dll not found in parent directory: {:?}", dll_path);
+                return ModsPathStatus::InvalidMissingDll;
+            }
         }
 
-        let dll_path = parent.join("d3d11.dll");
-        if !dll_path.exists() {
-            return ModsPathStatus::InvalidMissingDll;
+        #[cfg(target_os = "linux")]
+        {
+            log::debug!("Running on Linux, skipping d3dx.ini and d3d11.dll checks");
         }
 
         let managed_path = path.join(MANAGED_FOLDER);
         if !managed_path.exists() || !managed_path.is_dir() {
+            log::warn!("_MANAGED_ folder does not exist in mods path: {:?}", managed_path);
             return ModsPathStatus::InvalidWithoutManagedFolder;
         }
 
+        log::debug!("Mods path validation passed: {}", mods_path);
         ModsPathStatus::Valid
     }
 
