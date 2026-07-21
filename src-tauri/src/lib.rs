@@ -28,6 +28,7 @@ mod tray; // 系统托盘菜单与图标事件
 mod utils; // 通用工具集（日志采样器等）
 mod window_manager; // 主窗口的显示/隐藏/尺寸/置顶等管理
 mod image_converter; // PNG 转 ICO 图像格式转换
+mod single_instance; // 单实例检测与进程间通信
 
 // 暴露给前端的 Tauri 命令
 
@@ -96,6 +97,17 @@ pub fn get_app_data_dir() -> Option<std::path::PathBuf> {
 /// - setup 回调中的任何失败均被记录但不会中断启动（除窗口/托盘关键路径会记录 error）。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 单实例检测：如果存在同名程序则退出；如果指向同一路径则发送显示信号
+    let (should_exit, exe_path) = crate::single_instance::check_single_instance();
+    if should_exit {
+        log::info!("Another instance is running, exiting");
+        if exe_path.is_some() {
+            let _ = crate::single_instance::send_show_signal();
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        return;
+    }
+
     // 初始化日志系统（使用 fern 替代 tauri-plugin-log）
     init_logging();
 
@@ -181,7 +193,10 @@ pub fn run() {
                 }
             });
 
-            // 7) 监听主窗口生命周期事件，用于持久化窗口状态与设置
+            // 7) 启动单实例监听，接收来自其他实例的显示信号
+            crate::single_instance::start_listener(app_handle.clone());
+
+            // 8) 监听主窗口生命周期事件，用于持久化窗口状态与设置
             //    为避免 Move/Resized 高频触发导致写入风暴，使用独立线程 + sleep 500ms 进行防抖
             let settings_arc = state.settings.clone();
             let app_handle_clone = app_handle.clone();

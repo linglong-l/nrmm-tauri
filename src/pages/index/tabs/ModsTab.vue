@@ -549,10 +549,6 @@ async function applyModSelection(mod: ModData) {
     if (isTreeNode) {
       const realIndex = currentGroup.modsInGroup.findIndex(m => m.modPath === mod.modPath);
       if (realIndex !== -1) {
-        const [enabledPath, enabledDisabled] = await invokeToggleTreeNodeModDisabled(mod.modPath);
-        const updatedMod = { ...mod, modPath: enabledPath, isDisabled: enabledDisabled };
-        game.updateModInGroup(game.currentGroupPath.value, realIndex, updatedMod);
-
         const childGroupPaths = new Set((currentGroup.children || []).map(c => c.groupPath));
         for (const other of currentGroup.modsInGroup) {
           if (other.realIndex === 0) continue;
@@ -569,6 +565,10 @@ async function applyModSelection(mod: ModData) {
             log.error('Failed to disable tree node mod', e);
           }
         }
+
+        const [enabledPath, enabledDisabled] = await invokeToggleTreeNodeModDisabled(mod.modPath);
+        const updatedMod = { ...mod, modPath: enabledPath, isDisabled: enabledDisabled };
+        game.updateModInGroup(game.currentGroupPath.value, realIndex, updatedMod);
 
         const updatedGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
         game.updateGroup(game.currentGroupPath.value, updatedGroup);
@@ -656,7 +656,8 @@ async function toggleTreeNodeGroupDisabled(group: ModGroupData) {
   if (!group.isTreeNode || group.isVirtual) return;
   try {
     await invokeToggleTreeNodeGroupDisabled(group.groupPath);
-    await refreshMods();
+    const updatedGroup = await invokeRefreshSingleGroup(group.groupPath);
+    game.updateGroup(group.groupPath, updatedGroup);
     ElMessage.success(group.isDisabled ? t('Group enabled') : t('Group disabled'));
   } catch (error) {
     log.error('Failed to toggle group disabled', error);
