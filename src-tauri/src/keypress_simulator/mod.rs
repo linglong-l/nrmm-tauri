@@ -798,12 +798,113 @@ impl KeypressSimulator {
         Ok(())
     }
 
-    /// 模拟「选择模组」的按键序列（按下 Clear 键）。
+    /// 将光标移动到绝对屏幕坐标 (x, y)。
     ///
-    /// 对应 3DMigoto 中绑定的模组选择快捷键。
+    /// 参数：
+    /// - `x`: 水平屏幕坐标（像素）。
+    /// - `y`: 垂直屏幕坐标（像素）。
+    ///
+    /// 仅 Windows 平台有效。NRMM 使用光标坐标携带分组/模组索引信息：
+    /// 3DMigoto 通过 `cursor_screen_x` / `cursor_screen_y` 读取这些坐标值。
     #[allow(dead_code)]
-    pub async fn select_mod_key_sequence(&self) -> Result<()> {
-        self.simulate_key_press_vk(VK_CLEAR).await
+    pub async fn set_cursor_pos_absolute(&self, x: i32, y: i32) -> Result<()> {
+        #[cfg(windows)]
+        {
+            use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+            unsafe { SetCursorPos(x, y) }
+                .ok()
+                .ok_or_else(|| anyhow::anyhow!("SetCursorPos failed: x={}, y={}", x, y))?;
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = x;
+            let _ = y;
+            anyhow::bail!("光标定位仅支持 Windows 平台");
+        }
+        Ok(())
+    }
+
+    /// 获取当前光标位置。
+    ///
+    /// 返回 `(x, y)` 屏幕坐标。
+    #[cfg(windows)]
+    fn get_cursor_pos_windows() -> Result<(i32, i32)> {
+        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        let mut point = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+        unsafe { GetCursorPos(&mut point) }
+            .ok()
+            .ok_or_else(|| anyhow::anyhow!("GetCursorPos failed"))?;
+        Ok((point.x, point.y))
+    }
+
+    /// 模拟 NRMM「选择模组」的完整按键序列。
+    ///
+    /// 序列对应 NRMM `simulateKeySelectMod(realGroupIndex, realModIndex)`:
+    /// VK_CLEAR 按下 → SetCursorPos(modIndex, groupIndex) → VK_SPACE 按下/释放 →
+    /// SetCursorPos(modIndex, groupIndex) → VK_RETURN 按下/释放 → VK_CLEAR 释放。
+    ///
+    /// 光标坐标携带信息：x=modIndex 由 3DMigoto 的 `cursor_screen_x` 读取，
+    /// y=groupIndex 由 `cursor_screen_y` 读取。游戏侧通过 manager_group.ini 的
+    /// [KeyGroup] 和 group_<X>.ini 的 [KeyMod] 监听 VK_CLEAR+VK_SPACE/VK_RETURN
+    /// 组合键，读取光标坐标后更新 $active_group_id / $active_slot 变量完成切换。
+    ///
+    /// 参数：
+    /// - `group_index`: 分组索引（对应 3DMigoto 的 cursor_screen_y）。
+    /// - `mod_index`: 模组索引（对应 3DMigoto 的 cursor_screen_x）。
+    #[allow(dead_code)]
+    pub async fn select_mod_key_sequence(&self, group_index: i32, mod_index: i32) -> Result<()> {
+        #[cfg(windows)]
+        {
+            use windows::Win32::UI::WindowsAndMessaging::{ClipCursor, SetCursorPos};
+            use windows::Win32::Foundation::RECT;
+
+            // 保存当前光标位置，用于完成后恢复
+            let saved_pos = Self::get_cursor_pos_windows().unwrap_or((0, 0));
+
+            // 将光标移到目标坐标（携带 (modIndex, groupIndex) 信息）
+            unsafe { let _ = SetCursorPos(mod_index, group_index); }
+
+            // 锁定光标在 1 像素区域内，防止抖动
+            let lock_rect = RECT {
+                left: mod_index,
+                top: group_index,
+                right: mod_index + 1,
+                bottom: group_index + 1,
+            };
+            unsafe { let _ = ClipCursor(Some(&lock_rect)); }
+
+            // 按下 VK_CLEAR 修饰键
+            self.simulate_key_down(VK_CLEAR).await?;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // VK_SPACE → 触发游戏的 [KeyGroup]，设置 $active_group_id = cursor_screen_y
+            self.simulate_key_down(VK_SPACE).await?;
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            self.simulate_key_up(VK_SPACE).await?;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // VK_RETURN → 触发游戏的 [KeyMod]，设置 $active_slot = cursor_screen_x
+            self.simulate_key_down(VK_RETURN).await?;
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            self.simulate_key_up(VK_RETURN).await?;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // 释放 VK_CLEAR
+            self.simulate_key_up(VK_CLEAR).await?;
+
+            // 恢复光标位置和剪裁
+            unsafe {
+                let _ = ClipCursor(None);
+                let _ = SetCursorPos(saved_pos.0, saved_pos.1);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = group_index;
+            let _ = mod_index;
+            anyhow::bail!("按键模拟仅支持 Windows 平台");
+        }
+        Ok(())
     }
 
     /// 模拟「重载模组」的按键序列（按下 F10 键）。

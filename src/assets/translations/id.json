@@ -92,6 +92,7 @@
   "Mods restored!": "Mod di-restore!",
   "Confirm": "Konfirmasi",
   "Cancel": "Batal",
+  "Create a desktop shortcut to quickly launch the application": "Buat pintasan desktop untuk meluncurkan aplikasi dengan cepat",
   "Failed to move folder": "Gagal untuk memindahkan folder",
   "Folder moved to unmanaged": "Folder dipindahkan ke {}\n\n",
   "Loading...": "Memuat...",
@@ -360,14 +361,10 @@
   "Hotkey conflict: {key} is used by window toggle": "Konflik hotkey: {key} digunakan oleh toggle jendela",
   "Hotkey updated, old hotkey has been unregistered": "Hotkey diperbarui, hotkey lama telah dibatalkan",
   "settings": {
-    "groupSearchHotkey": "Pintasan Pencarian 1",
-    "modSearchHotkey": "Pintasan Pencarian 2",
+    "searchHotkey": "Pintasan Pencarian",
     "hotkeyActionWindow": "Beralih Jendela",
-    "hotkeyActionGroupSearch": "Pencarian Grup",
-    "hotkeyActionModSearch": "Pencarian Mod",
     "hotkeyHintWindow": "Beralih Jendela: Pintasan global, Alt+huruf untuk beralih visibilitas jendela",
-    "hotkeyHintGroupSearch": "Pencarian Grup: Pintasan dalam aplikasi, Alt+huruf untuk fokus kotak pencarian grup",
-    "hotkeyHintModSearch": "Pencarian Mod: Pintasan dalam aplikasi, Alt+huruf untuk fokus kotak pencarian mod"
+    "hotkeyHintSearch": "Pencarian: Pintasan dalam aplikasi, Alt+huruf untuk fokus kotak pencarian"
   },
   "keybinds": {
     "emptySelectMod": "Silakan pilih mod di tab Mod untuk melihat keybind.",

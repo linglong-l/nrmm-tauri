@@ -92,6 +92,7 @@
   "Mods restored!": "模組還原成功！",
   "Confirm": "確認",
   "Cancel": "取消",
+  "Create a desktop shortcut to quickly launch the application": "建立桌面捷徑，快速啟動應用",
   "Failed to move folder": "移動資料夾失敗",
   "Folder moved to unmanaged": "資料夾已移至 {}\n\n",
   "Loading...": "載入中。。。",
@@ -360,14 +361,10 @@
   "Hotkey conflict: {key} is used by window toggle": "快捷鍵衝突：{key} 已被視窗切換功能佔用",
   "Hotkey updated, old hotkey has been unregistered": "快捷鍵已更新，舊快捷鍵已註銷",
   "settings": {
-    "groupSearchHotkey": "搜尋快捷鍵 1",
-    "modSearchHotkey": "搜尋快捷鍵 2",
+    "searchHotkey": "搜尋快捷鍵",
     "hotkeyActionWindow": "視窗切換",
-    "hotkeyActionGroupSearch": "分組搜尋",
-    "hotkeyActionModSearch": "模組搜尋",
     "hotkeyHintWindow": "視窗切換：全域快捷鍵，Alt+字母切換視窗顯隱",
-    "hotkeyHintGroupSearch": "分組搜尋：視窗內快捷鍵，Alt+字母聚焦分組搜尋框",
-    "hotkeyHintModSearch": "模組搜尋：視窗內快捷鍵，Alt+字母聚焦模組搜尋框"
+    "hotkeyHintSearch": "搜尋：視窗內快捷鍵，Alt+字母聚焦搜尋框"
   },
   "keybinds": {
     "emptySelectMod": "請在「模組」標籤頁選擇一個模組以查看快捷鍵。",

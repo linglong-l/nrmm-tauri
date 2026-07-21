@@ -1623,6 +1623,29 @@ pub async fn simulate_mouse_move(
         .await
         .map_err(|e| e.to_string())
 }
+/// 模拟选择模组的按键序列（向游戏发送模组切换信号）。
+///
+/// 对应 NRMM 的 `simulateKeySelectMod(realGroupIndex, realModIndex)`。
+/// 通过全局键盘事件（SendInput）让 3DMigoto 感知模组切换：
+/// - VK_CLEAR + VK_SPACE → 触发 [KeyGroup]，更新 $active_group_id
+/// - VK_CLEAR + VK_RETURN → 触发 [KeyMod]，更新 $active_slot
+///
+/// 参数：
+/// - `state`: 应用全局状态。
+/// - `group_index`: 分组索引。
+/// - `mod_index`: 模组索引。
+#[tauri::command]
+pub async fn simulate_key_select_mod(
+    state: State<'_, AppState>,
+    group_index: i32,
+    mod_index: i32,
+) -> Result<(), String> {
+    state
+        .keypress_simulator
+        .select_mod_key_sequence(group_index, mod_index)
+        .await
+        .map_err(|e| e.to_string())
+}
 
 /// 检查单个 INI 文件的语法错误。
 ///

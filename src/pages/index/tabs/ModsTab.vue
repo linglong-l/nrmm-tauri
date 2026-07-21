@@ -61,7 +61,7 @@ import {
   invokeExtractArchive,
   invokeExportMod,
   invokeExportGroup,
-  invokeUpdateModData,
+  invokeSimulateKeySelectMod,
   convertToAssetUrl
 } from '../../../utils/invoke';
 import { EventNames, eventManager } from '../../../utils/events';
@@ -575,10 +575,13 @@ async function applyModSelection(mod: ModData) {
         game.setSelectedModPath(game.currentGroupPath.value, enabledPath);
       }
     } else {
+      // 对齐 NRMM：写 selectedindex + 向游戏发送按键信号（并行）
       game.setSelectedModPath(game.currentGroupPath.value, mod.modPath);
-      await invokeSetSelectedMod(game.currentGroupPath.value, arrayIndex);
-      await invokeUpdateModData(game.targetGame.value);
-      await refreshMods();
+      const groupIndex = currentGroup.realIndex ?? arrayIndex;
+      await Promise.all([
+        invokeSetSelectedMod(game.currentGroupPath.value, arrayIndex),
+        invokeSimulateKeySelectMod(groupIndex, arrayIndex),
+      ]);
     }
   } catch (error) {
     log.error('Failed to select mod', error);

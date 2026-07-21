@@ -282,6 +282,17 @@ export async function invokeUpdateModData(game: TargetGame): Promise<UpdateModDa
 }
 
 /**
+ * 向游戏发送模组选择按键信号。
+ * 对应 NRMM 的 `simulateKeySelectMod(realGroupIndex, realModIndex)`。
+ * 通过全局键盘事件让 3DMigoto 感知模组切换（VK_CLEAR + VK_SPACE + VK_RETURN）。
+ * @param groupIndex 分组索引
+ * @param modIndex 模组索引
+ */
+export async function invokeSimulateKeySelectMod(groupIndex: number, modIndex: number): Promise<void> {
+  return invoke('simulate_key_select_mod', { groupIndex, modIndex });
+}
+
+/**
  * 切换指定 Mod 的收藏状态。
  * 对应后端命令：`toggle_mod_favorite`。
  * @param modPath Mod 绝对路径

@@ -92,6 +92,7 @@
   "Mods restored!": "Моды восстановлены!",
   "Confirm": "Подтвердить",
   "Cancel": "Отмена",
+  "Create a desktop shortcut to quickly launch the application": "Создать ярлык на рабочем столе для быстрого запуска приложения",
   "Failed to move folder": "Не удалось переместить папку",
   "Folder moved to unmanaged": "Папка перемещена в {}\n\n",
   "Loading...": "Загрузка...",
@@ -360,14 +361,10 @@
   "Hotkey conflict: {key} is used by window toggle": "Конфликт горячих клавиш: {key} используется переключением окна",
   "Hotkey updated, old hotkey has been unregistered": "Горячая клавиша обновлена, старая клавиша отменена",
   "settings": {
-    "groupSearchHotkey": "Горячая клавиша поиска 1",
-    "modSearchHotkey": "Горячая клавиша поиска 2",
+    "searchHotkey": "Горячая клавиша поиска",
     "hotkeyActionWindow": "Переключение окна",
-    "hotkeyActionGroupSearch": "Поиск группы",
-    "hotkeyActionModSearch": "Поиск мода",
     "hotkeyHintWindow": "Переключение окна: Глобальная горячая клавиша, Alt+буква для переключения видимости окна",
-    "hotkeyHintGroupSearch": "Поиск группы: Горячая клавиша в приложении, Alt+буква для фокуса на поле поиска группы",
-    "hotkeyHintModSearch": "Поиск мода: Горячая клавиша в приложении, Alt+буква для фокуса на поле поиска мода"
+    "hotkeyHintSearch": "Поиск: Горячая клавиша в приложении, Alt+буква для фокуса на поле поиска"
   },
   "keybinds": {
     "emptySelectMod": "Выберите мод на вкладке «Моды», чтобы просмотреть привязки клавиш.",

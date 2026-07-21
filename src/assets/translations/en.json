@@ -98,6 +98,7 @@
   "Desktop icon already exists": "Desktop icon already exists at: {path}",
   "Failed to create desktop icon": "Failed to create desktop icon",
   "Desktop icon name": "Desktop icon name",
+  "Create a desktop shortcut to quickly launch the application": "Create a desktop shortcut to quickly launch the application",
   "Failed to move folder": "Failed to move folder",
   "Folder moved to unmanaged": "Folder moved to {}\n\n",
   "Loading...": "Loading...",
@@ -374,14 +375,10 @@
   "Hotkey conflict: {key} is used by window toggle": "Hotkey conflict: {key} is used by window toggle",
   "Hotkey updated, old hotkey has been unregistered": "Hotkey updated, old hotkey has been unregistered",
   "settings": {
-    "groupSearchHotkey": "Search Hotkey 1",
-    "modSearchHotkey": "Search Hotkey 2",
+    "searchHotkey": "Search Hotkey",
     "hotkeyActionWindow": "Window Toggle",
-    "hotkeyActionGroupSearch": "Group Search",
-    "hotkeyActionModSearch": "Mod Search",
     "hotkeyHintWindow": "Window Toggle: Global hotkey, Alt+letter to toggle window visibility",
-    "hotkeyHintGroupSearch": "Group Search: In-app hotkey, Alt+letter to focus group search box",
-    "hotkeyHintModSearch": "Mod Search: In-app hotkey, Alt+letter to focus mod search box"
+    "hotkeyHintSearch": "Search: In-app hotkey, Alt+letter to focus search box"
   },
   "keybinds": {
     "emptySelectMod": "Please select a mod in the Mods tab to view keybinds.",

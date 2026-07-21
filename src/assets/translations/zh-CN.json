@@ -98,6 +98,7 @@
   "Desktop icon already exists": "桌面图标已存在：{path}",
   "Failed to create desktop icon": "创建桌面图标失败",
   "Desktop icon name": "桌面图标名称",
+  "Create a desktop shortcut to quickly launch the application": "创建桌面快捷方式，快速启动应用",
   "Failed to move folder": "移动文件夹失败",
   "Folder moved to unmanaged": "文件夹已移至 {}\n\n",
   "Loading...": "加载中。。。",
@@ -374,14 +375,10 @@
   "Hotkey conflict: {key} is used by window toggle": "快捷键冲突：{key} 已被窗口切换功能占用",
   "Hotkey updated, old hotkey has been unregistered": "快捷键已更新，旧快捷键已注销",
   "settings": {
-    "groupSearchHotkey": "搜索快捷键 1",
-    "modSearchHotkey": "搜索快捷键 2",
+    "searchHotkey": "搜索快捷键",
     "hotkeyActionWindow": "窗口切换",
-    "hotkeyActionGroupSearch": "分组搜索",
-    "hotkeyActionModSearch": "模组搜索",
     "hotkeyHintWindow": "窗口切换：全局快捷键，Alt+字母切换窗口显隐",
-    "hotkeyHintGroupSearch": "分组搜索：窗口内快捷键，Alt+字母聚焦分组搜索框",
-    "hotkeyHintModSearch": "模组搜索：窗口内快捷键，Alt+字母聚焦模组搜索框"
+    "hotkeyHintSearch": "搜索：窗口内快捷键，Alt+字母聚焦搜索框"
   },
   "keybinds": {
     "emptySelectMod": "请在「模组」标签页选择一个模组以查看快捷键。",

@@ -328,6 +328,7 @@ pub fn run() {
             commands::sync_cloud_data,
             commands::simulate_key_press,
             commands::simulate_key_combination,
+            commands::simulate_key_select_mod,
             commands::simulate_mouse_move,
             commands::check_ini_syntax,
             commands::check_all_mods_syntax,
@@ -368,23 +369,27 @@ pub fn run() {
 /// - `apply()` 仅在第一次成功设置全局 logger 时生效，后续调用会被忽略。
 ///
 /// # 限制
-/// - 日志级别可通过环境变量 `XXMI_LOG_LEVEL` 动态配置（取值：`trace`/`debug`/`info`/`warn`/`error`/`off`，大小写不敏感，优先级最高）；未设置或无效值时，dev 构建默认 `Debug`，release 构建默认 `Info`；
+/// - 日志级别可通过环境变量 `XXMI_LOG_LEVEL` 动态配置（取值：`trace`/`debug`/`info`/`warn`/`error`/`off`，大小写不敏感，优先级最高）；
+///   未设置或无效值时，通过编译宏条件编译决定默认级别：dev（debug_assertions）构建默认 `Debug`，release 构建默认 `Info`；
 /// - 日志文件按日期分层存储（year/month/day.log），无自动清理。
+
+/// dev 构建的默认日志级别（编译宏条件编译，release 构建不编译此常量）。
+#[cfg(debug_assertions)]
+const DEFAULT_LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;
+
+/// release 构建的默认日志级别（编译宏条件编译，dev 构建不编译此常量）。
+#[cfg(not(debug_assertions))]
+const DEFAULT_LOG_LEVEL: log::LevelFilter = log::LevelFilter::Info;
+
 fn init_logging() {
-    // 解析环境变量 XXMI_LOG_LEVEL（优先级最高），未设置或无效值时回退到默认级别
+    // 解析环境变量 XXMI_LOG_LEVEL（优先级最高），未设置或无效值时回退到编译期默认级别
     // log::LevelFilter 实现了 FromStr，支持大小写不敏感解析（trace/debug/info/warn/error/off）
     let level_filter = match std::env::var("XXMI_LOG_LEVEL")
         .ok()
         .and_then(|v| v.to_lowercase().parse::<log::LevelFilter>().ok())
     {
         Some(level) => level,
-        None => {
-            if cfg!(dev) {
-                log::LevelFilter::Debug
-            } else {
-                log::LevelFilter::Info
-            }
-        }
+        None => DEFAULT_LOG_LEVEL,
     };
 
     // 构造基础 Dispatch：设置全局级别与统一格式化器，并链接到 stdout
