@@ -286,6 +286,7 @@
   "No mods found": "未找到模组",
   "mods.searchPlaceholder": "搜索模组...",
   "mods.searchGroupPlaceholder": "搜索分组...",
+  "mods.searchPlaceholderUnified": "搜索分组或模组...",
   "Please select a group first": "请先选择一个分组",
   "No valid paths found": "未找到有效路径",
   "Mods added successfully": "模组添加成功",
@@ -373,8 +374,8 @@
   "Hotkey conflict: {key} is used by window toggle": "快捷键冲突：{key} 已被窗口切换功能占用",
   "Hotkey updated, old hotkey has been unregistered": "快捷键已更新，旧快捷键已注销",
   "settings": {
-    "groupSearchHotkey": "分组搜索快捷键",
-    "modSearchHotkey": "模组搜索快捷键",
+    "groupSearchHotkey": "搜索快捷键 1",
+    "modSearchHotkey": "搜索快捷键 2",
     "hotkeyActionWindow": "窗口切换",
     "hotkeyActionGroupSearch": "分组搜索",
     "hotkeyActionModSearch": "模组搜索",

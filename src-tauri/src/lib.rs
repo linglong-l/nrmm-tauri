@@ -270,6 +270,7 @@ pub fn run() {
             commands::remove_icon,
             commands::toggle_mod_disabled,
             commands::toggle_tree_node_mod_disabled,
+            commands::disable_tree_node_mod,
             commands::toggle_tree_node_group_disabled,
             commands::check_hash_conflicts,
             commands::add_group,

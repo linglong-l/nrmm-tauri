@@ -981,6 +981,61 @@ impl ModManager {
         }
     }
 
+    /// 安全禁用指定模组目录（仅添加 `DISABLED` 前缀，不切换）。
+    ///
+    /// 与 `toggle_tree_node_mod_disabled` 不同，本函数只执行禁用方向的重命名：
+    /// - 若目录名尚未以 `DISABLED` 开头，则添加前缀；
+    /// - 若已处于禁用状态，直接返回原路径。
+    ///
+    /// 参数：
+    /// - `mod_path`: 目标模组目录路径。
+    ///
+    /// 返回：操作后的新路径字符串。
+    /// 错误：
+    /// - 路径不存在或非目录。
+    /// - 目录名包含非 UTF-8 字符。
+    /// - 目标路径已存在（避免覆盖）。
+    /// - 重命名失败。
+    pub fn disable_tree_node_mod(mod_path: &str) -> Result<String> {
+        let path = Path::new(mod_path);
+        if !path.exists() || !path.is_dir() {
+            error!("disable_tree_node_mod failed: mod path does not exist or is not a directory: {:?}", path);
+            anyhow::bail!("Mod path does not exist: {:?}", path);
+        }
+
+        let parent = match path.parent() {
+            Some(p) => p,
+            None => {
+                error!("disable_tree_node_mod failed: mod path has no parent directory: {:?}", path);
+                anyhow::bail!("Invalid mod path: no parent directory");
+            }
+        };
+
+        let dir_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| {
+                error!("disable_tree_node_mod failed: directory name is not valid UTF-8: {:?}", path);
+                anyhow::anyhow!("Directory name is not valid UTF-8: {:?}", path)
+            })?;
+
+        if Self::is_disabled_name(dir_name) {
+            return Ok(mod_path.to_string());
+        }
+
+        let new_name = format!("{}{}", DISABLED_PREFIX, dir_name);
+        let new_path = parent.join(&new_name);
+        if new_path.exists() {
+            error!("disable_tree_node_mod failed: destination path already exists: {:?}", new_path);
+            anyhow::bail!("Destination path already exists: {:?}", new_path);
+        }
+
+        fs::rename(path, &new_path)
+            .with_context(|| format!("Failed to rename mod: {:?} -> {:?}", path, new_path))?;
+
+        Ok(new_path.to_string_lossy().to_string())
+    }
+
     /// 扫描 Mods 目录下的所有分组。
     ///
     /// 默认读取 `_MANAGED_` 目录下的内容，支持三种分组识别方式：
@@ -3819,6 +3874,8 @@ impl Default for ModManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_mod_data_serialization() {
@@ -4059,6 +4116,25 @@ mod tests {
 
         let result = ModManager::is_favorite(temp.path().to_str().unwrap()).unwrap();
         assert_eq!(result, Some("2024-01-15T10:30:00Z".to_string()));
+    }
+
+    #[test]
+    fn disable_tree_node_mod_adds_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("MyMod");
+        fs::create_dir(&mod_dir).unwrap();
+        let result = ModManager::disable_tree_node_mod(mod_dir.to_str().unwrap()).unwrap();
+        assert!(result.contains("DISABLED"));
+        assert!(tmp.path().join("DISABLEDMyMod").exists());
+    }
+
+    #[test]
+    fn disable_tree_node_mod_ignores_already_disabled() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = tmp.path().join("DISABLEDMyMod");
+        fs::create_dir(&mod_dir).unwrap();
+        let result = ModManager::disable_tree_node_mod(mod_dir.to_str().unwrap()).unwrap();
+        assert_eq!(result, mod_dir.to_string_lossy().to_string());
     }
 
 }

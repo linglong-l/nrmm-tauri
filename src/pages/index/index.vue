@@ -233,14 +233,11 @@ function handleSearchHotkey(event: KeyboardEvent): void {
   if (target) {
     const tagName = target.tagName.toLowerCase();
     if (tagName === 'input' || tagName === 'textarea') {
-      // 仅在焦点位于搜索输入框且对应搜索框可见时放行，以便快捷键关闭搜索框
-      const groupInputEl = modsTabRef.value?.getGroupSearchInputEl() ?? null;
-      const modInputEl = modsTabRef.value?.getModSearchInputEl() ?? null;
-      const isGroupSearchInput = groupInputEl !== null && target === groupInputEl;
-      const isModSearchInput = modInputEl !== null && target === modInputEl;
-      const groupVisible = modsTabRef.value?.isGroupSearchVisible() ?? false;
-      const modVisible = modsTabRef.value?.isModSearchVisible() ?? false;
-      if (!((isGroupSearchInput && groupVisible) || (isModSearchInput && modVisible))) {
+      // 仅在焦点位于统一搜索输入框且搜索框可见时放行，以便快捷键关闭搜索框
+      const searchInputEl = modsTabRef.value?.getSearchInputEl() ?? null;
+      const isSearchInput = searchInputEl !== null && target === searchInputEl;
+      const searchVisible = modsTabRef.value?.isSearchVisible() ?? false;
+      if (!(isSearchInput && searchVisible)) {
         log.debug('Ignored: focus is in input/textarea');
         return;
       }
@@ -287,21 +284,12 @@ function handleSearchHotkey(event: KeyboardEvent): void {
     return;
   }
 
-  // 匹配分组搜索快捷键（统一小写比较）— toggle 显示/隐藏
-  if (pressedHotkey === settingsStore.groupSearchHotkey.toLowerCase()) {
+  // 匹配任意搜索快捷键（统一小写比较）— 触发统一搜索框 toggle
+  const searchHotkeys = [settingsStore.groupSearchHotkey, settingsStore.modSearchHotkey].map(k => k.toLowerCase());
+  if (searchHotkeys.includes(pressedHotkey)) {
     event.preventDefault();
-    log.debug('Triggering group search');
-    modsTabRef.value?.toggleGroupSearch();
-    log.debug('Group search toggled');
-    return;
-  }
-
-  // 匹配模组搜索快捷键（统一小写比较）— toggle 显示/隐藏
-  if (pressedHotkey === settingsStore.modSearchHotkey.toLowerCase()) {
-    event.preventDefault();
-    log.debug('Triggering mod search');
-    modsTabRef.value?.toggleModSearch();
-    log.debug('Mod search toggled');
+    log.debug('Triggering unified search');
+    modsTabRef.value?.toggleSearch();
     return;
   }
 

@@ -24,6 +24,7 @@ import { useI18n } from 'vue-i18n';
 import { FolderOpened, Star, CaretRight } from '@element-plus/icons-vue';
 import type { ModGroupData } from '../../../types';
 import { convertToAssetUrl } from '../../../utils/invoke';
+import { fuzzyMatch, splitByIndices } from '../../../utils/fuzzyMatch';
 
 const props = defineProps<{
   group: ModGroupData;
@@ -48,10 +49,18 @@ const hasChildren = computed(() => {
   return props.group.isTreeNode && props.group.children && props.group.children.length > 0;
 });
 
-// 判断当前分组是否匹配搜索关键字（用于高亮显示）
+// 判断当前分组是否匹配搜索关键字（用于整项边框高亮）
 const isHighlighted = computed(() => {
   if (!props.searchKeyword) return false;
-  return props.group.groupName.toLowerCase().includes(props.searchKeyword.toLowerCase());
+  return fuzzyMatch(props.searchKeyword, props.group.groupName).matched;
+});
+
+// 根据搜索关键字拆分分组名为高亮片段
+const groupNameSegments = computed(() => {
+  if (!props.searchKeyword) return [{ text: props.group.groupName, highlight: false }];
+  const result = fuzzyMatch(props.searchKeyword, props.group.groupName);
+  if (!result.matched) return [{ text: props.group.groupName, highlight: false }];
+  return splitByIndices(props.group.groupName, result.indices);
 });
 
 // 判断指定分组是否为当前激活的分组（用于高亮显示）
@@ -128,7 +137,11 @@ function toggleExpand(event: MouseEvent) {
 
         <!-- 分组信息区域 -->
         <div class="group-info">
-          <span class="group-name">{{ group.groupName }}</span>
+          <span class="group-name">
+            <template v-for="(segment, idx) in groupNameSegments" :key="idx">
+              <span :class="{ 'highlight-text': segment.highlight }">{{ segment.text }}</span>
+            </template>
+          </span>
           <span v-if="group.isDisabled" class="group-disabled-tag">{{ t('Disabled') }}</span>
           <!-- 模组数量统计（虚拟节点不显示） -->
           <span v-if="!group.isVirtual" class="group-count">{{ group.modsInGroup.length }} {{ t('Mods') }}</span>
@@ -324,5 +337,11 @@ function toggleExpand(event: MouseEvent) {
 .children-container {
   display: flex;
   flex-direction: column;
+}
+
+/* 搜索关键字高亮字符 */
+.highlight-text {
+  color: var(--el-color-primary);
+  font-weight: 600;
 }
 </style>

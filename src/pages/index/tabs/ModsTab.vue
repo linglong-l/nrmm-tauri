@@ -45,6 +45,7 @@ import {
   invokeRefreshSingleGroup,
   invokeToggleModDisabled,
   invokeToggleTreeNodeModDisabled,
+  invokeDisableTreeNodeMod,
   invokeToggleTreeNodeGroupDisabled,
   invokeAddGroup,
   invokeAddMods,
@@ -60,6 +61,7 @@ import {
   invokeExtractArchive,
   invokeExportMod,
   invokeExportGroup,
+  invokeUpdateModData,
   convertToAssetUrl
 } from '../../../utils/invoke';
 import { EventNames, eventManager } from '../../../utils/events';
@@ -76,6 +78,7 @@ const log = createLogger('ModsTab');
 
 // ===== 响应式状态 =====
 const isLoading = ref(false);                          // 全局加载指示
+const isApplyingSelection = ref(false);               // 正在应用模组选择
 const showFavoritesOnly = ref(false);                  // 是否仅显示收藏项
 const selectedModIndex = ref(0);                       // 当前选中的模组索引（用于高亮与轮播定位）
 const dialogAddGroupVisible = ref(false);              // 新建分组对话框可见性
@@ -362,32 +365,17 @@ const displayMods = computed(() => {
   return sortModsForDisplay(mods, selectedPath);
 });
 
-// 模组搜索关键字（纯前端模糊匹配，不调用后端）
-const modSearchKeyword = ref('');
-
-// 分组搜索关键字（简单 includes 匹配，用于高亮匹配的分组项）
-const groupSearchKeyword = ref('');
+// 统一搜索关键字（同时用于分组高亮与模组过滤）
+const searchKeyword = ref('');
 // 分组列表容器引用（用于搜索时滚动到第一个匹配项）
 const groupListRef = ref<HTMLElement | null>(null);
 // 搜索输入框引用（用于快捷键聚焦）
-const groupSearchInputRef = ref<InputInstance | null>(null);
-const modSearchInputRef = ref<InputInstance | null>(null);
+const searchInputRef = ref<InputInstance | null>(null);
 // 搜索栏显示/隐藏状态（通过快捷键切换）
-const groupSearchVisible = ref(false);
-const modSearchVisible = ref(false);
-
-/**
- * 判断分组名称是否匹配搜索关键字。
- * @param groupName 分组名称
- * @returns true 表示匹配搜索关键字
- */
-function isGroupMatched(groupName: string): boolean {
-  if (!groupSearchKeyword.value) return false;
-  return groupName.toLowerCase().includes(groupSearchKeyword.value.toLowerCase());
-}
+const searchVisible = ref(false);
 
 // 搜索关键字变化时滚动到第一个匹配项
-watch(groupSearchKeyword, (newVal) => {
+watch(searchKeyword, (newVal) => {
   if (!newVal || !groupListRef.value) return;
   nextTick(() => {
     const firstMatch = groupListRef.value?.querySelector('.group-highlight');
@@ -398,8 +386,8 @@ watch(groupSearchKeyword, (newVal) => {
 // 经过搜索关键字过滤后的模组列表：在 displayMods（已应用收藏过滤与排序）基础上叠加模糊匹配
 const filteredMods = computed(() => {
   const currentMods = displayMods.value;
-  if (!modSearchKeyword.value) return currentMods;
-  return currentMods.filter(mod => fuzzyMatch(modSearchKeyword.value, mod.modName).matched);
+  if (!searchKeyword.value) return currentMods;
+  return currentMods.filter(mod => fuzzyMatch(searchKeyword.value, mod.modName).matched);
 });
 
 /**
@@ -408,8 +396,8 @@ const filteredMods = computed(() => {
  * @returns 文本片段数组，每个片段标记是否高亮
  */
 function getModNameSegments(modName: string): TextSegment[] {
-  if (!modSearchKeyword.value) return [{ text: modName, highlight: false }];
-  const result = fuzzyMatch(modSearchKeyword.value, modName);
+  if (!searchKeyword.value) return [{ text: modName, highlight: false }];
+  const result = fuzzyMatch(searchKeyword.value, modName);
   return splitByIndices(modName, result.indices);
 }
 
@@ -422,6 +410,10 @@ function getModNameSegments(modName: string): TextSegment[] {
 function isModSelected(mod: ModData): boolean {
   if (mod.realIndex === 0) return false;
   if (mod.isDisabled) return false;
+  const currentGroup = game.currentGroup.value;
+  if (currentGroup?.isTreeNode && !currentGroup.isVirtual) {
+    return !mod.isDisabled;
+  }
   const selectedPath = game.getSelectedModPath(game.currentGroupPath.value);
   return mod.modPath === selectedPath;
 }
@@ -504,20 +496,22 @@ function debouncedRefresh() {
  */
 function selectGroup(group: ModGroupData) {
   game.setCurrentGroupByPath(group.groupPath);
-  // 优先从 store 的 selectedModPaths 中获取该分组的选中模组
-  const selectedModPath = game.getSelectedModPath(group.groupPath);
-  if (selectedModPath) {
-    const idx = group.modsInGroup.findIndex(m => m.modPath === selectedModPath);
-    selectedModIndex.value = idx >= 0 ? idx : 0;
-  } else {
-    // 回退到 previousSelectedModOnGroup（兼容旧逻辑）
-    const selectedIdx = group.previousSelectedModOnGroup;
-    if (selectedIdx >= 0 && selectedIdx < group.modsInGroup.length) {
-      selectedModIndex.value = selectedIdx;
+  nextTick(() => {
+    const selectedModPath = game.getSelectedModPath(group.groupPath);
+    let targetModPath: string | null = selectedModPath;
+    if (!targetModPath) {
+      const selectedIdx = group.previousSelectedModOnGroup;
+      if (selectedIdx >= 0 && selectedIdx < group.modsInGroup.length) {
+        targetModPath = group.modsInGroup[selectedIdx].modPath;
+      }
+    }
+    if (targetModPath) {
+      const idx = filteredMods.value.findIndex(m => m.modPath === targetModPath);
+      selectedModIndex.value = idx >= 0 ? idx : 0;
     } else {
       selectedModIndex.value = 0;
     }
-  }
+  });
 }
 
 /**
@@ -533,7 +527,65 @@ function toggleExpand(groupPath: string) {
  * @param index displayMods 中的索引
  */
 function selectMod(index: number) {
+  if (isApplyingSelection.value) return;
   selectedModIndex.value = index;
+}
+
+async function applyModSelection(mod: ModData) {
+  if (isApplyingSelection.value) return;
+  const currentGroup = game.currentGroup.value;
+  if (!currentGroup) return;
+
+  const isTreeNode = currentGroup.isTreeNode && !currentGroup.isVirtual;
+  if (!isTreeNode && mod.isDisabled) return;
+
+  const arrayIndex = currentGroup.modsInGroup.findIndex(m => m.modPath === mod.modPath);
+  if (arrayIndex < 0) return;
+  isApplyingSelection.value = true;
+  try {
+    const filteredIndex = filteredMods.value.findIndex(m => m.modPath === mod.modPath);
+    selectedModIndex.value = filteredIndex;
+
+    if (isTreeNode) {
+      const realIndex = currentGroup.modsInGroup.findIndex(m => m.modPath === mod.modPath);
+      if (realIndex !== -1) {
+        const [enabledPath, enabledDisabled] = await invokeToggleTreeNodeModDisabled(mod.modPath);
+        const updatedMod = { ...mod, modPath: enabledPath, isDisabled: enabledDisabled };
+        game.updateModInGroup(game.currentGroupPath.value, realIndex, updatedMod);
+
+        const childGroupPaths = new Set((currentGroup.children || []).map(c => c.groupPath));
+        for (const other of currentGroup.modsInGroup) {
+          if (other.realIndex === 0) continue;
+          if (other.modPath === mod.modPath) continue;
+          if (other.isDisabled) continue;
+          if (childGroupPaths.has(other.modPath)) continue;
+          try {
+            const disabledPath = await invokeDisableTreeNodeMod(other.modPath);
+            const otherIndex = currentGroup.modsInGroup.findIndex(m => m.modPath === other.modPath);
+            if (otherIndex !== -1) {
+              game.updateModInGroup(game.currentGroupPath.value, otherIndex, { ...other, modPath: disabledPath, isDisabled: true });
+            }
+          } catch (e) {
+            log.error('Failed to disable tree node mod', e);
+          }
+        }
+
+        const updatedGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
+        game.updateGroup(game.currentGroupPath.value, updatedGroup);
+        game.setSelectedModPath(game.currentGroupPath.value, enabledPath);
+      }
+    } else {
+      game.setSelectedModPath(game.currentGroupPath.value, mod.modPath);
+      await invokeSetSelectedMod(game.currentGroupPath.value, arrayIndex);
+      await invokeUpdateModData(game.targetGame.value);
+      await refreshMods();
+    }
+  } catch (error) {
+    log.error('Failed to select mod', error);
+    ElMessage.error(t('Failed to enable mod'));
+  } finally {
+    isApplyingSelection.value = false;
+  }
 }
 
 /**
@@ -986,25 +1038,7 @@ async function handleContextMenuSelect(command: string) {
 }
 
 async function selectModInGroup(mod: ModData) {
-  if (mod.isDisabled) {
-    return;
-  }
-  // 注意：此变量名为 arrayIndex 而非 realIndex，因为 findIndex 返回的是 modsInGroup 数组位置，
-  // 用于写入 selectedindex 文件（UI 选择恢复），与 ModData.realIndex（INI 注入的 $managed_slot_id）无关
-  const arrayIndex = game.currentGroup.value?.modsInGroup.findIndex(m => m.modPath === mod.modPath) ?? -1;
-  if (arrayIndex >= 0) {
-    selectedModIndex.value = arrayIndex;
-    game.setSelectedModPath(game.currentGroupPath.value, mod.modPath);
-    // # 目录分组不使用 selectedindex 机制，跳过持久化
-    const currentGroup = game.currentGroup.value;
-    if (currentGroup && !(currentGroup.isTreeNode && !currentGroup.isVirtual)) {
-      try {
-        await invokeSetSelectedMod(game.currentGroupPath.value, arrayIndex);
-      } catch (error) {
-        log.error('Failed to select mod', error);
-      }
-    }
-  }
+  await applyModSelection(mod);
 }
 
 async function removeModFromGroup(mod: ModData) {
@@ -1071,18 +1105,12 @@ async function exportGroup(group: ModGroupData) {
 
 /**
  * 模组双击回调。
- * 业务逻辑：
- *  - 空槽位双击仅选中，不切换状态。
- *  - 普通模组双击切换启用/禁用状态。
+ * 业务逻辑：选择模组作为当前槽位启用的模组。
  * @param mod 目标模组
- * @param index 目标模组在 displayMods 中的索引（仅用于空槽位选中高亮）
+ * @param index 目标模组在 displayMods 中的索引（保留参数以兼容调用）
  */
-function onModDoubleClick(mod: ModData, index: number) {
-  if (mod.realIndex === 0) {
-    selectMod(index);
-    return;
-  }
-  toggleMod(mod);
+function onModDoubleClick(mod: ModData, _index: number) {
+  applyModSelection(mod);
 }
 
 /**
@@ -1173,7 +1201,7 @@ onMounted(async () => {
     }
   }
   document.addEventListener('click', hideContextMenu);
-  document.addEventListener('keydown', handleEscKey);
+  document.addEventListener('keydown', handleKeyDown);
   // 捕获阶段监听容器点击/右键，用于阻止拖动结束后的误触发
   modsContainerRef.value?.addEventListener('click', onModsContainerClick, true);
   modsContainerRef.value?.addEventListener('contextmenu', onModsContainerContextMenu, true);
@@ -1192,7 +1220,7 @@ onUnmounted(() => {
   }
   invokeStopFileWatcher().catch((err) => log.error('Failed to stop file watcher on unmount', err));
   document.removeEventListener('click', hideContextMenu);
-  document.removeEventListener('keydown', handleEscKey);
+  document.removeEventListener('keydown', handleKeyDown);
   if (resizeHandler) {
     window.removeEventListener('resize', resizeHandler);
     resizeHandler = null;
@@ -1251,82 +1279,17 @@ watch(
 );
 
 /**
- * 聚焦分组搜索框（供父组件通过 ref 调用）。
+ * 切换统一搜索框显示/隐藏（供父组件通过 ref 调用）。
+ * 已显示时隐藏并清空关键字；隐藏时显示并聚焦搜索输入框。
  */
-function focusGroupSearch(): void {
-  groupSearchVisible.value = true;
-  // 延迟 focus 以等待 CSS max-height 过渡完成（过渡时间 250ms）
-  setTimeout(() => {
-    groupSearchInputRef.value?.focus();
-  }, 300);
-}
-
-/**
- * 聚焦模组搜索框（供父组件通过 ref 调用）。
- */
-function focusModSearch(): void {
-  modSearchVisible.value = true;
-  setTimeout(() => {
-    modSearchInputRef.value?.focus();
-  }, 300);
-}
-
-/**
- * 切换搜索栏显示/隐藏（供父组件通过 ref 调用）。
- * 隐藏时清空搜索关键字；显示时自动聚焦模组搜索框。
- */
-function toggleSearchBars(): void {
-  // Alt+S 同时切换两个搜索框（保持兼容）
-  const anyVisible = groupSearchVisible.value || modSearchVisible.value;
-  if (anyVisible) {
-    groupSearchVisible.value = false;
-    modSearchVisible.value = false;
-    groupSearchKeyword.value = '';
-    modSearchKeyword.value = '';
+function toggleSearch(): void {
+  if (searchVisible.value) {
+    searchVisible.value = false;
+    searchKeyword.value = '';
   } else {
-    modSearchVisible.value = true;
+    searchVisible.value = true;
     setTimeout(() => {
-      modSearchInputRef.value?.focus();
-    }, 300);
-  }
-}
-
-/**
- * 切换分组搜索框显示/隐藏（供父组件通过 ref 调用）。
- * 已显示时隐藏并清空关键字；隐藏时显示并聚焦分组搜索框。
- * 两个搜索框互斥：打开一个时关闭另一个。
- */
-function toggleGroupSearch(): void {
-  if (groupSearchVisible.value) {
-    groupSearchVisible.value = false;
-    groupSearchKeyword.value = '';
-  } else {
-    // 关闭另一个搜索框（互斥）
-    modSearchVisible.value = false;
-    modSearchKeyword.value = '';
-    groupSearchVisible.value = true;
-    setTimeout(() => {
-      groupSearchInputRef.value?.focus();
-    }, 300);
-  }
-}
-
-/**
- * 切换模组搜索框显示/隐藏（供父组件通过 ref 调用）。
- * 已显示时隐藏并清空关键字；隐藏时显示并聚焦模组搜索框。
- * 两个搜索框互斥：打开一个时关闭另一个。
- */
-function toggleModSearch(): void {
-  if (modSearchVisible.value) {
-    modSearchVisible.value = false;
-    modSearchKeyword.value = '';
-  } else {
-    // 关闭另一个搜索框（互斥）
-    groupSearchVisible.value = false;
-    groupSearchKeyword.value = '';
-    modSearchVisible.value = true;
-    setTimeout(() => {
-      modSearchInputRef.value?.focus();
+      searchInputRef.value?.focus();
     }, 300);
   }
 }
@@ -1335,63 +1298,158 @@ function toggleModSearch(): void {
  * 隐藏搜索栏并清空关键字（点击外部区域或按 Esc 时调用）。
  */
 function hideSearchBars(): void {
-  if (!groupSearchVisible.value && !modSearchVisible.value) return;
-  groupSearchVisible.value = false;
-  modSearchVisible.value = false;
-  groupSearchKeyword.value = '';
-  modSearchKeyword.value = '';
+  if (!searchVisible.value) return;
+  searchVisible.value = false;
+  searchKeyword.value = '';
 }
 
 /**
- * 全局键盘事件处理：按 Esc 退出搜索。
+ * 全局键盘事件处理：按 Esc 退出搜索；W/S/↑/↓切换模组；A/D/←/→切换分组；Enter/Space确认选择。
  */
-function handleEscKey(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && (groupSearchVisible.value || modSearchVisible.value)) {
+function handleKeyDown(event: KeyboardEvent): void {
+  const modsTab = document.querySelector('.mods-tab') as HTMLElement | null;
+  if (!modsTab) return;
+  const tabContent = modsTab.closest('.tab-content') as HTMLElement | null;
+  if (tabContent && getComputedStyle(tabContent).display === 'none') return;
+  if (isApplyingSelection.value) return;
+  if (dialogAddGroupVisible.value || dialogRenameGroupVisible.value || dialogRenameModVisible.value) return;
+  if (document.querySelector('.el-message-box__wrapper') || document.querySelector('.el-dialog__wrapper')) return;
+  if (contextMenuVisible.value) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      hideContextMenu();
+    }
+    return;
+  }
+  const active = document.activeElement;
+  if (active) {
+    const tag = active.tagName.toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || (active as HTMLElement).isContentEditable) {
+      if (event.key === 'Escape' && (searchVisible.value)) {
+        event.preventDefault();
+        hideSearchBars();
+        (active as HTMLElement).blur();
+      }
+      return;
+    }
+  }
+  if (event.key === 'Escape' && (searchVisible.value)) {
     event.preventDefault();
     hideSearchBars();
     (document.activeElement as HTMLElement)?.blur();
+    return;
+  }
+  const key = event.key.toLowerCase();
+  switch (key) {
+    case 'w':
+    case 'arrowup':
+      event.preventDefault();
+      navigateMod(-1);
+      break;
+    case 's':
+    case 'arrowdown':
+      event.preventDefault();
+      navigateMod(1);
+      break;
+    case 'a':
+    case 'arrowleft':
+      event.preventDefault();
+      navigateGroup(-1);
+      break;
+    case 'd':
+    case 'arrowright':
+      event.preventDefault();
+      navigateGroup(1);
+      break;
+    case 'enter':
+    case ' ':
+      event.preventDefault();
+      confirmCurrentMod();
+      break;
   }
 }
 
-/**
- * 获取分组搜索输入框的原生 DOM 元素。
- * 用于父组件判断焦点是否在搜索输入框内，以便快捷键关闭搜索框。
- * @returns 原生 input 元素，未挂载时返回 null
- */
-function getGroupSearchInputEl(): HTMLInputElement | null {
-  return (groupSearchInputRef.value as any)?.ref ?? null;
+function navigateMod(delta: number) {
+  const mods = filteredMods.value;
+  if (mods.length === 0) return;
+  let newIndex = selectedModIndex.value + delta;
+  if (newIndex < 0) newIndex = 0;
+  if (newIndex >= mods.length) newIndex = mods.length - 1;
+  selectedModIndex.value = newIndex;
+  nextTick(() => {
+    const container = modsContainerRef.value;
+    if (!container) return;
+    const selected = container.querySelector('.mod-card.selected, .list-mod-card.selected') as HTMLElement | null;
+    if (selected) {
+      selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
+}
+
+function getNavigableGroups(): ModGroupData[] {
+  const result: ModGroupData[] = [];
+  function walk(groups: ModGroupData[]) {
+    for (const g of groups) {
+      if (!g.isVirtual && !g.isDisabled) {
+        result.push(g);
+      }
+      if (g.children && g.children.length > 0 && game.expandedPaths.value.has(g.groupPath)) {
+        walk(g.children);
+      }
+    }
+  }
+  walk(displayGroups.value);
+  return result;
+}
+
+function navigateGroup(delta: number) {
+  const groups = getNavigableGroups();
+  if (groups.length === 0) return;
+  const currentPath = game.currentGroupPath.value;
+  let currentIdx = groups.findIndex(g => g.groupPath === currentPath);
+  if (currentIdx < 0) currentIdx = 0;
+  let newIdx = currentIdx + delta;
+  if (newIdx < 0) newIdx = 0;
+  if (newIdx >= groups.length) newIdx = groups.length - 1;
+  const targetGroup = groups[newIdx];
+  if (targetGroup.groupPath !== currentPath) {
+    selectGroup(targetGroup);
+    nextTick(() => {
+      const selected = groupListRef.value?.querySelector('.group-item.active') as HTMLElement | null;
+      if (selected) {
+        selected.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
+  }
+}
+
+function confirmCurrentMod() {
+  const mods = filteredMods.value;
+  const idx = selectedModIndex.value;
+  if (idx < 0 || idx >= mods.length) return;
+  const mod = mods[idx];
+  applyModSelection(mod);
 }
 
 /**
- * 获取模组搜索输入框的原生 DOM 元素。
+ * 获取统一搜索输入框的原生 DOM 元素。
  * 用于父组件判断焦点是否在搜索输入框内，以便快捷键关闭搜索框。
  * @returns 原生 input 元素，未挂载时返回 null
  */
-function getModSearchInputEl(): HTMLInputElement | null {
-  return (modSearchInputRef.value as any)?.ref ?? null;
+function getSearchInputEl(): HTMLInputElement | null {
+  return (searchInputRef.value as any)?.ref ?? null;
 }
 
-/** 返回分组搜索框是否可见。 */
-function isGroupSearchVisible(): boolean {
-  return groupSearchVisible.value;
+/** 返回统一搜索框是否可见。 */
+function isSearchVisible(): boolean {
+  return searchVisible.value;
 }
 
-/** 返回模组搜索框是否可见。 */
-function isModSearchVisible(): boolean {
-  return modSearchVisible.value;
-}
-
-// 暴露搜索框聚焦方法供父组件通过组件 ref 调用，用于快捷键聚焦
+// 暴露搜索框方法供父组件通过组件 ref 调用，用于快捷键聚焦
 defineExpose({
-  focusGroupSearch,
-  focusModSearch,
-  toggleSearchBars,
-  toggleGroupSearch,
-  toggleModSearch,
-  getGroupSearchInputEl,
-  getModSearchInputEl,
-  isGroupSearchVisible,
-  isModSearchVisible
+  toggleSearch,
+  getSearchInputEl,
+  isSearchVisible
 });
 </script>
 
@@ -1437,21 +1495,6 @@ defineExpose({
           </div>
         </div>
 
-        <!-- 分组搜索框：简单 includes 匹配，高亮匹配的分组项 -->
-        <div class="search-bars-wrapper" :class="{ 'search-visible': groupSearchVisible }" @click.stop>
-          <div class="group-search-bar" :class="{ 'has-match': displayGroups.some(g => isGroupMatched(g.groupName)) }">
-            <el-input
-              ref="groupSearchInputRef"
-              v-model="groupSearchKeyword"
-              :placeholder="t('mods.searchGroupPlaceholder')"
-              clearable
-              :prefix-icon="Search"
-              size="small"
-              @keydown.esc.prevent="hideSearchBars"
-            />
-          </div>
-        </div>
-
         <!--
           分组列表容器（树形结构）
           数据来源：displayGroups 提供分组数据
@@ -1482,7 +1525,7 @@ defineExpose({
             :is-expanded="game.expandedPaths.value.has(group.groupPath)"
             :expanded-paths="game.expandedPaths.value"
             :current-group-path="game.currentGroupPath.value"
-            :search-keyword="groupSearchKeyword"
+            :search-keyword="searchKeyword"
             @select="selectGroup"
             @contextmenu="showGroupContextMenu"
             @toggle-expand="toggleExpand"
@@ -1516,18 +1559,18 @@ defineExpose({
           模组容器
           加载状态：v-loading 在 isLoading 为 true 时显示加载动画
         -->
-        <div v-loading="isLoading" class="mods-container" ref="modsContainerRef" @mousedown="onModsContainerMouseDown">
+        <div v-loading="isLoading || isApplyingSelection" class="mods-container" ref="modsContainerRef" @mousedown="onModsContainerMouseDown" :element-loading-text="isApplyingSelection ? t('Double-click or press F to select a mod') : ''">
           <!--
-            模组搜索框
-            作用：纯前端模糊匹配当前分组内的模组名称
-            交互行为：v-model 绑定 modSearchKeyword，clearable 支持一键清空
+            统一搜索框
+            作用：同时用于分组高亮与当前分组内的模组模糊匹配
+            交互行为：v-model 绑定 searchKeyword，clearable 支持一键清空
           -->
-          <div class="search-bars-wrapper" :class="{ 'search-visible': modSearchVisible }" @click.stop>
-            <div class="mod-search-bar">
+          <div class="search-bars-wrapper" :class="{ 'search-visible': searchVisible }" @click.stop>
+            <div class="search-bar">
               <el-input
-                ref="modSearchInputRef"
-                v-model="modSearchKeyword"
-                :placeholder="t('mods.searchPlaceholder')"
+                ref="searchInputRef"
+                v-model="searchKeyword"
+                :placeholder="t('mods.searchPlaceholderUnified')"
                 clearable
                 :prefix-icon="Search"
                 @keydown.esc.prevent="hideSearchBars"
@@ -1597,7 +1640,7 @@ defineExpose({
                 -->
                 <div class="mod-name">
                   <template v-for="(seg, i) in getModNameSegments(mod.modName)" :key="i">
-                    <span :class="{ 'highlight-char': seg.highlight }">{{ seg.text }}</span>
+                    <span :class="{ 'highlight-text': seg.highlight }">{{ seg.text }}</span>
                   </template>
                 </div>
                 <!-- 
@@ -1716,7 +1759,7 @@ defineExpose({
                 <!-- 模组名称（按搜索关键字分段高亮） -->
                 <div class="list-mod-name">
                   <template v-for="(seg, i) in getModNameSegments(mod.modName)" :key="i">
-                    <span :class="{ 'highlight-char': seg.highlight }">{{ seg.text }}</span>
+                    <span :class="{ 'highlight-text': seg.highlight }">{{ seg.text }}</span>
                   </template>
                 </div>
                 <!-- 状态图标 -->
@@ -2124,10 +2167,6 @@ defineExpose({
   gap: 4px;
 }
 
-.group-search-bar {
-  padding: 8px;
-}
-
 .search-bars-wrapper {
   max-height: 0;
   opacity: 0;
@@ -2294,7 +2333,7 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 0;
+  padding: 4px;
   border-radius: 16px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -2304,35 +2343,49 @@ defineExpose({
 
 .mod-card:hover {
   transform: translateY(-2px);
+  background-color: rgba(255, 255, 255, 0.04);
 }
 
 .mod-card:hover .mod-icon {
-  box-shadow: 0 0 0 2px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.3);
+  box-shadow: 0 0 0 2px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.2);
 }
 
 .mod-card .mod-icon {
-  box-shadow: 0 0 0 2px var(--el-color-primary);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+}
+
+.mod-card.selected {
+  background-color: rgba(64, 158, 255, 0.08);
 }
 
 .mod-card.selected .mod-icon {
   box-shadow: 0 0 0 3px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.3);
+  transform: scale(1.02);
 }
 
-/* 选中状态：紫色描边（后端记录的选中模组） */
+/* 选中且已应用状态：紫色描边+发光 */
+.mod-card.mod-selected {
+  background-color: rgba(168, 85, 247, 0.1);
+}
+
 .mod-card.mod-selected .mod-icon {
-  box-shadow: 0 0 0 3px #a855f7, 0 0 12px rgba(168, 85, 247, 0.4);
+  box-shadow: 0 0 0 3px #a855f7, 0 0 16px rgba(168, 85, 247, 0.5);
 }
 
 .mod-card.disabled .mod-icon {
-  box-shadow: 0 0 0 2px #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.5);
+  opacity: 0.5;
 }
 
 .mod-card.disabled.selected .mod-icon {
   box-shadow: 0 0 0 3px #ef4444, 0 8px 24px rgba(239, 68, 68, 0.3);
+  opacity: 0.6;
 }
 
 .mod-card.disabled {
   opacity: 1;
+  cursor: not-allowed;
 }
 
 .mod-card.none-slot .mod-icon {
@@ -2427,7 +2480,7 @@ defineExpose({
   align-items: center;
   gap: 6px;
   width: 160px;
-  padding: 0;
+  padding: 4px;
   border-radius: 14px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -2438,35 +2491,49 @@ defineExpose({
 
 .list-mod-card:hover {
   transform: translateY(-2px);
+  background-color: rgba(255, 255, 255, 0.04);
 }
 
 .list-mod-card:hover .list-mod-icon {
-  box-shadow: 0 0 0 2px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.3);
+  box-shadow: 0 0 0 2px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.2);
 }
 
 .list-mod-card .list-mod-icon {
-  box-shadow: 0 0 0 2px var(--el-color-primary);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1);
+  transition: all 0.2s ease;
+}
+
+.list-mod-card.selected {
+  background-color: rgba(64, 158, 255, 0.08);
 }
 
 .list-mod-card.selected .list-mod-icon {
   box-shadow: 0 0 0 3px var(--el-color-primary), 0 8px 24px rgba(64, 158, 255, 0.3);
+  transform: scale(1.02);
 }
 
-/* 选中状态：紫色描边（后端记录的选中模组） */
+/* 选中且已应用状态：紫色描边+发光 */
+.list-mod-card.mod-selected {
+  background-color: rgba(168, 85, 247, 0.1);
+}
+
 .list-mod-card.mod-selected .list-mod-icon {
-  box-shadow: 0 0 0 3px #a855f7, 0 0 12px rgba(168, 85, 247, 0.4);
+  box-shadow: 0 0 0 3px #a855f7, 0 0 16px rgba(168, 85, 247, 0.5);
 }
 
 .list-mod-card.disabled .list-mod-icon {
-  box-shadow: 0 0 0 2px #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.5);
+  opacity: 0.5;
 }
 
 .list-mod-card.disabled.selected .list-mod-icon {
   box-shadow: 0 0 0 3px #ef4444, 0 8px 24px rgba(239, 68, 68, 0.3);
+  opacity: 0.6;
 }
 
 .list-mod-card.disabled {
   opacity: 1;
+  cursor: not-allowed;
 }
 
 .list-mod-card.none-slot .list-mod-icon {
@@ -2564,15 +2631,15 @@ defineExpose({
   font-size: 16px;
 }
 
-/* ===== 模组搜索框样式 ===== */
-.mod-search-bar {
+/* ===== 统一搜索框样式 ===== */
+.search-bar {
   padding: 8px;
   margin-bottom: 8px;
 }
 
 /* 搜索关键字高亮字符 */
-.highlight-char {
+.highlight-text {
   color: var(--el-color-primary);
-  font-weight: bold;
+  font-weight: 600;
 }
 </style>

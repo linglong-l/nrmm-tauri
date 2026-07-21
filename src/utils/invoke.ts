@@ -396,6 +396,17 @@ export async function invokeToggleTreeNodeModDisabled(modPath: string): Promise<
 }
 
 /**
+ * 安全禁用树节点（# 目录）下的指定 Mod 目录（仅添加 DISABLED 前缀，不切换）。
+ * 若目标已处于禁用状态，则直接返回原路径。
+ * 对应后端命令：`disable_tree_node_mod`。
+ * @param modPath Mod 绝对路径
+ * @returns 操作后的新模组路径
+ */
+export async function invokeDisableTreeNodeMod(modPath: string): Promise<string> {
+  return invoke('disable_tree_node_mod', { modPath });
+}
+
+/**
  * 切换 # 目录分组的启用/禁用状态。
  * 对应后端命令：`toggle_tree_node_group_disabled`。
  * @param groupPath 分组绝对路径

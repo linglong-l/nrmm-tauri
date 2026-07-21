@@ -272,6 +272,7 @@
   "No mods found": "Моды не найдены",
   "mods.searchPlaceholder": "Поиск модов...",
   "mods.searchGroupPlaceholder": "Поиск групп...",
+  "mods.searchPlaceholderUnified": "Поиск групп или модов...",
   "Please select a group first": "Сначала выберите группу",
   "No valid paths found": "Допустимые пути не найдены",
   "Mods added successfully": "Моды успешно добавлены",
@@ -359,8 +360,8 @@
   "Hotkey conflict: {key} is used by window toggle": "Конфликт горячих клавиш: {key} используется переключением окна",
   "Hotkey updated, old hotkey has been unregistered": "Горячая клавиша обновлена, старая клавиша отменена",
   "settings": {
-    "groupSearchHotkey": "Горячая клавиша поиска группы",
-    "modSearchHotkey": "Горячая клавиша поиска мода",
+    "groupSearchHotkey": "Горячая клавиша поиска 1",
+    "modSearchHotkey": "Горячая клавиша поиска 2",
     "hotkeyActionWindow": "Переключение окна",
     "hotkeyActionGroupSearch": "Поиск группы",
     "hotkeyActionModSearch": "Поиск мода",

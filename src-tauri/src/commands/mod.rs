@@ -649,6 +649,20 @@ pub async fn toggle_tree_node_mod_disabled(
     Ok(result)
 }
 
+/// 安全禁用树节点（# 目录）下的指定模组目录。
+///
+/// 仅对目标目录添加 `DISABLED` 前缀；若已处于禁用状态则直接返回原路径。
+/// 与 `toggle_tree_node_mod_disabled` 不同，本函数不会启用已禁用的模组，也不影响同目录下其他模组。
+///
+/// 参数：
+/// - `mod_path`: 目标模组目录路径。
+///
+/// 返回：操作后的新路径字符串。
+#[tauri::command]
+pub fn disable_tree_node_mod(mod_path: String) -> Result<String, String> {
+    crate::mod_manager::ModManager::disable_tree_node_mod(&mod_path).map_err(|e| e.to_string())
+}
+
 /// 独立执行 Hash 冲突检测。
 ///
 /// 通过 `TaskQueue` 任务类型 `"check_hash_conflicts"` 互斥执行：

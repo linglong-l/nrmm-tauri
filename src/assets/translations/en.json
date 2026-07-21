@@ -286,6 +286,7 @@
   "No mods found": "No mods found",
   "mods.searchPlaceholder": "Search mods...",
   "mods.searchGroupPlaceholder": "Search groups...",
+  "mods.searchPlaceholderUnified": "Search groups or mods...",
   "Please select a group first": "Please select a group first",
   "No valid paths found": "No valid paths found",
   "Mods added successfully": "Mods added successfully",
@@ -373,8 +374,8 @@
   "Hotkey conflict: {key} is used by window toggle": "Hotkey conflict: {key} is used by window toggle",
   "Hotkey updated, old hotkey has been unregistered": "Hotkey updated, old hotkey has been unregistered",
   "settings": {
-    "groupSearchHotkey": "Group Search Hotkey",
-    "modSearchHotkey": "Mod Search Hotkey",
+    "groupSearchHotkey": "Search Hotkey 1",
+    "modSearchHotkey": "Search Hotkey 2",
     "hotkeyActionWindow": "Window Toggle",
     "hotkeyActionGroupSearch": "Group Search",
     "hotkeyActionModSearch": "Mod Search",

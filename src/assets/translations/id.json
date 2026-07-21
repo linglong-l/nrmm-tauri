@@ -272,6 +272,7 @@
   "No mods found": "Tidak ada mod ditemukan",
   "mods.searchPlaceholder": "Cari mod...",
   "mods.searchGroupPlaceholder": "Cari grup...",
+  "mods.searchPlaceholderUnified": "Cari grup atau mod...",
   "Please select a group first": "Silakan pilih grup terlebih dahulu",
   "No valid paths found": "Tidak ada jalur valid ditemukan",
   "Mods added successfully": "Mod berhasil ditambahkan",
@@ -359,8 +360,8 @@
   "Hotkey conflict: {key} is used by window toggle": "Konflik hotkey: {key} digunakan oleh toggle jendela",
   "Hotkey updated, old hotkey has been unregistered": "Hotkey diperbarui, hotkey lama telah dibatalkan",
   "settings": {
-    "groupSearchHotkey": "Pintasan Pencarian Grup",
-    "modSearchHotkey": "Pintasan Pencarian Mod",
+    "groupSearchHotkey": "Pintasan Pencarian 1",
+    "modSearchHotkey": "Pintasan Pencarian 2",
     "hotkeyActionWindow": "Beralih Jendela",
     "hotkeyActionGroupSearch": "Pencarian Grup",
     "hotkeyActionModSearch": "Pencarian Mod",
