@@ -278,7 +278,7 @@ export async function invokeGetModsInGroup(groupPath: string): Promise<ModData[]
  * @returns 操作结果（含成功标志、最新分组列表、可选错误信息）
  */
 export async function invokeUpdateModData(game: TargetGame): Promise<UpdateModDataResult> {
-  return invoke('update_mod_data', { game });
+  return invoke('update_mod_data', { game, knownLibraries: {} });
 }
 
 /**

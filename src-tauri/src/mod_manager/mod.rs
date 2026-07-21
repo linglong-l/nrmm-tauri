@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -2659,6 +2659,7 @@ impl ModManager {
         let mut logs: Vec<LogEntry> = Vec::new();
 
         logs.push(LogEntry::info("Starting Update Mod Data..."));
+        debug!("[update_mod_data] mods_path: {:?}", mods_path);
 
         let mods_path = Path::new(mods_path);
         if !mods_path.exists() || !mods_path.is_dir() {
@@ -2667,6 +2668,7 @@ impl ModManager {
 
         let managed_path = mods_path.join(MANAGED_FOLDER);
         let managed_path_str = managed_path.to_string_lossy().to_string();
+        debug!("[update_mod_data] managed_path: {:?}", managed_path_str);
 
         // 确保 _MANAGED_ 目录存在
         if !managed_path.exists() {
@@ -2681,6 +2683,13 @@ impl ModManager {
             "Found {} groups",
             group_folders.len()
         )));
+        debug!(
+            "[update_mod_data] group folders: {:?}",
+            group_folders
+                .iter()
+                .map(|(p, i)| format!("group_{}: {}", i, p))
+                .collect::<Vec<_>>()
+        );
 
         let known_lib_namespaces: Vec<String> = known_libraries.keys().cloned().collect();
 
@@ -2691,6 +2700,13 @@ impl ModManager {
         )?;
 
         logs.push(LogEntry::info("Error detection completed"));
+        debug!(
+            "[update_mod_data] error detection: {} duplicate libs, {} crash lines, {} other errors, {} missing endif",
+            error_report.duplicate_libs.len(),
+            error_report.crash_lines.len(),
+            error_report.other_errors.len(),
+            error_report.missing_endif_errors.len(),
+        );
 
         if !error_report.duplicate_libs.is_empty() {
             logs.push(LogEntry::warn(format!(
@@ -2706,11 +2722,19 @@ impl ModManager {
             )));
         }
 
-        // 并行处理每个分组
+        // 并行处理每个 group_<index> 分组（# 目录和普通目录不在此处理）
+        debug!(
+            "[update_mod_data] starting parallel processing of {} groups",
+            group_folders.len()
+        );
         group_folders
             .par_iter()
             .for_each(|(group_path, group_index)| {
                 let group_name = format!("group_{}", group_index);
+                debug!(
+                    "[update_mod_data] processing group: {} (path: {})",
+                    group_name, group_path
+                );
 
                 // 删除分组目录下旧的 INI 文件
                 if let Err(e) = Self::delete_group_ini_files(group_path) {
@@ -2727,6 +2751,13 @@ impl ModManager {
                 // 状态保护机制：本流程不会改变任何模组的启用/禁用状态，状态由目录名的 DISABLED 前缀决定
                 match Self::get_mods_on_group(group_path) {
                     Ok(mods) => {
+                        let enabled_count = mods.iter().filter(|m| !m.is_disabled && m.mod_path != "None").count();
+                        debug!(
+                            "[update_mod_data] group {}: {} mods total, {} enabled",
+                            group_name,
+                            mods.len(),
+                            enabled_count
+                        );
                         mods.par_iter().for_each(|mod_data| {
                             // 状态过滤：跳过 None 槽位和禁用模组
                             // None 槽位（mod_path == "None"）是特殊占位符，不需要 INI 处理
@@ -2734,6 +2765,11 @@ impl ModManager {
                             if mod_data.mod_path == "None" || mod_data.is_disabled {
                                 return;
                             }
+
+                            debug!(
+                                "[update_mod_data]   managing mod: {} (real_index: {}) in group {}",
+                                mod_data.mod_path, mod_data.real_index, group_name
+                            );
 
                             // manage_mod 内部会进行路径安全验证，确保仅处理 _MANAGED_/group_xx 下的模组
                             if let Err(e) = Self::manage_mod(
@@ -2753,6 +2789,9 @@ impl ModManager {
             });
 
         // 在所有分组处理完成后，检测启用的 mod 的 hash 冲突
+        debug!(
+            "[update_mod_data] parallel processing done, collecting data for hash conflict check"
+        );
         let mut groups_for_hash_check: Vec<ModGroupData> = Vec::new();
         for (group_path, _group_index) in &group_folders {
             if let Ok(mods) = Self::get_mods_on_group(group_path) {
@@ -2780,6 +2819,10 @@ impl ModManager {
                 groups_for_hash_check.push(group_data);
             }
         }
+        debug!(
+            "[update_mod_data] hash conflict check: {} groups collected",
+            groups_for_hash_check.len()
+        );
 
         let (_hash_conflict_count, hash_logs, hash_conflict_report) =
             Self::check_and_report_hash_conflicts(&managed_path_str, &groups_for_hash_check);
@@ -2801,12 +2844,17 @@ impl ModManager {
     fn delete_group_ini_files(group_path: &str) -> Result<()> {
         let group_path = Path::new(group_path);
         if !group_path.exists() || !group_path.is_dir() {
+            debug!(
+                "[delete_group_ini_files] group path does not exist, skipping: {:?}",
+                group_path
+            );
             return Ok(());
         }
 
         let entries = fs::read_dir(group_path)
             .with_context(|| format!("Failed to read group directory: {:?}", group_path))?;
 
+        let mut deleted_count = 0;
         for entry in entries {
             if let Ok(entry) = entry {
                 let path = entry.path();
@@ -2815,12 +2863,17 @@ impl ModManager {
                         if ext.eq_ignore_ascii_case("ini") {
                             // 删除失败时静默忽略，不影响整体流程
                             let _ = fs::remove_file(&path);
+                            deleted_count += 1;
                         }
                     }
                 }
             }
         }
 
+        debug!(
+            "[delete_group_ini_files] deleted {} .ini files from {:?}",
+            deleted_count, group_path
+        );
         Ok(())
     }
 
@@ -2863,6 +2916,10 @@ impl ModManager {
         fs::write(&ini_path, content)
             .with_context(|| format!("Failed to create group INI: {:?}", ini_path))?;
 
+        debug!(
+            "[create_group_ini] created group INI: {:?} for group_{}",
+            ini_path, group_index
+        );
         Ok(())
     }
 
@@ -2954,6 +3011,11 @@ impl ModManager {
         }
 
         let ini_files = Self::find_ini_files_recursive(mod_path);
+        debug!(
+            "[manage_mod] processing mod: {:?} (group: {}, mod_index: {}, group_index: {}) - found {} .ini files",
+            mod_path, group_folder_name, mod_index, group_index,
+            ini_files.len()
+        );
 
         for ini_file in &ini_files {
             // 备份路径：<ini>.baknrmm
@@ -2968,6 +3030,10 @@ impl ModManager {
                         ini_file, backup_path
                     )
                 })?;
+                debug!(
+                    "[manage_mod] created backup: {:?} -> {:?}",
+                    ini_file, backup_path
+                );
             }
 
             if let Err(e) =

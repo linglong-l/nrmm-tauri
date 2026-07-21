@@ -204,22 +204,58 @@ pub async fn refresh_mod_data(
 /// 参数：
 /// - `_app`: Tauri 应用句柄（当前未使用）。
 /// - `state`: 应用全局状态。
-/// - `mods_path`: Mods 根目录路径。
-/// - `known_libraries`: 已知模组库命名空间映射。
+/// - `game`: 目标游戏标识（如 `"WutheringWaves"`），与 `load_mods`/`refresh_mods` 保持一致。
+/// - `known_libraries`: 已知模组库命名空间映射（可选）。
 ///
 /// 返回：`UpdateModDataResult`，包含成功状态、日志、耗时及各项检测报告。
 #[tauri::command]
 pub async fn update_mod_data(
     app: AppHandle,
     state: State<'_, AppState>,
-    mods_path: String,
-    known_libraries: HashMap<String, String>,
+    game: Option<String>,
+    known_libraries: Option<HashMap<String, String>>,
 ) -> Result<UpdateModDataResult, String> {
+    log::debug!("[update_mod_data] command received - game: {:?}", game);
+
+    // 从 settings 获取 mods_path，与 load_mods/refresh_mods 保持一致
+    let mut settings = state.settings.read().clone();
+    if let Some(g) = game {
+        use crate::process::TargetGame;
+        let target = match g.as_str() {
+            "Wuthering_Waves" | "WutheringWaves" => TargetGame::WutheringWaves,
+            "Genshin_Impact" | "GenshinImpact" => TargetGame::GenshinImpact,
+            "Honkai_Star_Rail" | "HonkaiStarRail" => TargetGame::HonkaiStarRail,
+            "Zenless_Zone_Zero" | "ZenlessZoneZero" => TargetGame::ZenlessZoneZero,
+            "Arknights_Endfield" | "ArknightsEndfield" => TargetGame::ArknightsEndfield,
+            e => {
+                log::error!(
+                    "[update_mod_data] Unknown game string: {:?}, defaulting to None",
+                    e
+                );
+                return Err(format!("Unknown game string: {}", e));
+            }
+        };
+        settings.target_game = target;
+    }
+
+    let mods_path = crate::mod_manager::ModManager::get_mods_path_for_game(&settings, settings.target_game);
+    if mods_path.is_empty() {
+        return Err("Mods path is not configured for the selected game".to_string());
+    }
+    log::debug!("[update_mod_data] mods_path resolved: {:?}", mods_path);
+
+    let known_libraries = known_libraries.unwrap_or_default();
+    log::debug!(
+        "[update_mod_data] known_libraries count: {}",
+        known_libraries.len()
+    );
+
     // 克隆参数以满足 'static 生命周期要求
     let mod_manager = state.mod_manager.clone();
     let mods_path_clone = mods_path.clone();
     let known_libraries_clone = known_libraries.clone();
 
+    log::debug!("[update_mod_data] submitting task to queue...");
     let result = state
         .task_queue
         .run_task("update_mod_data", async move {
@@ -233,10 +269,13 @@ pub async fn update_mod_data(
             TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e),
         })?;
 
+    log::debug!("[update_mod_data] task completed successfully");
+
     // 更新完成后异步触发独立 Hash 冲突检测
     // （`update_mod_data` 内部已包含 hash 检测，但独立检测可保证报告
     //  通过事件推送给前端，并支持后续独立调用入口）
     trigger_hash_conflict_check(&app, &state);
+    log::debug!("[update_mod_data] trigger_hash_conflict_check dispatched");
 
     Ok(result)
 }
