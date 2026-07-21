@@ -163,33 +163,23 @@ const selectedGame = computed({
 });
 
 /**
- * 分组搜索快捷键双向绑定代理。
- * getter 从 settingsStore 读取，setter 调用 setGroupSearchHotkey 写回内存值。
+ * 搜索快捷键双向绑定代理。
+ * getter 从 settingsStore 读取，setter 调用 setSearchHotkey 写回内存值。
  */
-const groupSearchHotkeyProxy = computed({
-  get: () => settingsStore.groupSearchHotkey,
-  set: (val: string) => settingsStore.setGroupSearchHotkey(val),
-});
-
-/**
- * 模组搜索快捷键双向绑定代理。
- * getter 从 settingsStore 读取，setter 调用 setModSearchHotkey 写回内存值。
- */
-const modSearchHotkeyProxy = computed({
-  get: () => settingsStore.modSearchHotkey,
-  set: (val: string) => settingsStore.setModSearchHotkey(val),
+const searchHotkeyProxy = computed({
+  get: () => settingsStore.searchHotkey,
+  set: (val: string) => settingsStore.setSearchHotkey(val),
 });
 
 /**
  * 快捷键冲突检测结果。
- * 基于窗口切换、分组搜索、模组搜索三类快捷键计算冲突列表，
+ * 基于窗口切换与搜索快捷键计算冲突列表，
  * 用于在界面中以 el-alert 形式逐条提示。
  */
 const hotkeyConflicts = computed(() => {
   return validateHotkeys(
     settingsStore.settings?.hotkeyKeyboard ?? 'altW',
-    settingsStore.groupSearchHotkey,
-    settingsStore.modSearchHotkey
+    settingsStore.searchHotkey
   ).conflicts;
 });
 
@@ -953,9 +943,9 @@ watch(
 
             <!--
               快捷键网格区域
-              作用：以响应式 CSS Grid 布局展示 4 个键盘快捷键配置项
+              作用：以响应式 CSS Grid 布局展示键盘快捷键配置项
               布局：默认每行 3 个，窗口缩窄时自适应
-              包含：窗口切换、分组搜索、模组搜索、切换搜索栏
+              包含：窗口切换、搜索
             -->
             <div class="hotkey-grid">
               <!-- 窗口切换键盘热键 -->
@@ -974,27 +964,11 @@ watch(
                   />
                 </el-select>
               </div>
-              <!-- 分组搜索快捷键 -->
+              <!-- 搜索快捷键 -->
               <div class="hotkey-grid-item">
-                <label class="hotkey-grid-label">{{ t('settings.groupSearchHotkey') }}</label>
+                <label class="hotkey-grid-label">{{ t('settings.searchHotkey') }}</label>
                 <el-select
-                  v-model="groupSearchHotkeyProxy"
-                  style="width: 100%"
-                  @change="handleSearchHotkeyChange"
-                >
-                  <el-option
-                    v-for="(label, key) in HOTKEY_KEYBOARD_NAMES"
-                    :key="key"
-                    :label="label"
-                    :value="key"
-                  />
-                </el-select>
-              </div>
-              <!-- 模组搜索快捷键 -->
-              <div class="hotkey-grid-item">
-                <label class="hotkey-grid-label">{{ t('settings.modSearchHotkey') }}</label>
-                <el-select
-                  v-model="modSearchHotkeyProxy"
+                  v-model="searchHotkeyProxy"
                   style="width: 100%"
                   @change="handleSearchHotkeyChange"
                 >
@@ -1024,12 +998,11 @@ watch(
 
             <!--
               快捷键说明提示区域
-              作用：分别说明窗口切换、分组搜索、模组搜索三类快捷键的作用
+              作用：分别说明窗口切换、搜索两类快捷键的作用
             -->
             <div class="hotkey-hint">
               <p>{{ t('settings.hotkeyHintWindow') }}</p>
-              <p>{{ t('settings.hotkeyHintGroupSearch') }}</p>
-              <p>{{ t('settings.hotkeyHintModSearch') }}</p>
+              <p>{{ t('settings.hotkeyHintSearch') }}</p>
             </div>
           </el-form>
         </div>

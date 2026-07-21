@@ -351,6 +351,30 @@ impl ModManager {
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case(DISABLED_PREFIX))
     }
 
+    /// 在模组列表中找到第一个已启用模组的索引。
+    ///
+    /// 用于 # 目录分组的 `previous_selected_mod_on_group` 推导。
+    /// 由于 # 目录分组采用互斥模式（同一时间最多一个启用模组），
+    /// 不需要 `selectedindex` 文件，直接根据当前状态计算即可。
+    ///
+    /// 行为：
+    /// - 找到第一个 `is_disabled == false` 且 `mod_path != "None"` 的模组，返回其在数组中的索引。
+    /// - 索引语义与 `previous_selected_mod_on_group` 一致：包含 None 槽位。
+    /// - 若没有找到启用的模组（全部禁用或仅有 None 槽位），返回 0（指向 None 槽位）。
+    /// - 若 `mods_in_group` 为空（递归子分组无 mod），返回 0。
+    ///
+    /// 参数：
+    /// - `mods_in_group`: 模组列表引用。
+    ///
+    /// 返回：第一个已启用模组的索引（`i32` 类型），未找到时返回 0。
+    pub fn get_enabled_mod_index_in_group(mods_in_group: &[ModData]) -> i32 {
+        mods_in_group
+            .iter()
+            .position(|m| !m.is_disabled && m.mod_path != "None")
+            .map(|idx| idx as i32)
+            .unwrap_or(0)
+    }
+
     /// 校验传入的 Mods 路径是否为合法的 3DMigoto Mods 目录。
     ///
     /// 校验顺序：
@@ -1236,12 +1260,20 @@ impl ModManager {
                     (true, false) => std::cmp::Ordering::Greater,
                     (false, true) => std::cmp::Ordering::Less,
                     _ => {
-                        let a_fav = a.join(FAVORITE_FILE).exists();
-                        let b_fav = b.join(FAVORITE_FILE).exists();
+                        let a_fav_dt = Self::is_favorite(&a.to_string_lossy()).unwrap_or(None);
+                        let b_fav_dt = Self::is_favorite(&b.to_string_lossy()).unwrap_or(None);
+                        let a_fav = a_fav_dt.is_some();
+                        let b_fav = b_fav_dt.is_some();
                         match (a_fav, b_fav) {
                             (true, false) => std::cmp::Ordering::Less,
                             (false, true) => std::cmp::Ordering::Greater,
-                            _ => a_name.to_lowercase().cmp(&b_name.to_lowercase()),
+                            (true, true) => {
+                                match (&a_fav_dt, &b_fav_dt) {
+                                    (Some(ad), Some(bd)) => bd.cmp(ad),
+                                    _ => std::cmp::Ordering::Equal,
+                                }
+                            }
+                            _ => Self::natural_cmp(a_name.to_lowercase().as_str(), b_name.to_lowercase().as_str()),
                         }
                     }
                 }
@@ -1348,8 +1380,13 @@ impl ModManager {
                 }
             }
 
-            // # 目录分组不使用 selectedindex 机制（与 INI 修改无关），直接返回 0
-            let previous_selected_mod_on_group = 0;
+            // # 目录分组根据当前启用的模组推导索引（互斥模式下同一分组最多一个启用模组）
+            // 注意：仅在 mods_in_group 非空时设置（递归分组可能没有 mods）
+            let previous_selected_mod_on_group = if !mods_in_group.is_empty() {
+                Self::get_enabled_mod_index_in_group(&mods_in_group)
+            } else {
+                0
+            };
 
             let mut children: Vec<ModGroupData> = Vec::new();
             for child_path in &info.child_paths {
@@ -1681,31 +1718,35 @@ impl ModManager {
         }
 
         // 2. 再排序 ModData 向量（用于显示顺序，与 NRMM 排序逻辑一致）
-        //    排序规则：禁用状态 → 收藏状态 → 名称字母序
+        //    排序规则：禁用状态 → 收藏状态 → 最新收藏优先 → 自然排序
         //    注意：排序仅改变数组顺序，不改变已分配的 real_index 值
         mod_datas.sort_by(|a, b| {
-            let a_name = Path::new(&a.mod_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            let b_name = Path::new(&b.mod_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            let a_disabled = Self::is_disabled_name(a_name);
-            let b_disabled = Self::is_disabled_name(b_name);
-            match (a_disabled, b_disabled) {
-                // 启用 < 禁用
+            match (a.is_disabled, b.is_disabled) {
                 (true, false) => std::cmp::Ordering::Greater,
                 (false, true) => std::cmp::Ordering::Less,
                 _ => {
-                    let a_fav = Path::new(&a.mod_path).join(FAVORITE_FILE).exists();
-                    let b_fav = Path::new(&b.mod_path).join(FAVORITE_FILE).exists();
+                    let a_fav = a.favorite_date_time.is_some();
+                    let b_fav = b.favorite_date_time.is_some();
                     match (a_fav, b_fav) {
-                        // 收藏 < 未收藏
                         (true, false) => std::cmp::Ordering::Less,
                         (false, true) => std::cmp::Ordering::Greater,
-                        _ => a_name.to_lowercase().cmp(&b_name.to_lowercase()),
+                        (true, true) => {
+                            match (&a.favorite_date_time, &b.favorite_date_time) {
+                                (Some(ad), Some(bd)) => bd.cmp(ad),
+                                _ => std::cmp::Ordering::Equal,
+                            }
+                        }
+                        _ => {
+                            let a_name = Path::new(&a.mod_path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("");
+                            let b_name = Path::new(&b.mod_path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("");
+                            Self::natural_cmp(a_name.to_lowercase().as_str(), b_name.to_lowercase().as_str())
+                        }
                     }
                 }
             }
@@ -1818,26 +1859,32 @@ impl ModManager {
         }
 
         mod_datas.sort_by(|a, b| {
-            let a_name = Path::new(&a.mod_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            let b_name = Path::new(&b.mod_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            let a_disabled = Self::is_disabled_name(a_name);
-            let b_disabled = Self::is_disabled_name(b_name);
-            match (a_disabled, b_disabled) {
+            match (a.is_disabled, b.is_disabled) {
                 (true, false) => std::cmp::Ordering::Greater,
                 (false, true) => std::cmp::Ordering::Less,
                 _ => {
-                    let a_fav = Path::new(&a.mod_path).join(FAVORITE_FILE).exists();
-                    let b_fav = Path::new(&b.mod_path).join(FAVORITE_FILE).exists();
+                    let a_fav = a.favorite_date_time.is_some();
+                    let b_fav = b.favorite_date_time.is_some();
                     match (a_fav, b_fav) {
                         (true, false) => std::cmp::Ordering::Less,
                         (false, true) => std::cmp::Ordering::Greater,
-                        _ => a_name.to_lowercase().cmp(&b_name.to_lowercase()),
+                        (true, true) => {
+                            match (&a.favorite_date_time, &b.favorite_date_time) {
+                                (Some(ad), Some(bd)) => bd.cmp(ad),
+                                _ => std::cmp::Ordering::Equal,
+                            }
+                        }
+                        _ => {
+                            let a_name = Path::new(&a.mod_path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("");
+                            let b_name = Path::new(&b.mod_path)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("");
+                            Self::natural_cmp(a_name.to_lowercase().as_str(), b_name.to_lowercase().as_str())
+                        }
                     }
                 }
             }
@@ -1881,6 +1928,53 @@ impl ModManager {
                     .cmp(&b.group_name.to_lowercase()),
             }
         });
+    }
+
+    /// 自然排序比较函数。
+    ///
+    /// 将字符串按数字和非数字段分段比较，数字段按数值大小比较，非数字段按字符比较。
+    /// 例如："mod1", "mod2", "mod10" 会正确排序为 mod1 < mod2 < mod10。
+    fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+        let a_chars: Vec<char> = a.chars().collect();
+        let b_chars: Vec<char> = b.chars().collect();
+        let mut a_idx = 0;
+        let mut b_idx = 0;
+
+        while a_idx < a_chars.len() && b_idx < b_chars.len() {
+            let a_is_digit = a_chars[a_idx].is_ascii_digit();
+            let b_is_digit = b_chars[b_idx].is_ascii_digit();
+
+            match (a_is_digit, b_is_digit) {
+                (true, true) => {
+                    let mut a_num = String::new();
+                    while a_idx < a_chars.len() && a_chars[a_idx].is_ascii_digit() {
+                        a_num.push(a_chars[a_idx]);
+                        a_idx += 1;
+                    }
+                    let mut b_num = String::new();
+                    while b_idx < b_chars.len() && b_chars[b_idx].is_ascii_digit() {
+                        b_num.push(b_chars[b_idx]);
+                        b_idx += 1;
+                    }
+                    let a_val: u64 = a_num.parse().unwrap_or(0);
+                    let b_val: u64 = b_num.parse().unwrap_or(0);
+                    if a_val != b_val {
+                        return a_val.cmp(&b_val);
+                    }
+                }
+                (false, false) => {
+                    if a_chars[a_idx] != b_chars[b_idx] {
+                        return a_chars[a_idx].cmp(&b_chars[b_idx]);
+                    }
+                    a_idx += 1;
+                    b_idx += 1;
+                }
+                (true, false) => return std::cmp::Ordering::Less,
+                (false, true) => return std::cmp::Ordering::Greater,
+            }
+        }
+
+        a_chars.len().cmp(&b_chars.len())
     }
 
     /// 验证目录名称是否符合平台文件系统命名规范。
@@ -3925,6 +4019,74 @@ mod tests {
 
         let success = LogEntry::success("success");
         assert_eq!(success.level, "success");
+    }
+
+    /// 辅助函数：构造测试用 ModData。
+    fn make_test_mod(mod_path: &str, is_disabled: bool) -> ModData {
+        ModData {
+            mod_path: mod_path.to_string(),
+            icon_path: None,
+            mod_name: mod_path.to_string(),
+            real_index: 1,
+            is_old_auto_fixed: false,
+            is_syntax_error_removed: false,
+            is_unoptimized: false,
+            is_namespaced: false,
+            is_disabled,
+            favorite_date_time: None,
+        }
+    }
+
+    #[test]
+    fn test_get_enabled_mod_index_in_group_empty() {
+        // 空数组应返回 0
+        let mods: Vec<ModData> = Vec::new();
+        let result = ModManager::get_enabled_mod_index_in_group(&mods);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_get_enabled_mod_index_in_group_none_only() {
+        // 仅 None 槽位时应返回 0
+        let mods = vec![make_test_mod("None", false)];
+        let result = ModManager::get_enabled_mod_index_in_group(&mods);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_get_enabled_mod_index_in_group_all_disabled() {
+        // 所有模组都禁用时应返回 0
+        let mods = vec![
+            make_test_mod("None", false),
+            make_test_mod("/path/mod1", true),
+            make_test_mod("/path/mod2", true),
+        ];
+        let result = ModManager::get_enabled_mod_index_in_group(&mods);
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_get_enabled_mod_index_in_group_with_enabled() {
+        // 存在启用模组时应返回其索引（包含 None 槽位）
+        let mods = vec![
+            make_test_mod("None", false),
+            make_test_mod("/path/mod1", true), // 禁用
+            make_test_mod("/path/mod2", false), // 启用 - 应返回索引 2
+            make_test_mod("/path/mod3", false), // 启用 - 不应被选择
+        ];
+        let result = ModManager::get_enabled_mod_index_in_group(&mods);
+        assert_eq!(result, 2);
+    }
+
+    #[test]
+    fn test_get_enabled_mod_index_in_group_first_mod_enabled() {
+        // 第一个非 None 模组启用时应返回索引 1
+        let mods = vec![
+            make_test_mod("None", false),
+            make_test_mod("/path/mod1", false), // 启用 - 应返回索引 1
+        ];
+        let result = ModManager::get_enabled_mod_index_in_group(&mods);
+        assert_eq!(result, 1);
     }
 
     #[test]

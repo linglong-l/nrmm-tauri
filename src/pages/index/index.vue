@@ -270,28 +270,26 @@ function handleSearchHotkey(event: KeyboardEvent): void {
   });
 
   // 诊断日志：记录按键输入和当前配置
-  log.debug('Pressed hotkey', {
-    pressedHotkey,
-    groupSearch: settingsStore.groupSearchHotkey,
-    modSearch: settingsStore.modSearchHotkey,
-    windowHotkey: settingsStore.hotkeyKeyboard
-  });
+    log.debug('Pressed hotkey', {
+      pressedHotkey,
+      searchHotkey: settingsStore.searchHotkey,
+      windowHotkey: settingsStore.hotkeyKeyboard
+    });
 
-  // 检查是否与全局热键冲突 — 告知用户
-  if (pressedHotkey === settingsStore.hotkeyKeyboard.toLowerCase()) {
-    log.warn('Conflict with window hotkey', { reason: `Search hotkey ${pressedHotkey} conflicts with window toggle hotkey`, impact: 'Search hotkey blocked to prevent accidental window toggle' });
-    ElMessage.warning(t('Hotkey conflict: {key} is used by window toggle', { key: pressedHotkey }));
-    return;
-  }
+    // 检查是否与全局热键冲突 — 告知用户
+    if (pressedHotkey === settingsStore.hotkeyKeyboard.toLowerCase()) {
+      log.warn('Conflict with window hotkey', { reason: `Search hotkey ${pressedHotkey} conflicts with window toggle hotkey`, impact: 'Search hotkey blocked to prevent accidental window toggle' });
+      ElMessage.warning(t('Hotkey conflict: {key} is used by window toggle', { key: pressedHotkey }));
+      return;
+    }
 
-  // 匹配任意搜索快捷键（统一小写比较）— 触发统一搜索框 toggle
-  const searchHotkeys = [settingsStore.groupSearchHotkey, settingsStore.modSearchHotkey].map(k => k.toLowerCase());
-  if (searchHotkeys.includes(pressedHotkey)) {
-    event.preventDefault();
-    log.debug('Triggering unified search');
-    modsTabRef.value?.toggleSearch();
-    return;
-  }
+    // 匹配搜索快捷键（统一小写比较）— 触发统一搜索框 toggle
+    if (pressedHotkey === settingsStore.searchHotkey.toLowerCase()) {
+      event.preventDefault();
+      log.debug('Triggering unified search');
+      modsTabRef.value?.toggleSearch();
+      return;
+    }
 
   log.debug('Ignored: no matching search hotkey', { pressedHotkey });
 }

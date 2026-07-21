@@ -893,14 +893,14 @@ pub async fn refresh_single_group(
             ModManager::get_mods_on_group(&group_path_str).map_err(|e| e.to_string())?
         };
         let mods_count = mods_in_group.len();
-        // # 目录分组不使用 selectedindex 机制，跳过读取
-        let previous_selected_mod_on_group = if dir_name.starts_with('#')
+        // # 目录分组根据当前启用的模组推导索引（互斥模式下同一分组最多一个启用模组）
+        let is_hash_group = dir_name.starts_with('#')
             || (ModManager::is_disabled_name(&dir_name)
                 && dir_name[crate::mod_manager::DISABLED_PREFIX.len()..]
                     .trim_start_matches('_')
-                    .starts_with('#'))
-        {
-            0
+                    .starts_with('#'));
+        let previous_selected_mod_on_group = if is_hash_group {
+            ModManager::get_enabled_mod_index_in_group(&mods_in_group)
         } else {
             ModManager::get_selected_mod_in_group(&group_path_str, mods_count).unwrap_or(0)
         };

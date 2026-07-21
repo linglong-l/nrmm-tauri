@@ -609,8 +609,7 @@ export function getDefaultSettings(): AppSettings {
   return {
     hotkeyKeyboard: CONSTANTS.defaultHotkeyKeyboard as HotkeyKeyboard,
     hotkeyGamepad: CONSTANTS.defaultHotkeyGamepad as HotkeyGamepad,
-    groupSearchHotkey: 'altG',
-    modSearchHotkey: 'altF',
+    searchHotkey: 'altF',
     targetProcessWuwa: CONSTANTS.defaultTargetProcesses.wuwa,
     targetProcessGenshin: CONSTANTS.defaultTargetProcesses.genshin,
     targetProcessHsr: CONSTANTS.defaultTargetProcesses.hsr,

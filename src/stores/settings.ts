@@ -35,10 +35,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const hotkeyKeyboard = computed(() => settings.value.hotkeyKeyboard);
   /** 当前手柄热键配置（如 none / lsB） */
   const hotkeyGamepad = computed(() => settings.value.hotkeyGamepad);
-  /** 分组搜索快捷键（窗口内绑定），未设置时回退为 altG */
-  const groupSearchHotkey = computed(() => settings.value?.groupSearchHotkey ?? 'altG');
-  /** 模组搜索快捷键（窗口内绑定），未设置时回退为 altF */
-  const modSearchHotkey = computed(() => settings.value?.modSearchHotkey ?? 'altF');
+  /** 搜索快捷键（窗口内绑定），未设置时回退为 altF */
+  const searchHotkey = computed(() => settings.value?.searchHotkey ?? 'altF');
   /** 整体缩放比例（影响 UI 元素大小） */
   const overallScale = computed(() => settings.value.overallScale);
   /** 背景透明度（0~1，1 为完全不透明） */
@@ -72,17 +70,10 @@ export const useSettingsStore = defineStore('settings', () => {
     settings.value.hotkeyGamepad = value;
   }
 
-  /** 设置分组搜索快捷键。仅修改内存值，需另行保存。 */
-  function setGroupSearchHotkey(value: string) {
+  /** 设置搜索快捷键。仅修改内存值，需另行保存。 */
+  function setSearchHotkey(value: string) {
     if (settings.value) {
-      settings.value.groupSearchHotkey = value;
-    }
-  }
-
-  /** 设置模组搜索快捷键。仅修改内存值，需另行保存。 */
-  function setModSearchHotkey(value: string) {
-    if (settings.value) {
-      settings.value.modSearchHotkey = value;
+      settings.value.searchHotkey = value;
     }
   }
 
@@ -348,8 +339,7 @@ export const useSettingsStore = defineStore('settings', () => {
     isLoaded,
     hotkeyKeyboard,
     hotkeyGamepad,
-    groupSearchHotkey,
-    modSearchHotkey,
+    searchHotkey,
     overallScale,
     bgTransparency,
     layoutMode,
@@ -363,8 +353,7 @@ export const useSettingsStore = defineStore('settings', () => {
     targetGame,
     setHotkeyKeyboard,
     setHotkeyGamepad,
-    setGroupSearchHotkey,
-    setModSearchHotkey,
+    setSearchHotkey,
     setOverallScale,
     setBgTransparency,
     setLayoutMode,

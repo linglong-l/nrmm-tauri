@@ -1,7 +1,7 @@
 /**
  * 快捷键校验工具模块
  *
- * 提供快捷键冲突检测功能，确保窗口切换、分组搜索、模组搜索三类快捷键之间不重复。
+ * 提供快捷键冲突检测功能，确保窗口切换与搜索快捷键之间不重复。
  */
 
 /** 快捷键冲突信息 */
@@ -21,41 +21,22 @@ export interface HotkeyValidationResult {
 }
 
 /**
- * 校验三类快捷键之间是否存在冲突。
+ * 校验窗口切换与搜索快捷键之间是否存在冲突。
  *
  * @param windowHotkey 窗口切换快捷键值（如 "altW"）
- * @param groupSearchHotkey 分组搜索快捷键值（如 "altG"）
- * @param modSearchHotkey 模组搜索快捷键值（如 "altF"）
+ * @param searchHotkey 搜索快捷键值（如 "altF"）
  * @returns 校验结果，含冲突信息
  */
 export function validateHotkeys(
   windowHotkey: string,
-  groupSearchHotkey: string,
-  modSearchHotkey: string
+  searchHotkey: string
 ): HotkeyValidationResult {
   const conflicts: HotkeyConflict[] = [];
 
-  // 检测窗口切换与分组搜索冲突
-  if (windowHotkey !== 'none' && windowHotkey === groupSearchHotkey) {
+  if (windowHotkey !== 'none' && windowHotkey === searchHotkey) {
     conflicts.push({
-      keys: [windowHotkey, groupSearchHotkey],
-      message: `快捷键冲突：${hotkeyToDisplayName(windowHotkey)} 被窗口切换和分组搜索同时使用`,
-    });
-  }
-
-  // 检测窗口切换与模组搜索冲突
-  if (windowHotkey !== 'none' && windowHotkey === modSearchHotkey) {
-    conflicts.push({
-      keys: [windowHotkey, modSearchHotkey],
-      message: `快捷键冲突：${hotkeyToDisplayName(windowHotkey)} 被窗口切换和模组搜索同时使用`,
-    });
-  }
-
-  // 检测分组搜索与模组搜索冲突
-  if (groupSearchHotkey === modSearchHotkey) {
-    conflicts.push({
-      keys: [groupSearchHotkey, modSearchHotkey],
-      message: `快捷键冲突：${hotkeyToDisplayName(groupSearchHotkey)} 被分组搜索和模组搜索同时使用`,
+      keys: [windowHotkey, searchHotkey],
+      message: `快捷键冲突：${hotkeyToDisplayName(windowHotkey)} 被窗口切换和搜索同时使用`,
     });
   }
 

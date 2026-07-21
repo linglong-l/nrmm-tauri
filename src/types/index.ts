@@ -234,10 +234,8 @@ export interface AppSettings {
   hotkeyKeyboard: HotkeyKeyboard;
   /** 手柄热键 */
   hotkeyGamepad: HotkeyGamepad;
-  /** 分组搜索快捷键（窗口内绑定） */
-  groupSearchHotkey: string;
-  /** 模组搜索快捷键（窗口内绑定） */
-  modSearchHotkey: string;
+  /** 搜索快捷键（窗口内绑定） */
+  searchHotkey: string;
   /** 鸣潮目标进程名 */
   targetProcessWuwa: string;
   /** 原神目标进程名 */
