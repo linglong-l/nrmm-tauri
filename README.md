@@ -44,12 +44,15 @@
 ### 核心模块
 
 - **mod_manager**：模组扫描、启用/禁用、分组管理核心逻辑
+- **mod_manager/game_interaction**：NRMM 游戏交互协议（按键序列）
 - **commands**：Tauri IPC 命令注册与处理
 - **settings**：应用设置持久化（JSON 文件）
 - **window_manager**：窗口位置、尺寸、置顶状态管理
 - **hotkey**：全局热键注册与处理
 - **file_watcher**：文件系统监听（500ms 防抖）
 - **process**：目标游戏进程检测
+- **keypress_simulator**：通用键鼠模拟（无业务逻辑）
+- **task_queue**：异步任务队列（保证全局单一性）
 
 ## 环境要求
 
@@ -232,10 +235,16 @@ xxmi-nrmm/
 │   ├── types/                    # TypeScript 类型定义
 │   │   └── index.ts              # 全局类型定义
 │   ├── utils/                    # 工具函数
+│   │   ├── cache.ts              # localStorage 缓存工具
 │   │   ├── constants.ts          # 常量定义
+│   │   ├── debounce.ts           # 通用防抖函数
 │   │   ├── events.ts             # 事件系统
+│   │   ├── format.ts             # 格式化工具（耗时等）
+│   │   ├── fuzzyMatch.ts         # 子序列模糊匹配
+│   │   ├── hotkeyValidator.ts    # 快捷键冲突检测
 │   │   ├── index.ts              # 工具导出
-│   │   └── invoke.ts             # Tauri 后端调用封装
+│   │   ├── invoke.ts             # Tauri 后端调用封装
+│   │   └── logger.ts             # 前端日志工具
 │   ├── views/                    # 视图组件
 │   │   ├── SettingsView.vue      # 设置页面
 │   │   └── index.ts              # 视图导出
@@ -267,11 +276,13 @@ xxmi-nrmm/
 │   │   ├── init_xx/              # XXMI 初始化与日志模块
 │   │   │   ├── logger.rs
 │   │   │   └── mod.rs
-│   │   ├── keypress_simulator/   # 按键模拟模块
+│   │   ├── keypress_simulator/   # 通用键鼠模拟模块（无业务逻辑）
 │   │   │   └── mod.rs
 │   │   ├── mod_manager/          # 模组管理核心模块
-│   │   │   └── mod.rs            # 扫描、启用/禁用、分组管理
-│   │   ├── process/              # 进程检测模块
+│   │   │   ├── mod.rs            # 扫描、启用/禁用、分组管理
+│   │   │   ├── path_utils.rs     # 路径操作工具
+│   │   │   └── game_interaction.rs # NRMM 游戏交互协议（按键序列）
+│   │   ├── process/              # 进程检测模块（纯工具）
 │   │   │   └── mod.rs
 │   │   ├── settings/             # 设置持久化模块
 │   │   │   └── mod.rs
@@ -296,6 +307,7 @@ xxmi-nrmm/
 ├── tsconfig.node.json            # TypeScript Node 配置
 ├── vite.config.ts                # Vite 配置
 ├── .gitignore                    # Git 忽略配置
+├── ARCHITECTURE.md               # 项目架构文档（详见 src-tauri/ARCHITECTURE.md）
 ├── LICENSE                       # 许可证文件
 └── README.md                     # 项目文档（本文档）
 ```

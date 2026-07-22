@@ -1646,10 +1646,20 @@ pub async fn simulate_key_select_mod(
     mod_index: i32,
 ) -> Result<(), String> {
     state
-        .keypress_simulator
-        .select_mod_key_sequence(group_index, mod_index)
+        .task_queue
+        .run_task("simulate_key_select_mod", async move {
+            crate::mod_manager::game_interaction::select_mod_key_sequence(
+                group_index,
+                mod_index,
+            )
+            .await
+        })
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| match e {
+            TaskQueueError::TaskCancelled(t) => format!("Task '{}' was cancelled", t),
+            TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e),
+        })?;
+    Ok(())
 }
 
 /// 检查单个 INI 文件的语法错误。

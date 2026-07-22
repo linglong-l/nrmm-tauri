@@ -37,6 +37,7 @@ import {
 import { validateHotkeys } from '../utils/hotkeyValidator';
 import { EventNames, eventManager } from '../utils/events';
 import { createLogger } from '../utils/logger';
+import { createDebounce } from '../utils/debounce';
 import { getVersion } from '@tauri-apps/api/app';
 
 const { t } = useI18n();
@@ -244,24 +245,6 @@ function getDefaultTargetProcess(game: TargetGame): string {
     default:
       return '';
   }
-}
-
-/**
- * 创建防抖函数
- * @param fn 需要防抖的异步函数
- * @param delay 延迟毫秒
- */
-function createDebounce<T extends (...args: any[]) => Promise<void>>(
-  fn: T,
-  delay: number
-): (...args: Parameters<T>) => void {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  return (...args: Parameters<T>) => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      fn(...args);
-    }, delay);
-  };
 }
 
 /**

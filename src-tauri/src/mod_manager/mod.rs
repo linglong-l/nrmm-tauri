@@ -12,6 +12,7 @@
 //! - 模组目录名以 `DISABLED` 前缀表示该模组处于禁用状态。
 
 pub mod path_utils;
+pub mod game_interaction;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -66,8 +67,9 @@ const MOD_NAME_FILE: &str = "modname";
 const SELECTED_INDEX_FILE: &str = "selectedindex";
 
 /// 被 NRMM 管理修改的 INI 文件的原始备份扩展名。
-/// 第一次修改 INI 时会生成 `<ini>.baknrmm` 备份，便于回滚。
-const MANAGED_BACKUP_EXT: &str = "baknrmm";
+/// 第一次修改 INI 时会生成 `<ini>.ini_managed_backup` 备份，便于回滚。
+/// 扩展名与 NRMM 原始项目保持一致（NRMM 使用 `ini_managed_backup`）。
+const MANAGED_BACKUP_EXT: &str = "ini_managed_backup";
 
 /// 分组「None 槽位」专用图标文件名。每个分组第一个槽位为 None（不启用任何模组），
 /// 若分组目录下存在此文件，则作为该槽位的图标。
@@ -931,8 +933,75 @@ impl ModManager {
             return Err(e).with_context(|| format!("Failed to rename mod: {:?} -> {:?}", path, new_path));
         }
 
+        // 启用时递归去除内部嵌套的 DISABLED 前缀
+        if is_disabled {
+            if let Ok(stripped) = Self::strip_disabled_prefixes_deep(&new_path) {
+                if stripped > 0 {
+                    info!("Stripped {} DISABLED prefixes inside {:?}", stripped, new_path);
+                }
+            }
+        }
+
         // 返回操作后的禁用状态（与原状态相反）
         Ok(!is_disabled)
+    }
+
+    /// 深度优先遍历目录树，递归移除所有文件/目录名中的 DISABLED 前缀。
+    ///
+    /// 此函数会递归处理所有嵌套内容。若文件/目录名恰好等于 `DISABLED`（不区分大小写）
+    /// 本身（无后续内容），则跳过不处理，避免误删除名称为 DISABLED 的文件/目录。
+    ///
+    /// 参数：
+    /// - `dir`: 要处理的目录路径（已去除顶层 DISABLED 前缀后的路径）。
+    ///
+    /// 返回：成功处理的条目数量。
+    pub fn strip_disabled_prefixes_deep(dir: &Path) -> Result<usize> {
+        let mut count = 0;
+
+        if !dir.exists() || !dir.is_dir() {
+            return Ok(0);
+        }
+
+        // 收集当前目录下的条目（避免遍历时修改目录导致问题）
+        let entries: Vec<PathBuf> = fs::read_dir(dir)
+            .with_context(|| format!("Failed to read directory: {:?}", dir))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .collect();
+
+        for entry_path in entries {
+            let name = entry_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+
+            // 名称等于 DISABLED（大小写不敏感）时跳过
+            if name.eq_ignore_ascii_case(DISABLED_PREFIX) {
+                continue;
+            }
+
+            if Self::is_disabled_name(name) {
+                let new_name = name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string();
+                let parent = entry_path.parent().unwrap_or(dir);
+                let new_path = parent.join(&new_name);
+
+                if !new_path.exists() {
+                    fs::rename(&entry_path, &new_path).with_context(|| {
+                        format!("Failed to rename {:?} -> {:?}", entry_path, new_path)
+                    })?;
+                    count += 1;
+
+                    // 如果是目录，递归处理
+                    if new_path.is_dir() {
+                        count += Self::strip_disabled_prefixes_deep(&new_path)?;
+                    }
+                }
+            } else if entry_path.is_dir() {
+                // 非禁用目录，仍需递归处理内部
+                count += Self::strip_disabled_prefixes_deep(&entry_path)?;
+            }
+        }
+
+        Ok(count)
     }
 
     /// 判断给定路径是否位于某个 # 目录下（向上遍历查找最近的 # 开头目录）。
@@ -1032,6 +1101,13 @@ impl ModManager {
             }
             fs::rename(path, &new_path)
                 .with_context(|| format!("Failed to rename mod: {:?} -> {:?}", path, new_path))?;
+
+            // 启用时递归去除内部嵌套的 DISABLED 前缀
+            if let Ok(stripped) = Self::strip_disabled_prefixes_deep(&new_path) {
+                if stripped > 0 {
+                    info!("Stripped {} DISABLED prefixes inside {:?}", stripped, new_path);
+                }
+            }
 
             Ok((new_path.to_string_lossy().to_string(), false))
         } else {
@@ -3244,6 +3320,8 @@ impl ModManager {
     /// - `if $managed_slot_id == ...` / `endif` 条件块
     /// - `$\\modmanageragl\\group_*` 相关引用
     ///
+    /// 处理前会先尝试从 `.ini_managed_backup` 备份恢复原始文件。
+    ///
     /// 参数：
     /// - `paths`: INI 文件路径列表。
     ///
@@ -3255,6 +3333,9 @@ impl ModManager {
                 warn!("INI file does not exist: {:?}", path);
                 continue;
             }
+
+            // 先尝试从 ini_managed_backup 恢复原始文件
+            Self::try_restore_from_managed_backup(path);
 
             let content = fs::read_to_string(path)
                 .with_context(|| format!("Failed to read INI file: {:?}", path))?;
@@ -3271,6 +3352,36 @@ impl ModManager {
         Ok(true)
     }
 
+    /// 尝试从管理的备份文件恢复原始 INI。
+    ///
+    /// 检查 `<ini>.ini_managed_backup` 是否存在，若存在则复制覆盖原文件。
+    /// 这确保了在 Restore Zone 处理前文件已恢复到 NRMM 修改前的状态。
+    ///
+    /// 参数：
+    /// - `ini_path`: INI 文件路径。
+    fn try_restore_from_managed_backup(ini_path: &Path) {
+        let backup_path_str = format!(
+            "{}.{}",
+            ini_path.to_string_lossy(),
+            MANAGED_BACKUP_EXT
+        );
+        let backup_path = Path::new(&backup_path_str);
+
+        if backup_path.exists() {
+            match fs::copy(backup_path, ini_path) {
+                Ok(_) => {
+                    info!("Restored INI from backup: {:?} -> {:?}", backup_path, ini_path);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to restore INI from backup {:?}: {}",
+                        backup_path, e
+                    );
+                }
+            }
+        }
+    }
+
     /// 从 INI 文件内容中移除 xxmi 专属语句。
     ///
     /// 移除规则：
@@ -3285,37 +3396,147 @@ impl ModManager {
     fn remove_xxmi_ini_statements(content: &str) -> String {
         let lines: Vec<&str> = content.lines().collect();
         let mut result: Vec<String> = Vec::new();
-        let mut in_xxmi_block = false;
+        let mut if_stack: Vec<String> = Vec::new();
 
         for line in lines {
             let trimmed = line.trim();
+            let trimmed_lower = trimmed.to_lowercase();
 
-            if trimmed.starts_with("global $managed_slot_id") {
+            // 新段开始时重置 if 栈（与 NRMM 行为一致）
+            if trimmed.starts_with('[') {
+                if_stack.clear();
+                result.push(line.to_string());
                 continue;
             }
 
-            if trimmed.starts_with("if $managed_slot_id") {
-                in_xxmi_block = true;
+            // 移除 NRMM 注释标记行
+            if trimmed.starts_with(';')
+                && (trimmed_lower.contains("no reload mod manager")
+                    || trimmed_lower.contains("\";-;\" are errored")
+                    || trimmed_lower.contains("\";+;\" are disabled keys")
+                    || trimmed_lower.contains("errored conditional blocks")
+                    || trimmed_lower.contains("if certain syntax is only available"))
+            {
                 continue;
             }
 
-            if in_xxmi_block && trimmed == "endif" {
-                in_xxmi_block = false;
+            // 移除 managed_slot_id 变量声明
+            if trimmed_lower.replace(' ', "").starts_with("global$managed_slot_id=") {
                 continue;
             }
 
-            if in_xxmi_block {
-                continue;
+            // 清理 condition= 行中的管理表达式
+            match Self::sanitize_condition_line(line) {
+                Some(processed) => {
+                    result.push(processed);
+                    continue;
+                }
+                None => {} // 非 condition 行，继续后续检查
             }
 
+            // 处理 manager if 行（使用栈追踪配对）
+            if trimmed_lower.starts_with("if ") {
+                if_stack.push(trimmed_lower.clone());
+                if trimmed_lower.replace(' ', "")
+                    .contains(r"if$managed_slot_id==$\modmanageragl\group_")
+                {
+                    continue; // 移除 manager if 行
+                }
+            }
+
+            // 处理与 manager if 配对的 endif
+            if trimmed_lower == "endif" {
+                if let Some(if_line) = if_stack.pop() {
+                    if if_line.replace(' ', "")
+                        .contains(r"if$managed_slot_id==$\modmanageragl\group_")
+                    {
+                        continue; // 移除配对的 endif
+                    }
+                }
+            }
+
+            // 移除包含 $\modmanageragl\ 的行（剩余的未被 condition= 处理的行）
             if trimmed.contains(r"$\modmanageragl\") {
                 continue;
             }
 
-            result.push(line.to_string());
+            // 恢复缩进：移除前 4 空格（NRMM 行为）
+            result.push(Self::remove_first_four_spaces(line));
         }
 
-        result.join("\n")
+        result.into_iter()
+            .filter(|l| !l.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// 清理 condition= 行中的 NRMM 管理表达式。
+    ///
+    /// 从 `condition = expression && $managed_slot_id == $\modmanageragl\group_1\active_slot`
+    /// 中移除管理部分，保留原始条件表达式。若无剩余条件则返回空字符串。
+    ///
+    /// 参数：
+    /// - `line`: 原始行文本。
+    ///
+    /// 返回：清理后的行文本，若整行被移除则返回 None。
+    fn sanitize_condition_line(line: &str) -> Option<String> {
+        let trimmed_lower = line.trim().to_lowercase().replace(' ', "");
+        let is_disabled_comment = trimmed_lower.starts_with(";-;condition=");
+        let is_enabled_comment = trimmed_lower.starts_with(";+;condition=");
+        let is_normal = trimmed_lower.starts_with("condition=");
+
+        if !is_disabled_comment && !is_enabled_comment && !is_normal {
+            return None; // 非 condition 行，不处理
+        }
+
+        let eq_pos = line.find('=')?;
+        let expression = line[eq_pos + 1..].trim();
+
+        // 移除管理表达式
+        let sanitized = Self::sanitize_key_condition_expression(expression);
+
+        if sanitized.is_empty() {
+            return Some(String::new()); // 管理表达式为空，整行移除
+        }
+
+        Some(if is_disabled_comment {
+            format!(";-;condition = {}", sanitized)
+        } else if is_enabled_comment {
+            format!(";+;condition = {}", sanitized)
+        } else {
+            format!("condition = {}", sanitized)
+        })
+    }
+
+    /// 从条件表达式中移除 NRMM 管理表达式部分。
+    ///
+    /// 例如 `$active == 1 && $managed_slot_id == $\modmanageragl\group_1\active_slot`
+    /// 会被清理为 `$active == 1`。
+    ///
+    /// 参数：
+    /// - `expression`: 原始条件表达式字符串。
+    ///
+    /// 返回：清理后的表达式。
+    fn sanitize_key_condition_expression(expression: &str) -> String {
+        // 匹配并移除包含 $\modmanageragl\ 的完整子表达式
+        let re = regex::Regex::new(
+            r"\s*(&&|\|\|)?\s*\$managed_slot_id\s*==\s*\$\\modmanageragl\\[^\s&|]*"
+        ).unwrap();
+        re.replace_all(expression, "").trim().to_string()
+    }
+
+    /// 移除行首的 4 个空格（恢复 NRMM 注入前的原始缩进）。
+    ///
+    /// 参数：
+    /// - `line`: 原始行文本。
+    ///
+    /// 返回：移除 4 空格后的行文本。
+    fn remove_first_four_spaces(line: &str) -> String {
+        if line.starts_with("    ") {
+            line[4..].to_string()
+        } else {
+            line.to_string()
+        }
     }
 
     /// 修改单个 INI 文件，注入槽位管理逻辑。
