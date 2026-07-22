@@ -279,3 +279,115 @@ impl Default for ProcessDetector {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 验证 TargetGame 各变体的字符串标识。
+    #[test]
+    fn test_target_game_as_str() {
+        assert_eq!(TargetGame::None.as_str(), "None");
+        assert_eq!(TargetGame::WutheringWaves.as_str(), "WutheringWaves");
+        assert_eq!(TargetGame::GenshinImpact.as_str(), "GenshinImpact");
+        assert_eq!(TargetGame::HonkaiStarRail.as_str(), "HonkaiStarRail");
+        assert_eq!(TargetGame::ZenlessZoneZero.as_str(), "ZenlessZoneZero");
+        assert_eq!(TargetGame::ArknightsEndfield.as_str(), "ArknightsEndfield");
+    }
+
+    /// 验证 ProcessDetector 构造不崩溃。
+    #[test]
+    fn test_process_detector_new() {
+        let detector = ProcessDetector::new();
+        let _ = detector;
+    }
+
+    /// 验证 ProcessDetector default 构造。
+    #[test]
+    fn test_process_detector_default() {
+        let detector: ProcessDetector = Default::default();
+        let _ = detector;
+    }
+
+    /// 验证 match_game_process 默认设置下匹配鸣潮。
+    #[test]
+    fn test_match_game_process_wuwa() {
+        let settings = Settings::default();
+        let result = ProcessDetector::match_game_process("Wuthering Waves.exe", &settings);
+        assert_eq!(result, TargetGame::WutheringWaves);
+    }
+
+    /// 验证 match_game_process 默认设置下匹配原神。
+    #[test]
+    fn test_match_game_process_genshin() {
+        let settings = Settings::default();
+        let result = ProcessDetector::match_game_process("GenshinImpact.exe", &settings);
+        assert_eq!(result, TargetGame::GenshinImpact);
+    }
+
+    /// 验证 match_game_process 默认设置下匹配星铁。
+    #[test]
+    fn test_match_game_process_hsr() {
+        let settings = Settings::default();
+        let result = ProcessDetector::match_game_process("StarRail.exe", &settings);
+        assert_eq!(result, TargetGame::HonkaiStarRail);
+    }
+
+    /// 验证 match_game_process 默认设置下匹配绝区零。
+    #[test]
+    fn test_match_game_process_zzz() {
+        let settings = Settings::default();
+        let result = ProcessDetector::match_game_process("ZenlessZoneZero.exe", &settings);
+        assert_eq!(result, TargetGame::ZenlessZoneZero);
+    }
+
+    /// 验证 match_game_process 默认设置下匹配终末地。
+    #[test]
+    fn test_match_game_process_endfield() {
+        let settings = Settings::default();
+        let result = ProcessDetector::match_game_process("Endfield-Win64-Shipping.exe", &settings);
+        assert_eq!(result, TargetGame::ArknightsEndfield);
+    }
+
+    /// 验证 match_game_process 未匹配时返回 None。
+    #[test]
+    fn test_match_game_process_none() {
+        let settings = Settings::default();
+        let result = ProcessDetector::match_game_process("notepad.exe", &settings);
+        assert_eq!(result, TargetGame::None);
+    }
+
+    /// 验证 match_game_process 大小写不敏感。
+    #[test]
+    fn test_match_game_process_case_insensitive() {
+        let settings = Settings::default();
+        let result = ProcessDetector::match_game_process("wuthering waves.exe", &settings);
+        assert_eq!(result, TargetGame::WutheringWaves);
+    }
+
+    /// 验证 match_game_process 空字符串不会匹配到 None 以外的游戏。
+    #[test]
+    fn test_match_game_process_empty_string() {
+        let settings = Settings::default();
+        let result = ProcessDetector::match_game_process("", &settings);
+        // 默认设置中 target_process_wuwa 为 "Wuthering Waves.exe"，非空，所以不匹配
+        assert_eq!(result, TargetGame::None);
+    }
+
+    /// 验证 is_process_running 不崩溃。
+    #[test]
+    fn test_is_process_running_does_not_panic() {
+        let detector = ProcessDetector::new();
+        let result = detector.is_process_running("nonexistent_process_12345.exe");
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    /// 验证 get_process_list 不崩溃。
+    #[test]
+    fn test_get_process_list_does_not_panic() {
+        let detector = ProcessDetector::new();
+        let result = detector.get_process_list();
+        assert!(result.is_ok());
+    }
+}

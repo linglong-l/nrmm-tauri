@@ -23,6 +23,8 @@ use super::{
     IniSection, SectionType,
 };
 
+const MAX_TRAVERSAL_DEPTH: usize = 64;
+
 #[cfg(test)]
 use super::parse_content;
 
@@ -546,7 +548,12 @@ fn collect_ini_files(base_path: &str) -> Vec<String> {
         return ini_files;
     }
 
-    for entry in WalkDir::new(base).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(base)
+        .max_depth(MAX_TRAVERSAL_DEPTH)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let path = entry.path();
         if path.is_file() {
             if let Some(ext) = path.extension() {

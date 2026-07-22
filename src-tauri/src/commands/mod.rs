@@ -1002,6 +1002,50 @@ pub async fn save_ini(
         .map_err(|e| e.to_string())
 }
 
+/// 保存按键绑定：修改指定 INI 文件中指定段的按键值。
+///
+/// 参数：
+/// - `ini_path`: INI 文件路径。
+/// - `section_name`: 段名（如 `"Key.Toggle"`）。
+/// - `key_index`: 该段中 key= 行的序号（从 0 开始）。
+/// - `new_key_value`: 新的按键值。
+#[tauri::command]
+pub async fn save_keybind(
+    ini_path: String,
+    section_name: String,
+    key_index: usize,
+    new_key_value: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::ini_handler::save_keybind(&ini_path, &section_name, key_index, &new_key_value)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 切换按键绑定的启用/禁用状态。
+///
+/// 参数：
+/// - `ini_path`: INI 文件路径。
+/// - `section_name`: 段名。
+/// - `key_index`: key= 行序号（从 0 开始）。
+/// - `enabled`: `true` 启用，`false` 禁用。
+#[tauri::command]
+pub async fn toggle_keybind_enabled(
+    ini_path: String,
+    section_name: String,
+    key_index: usize,
+    enabled: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::ini_handler::toggle_keybind_enabled(&ini_path, &section_name, key_index, enabled)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 从 INI 文件中提取所有命名空间。
 ///
 /// 参数：
@@ -2003,12 +2047,34 @@ pub async fn find_all_files(
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
-/// 解压压缩文件到指定目录（自动识别文件类型）。
+/// 检测归档文件是否加密（需要密码才能解压）。
+///
+/// 参数：
+/// - `state`: 应用全局状态（当前未使用）。
+/// - `path`: 归档文件路径。
+///
+/// 返回：是否需要密码。
+#[tauri::command]
+pub async fn is_archive_encrypted(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<bool, String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::is_archive_encrypted(Path::new(&path))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
+/// 解压压缩文件到指定目录（自动识别文件类型，支持可选密码）。
 ///
 /// 参数：
 /// - `state`: 应用全局状态（当前未使用）。
 /// - `file_path`: 压缩文件路径。
 /// - `dest_dir`: 目标目录路径。
+/// - `password`: 可选解压密码。
 ///
 /// 返回：是否解压成功。
 #[tauri::command]
@@ -2016,10 +2082,12 @@ pub async fn extract_archive(
     state: State<'_, AppState>,
     file_path: String,
     dest_dir: String,
+    password: Option<String>,
 ) -> Result<bool, String> {
     let _ = state;
     tokio::task::spawn_blocking(move || {
-        crate::mod_manager::ModManager::extract_archive(Path::new(&file_path), Path::new(&dest_dir))
+        let pwd = password.as_deref();
+        crate::mod_manager::ModManager::extract_archive(Path::new(&file_path), Path::new(&dest_dir), pwd)
             .map_err(|e| e.to_string())
     })
     .await

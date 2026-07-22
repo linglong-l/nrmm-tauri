@@ -12,6 +12,7 @@
 //! - 通过 `IniFileData` 等结构体支持前后端 JSON 序列化。
 
 use anyhow::{Context, Result};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -395,6 +396,118 @@ pub fn extract_namespaces(ini_file: &IniFile) -> Vec<String> {
     namespaces
 }
 
+/// 从 INI 内容中提取显式声明的 namespace=xxx 值。
+///
+/// 查找规则：
+/// - 在第一个 [section] 段头之前的非注释行中查找
+/// - 匹配以 "namespace=" 开头的行（忽略空格，不区分大小写）
+/// - 注释行（以 ; 或 // 开头）跳过
+///
+/// 参数：
+/// - `content`: INI 文件文本内容
+///
+/// 返回：找到则返回小写的 namespace 值，否则返回 None
+pub fn extract_namespace_from_ini_content(content: &str) -> Option<String> {
+    let content = content.strip_prefix("\u{FEFF}").unwrap_or(content);
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if is_section_header(trimmed) {
+            break;
+        }
+
+        if is_comment_line(trimmed) {
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let lower_trimmed = trimmed.to_lowercase();
+        let namespace_key = "namespace=";
+        if lower_trimmed.replace(' ', "").starts_with(namespace_key) {
+            if let Some(eq_pos) = trimmed.find('=') {
+                let value = trimmed[eq_pos + 1..].trim();
+                if !value.is_empty() {
+                    return Some(value.to_lowercase());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// 在 INI 内容中替换命名空间（包括 namespace= 行和所有反斜杠包裹的引用）。
+///
+/// 替换规则：
+/// - 注释行（以 ; 或 // 开头，忽略前导空格）完全跳过，不做任何替换
+/// - 以 "namespace=" 开头的行（忽略空格，不区分大小写），若值匹配原始 namespace，
+///   替换为 "namespace = {new_namespace}"
+/// - 其他行中，匹配反斜杠包裹的 namespace（如 `\Mod\`）进行不区分大小写的替换
+///
+/// 参数：
+/// - `content`: 原始 INI 内容
+/// - `original_namespace`: 要替换的原始 namespace
+/// - `new_namespace`: 替换后的新 namespace
+///
+/// 返回：(替换后的内容, 是否有修改)
+pub fn replace_namespace_in_content(
+    content: &str,
+    original_namespace: &str,
+    new_namespace: &str,
+) -> (String, bool) {
+    let mut modified = false;
+    let mut result_lines: Vec<String> = Vec::new();
+
+    let escaped_ns = regex::escape(original_namespace);
+    let pattern = format!(r"\\{}\\", escaped_ns);
+    let re = match Regex::new(&format!(r"(?i){}", pattern)) {
+        Ok(re) => re,
+        Err(_) => return (content.to_string(), false),
+    };
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if is_comment_line(trimmed) {
+            result_lines.push(line.to_string());
+            continue;
+        }
+
+        let mut new_line = line.to_string();
+
+        let lower_trimmed_no_space = trimmed.to_lowercase().replace(' ', "");
+        if lower_trimmed_no_space.starts_with("namespace=") {
+            if let Some(eq_pos) = trimmed.find('=') {
+                let value = trimmed[eq_pos + 1..].trim();
+                if value.eq_ignore_ascii_case(original_namespace) {
+                    new_line = format!("namespace = {}", new_namespace);
+                    modified = true;
+                }
+            }
+        } else {
+            let replacement = format!(r"\{}\", new_namespace);
+            let replaced = re.replace_all(&new_line, replacement.as_str());
+            if replaced != new_line {
+                new_line = replaced.to_string();
+                modified = true;
+            }
+        }
+
+        result_lines.push(new_line);
+    }
+
+    let mut result = result_lines.join("\n");
+    if content.ends_with('\n') {
+        result.push('\n');
+    }
+
+    (result, modified)
+}
+
 /// 从单个段提取快捷键信息（仅 Key 类型段）。
 ///
 /// 如果该段不是 Key 类型，则返回 `None`。
@@ -671,6 +784,254 @@ impl From<IniFileData> for IniFile {
             namespaces: data.namespaces,
         }
     }
+}
+
+/// 备份 INI 文件（如果备份尚未存在）。
+///
+/// 备份文件名为 `<ini_path>.ini_managed_backup`，仅在备份不存在时创建，
+/// 避免覆盖原始备份内容。
+///
+/// 参数：
+/// - `ini_path`: 原始 INI 文件路径。
+///
+/// 返回：是否成功创建备份（备份已存在时返回 `Ok(true)`）。
+pub fn backup_ini_file_if_needed(ini_path: &str) -> Result<bool> {
+    let path = Path::new(ini_path);
+    let backup_path = format!("{}.ini_managed_backup", ini_path);
+    let backup_path = Path::new(&backup_path);
+
+    if backup_path.exists() {
+        return Ok(true);
+    }
+
+    fs::copy(path, backup_path)
+        .with_context(|| format!("Failed to create backup for INI file: {}", ini_path))?;
+
+    Ok(true)
+}
+
+/// 读取 INI 文件并返回所有行（保留换行符信息通过 split 后的 lines 重建）。
+///
+/// 使用 `\n` 分割，保留原始行内容（不含行尾的 `\r` 或 `\n`），
+/// 写入时统一使用 CRLF 行尾。
+fn read_ini_lines(ini_path: &str) -> Result<Vec<String>> {
+    let content = fs::read_to_string(ini_path)
+        .with_context(|| format!("Failed to read INI file: {}", ini_path))?;
+    let content = content.strip_prefix("\u{FEFF}").unwrap_or(&content);
+    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    Ok(lines)
+}
+
+/// 判断一行（去除前导空白和 ;+; 前缀后）是否为指定段名的段头。
+fn is_target_section_header(line: &str, section_name: &str) -> bool {
+    let effective = if line.trim_start().starts_with(";+;") {
+        line.trim_start().strip_prefix(";+;").unwrap_or(line).trim_start()
+    } else {
+        line.trim_start()
+    };
+    if let Some(parsed) = parse_section_name(effective) {
+        parsed.eq_ignore_ascii_case(section_name)
+    } else {
+        false
+    }
+}
+
+/// 判断一行是否为已被 ; 注释禁用的 key= 行。
+///
+/// 返回 `(is_commented_key_line, indentation, key_value_part)`：
+/// - `is_commented_key_line`: 是否为被 `;` 注释的 key= 行。
+/// - `indentation`: 前导空白 + 分号 + 可选空白（用于取消注释时保留格式）。
+/// - `key_value_part`: 分号之后到行尾的内容（即 "key = value" 部分）。
+fn parse_commented_key_line(line: &str) -> Option<(String, String)> {
+    let trimmed_start = line.trim_start();
+    if !trimmed_start.starts_with(';') {
+        return None;
+    }
+    if trimmed_start.starts_with(";+;") {
+        return None;
+    }
+    let semicolon_pos = line.find(';')?;
+    let prefix = &line[..=semicolon_pos];
+    let after_semi = &line[semicolon_pos + 1..];
+    let after_trimmed = after_semi.trim_start();
+    if !after_trimmed.to_ascii_lowercase().starts_with("key") {
+        return None;
+    }
+    let after_key = &after_trimmed[3..];
+    let after_key_trimmed = after_key.trim_start();
+    if !after_key_trimmed.starts_with('=') {
+        return None;
+    }
+    let indentation_end = after_semi.len() - after_trimmed.len();
+    let semi_and_indent = format!("{}{}", prefix, &after_semi[..indentation_end]);
+    Some((semi_and_indent, after_trimmed.to_string()))
+}
+
+/// 判断一行是否为有效（未被注释的）key= 行。
+///
+/// 返回值与 `parse_commented_key_line` 一致，`indentation` 为前导空白部分。
+fn parse_active_key_line(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with(';') || trimmed.starts_with("//") {
+        return None;
+    }
+    if let Some((key, _)) = parse_key_value(line) {
+        if key.to_ascii_lowercase() != "key" {
+            return None;
+        }
+    } else {
+        return None;
+    }
+    let content_start = line.len() - trimmed.len();
+    let indentation = line[..content_start].to_string();
+    Some((indentation, trimmed.to_string()))
+}
+
+/// 在 INI 文件行列表中查找指定段中的第 `key_index` 个 key= 行（含被 ; 注释的）。
+///
+/// 返回 `(global_line_index, is_commented)`：
+/// - `global_line_index`: 该行在文件中的全局行索引。
+/// - `is_commented`: 该行是否被 `;` 注释禁用。
+///
+/// 找不到时返回 `None`。
+fn find_key_line(lines: &[String], section_name: &str, key_index: usize) -> Option<(usize, bool)> {
+    let mut in_target_section = false;
+    let mut key_count = 0usize;
+
+    for (i, line) in lines.iter().enumerate() {
+        if is_section_header(line.trim_start()) {
+            in_target_section = is_target_section_header(line, section_name);
+            continue;
+        }
+        if !in_target_section {
+            continue;
+        }
+
+        if parse_active_key_line(line).is_some() {
+            if key_count == key_index {
+                return Some((i, false));
+            }
+            key_count += 1;
+        } else if parse_commented_key_line(line).is_some() {
+            if key_count == key_index {
+                return Some((i, true));
+            }
+            key_count += 1;
+        }
+    }
+    None
+}
+
+/// 保存按键绑定：修改指定 INI 文件中指定段的第 key_index 个 key= 行的值。
+///
+/// 操作流程：
+/// 1. 若 `.ini_managed_backup` 备份不存在则先创建备份。
+/// 2. 读取文件所有行。
+/// 3. 找到目标 key= 行，替换其值部分（保留前导缩进、等号两侧空白格式）。
+/// 4. 将修改后的行写回文件（CRLF 行尾，原子写入）。
+///
+/// 参数：
+/// - `ini_path`: INI 文件路径。
+/// - `section_name`: 段名（不含方括号，如 `"Key.Toggle"`）。
+/// - `key_index`: 该段中 key= 行的序号（从 0 开始，包含被注释的行）。
+/// - `new_key_value`: 新的按键值（如 `"VK_F2"`、`"VK_CONTROL + VK_F3"`）。
+pub fn save_keybind(
+    ini_path: &str,
+    section_name: &str,
+    key_index: usize,
+    new_key_value: &str,
+) -> Result<()> {
+    backup_ini_file_if_needed(ini_path)?;
+
+    let mut lines = read_ini_lines(ini_path)?;
+
+    let (line_idx, is_commented) = find_key_line(&lines, section_name, key_index)
+        .with_context(|| {
+            format!(
+                "Could not find key index {} in section [{}] of file {}",
+                key_index, section_name, ini_path
+            )
+        })?;
+
+    let line = &mut lines[line_idx];
+
+    if is_commented {
+        if let Some((indent_part, content_part)) = parse_commented_key_line(line) {
+            let eq_pos = content_part.find('=').unwrap();
+            let key_part = &content_part[..eq_pos + 1];
+            let before_eq_spaces = {
+                let after_key = &content_part[3..eq_pos];
+                after_key.len() - after_key.trim_start().len()
+            };
+            let spaces = &content_part[3..3 + before_eq_spaces];
+            *line = format!("{}{}{}{}", indent_part, key_part, spaces, new_key_value);
+        }
+    } else if let Some((indent_part, content_part)) = parse_active_key_line(line) {
+        let eq_pos = content_part.find('=').unwrap();
+        let key_part = &content_part[..eq_pos + 1];
+        let before_eq_spaces = {
+            let after_key = &content_part[3..eq_pos];
+            after_key.len() - after_key.trim_start().len()
+        };
+        let spaces = &content_part[3..3 + before_eq_spaces];
+        *line = format!("{}{}{}{}", indent_part, key_part, spaces, new_key_value);
+    }
+
+    write_lines_to_file(&lines, ini_path)?;
+    Ok(())
+}
+
+/// 切换按键绑定的启用/禁用状态。
+///
+/// 禁用时在 key= 行前添加分号注释（`; key = xxx`），
+/// 启用时移除 key= 行前的分号注释，保留行的原始缩进和内容。
+///
+/// 参数：
+/// - `ini_path`: INI 文件路径。
+/// - `section_name`: 段名。
+/// - `key_index`: key= 行序号（从 0 开始）。
+/// - `enabled`: `true` 启用，`false` 禁用。
+pub fn toggle_keybind_enabled(
+    ini_path: &str,
+    section_name: &str,
+    key_index: usize,
+    enabled: bool,
+) -> Result<()> {
+    backup_ini_file_if_needed(ini_path)?;
+
+    let mut lines = read_ini_lines(ini_path)?;
+
+    let (line_idx, is_commented) = find_key_line(&lines, section_name, key_index)
+        .with_context(|| {
+            format!(
+                "Could not find key index {} in section [{}] of file {}",
+                key_index, section_name, ini_path
+            )
+        })?;
+
+    let line = &mut lines[line_idx];
+
+    if enabled {
+        if is_commented {
+            if let Some((semi_indent, content)) = parse_commented_key_line(line) {
+                let after_semi_spaces = {
+                    let semi_trimmed = semi_indent.trim_start();
+                    semi_indent.len() - semi_trimmed.len()
+                };
+                let leading_ws = &semi_indent[..after_semi_spaces];
+                *line = format!("{}{}", leading_ws, content);
+            }
+        }
+    } else {
+        if !is_commented {
+            if let Some((indent_part, content_part)) = parse_active_key_line(line) {
+                *line = format!("{}; {}", indent_part, content_part);
+            }
+        }
+    }
+
+    write_lines_to_file(&lines, ini_path)?;
+    Ok(())
 }
 
 /// INI 处理器结构体（封装异步加载/保存接口）。
@@ -1294,5 +1655,329 @@ x = 1
         assert_eq!(section.lines[0].key, "hash");
         assert_eq!(section.lines[0].value, "1234");
         assert_eq!(section.lines[1].key, "x");
+    }
+
+    #[test]
+    fn test_extract_namespace_from_ini_content_basic() {
+        let content = r#"namespace = MyMod
+; comment line
+[Constants]
+x = 1
+"#;
+        assert_eq!(
+            extract_namespace_from_ini_content(content),
+            Some("mymod".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_namespace_from_ini_content_no_spaces() {
+        let content = "namespace=TestMod\n[Section]\n";
+        assert_eq!(
+            extract_namespace_from_ini_content(content),
+            Some("testmod".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_namespace_from_ini_content_case_insensitive() {
+        let content = "NAMESPACE = MyMod\n[Section]\n";
+        assert_eq!(
+            extract_namespace_from_ini_content(content),
+            Some("mymod".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_namespace_from_ini_content_skips_comments() {
+        let content = r#"; namespace = Commented
+; this is a comment
+namespace = RealNS
+[Constants]
+"#;
+        assert_eq!(
+            extract_namespace_from_ini_content(content),
+            Some("realns".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_namespace_from_ini_content_stops_at_section() {
+        let content = r#"[Constants]
+namespace = AfterSection
+x = 1
+"#;
+        assert_eq!(extract_namespace_from_ini_content(content), None);
+    }
+
+    #[test]
+    fn test_extract_namespace_from_ini_content_none() {
+        let content = r#"; no namespace here
+[Constants]
+x = 1
+"#;
+        assert_eq!(extract_namespace_from_ini_content(content), None);
+    }
+
+    #[test]
+    fn test_extract_namespace_from_ini_content_empty_lines() {
+        let content = "\n\n  \nnamespace = SpacedMod\n\n[Section]\n";
+        assert_eq!(
+            extract_namespace_from_ini_content(content),
+            Some("spacedmod".to_string())
+        );
+    }
+
+    #[test]
+    fn test_replace_namespace_in_content_namespace_line() {
+        let content = "namespace = OldMod\n[Constants]\nx = 1\n";
+        let (new_content, modified) = replace_namespace_in_content(content, "oldmod", "NewMod");
+        assert!(modified);
+        assert!(new_content.contains("namespace = NewMod"));
+        assert!(!new_content.contains("namespace = OldMod"));
+    }
+
+    #[test]
+    fn test_replace_namespace_in_content_backslash_references() {
+        let content = r"[Constants]
+x = $\OldMod\value
+run = CommandList\OldMod\Cmd
+[TextureOverride.OldModTex]
+hash = 1234
+";
+        let (new_content, modified) = replace_namespace_in_content(content, "oldmod", "NewMod");
+        assert!(modified);
+        assert!(new_content.contains(r"$\NewMod\value"));
+        assert!(new_content.contains(r"CommandList\NewMod\Cmd"));
+        assert!(!new_content.contains(r"\OldMod\"));
+    }
+
+    #[test]
+    fn test_replace_namespace_in_content_skips_comments() {
+        let content = "; namespace = OldMod\n; run = CommandList\\OldMod\\Cmd\nnamespace = OldMod\n";
+        let (new_content, modified) = replace_namespace_in_content(content, "oldmod", "NewMod");
+        assert!(modified);
+        assert!(new_content.contains("; namespace = OldMod"));
+        assert!(new_content.contains("; run = CommandList\\OldMod\\Cmd"));
+        assert!(new_content.contains("namespace = NewMod"));
+    }
+
+    #[test]
+    fn test_replace_namespace_in_content_no_match() {
+        let content = "namespace = OtherMod\n[Section]\nx = 1\n";
+        let (new_content, modified) = replace_namespace_in_content(content, "oldmod", "NewMod");
+        assert!(!modified);
+        assert_eq!(new_content, content);
+    }
+
+    #[test]
+    fn test_replace_namespace_in_content_case_insensitive() {
+        let content = "NAMESPACE = MYMOD\nx = $\\mymod\\val\n";
+        let (new_content, modified) = replace_namespace_in_content(content, "MyMod", "NewMod");
+        assert!(modified);
+        assert!(new_content.contains("namespace = NewMod"));
+        assert!(new_content.contains(r"$\NewMod\val"));
+    }
+
+    #[test]
+    fn test_replace_namespace_in_content_no_modification_needed() {
+        let content = "[Constants]\nx = 1\n";
+        let (new_content, modified) = replace_namespace_in_content(content, "test", "new");
+        assert!(!modified);
+        assert_eq!(new_content, content);
+    }
+
+    fn create_temp_ini(name: &str, content: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let ini_path = dir.path().join(name);
+        fs::write(&ini_path, content).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_save_keybind_replaces_value() {
+        let dir = create_temp_ini("test.ini", "[Key.Toggle]\nkey = VK_F1\nback = 1\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+
+        save_keybind(ini_path_str, "Key.Toggle", 0, "VK_F2").unwrap();
+
+        let result = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(result.contains("key = VK_F2"));
+        assert!(!result.contains("key = VK_F1\n"));
+        assert!(result.contains("back = 1"));
+    }
+
+    #[test]
+    fn test_save_keybind_preserves_formatting() {
+        let dir = create_temp_ini("test.ini", "[Constants]\nx=1\n\n[Key.Test]\n  key  =  VK_SPACE\n; comment\nback=0\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+
+        save_keybind(ini_path_str, "Key.Test", 0, "VK_RETURN").unwrap();
+
+        let result = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(result.contains("  key  =  VK_RETURN"));
+        assert!(result.contains("x=1"));
+        assert!(result.contains("; comment"));
+        assert!(result.contains("back=0"));
+    }
+
+    #[test]
+    fn test_save_keybind_multiple_keys() {
+        let dir = create_temp_ini("test.ini", "[Key.Multi]\nkey = VK_F1\nkey = VK_F2\nkey = VK_F3\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+
+        save_keybind(ini_path_str, "Key.Multi", 1, "VK_F5").unwrap();
+
+        let result = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(result.contains("key = VK_F1"));
+        assert!(result.contains("key = VK_F5"));
+        assert!(result.contains("key = VK_F3"));
+        assert!(!result.contains("key = VK_F2\n"));
+    }
+
+    #[test]
+    fn test_save_keybind_creates_backup() {
+        let dir = create_temp_ini("test.ini", "[Key.Toggle]\nkey = VK_F1\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+        let backup_path = dir.path().join("test.ini.ini_managed_backup");
+
+        assert!(!backup_path.exists());
+        save_keybind(ini_path_str, "Key.Toggle", 0, "VK_F2").unwrap();
+        assert!(backup_path.exists());
+
+        let backup_content = fs::read_to_string(&backup_path).unwrap();
+        assert!(backup_content.contains("key = VK_F1"));
+    }
+
+    #[test]
+    fn test_save_keybind_does_not_overwrite_backup() {
+        let dir = create_temp_ini("test.ini", "[Key.Toggle]\nkey = VK_F1\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+        let backup_path = dir.path().join("test.ini.ini_managed_backup");
+
+        fs::write(&backup_path, "ORIGINAL BACKUP CONTENT").unwrap();
+        save_keybind(ini_path_str, "Key.Toggle", 0, "VK_F2").unwrap();
+
+        let backup_content = fs::read_to_string(&backup_path).unwrap();
+        assert_eq!(backup_content, "ORIGINAL BACKUP CONTENT");
+    }
+
+    #[test]
+    fn test_toggle_keybind_disable() {
+        let dir = create_temp_ini("test.ini", "[Key.Toggle]\nkey = VK_F1\nback = 1\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+
+        toggle_keybind_enabled(ini_path_str, "Key.Toggle", 0, false).unwrap();
+
+        let result = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(result.contains("; key = VK_F1"));
+        assert!(result.contains("back = 1"));
+    }
+
+    #[test]
+    fn test_toggle_keybind_enable() {
+        let dir = create_temp_ini("test.ini", "[Key.Toggle]\n; key = VK_F1\nback = 1\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+
+        toggle_keybind_enabled(ini_path_str, "Key.Toggle", 0, true).unwrap();
+
+        let result = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(result.contains("key = VK_F1"));
+        assert!(!result.contains("; key = VK_F1"));
+    }
+
+    #[test]
+    fn test_toggle_keybind_disable_then_enable_roundtrip() {
+        let original = "[Key.Test]\nkey = VK_SPACE\n";
+        let dir = create_temp_ini("test.ini", original);
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+
+        toggle_keybind_enabled(ini_path_str, "Key.Test", 0, false).unwrap();
+        let disabled = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(disabled.contains("; key = VK_SPACE"));
+
+        toggle_keybind_enabled(ini_path_str, "Key.Test", 0, true).unwrap();
+        let enabled = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(enabled.contains("key = VK_SPACE"));
+        assert!(!enabled.contains("; key = VK_SPACE"));
+    }
+
+    #[test]
+    fn test_toggle_keybind_preserves_indentation() {
+        let dir = create_temp_ini("test.ini", "[Key.Test]\n  key = VK_F1\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+
+        toggle_keybind_enabled(ini_path_str, "Key.Test", 0, false).unwrap();
+        let result = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(result.contains("  ; key = VK_F1"));
+
+        toggle_keybind_enabled(ini_path_str, "Key.Test", 0, true).unwrap();
+        let result2 = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(result2.contains("  key = VK_F1"));
+        assert!(!result2.contains("; key"));
+    }
+
+    #[test]
+    fn test_save_keybind_on_commented_line() {
+        let dir = create_temp_ini("test.ini", "[Key.Toggle]\n; key = VK_F1\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+
+        save_keybind(ini_path_str, "Key.Toggle", 0, "VK_F10").unwrap();
+
+        let result = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(result.contains("; key = VK_F10"));
+    }
+
+    #[test]
+    fn test_save_keybind_other_sections_unchanged() {
+        let content = r#"; header comment
+[Constants]
+global persist $x = 1
+
+[TextureOverride.Test]
+hash = 0x1234
+
+[Key.Toggle]
+key = VK_F1
+back = 1
+
+[CommandList.Test]
+x = 100
+"#;
+        let dir = create_temp_ini("test.ini", content);
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+
+        save_keybind(ini_path_str, "Key.Toggle", 0, "VK_F2").unwrap();
+
+        let result = fs::read_to_string(&ini_path).unwrap().replace("\r\n", "\n");
+        assert!(result.contains("; header comment"));
+        assert!(result.contains("global persist $x = 1"));
+        assert!(result.contains("hash = 0x1234"));
+        assert!(result.contains("x = 100"));
+        assert!(result.contains("back = 1"));
+        assert!(result.contains("key = VK_F2"));
+    }
+
+    #[test]
+    fn test_toggle_keybind_creates_backup() {
+        let dir = create_temp_ini("test.ini", "[Key.Toggle]\nkey = VK_F1\n");
+        let ini_path = dir.path().join("test.ini");
+        let ini_path_str = ini_path.to_str().unwrap();
+        let backup_path = dir.path().join("test.ini.ini_managed_backup");
+
+        assert!(!backup_path.exists());
+        toggle_keybind_enabled(ini_path_str, "Key.Toggle", 0, false).unwrap();
+        assert!(backup_path.exists());
     }
 }

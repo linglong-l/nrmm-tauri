@@ -164,4 +164,17 @@ describe('hashConflictStore', () => {
     expect(store.lastReport).toBeNull();
     expect(store.ignoredHashes.size).toBe(0);
   });
+
+  it('visibleConflicts 全部忽略时返回空数组', () => {
+    const store = useHashConflictStore();
+    store.lastReport = {
+      enabledModHashes: {},
+      namespaceHashes: {},
+      conflicts: [
+        { hash: 'hash1', groupNames: ['Group 1'], modNames: ['Mod 1'], modPaths: ['/mod1'] },
+      ],
+    };
+    store.ignoredHashes = new Set(['hash1']);
+    expect(store.visibleConflicts.length).toBe(0);
+  });
 });

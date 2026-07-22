@@ -26,11 +26,12 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use walkdir::WalkDir;
 use zip::ZipArchive;
-use sevenz_rust::decompress_file;
+use sevenz_rust::{decompress_file, Password};
 
 use crate::ini_handler::error_detection::ErroredLinesReport;
 use crate::ini_handler::{
-    get_section_type, is_comment_line, is_section_header, parse_section_name, SectionType,
+    extract_namespace_from_ini_content, get_section_type, is_comment_line, is_section_header,
+    parse_section_name, replace_namespace_in_content, SectionType,
 };
 use crate::process::TargetGame;
 use crate::settings::Settings;
@@ -38,6 +39,9 @@ use crate::settings::Settings;
 /// 禁用模组目录名前缀。被禁用的模组目录会被重命名为 `DISABLED<原名>`，
 /// 3DMigoto 框架会忽略此前缀开头的目录，从而实现「不删除文件即可禁用」的效果。
 pub const DISABLED_PREFIX: &str = "DISABLED";
+
+/// 目录遍历最大深度限制，防止栈溢出或循环符号链接导致的无限递归。
+const MAX_TRAVERSAL_DEPTH: usize = 64;
 
 /// 收藏标记文件名。在模组/分组目录下存在该文件即表示已被收藏，
 /// 文件内容为收藏时的时间戳字符串（用于排序）。
@@ -306,6 +310,23 @@ pub struct ModProcessSummary {
     pub success_count: u32,
     /// 处理失败的模组数。
     pub error_count: u32,
+    /// 命名空间修复记录列表。
+    #[serde(default)]
+    pub namespace_fixes: Vec<NamespaceFix>,
+}
+
+/// 命名空间冲突修复记录。
+///
+/// 描述一次命名空间冲突自动修复的详细信息。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamespaceFix {
+    /// 发生冲突的模组名称。
+    pub mod_name: String,
+    /// 原始命名空间。
+    pub original_namespace: String,
+    /// 修复后的新命名空间。
+    pub new_namespace: String,
 }
 
 /// Mods 路径校验状态枚举。
@@ -946,10 +967,12 @@ impl ModManager {
         Ok(!is_disabled)
     }
 
-    /// 深度优先遍历目录树，递归移除所有文件/目录名中的 DISABLED 前缀。
+    /// 深度优先遍历目录树，使用显式栈迭代移除所有文件/目录名中的 DISABLED 前缀。
     ///
-    /// 此函数会递归处理所有嵌套内容。若文件/目录名恰好等于 `DISABLED`（不区分大小写）
-    /// 本身（无后续内容），则跳过不处理，避免误删除名称为 DISABLED 的文件/目录。
+    /// 此函数使用迭代式显式栈进行 DFS 遍历，避免递归深度过大导致栈溢出。包含深度限制
+    /// (`MAX_TRAVERSAL_DEPTH`) 和符号链接检测，防止循环引用导致的无限遍历。若文件/目录名
+    /// 恰好等于 `DISABLED`（不区分大小写）本身（无后续内容），则跳过不处理，避免误删除
+    /// 名称为 DISABLED 的文件/目录。
     ///
     /// 参数：
     /// - `dir`: 要处理的目录路径（已去除顶层 DISABLED 前缀后的路径）。
@@ -962,42 +985,55 @@ impl ModManager {
             return Ok(0);
         }
 
-        // 收集当前目录下的条目（避免遍历时修改目录导致问题）
-        let entries: Vec<PathBuf> = fs::read_dir(dir)
-            .with_context(|| format!("Failed to read directory: {:?}", dir))?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .collect();
+        let mut stack: Vec<(PathBuf, usize)> = vec![(dir.to_path_buf(), 0)];
 
-        for entry_path in entries {
-            let name = entry_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-
-            // 名称等于 DISABLED（大小写不敏感）时跳过
-            if name.eq_ignore_ascii_case(DISABLED_PREFIX) {
+        while let Some((current_dir, depth)) = stack.pop() {
+            if depth >= MAX_TRAVERSAL_DEPTH {
+                warn!("Max traversal depth reached at {:?}, skipping deeper", current_dir);
                 continue;
             }
 
-            if Self::is_disabled_name(name) {
-                let new_name = name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string();
-                let parent = entry_path.parent().unwrap_or(dir);
-                let new_path = parent.join(&new_name);
+            if !current_dir.exists() || !current_dir.is_dir() {
+                continue;
+            }
 
-                if !new_path.exists() {
-                    fs::rename(&entry_path, &new_path).with_context(|| {
-                        format!("Failed to rename {:?} -> {:?}", entry_path, new_path)
-                    })?;
-                    count += 1;
+            let entries: Vec<PathBuf> = fs::read_dir(&current_dir)
+                .with_context(|| format!("Failed to read directory: {:?}", current_dir))?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .collect();
 
-                    // 如果是目录，递归处理
-                    if new_path.is_dir() {
-                        count += Self::strip_disabled_prefixes_deep(&new_path)?;
-                    }
+            for entry_path in entries {
+                if entry_path.is_symlink() {
+                    continue;
                 }
-            } else if entry_path.is_dir() {
-                // 非禁用目录，仍需递归处理内部
-                count += Self::strip_disabled_prefixes_deep(&entry_path)?;
+
+                let name = entry_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+
+                if name.eq_ignore_ascii_case(DISABLED_PREFIX) {
+                    continue;
+                }
+
+                if Self::is_disabled_name(name) {
+                    let new_name = name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string();
+                    let parent = entry_path.parent().unwrap_or(&current_dir);
+                    let new_path = parent.join(&new_name);
+
+                    if !new_path.exists() {
+                        fs::rename(&entry_path, &new_path).with_context(|| {
+                            format!("Failed to rename {:?} -> {:?}", entry_path, new_path)
+                        })?;
+                        count += 1;
+
+                        if new_path.is_dir() {
+                            stack.push((new_path, depth + 1));
+                        }
+                    }
+                } else if entry_path.is_dir() {
+                    stack.push((entry_path, depth + 1));
+                }
             }
         }
 
@@ -2262,15 +2298,21 @@ impl ModManager {
                 continue;
             }
 
+            // 安全验证
+            if let Err(reason) = Self::validate_drop_path(source, target_group_path) {
+                warn!("Rejected unsafe path: {}", reason);
+                continue;
+            }
+
             let name = source
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("unknown");
-            let dest = target.join(name);
+            let raw_dest = target.join(name);
+            let dest = Self::get_safe_target(&raw_dest);
 
             if source.is_dir() {
-                // 递归复制目录
-                Self::copy_dir_all(source, &dest).with_context(|| {
+                Self::copy_dir_recursive(source, &dest).with_context(|| {
                     format!("Failed to copy directory {:?} to {:?}", source, dest)
                 })?;
                 info!("Copied directory {:?} to {:?}", source, dest);
@@ -2285,25 +2327,208 @@ impl ModManager {
         Ok(true)
     }
 
-    /// 递归复制目录（使用 Rust std 实现）。
-    fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
-        fs::create_dir_all(dst)
-            .with_context(|| format!("Failed to create directory: {:?}", dst))?;
+    /// 获取安全的目标路径，处理名称冲突。
+    ///
+    /// 如果目标路径不存在，直接返回原路径。
+    /// 如果存在，在名称后追加 _1, _2, _3... 直到找到不存在的路径。
+    /// 对目录和文件都有效。
+    ///
+    /// 参数：
+    /// - `target`: 期望的目标路径。
+    ///
+    /// 返回：不存在的可用路径。
+    fn get_safe_target(target: &Path) -> PathBuf {
+        if !target.exists() {
+            return target.to_path_buf();
+        }
 
-        for entry in
-            fs::read_dir(src).with_context(|| format!("Failed to read directory: {:?}", src))?
-        {
-            let entry = entry?;
-            let ty = entry.file_type()?;
-            let src_path = entry.path();
-            let dst_path = dst.join(entry.file_name());
+        let parent = target.parent().unwrap_or_else(|| Path::new(""));
+        let file_stem = target.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        let extension = target.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{}", e))
+            .unwrap_or_default();
 
-            if ty.is_dir() {
-                Self::copy_dir_all(&src_path, &dst_path)?;
+        let mut i = 1;
+        loop {
+            let candidate_name = if extension.is_empty() {
+                format!("{}_{}", file_stem, i)
             } else {
-                fs::copy(&src_path, &dst_path).with_context(|| {
-                    format!("Failed to copy file {:?} to {:?}", src_path, dst_path)
-                })?;
+                format!("{}_{}{}", file_stem, i, extension)
+            };
+            let candidate = parent.join(&candidate_name);
+            if !candidate.exists() {
+                return candidate;
+            }
+            i += 1;
+        }
+    }
+
+    /// 从 target_group_path 向上查找 Mods 根目录。
+    ///
+    /// 通过向上遍历父目录，找到名为 "Mods" 且包含 `_MANAGED_` 子目录的目录。
+    ///
+    /// 参数：
+    /// - `target_group_path`: 目标分组路径。
+    ///
+    /// 返回：Mods 根目录路径，找不到时返回 None。
+    fn find_mods_root(target_group_path: &Path) -> Option<PathBuf> {
+        let mut current = target_group_path.to_path_buf();
+        loop {
+            if current.file_name()?.to_str()? == "Mods" {
+                let managed = current.join(MANAGED_FOLDER);
+                if managed.exists() && managed.is_dir() {
+                    return Some(current);
+                }
+            }
+            let parent = current.parent()?;
+            if parent == current {
+                return None;
+            }
+            current = parent.to_path_buf();
+        }
+    }
+
+    /// 检查目录内部（BFS 遍历，深度限制）是否包含 `_MANAGED_` 子目录。
+    ///
+    /// 参数：
+    /// - `dir`: 待检查的目录路径。
+    ///
+    /// 返回：包含 `_MANAGED_` 返回 true，否则返回 false。
+    fn dir_contains_managed(dir: &Path) -> bool {
+        if !dir.exists() || !dir.is_dir() {
+            return false;
+        }
+
+        let dir_name = dir.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        if dir_name.eq_ignore_ascii_case(MANAGED_FOLDER) {
+            return true;
+        }
+
+        let mut queue: Vec<(PathBuf, usize)> = vec![(dir.to_path_buf(), 0)];
+        let mut visited: HashSet<PathBuf> = HashSet::new();
+
+        while let Some((current, depth)) = queue.pop() {
+            if depth >= MAX_TRAVERSAL_DEPTH {
+                warn!("Max traversal depth reached while checking for _MANAGED_ at {:?}", current);
+                continue;
+            }
+
+            let canonical = match current.canonicalize() {
+                Ok(p) => p,
+                Err(_) => current.clone(),
+            };
+            if visited.contains(&canonical) {
+                continue;
+            }
+            visited.insert(canonical);
+
+            let entries = match fs::read_dir(&current) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                if !entry_path.is_dir() {
+                    continue;
+                }
+                if entry_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.eq_ignore_ascii_case(MANAGED_FOLDER))
+                {
+                    return true;
+                }
+                queue.push((entry_path, depth + 1));
+            }
+        }
+
+        false
+    }
+
+    /// 验证拖入路径的安全性。
+    ///
+    /// 检查以下条件（任一不满足则拒绝）：
+    /// a) 路径不是 `_MANAGED_` 目录的子目录
+    /// b) 路径不是当前可执行文件所在目录的子目录
+    /// c) 拖入的目录不包含 `_MANAGED_` 子目录（BFS，深度限制 MAX_TRAVERSAL_DEPTH）
+    /// d) 路径不是 Mods 根目录的父目录或其祖先
+    ///
+    /// 参数：
+    /// - `source_path`: 拖入的源路径。
+    /// - `target_group_path`: 目标分组路径（用于定位 Mods 根目录）。
+    ///
+    /// 返回：`Ok(())` 表示安全，`Err(String)` 包含拒绝原因。
+    fn validate_drop_path(source_path: &Path, target_group_path: &str) -> Result<(), String> {
+        let target_group = Path::new(target_group_path);
+
+        // a) 检查路径是否位于 _MANAGED_ 目录下
+        let mut current = source_path.to_path_buf();
+        loop {
+            if let Some(name) = current.file_name().and_then(|n| n.to_str()) {
+                if name.eq_ignore_ascii_case(MANAGED_FOLDER) {
+                    return Err(format!(
+                        "Path is under _MANAGED_ directory, which is not allowed: {:?}",
+                        source_path
+                    ));
+                }
+            }
+            match current.parent() {
+                Some(parent) if parent != current => current = parent.to_path_buf(),
+                _ => break,
+            }
+        }
+
+        // b) 检查路径是否位于当前可执行文件所在目录下
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                if let Ok(exe_dir_canon) = exe_dir.canonicalize() {
+                    if let Ok(source_canon) = source_path.canonicalize() {
+                        if source_canon.starts_with(&exe_dir_canon) {
+                            return Err(format!(
+                                "Path is under the tool's directory, which is not allowed: {:?}",
+                                source_path
+                            ));
+                        }
+                    }
+                }
+                // 额外检查：拖入的路径是否是工具目录的父目录
+                if let Ok(exe_dir_canon) = exe_dir.canonicalize() {
+                    if let Ok(source_canon) = source_path.canonicalize() {
+                        if exe_dir_canon.starts_with(&source_canon) {
+                            return Err(format!(
+                                "Path is an ancestor of the tool's directory, which is not allowed: {:?}",
+                                source_path
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // c) 检查目录内部是否包含 _MANAGED_ 子目录
+        if source_path.is_dir() && Self::dir_contains_managed(source_path) {
+            return Err(format!(
+                "Directory contains _MANAGED_ folder, which is not allowed: {:?}",
+                source_path
+            ));
+        }
+
+        // d) 检查路径是否是 Mods 根目录的父目录或其祖先
+        if let Some(mods_root) = Self::find_mods_root(target_group) {
+            if let Ok(mods_root_canon) = mods_root.canonicalize() {
+                if let Ok(source_canon) = source_path.canonicalize() {
+                    if mods_root_canon.starts_with(&source_canon) && source_canon != mods_root_canon {
+                        return Err(format!(
+                            "Path is an ancestor of Mods directory, which is not allowed: {:?}",
+                            source_path
+                        ));
+                    }
+                }
             }
         }
 
@@ -2865,6 +3090,7 @@ impl ModManager {
             Arc::new(Mutex::new(Vec::new()));
         let group_summaries: Arc<Mutex<Vec<ModProcessSummary>>> =
             Arc::new(Mutex::new(Vec::new()));
+        let logs: Arc<Mutex<Vec<LogEntry>>> = Arc::new(Mutex::new(logs));
 
         group_folders
             .par_iter()
@@ -2901,6 +3127,34 @@ impl ModManager {
                         );
 
                         group_total = mods.iter().filter(|m| m.mod_path != "None" && !m.is_disabled).count() as u32;
+
+                        let mut namespace_fixes = Vec::new();
+                        match Self::fix_namespace_conflicts_for_group(group_path, &mods, known_libraries) {
+                            Ok(fixes) => {
+                                if !fixes.is_empty() {
+                                    info!(
+                                        "[update_mod_data] group {}: fixed {} namespace conflicts",
+                                        group_name,
+                                        fixes.len()
+                                    );
+                                    if let Ok(mut logs_guard) = logs.lock() {
+                                        for fix in &fixes {
+                                            logs_guard.push(LogEntry::info(format!(
+                                                "Namespace conflict fixed: '{}' -> '{}' in mod '{}'",
+                                                fix.original_namespace, fix.new_namespace, fix.mod_name
+                                            )));
+                                        }
+                                    }
+                                }
+                                namespace_fixes = fixes;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "[update_mod_data] group {}: failed to fix namespace conflicts: {}",
+                                    group_name, e
+                                );
+                            }
+                        }
 
                         mods.par_iter().for_each(|mod_data| {
                             // 状态过滤：跳过 None 槽位和禁用模组
@@ -2942,30 +3196,40 @@ impl ModManager {
                                 }
                             }
                         });
+
+                        let group_error_count = per_mod_errors.lock().map(|errors| {
+                            errors.iter()
+                                .filter(|e| e.mod_path.starts_with(group_path))
+                                .count() as u32
+                        }).unwrap_or(0);
+                        let group_success_count = group_total.saturating_sub(group_error_count);
+
+                        let summary = ModProcessSummary {
+                            group_name,
+                            total_mods: group_total,
+                            success_count: group_success_count,
+                            error_count: group_error_count,
+                            namespace_fixes,
+                        };
+
+                        if let Ok(mut summaries) = group_summaries.lock() {
+                            summaries.push(summary);
+                        }
                     }
                     Err(e) => {
                         error!("update_mod_data: failed to get mods for group {}: {}", group_path, e);
-                    }
-                }
 
-                // 收集该分组的摘要
-                {
-                    let group_error_count = per_mod_errors.lock().map(|errors| {
-                        errors.iter()
-                            .filter(|e| e.mod_path.starts_with(group_path))
-                            .count() as u32
-                    }).unwrap_or(0);
-                    let group_success_count = group_total.saturating_sub(group_error_count);
+                        let summary = ModProcessSummary {
+                            group_name,
+                            total_mods: 0,
+                            success_count: 0,
+                            error_count: 0,
+                            namespace_fixes: Vec::new(),
+                        };
 
-                    let summary = ModProcessSummary {
-                        group_name,
-                        total_mods: group_total,
-                        success_count: group_success_count,
-                        error_count: group_error_count,
-                    };
-
-                    if let Ok(mut summaries) = group_summaries.lock() {
-                        summaries.push(summary);
+                        if let Ok(mut summaries) = group_summaries.lock() {
+                            summaries.push(summary);
+                        }
                     }
                 }
             });
@@ -3009,6 +3273,7 @@ impl ModManager {
         let (_hash_conflict_count, hash_logs, hash_conflict_report) =
             Self::check_and_report_hash_conflicts(&managed_path_str, &groups_for_hash_check);
 
+        let mut logs = logs.lock().unwrap().clone();
         logs.extend(hash_logs);
 
         logs.push(LogEntry::info("All groups processed"));
@@ -3156,6 +3421,159 @@ impl ModManager {
         !components.is_empty() && components[0].starts_with("group_")
     }
 
+    /// 为分组内所有启用的模组检测并修复命名空间冲突。
+    ///
+    /// 流程：
+    /// 1. 初始化已占用命名空间集合（包含已知模组库的命名空间）
+    /// 2. 按模组顺序遍历每个启用的模组
+    /// 3. 对模组内每个 INI 文件，先收集所有 namespace 信息
+    /// 4. 若模组存在 namespace，检查是否冲突，若冲突则生成唯一的新名称（追加 _1, _2...）
+    /// 5. 使用确定的新命名空间替换模组内所有相关 INI 文件
+    /// 6. 记录修复日志
+    ///
+    /// 参数：
+    /// - `group_path`: 分组目录路径
+    /// - `mods`: 分组内的模组列表
+    /// - `known_libraries`: 已知模组库命名空间映射（这些命名空间不重命名）
+    ///
+    /// 返回：该分组内的命名空间修复记录列表
+    fn fix_namespace_conflicts_for_group(
+        _group_path: &str,
+        mods: &[ModData],
+        known_libraries: &HashMap<String, String>,
+    ) -> Result<Vec<NamespaceFix>> {
+        let mut fixes: Vec<NamespaceFix> = Vec::new();
+        let mut used_namespaces: HashSet<String> = HashSet::new();
+
+        for (ns_lower, _) in known_libraries {
+            used_namespaces.insert(ns_lower.clone());
+        }
+
+        for mod_data in mods {
+            if mod_data.mod_path == "None" || mod_data.is_disabled {
+                continue;
+            }
+
+            let mod_path = Path::new(&mod_data.mod_path);
+            if !mod_path.exists() || !mod_path.is_dir() {
+                continue;
+            }
+
+            let ini_files = Self::find_ini_files_recursive(mod_path);
+
+            let mut mod_original_ns: Option<String> = None;
+            let mut mod_file_contents: Vec<(PathBuf, String)> = Vec::new();
+
+            for ini_file in &ini_files {
+                let backup_path_str = format!(
+                    "{}.{}",
+                    ini_file.to_string_lossy(),
+                    MANAGED_BACKUP_EXT
+                );
+                let backup_path = Path::new(&backup_path_str);
+
+                if !backup_path.exists() {
+                    if let Err(e) = fs::copy(ini_file, backup_path) {
+                        warn!(
+                            "[fix_namespace_conflicts] failed to create backup for {:?}: {}",
+                            ini_file, e
+                        );
+                        continue;
+                    }
+                    debug!(
+                        "[fix_namespace_conflicts] created backup: {:?} -> {:?}",
+                        ini_file, backup_path
+                    );
+                }
+
+                let content = match fs::read_to_string(ini_file) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(
+                            "[fix_namespace_conflicts] failed to read {:?}: {}",
+                            ini_file, e
+                        );
+                        continue;
+                    }
+                };
+
+                if mod_original_ns.is_none() {
+                    if let Some(ns) = extract_namespace_from_ini_content(&content) {
+                        mod_original_ns = Some(ns);
+                    }
+                }
+
+                mod_file_contents.push((ini_file.clone(), content));
+            }
+
+            let original_ns = match mod_original_ns {
+                Some(ns) => ns,
+                None => continue,
+            };
+
+            let original_ns_lower = original_ns.to_lowercase();
+
+            let is_known_lib = known_libraries
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case(&original_ns_lower));
+            if is_known_lib {
+                used_namespaces.insert(original_ns_lower);
+                continue;
+            }
+
+            let mut new_ns = original_ns.clone();
+            let mut new_ns_lower = new_ns.to_lowercase();
+            let mut suffix = 1;
+
+            while used_namespaces.contains(&new_ns_lower) {
+                new_ns = format!("{}_{}", original_ns, suffix);
+                new_ns_lower = new_ns.to_lowercase();
+                suffix += 1;
+            }
+
+            if new_ns != original_ns {
+                let mut mod_was_modified = false;
+
+                for (ini_file, content) in &mod_file_contents {
+                    let (new_content, was_modified) =
+                        replace_namespace_in_content(content, &original_ns, &new_ns);
+
+                    if was_modified {
+                        if let Err(e) = fs::write(ini_file, &new_content) {
+                            warn!(
+                                "[fix_namespace_conflicts] failed to write {:?}: {}",
+                                ini_file, e
+                            );
+                            continue;
+                        }
+                        mod_was_modified = true;
+                        debug!(
+                            "[fix_namespace_conflicts] updated file {:?} for namespace rename",
+                            ini_file.file_name().unwrap_or_default()
+                        );
+                    }
+                }
+
+                if mod_was_modified {
+                    info!(
+                        "[fix_namespace_conflicts] renamed namespace '{}' -> '{}' in mod '{}'",
+                        original_ns, new_ns, mod_data.mod_name
+                    );
+
+                    fixes.push(NamespaceFix {
+                        mod_name: mod_data.mod_name.clone(),
+                        original_namespace: original_ns.clone(),
+                        new_namespace: new_ns.clone(),
+                    });
+                }
+            }
+
+            used_namespaces.insert(new_ns_lower);
+        }
+
+        Ok(fixes)
+    }
+
     /// 管理单个模组：备份并修改其 INI 文件以支持槽位切换。
     ///
     /// **状态保护机制**：本函数仅修改 INI 文件内容，不会改变模组的启用/禁用状态。
@@ -3251,7 +3669,12 @@ impl ModManager {
             return ini_files;
         }
 
-        for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(dir)
+            .max_depth(MAX_TRAVERSAL_DEPTH)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             if path.is_file() {
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -3269,6 +3692,7 @@ impl ModManager {
     ///
     /// 采用迭代式队列遍历而非递归，避免深目录导致的栈溢出问题。
     /// 支持传入文件路径（直接返回该文件，如果是.ini文件）或目录路径（递归查找）。
+    /// 遍历深度超过 MAX_TRAVERSAL_DEPTH 时跳过并记录警告。
     ///
     /// 参数：
     /// - `path`: 起始路径（文件或目录）。
@@ -3291,14 +3715,19 @@ impl ModManager {
         }
 
         let mut queue = std::collections::VecDeque::new();
-        queue.push_back(path.to_path_buf());
+        queue.push_back((path.to_path_buf(), 0));
 
-        while let Some(current) = queue.pop_front() {
+        while let Some((current, depth)) = queue.pop_front() {
+            if depth >= MAX_TRAVERSAL_DEPTH {
+                warn!("Max traversal depth reached at {:?}, skipping", current);
+                continue;
+            }
+
             if let Ok(entries) = fs::read_dir(&current) {
                 for entry in entries.flatten() {
                     let entry_path = entry.path();
                     if entry_path.is_dir() {
-                        queue.push_back(entry_path);
+                        queue.push_back((entry_path, depth + 1));
                     } else if entry_path.is_file() {
                         if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
                             if ext.eq_ignore_ascii_case("ini") {
@@ -3722,7 +4151,10 @@ impl ModManager {
             return result;
         }
 
-        let walker = WalkDir::new(managed).follow_links(false).into_iter();
+        let walker = WalkDir::new(managed)
+            .max_depth(MAX_TRAVERSAL_DEPTH)
+            .follow_links(false)
+            .into_iter();
         for entry in walker.filter_map(|e| e.ok()) {
             if !entry.file_type().is_file() {
                 continue;
@@ -3959,7 +4391,67 @@ impl ModManager {
         }
     }
 
+    /// 检测归档文件是否加密（需要密码才能解压）。
+    ///
+    /// 参数：
+    /// - `file_path`: 归档文件路径。
+    ///
+    /// 返回：true 表示文件已加密需要密码；false 表示未加密。
+    pub fn is_archive_encrypted(file_path: &Path) -> Result<bool> {
+        let (valid, archive_type) = Self::validate_archive_file(file_path);
+        if !valid {
+            anyhow::bail!("Invalid archive file: {:?}", file_path);
+        }
+
+        match archive_type {
+            ArchiveType::Zip => {
+                let file = fs::File::open(file_path)
+                    .with_context(|| format!("Failed to open ZIP file: {:?}", file_path))?;
+                let mut archive = ZipArchive::new(file)
+                    .with_context(|| format!("Failed to read ZIP file: {:?}", file_path))?;
+                for i in 0..archive.len() {
+                    match archive.by_index(i) {
+                        Ok(_) => continue,
+                        Err(e) => {
+                            let err_msg = e.to_string();
+                            if err_msg.contains("encrypted") || err_msg.contains("password") {
+                                return Ok(true);
+                            }
+                            return Err(e).with_context(|| format!("Failed to read entry {} in ZIP file", i));
+                        }
+                    }
+                }
+                Ok(false)
+            }
+            ArchiveType::SevenZip => {
+                let mut file = fs::File::open(file_path)
+                    .with_context(|| format!("Failed to open 7z file: {:?}", file_path))?;
+                let len = file.metadata()
+                    .with_context(|| format!("Failed to get file metadata: {:?}", file_path))?.len();
+                match sevenz_rust::SevenZReader::new(&mut file, len, Password::empty()) {
+                    Ok(_) => Ok(false),
+                    Err(e) => {
+                        let err_msg = e.to_string().to_lowercase();
+                        if err_msg.contains("password") || err_msg.contains("encrypt") {
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                }
+            }
+            ArchiveType::Rar => {
+                anyhow::bail!("RAR format is not supported");
+            }
+            ArchiveType::Unknown => {
+                anyhow::bail!("Unknown archive format");
+            }
+        }
+    }
+
     /// 使用 BFS 算法递归查找目录下所有文件（非递归实现）。
+    ///
+    /// 遍历深度超过 MAX_TRAVERSAL_DEPTH 时跳过并记录警告。
     ///
     /// 参数：
     /// - `path`: 起始目录路径。
@@ -3973,14 +4465,19 @@ impl ModManager {
         }
 
         let mut queue = std::collections::VecDeque::new();
-        queue.push_back(path.to_path_buf());
+        queue.push_back((path.to_path_buf(), 0));
 
-        while let Some(current) = queue.pop_front() {
+        while let Some((current, depth)) = queue.pop_front() {
+            if depth >= MAX_TRAVERSAL_DEPTH {
+                warn!("Max traversal depth reached at {:?}, skipping", current);
+                continue;
+            }
+
             if let Ok(entries) = fs::read_dir(&current) {
                 for entry in entries.flatten() {
                     let entry_path = entry.path();
                     if entry_path.is_dir() {
-                        queue.push_back(entry_path);
+                        queue.push_back((entry_path, depth + 1));
                     } else if entry_path.is_file() {
                         result.push(entry_path);
                     }
@@ -3991,14 +4488,15 @@ impl ModManager {
         result
     }
 
-    /// 解压 ZIP 文件到指定目录。
+    /// 解压 ZIP 文件到指定目录（支持可选密码）。
     ///
     /// 参数：
     /// - `file_path`: ZIP 文件路径。
     /// - `dest_dir`: 目标目录路径。
+    /// - `password`: 可选解压密码。
     ///
     /// 返回：是否解压成功。
-    pub fn extract_zip(file_path: &Path, dest_dir: &Path) -> Result<bool> {
+    pub fn extract_zip(file_path: &Path, dest_dir: &Path, password: Option<&str>) -> Result<bool> {
         let file = fs::File::open(file_path)
             .with_context(|| format!("Failed to open ZIP file: {:?}", file_path))?;
 
@@ -4009,58 +4507,77 @@ impl ModManager {
             .with_context(|| format!("Failed to create destination directory: {:?}", dest_dir))?;
 
         for i in 0..archive.len() {
-            let mut file = archive.by_index(i)
-                .with_context(|| format!("Failed to read entry {} in ZIP file", i))?;
-
-            let entry_path = dest_dir.join(file.name());
-
-            if (*file.name()).ends_with('/') {
-                fs::create_dir_all(&entry_path)
-                    .with_context(|| format!("Failed to create directory: {:?}", entry_path))?;
-            } else {
-                if let Some(parent) = entry_path.parent() {
-                    fs::create_dir_all(parent)
-                        .with_context(|| format!("Failed to create parent directory: {:?}", parent))?;
+            let mut file = if let Some(pwd) = password {
+                match archive.by_index_decrypt(i, pwd.as_bytes()) {
+                    Ok(Ok(f)) => f,
+                    Ok(Err(_)) => anyhow::bail!("Failed to decrypt ZIP entry {} (wrong password?)", i),
+                    Err(e) => anyhow::bail!("Failed to read ZIP entry {}: {}", i, e),
                 }
+            } else {
+                archive.by_index(i)
+                    .with_context(|| format!("Failed to read entry {} in ZIP file (file may be encrypted)", i))?
+            };
 
-                let mut out_file = fs::File::create(&entry_path)
-                    .with_context(|| format!("Failed to create file: {:?}", entry_path))?;
-
-                std::io::copy(&mut file, &mut out_file)
-                    .with_context(|| format!("Failed to write file: {:?}", entry_path))?;
-            }
+            Self::write_zip_entry(&mut file, dest_dir)?;
         }
 
         info!("Extracted ZIP file: {:?} -> {:?}", file_path, dest_dir);
         Ok(true)
     }
 
-    /// 解压 7z 文件到指定目录。
+    fn write_zip_entry(file: &mut zip::read::ZipFile, dest_dir: &Path) -> Result<()> {
+        let entry_path = dest_dir.join(file.name());
+
+        if (*file.name()).ends_with('/') {
+            fs::create_dir_all(&entry_path)
+                .with_context(|| format!("Failed to create directory: {:?}", entry_path))?;
+        } else {
+            if let Some(parent) = entry_path.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("Failed to create parent directory: {:?}", parent))?;
+            }
+
+            let mut out_file = fs::File::create(&entry_path)
+                .with_context(|| format!("Failed to create file: {:?}", entry_path))?;
+
+            std::io::copy(file, &mut out_file)
+                .with_context(|| format!("Failed to write file: {:?}", entry_path))?;
+        }
+        Ok(())
+    }
+
+    /// 解压 7z 文件到指定目录（支持可选密码）。
     ///
     /// 参数：
     /// - `file_path`: 7z 文件路径。
     /// - `dest_dir`: 目标目录路径。
+    /// - `password`: 可选解压密码。
     ///
     /// 返回：是否解压成功。
-    pub fn extract_7z(file_path: &Path, dest_dir: &Path) -> Result<bool> {
+    pub fn extract_7z(file_path: &Path, dest_dir: &Path, password: Option<&str>) -> Result<bool> {
         fs::create_dir_all(dest_dir)
             .with_context(|| format!("Failed to create destination directory: {:?}", dest_dir))?;
 
-        decompress_file(file_path, dest_dir)
-            .with_context(|| format!("Failed to extract 7z file: {:?}", file_path))?;
+        match password {
+            Some(pwd) => sevenz_rust::decompress_file_with_password(file_path, dest_dir, pwd.into())
+                .with_context(|| format!("Failed to extract encrypted 7z file: {:?}", file_path))?,
+            None => decompress_file(file_path, dest_dir)
+                .with_context(|| format!("Failed to extract 7z file: {:?}", file_path))?,
+        }
 
         info!("Extracted 7z file: {:?} -> {:?}", file_path, dest_dir);
         Ok(true)
     }
 
-    /// 解压压缩文件到指定目录（自动识别文件类型）。
+    /// 解压压缩文件到指定目录（自动识别文件类型，支持可选密码）。
     ///
     /// 参数：
     /// - `file_path`: 压缩文件路径。
     /// - `dest_dir`: 目标目录路径。
+    /// - `password`: 可选解压密码。
     ///
     /// 返回：是否解压成功。
-    pub fn extract_archive(file_path: &Path, dest_dir: &Path) -> Result<bool> {
+    pub fn extract_archive(file_path: &Path, dest_dir: &Path, password: Option<&str>) -> Result<bool> {
         let (valid, archive_type) = Self::validate_archive_file(file_path);
 
         if !valid {
@@ -4068,8 +4585,8 @@ impl ModManager {
         }
 
         match archive_type {
-            ArchiveType::Zip => Self::extract_zip(file_path, dest_dir),
-            ArchiveType::SevenZip => Self::extract_7z(file_path, dest_dir),
+            ArchiveType::Zip => Self::extract_zip(file_path, dest_dir, password),
+            ArchiveType::SevenZip => Self::extract_7z(file_path, dest_dir, password),
             ArchiveType::Rar => {
                 anyhow::bail!("RAR format is not supported for extraction");
             }
@@ -4083,6 +4600,7 @@ impl ModManager {
     ///
     /// 采用迭代式队列遍历，复制文件和目录结构。
     /// 跳过符号链接以避免循环引用。
+    /// 遍历深度超过 MAX_TRAVERSAL_DEPTH 时跳过并记录警告。
     ///
     /// 参数：
     /// - `src`: 源目录路径。
@@ -4092,14 +4610,18 @@ impl ModManager {
             .with_context(|| format!("Failed to create destination directory: {:?}", dst))?;
 
         let mut queue = std::collections::VecDeque::new();
-        queue.push_back((src.to_path_buf(), dst.to_path_buf()));
+        queue.push_back((src.to_path_buf(), dst.to_path_buf(), 0));
 
-        while let Some((current_src, current_dst)) = queue.pop_front() {
+        while let Some((current_src, current_dst, depth)) = queue.pop_front() {
+            if depth >= MAX_TRAVERSAL_DEPTH {
+                warn!("Max traversal depth reached at {:?}, skipping", current_src);
+                continue;
+            }
+
             if !current_src.exists() {
                 continue;
             }
 
-            // 跳过符号链接
             if current_src.is_symlink() {
                 continue;
             }
@@ -4112,7 +4634,7 @@ impl ModManager {
                     for entry in entries.flatten() {
                         let entry_path = entry.path();
                         let dest_path = current_dst.join(entry.file_name());
-                        queue.push_back((entry_path, dest_path));
+                        queue.push_back((entry_path, dest_path, depth + 1));
                     }
                 }
             } else if current_src.is_file() {
@@ -4321,7 +4843,11 @@ impl ModManager {
                     })?;
 
                 // 使用 WalkDir 递归遍历目录，min_depth(1) 跳过根目录自身
-                for entry in WalkDir::new(source_path).min_depth(1) {
+                for entry in WalkDir::new(source_path)
+                    .min_depth(1)
+                    .max_depth(MAX_TRAVERSAL_DEPTH)
+                    .follow_links(false)
+                {
                     let entry = entry.with_context(|| "Failed to read directory entry")?;
                     // 计算相对路径并转换为正斜杠风格（兼容 7z 标准）
                     let relative = entry
@@ -4704,4 +5230,461 @@ mod tests {
         assert_eq!(result, mod_dir.to_string_lossy().to_string());
     }
 
+    // ==================== natural_cmp 自然排序测试 ====================
+
+    #[test]
+    fn test_natural_cmp_basic() {
+        assert_eq!(ModManager::natural_cmp("a", "b"), std::cmp::Ordering::Less);
+        assert_eq!(ModManager::natural_cmp("b", "a"), std::cmp::Ordering::Greater);
+        assert_eq!(ModManager::natural_cmp("a", "a"), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn test_natural_cmp_numeric() {
+        // 数字比较：2 < 10 （自然排序）
+        assert_eq!(ModManager::natural_cmp("mod2", "mod10"), std::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn test_natural_cmp_numeric_leading() {
+        assert_eq!(ModManager::natural_cmp("2mod", "10mod"), std::cmp::Ordering::Less);
+        assert_eq!(ModManager::natural_cmp("10mod", "2mod"), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_natural_cmp_pure_numbers() {
+        assert_eq!(ModManager::natural_cmp("123", "456"), std::cmp::Ordering::Less);
+        assert_eq!(ModManager::natural_cmp("456", "123"), std::cmp::Ordering::Greater);
+        assert_eq!(ModManager::natural_cmp("123", "123"), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn test_natural_cmp_mixed_text_and_numbers() {
+        assert_eq!(ModManager::natural_cmp("abc123def", "abc456def"), std::cmp::Ordering::Less);
+        assert_eq!(ModManager::natural_cmp("abc10def", "abc2def"), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_natural_cmp_different_lengths() {
+        // 短字符串排在长字符串前面
+        assert_eq!(ModManager::natural_cmp("mod", "mod1"), std::cmp::Ordering::Less);
+        assert_eq!(ModManager::natural_cmp("mod1", "mod"), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_natural_cmp_empty_string() {
+        assert_eq!(ModManager::natural_cmp("", "a"), std::cmp::Ordering::Less);
+        assert_eq!(ModManager::natural_cmp("a", ""), std::cmp::Ordering::Greater);
+        assert_eq!(ModManager::natural_cmp("", ""), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn test_natural_cmp_case_sensitive() {
+        // 大写字母排在小写字母前面（ASCII 排序）
+        assert_eq!(ModManager::natural_cmp("A", "a"), std::cmp::Ordering::Less);
+        assert_eq!(ModManager::natural_cmp("a", "A"), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_natural_cmp_large_numbers() {
+        // 大数字不溢出
+        assert_eq!(
+            ModManager::natural_cmp("a99999999999999999999", "a100000000000000000000"),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn test_natural_cmp_digit_vs_non_digit() {
+        // 数字 < 非数字
+        assert_eq!(ModManager::natural_cmp("1a", "a1"), std::cmp::Ordering::Less);
+    }
+
+    // ==================== sanitize 辅助函数测试 ====================
+
+    #[test]
+    fn test_sanitize_condition_line_removes_managed_slot() {
+        // 传入包含 managed_slot_id 的 condition 行，验证管理表达式被移除
+        let result = ModManager::sanitize_condition_line(
+            r"condition = $active == 1 && $managed_slot_id == $\modmanageragl\group_1\active_slot",
+        );
+        assert!(result.is_some());
+        let cleaned = result.unwrap();
+        assert!(!cleaned.contains("managed_slot_id"));
+        assert!(cleaned.contains("$active == 1"));
+    }
+
+    #[test]
+    fn test_sanitize_condition_line_no_condition() {
+        // 非 condition 行返回 None
+        let result = ModManager::sanitize_condition_line("if $var == 1");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_sanitize_condition_line_empty() {
+        let result = ModManager::sanitize_condition_line("");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_sanitize_key_condition_expression_removes_managed_slot() {
+        let result = ModManager::sanitize_key_condition_expression(
+            r"$active == 1 && $managed_slot_id == $\modmanageragl\group_1\active_slot",
+        );
+        assert!(!result.contains("managed_slot_id"));
+        assert!(result.contains("$active == 1"));
+    }
+
+    #[test]
+    fn test_sanitize_key_condition_expression_no_managed() {
+        let result = ModManager::sanitize_key_condition_expression("$var == 1");
+        assert_eq!(result, "$var == 1");
+    }
+
+    #[test]
+    fn test_sanitize_key_condition_expression_empty() {
+        let result = ModManager::sanitize_key_condition_expression("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_remove_first_four_spaces_basic() {
+        assert_eq!(ModManager::remove_first_four_spaces("    hello"), "hello");
+        assert_eq!(ModManager::remove_first_four_spaces("  hello"), "  hello");
+        assert_eq!(ModManager::remove_first_four_spaces("hello"), "hello");
+    }
+
+    #[test]
+    fn test_remove_first_four_spaces_tabs() {
+        // 制表符不受影响
+        assert_eq!(ModManager::remove_first_four_spaces("\thello"), "\thello");
+    }
+
+    #[test]
+    fn test_remove_first_four_spaces_empty() {
+        assert_eq!(ModManager::remove_first_four_spaces(""), "");
+        assert_eq!(ModManager::remove_first_four_spaces("    "), "");
+    }
+
+    #[test]
+    fn test_remove_first_four_spaces_mixed() {
+        assert_eq!(ModManager::remove_first_four_spaces("    hello world"), "hello world");
+        assert_eq!(ModManager::remove_first_four_spaces("   hello world"), "   hello world");
+    }
+
+    // ==================== is_disabled_name 边界测试 ====================
+
+    #[test]
+    fn test_is_disabled_name_short_string() {
+        // 短于 DISABLED 前缀长度（8 字符）的字符串
+        assert!(!ModManager::is_disabled_name("D"));
+        assert!(!ModManager::is_disabled_name("DIS"));
+        assert!(!ModManager::is_disabled_name("DISABL"));
+        // "DISABLED" 本身是前缀，应返回 true
+        assert!(ModManager::is_disabled_name("DISABLED"));
+    }
+
+    #[test]
+    fn test_is_disabled_name_with_underscore() {
+        // "DISABLED_" 是纯粹的前缀，不检查后续字符
+        assert!(ModManager::is_disabled_name("DISABLED_"));
+        assert!(ModManager::is_disabled_name("DISABLED_anything"));
+    }
+
+    // ==================== remove_xxmi_ini_statements 测试 ====================
+
+    #[test]
+    fn test_remove_managed_statements_removes_managed_slot() {
+        // 构造包含 managed_slot_id 声明的 INI 内容
+        let content = "[Constants]\nglobal $managed_slot_id = 0\nkey = value\n";
+        let result = ModManager::remove_xxmi_ini_statements(content);
+        assert!(!result.contains("managed_slot_id"));
+        assert!(result.contains("key = value"));
+    }
+
+    #[test]
+    fn test_remove_managed_statements_no_marks() {
+        let content = "[Constants]\nkey = value\n";
+        let result = ModManager::remove_xxmi_ini_statements(content);
+        assert_eq!(result.trim(), content.trim());
+    }
+
+    #[test]
+    fn test_remove_managed_statements_empty() {
+        let result = ModManager::remove_xxmi_ini_statements("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_remove_managed_statements_with_if_endif() {
+        // 包含 manager if/endif 的块应被移除
+        let content = "[Constants]\nif $managed_slot_id == $\\modmanageragl\\group_1\\active_slot\nx = 1\nendif\nkey = value\n";
+        let result = ModManager::remove_xxmi_ini_statements(content);
+        assert!(!result.contains("managed_slot_id"));
+        assert!(!result.contains("modmanageragl"));
+        assert!(result.contains("key = value"));
+    }
+
+    // ==================== strip_disabled_prefixes_deep 测试 ====================
+
+    #[test]
+    fn test_strip_disabled_single_file() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        fs::write(root.join("DISABLED_test.txt"), "content").unwrap();
+
+        let count = ModManager::strip_disabled_prefixes_deep(root).unwrap();
+        assert_eq!(count, 1);
+        assert!(root.join("test.txt").exists());
+        assert!(!root.join("DISABLED_test.txt").exists());
+    }
+
+    #[test]
+    fn test_strip_disabled_nested_directories() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let dir1 = root.join("DISABLED_dir1");
+        fs::create_dir(&dir1).unwrap();
+        let dir2 = dir1.join("DISABLED_dir2");
+        fs::create_dir(&dir2).unwrap();
+        fs::write(dir2.join("DISABLED_file.txt"), "content").unwrap();
+
+        let count = ModManager::strip_disabled_prefixes_deep(root).unwrap();
+        assert_eq!(count, 3);
+        assert!(root.join("dir1").exists());
+        assert!(root.join("dir1").join("dir2").exists());
+        assert!(root.join("dir1").join("dir2").join("file.txt").exists());
+    }
+
+    #[test]
+    fn test_strip_disabled_exact_disabled_name_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let disabled_dir = root.join("DISABLED");
+        fs::create_dir(&disabled_dir).unwrap();
+        fs::write(disabled_dir.join("DISABLED_file.txt"), "content").unwrap();
+
+        let count = ModManager::strip_disabled_prefixes_deep(root).unwrap();
+        assert_eq!(count, 0);
+        assert!(disabled_dir.exists());
+        assert!(disabled_dir.join("DISABLED_file.txt").exists());
+    }
+
+    #[test]
+    fn test_strip_disabled_depth_limit() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let mut current = root.to_path_buf();
+        for i in 0..70 {
+            current = current.join(format!("DISABLED_level{}", i));
+            fs::create_dir(&current).unwrap();
+        }
+
+        let count = ModManager::strip_disabled_prefixes_deep(root).unwrap();
+        assert!(count >= 64);
+        assert!(count <= 70);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_strip_disabled_symlink_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let real_dir = root.join("real_dir");
+        fs::create_dir(&real_dir).unwrap();
+        fs::write(real_dir.join("DISABLED_file.txt"), "content").unwrap();
+
+        let link_dir = root.join("link_dir");
+        std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+
+        let count = ModManager::strip_disabled_prefixes_deep(root).unwrap();
+        assert_eq!(count, 1);
+        assert!(real_dir.join("file.txt").exists());
+        assert!(link_dir.exists());
+        assert!(link_dir.is_symlink());
+    }
+
+    // ==================== get_safe_target 测试 ====================
+
+    #[test]
+    fn test_get_safe_target_nonexistent() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("nonexistent");
+        let result = ModManager::get_safe_target(&target);
+        assert_eq!(result, target);
+    }
+
+    #[test]
+    fn test_get_safe_target_existing_file() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("test.txt");
+        fs::write(&target, "content").unwrap();
+
+        let result = ModManager::get_safe_target(&target);
+        assert!(result.ends_with("test_1.txt"));
+        assert!(!result.exists());
+    }
+
+    #[test]
+    fn test_get_safe_target_existing_directory() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("mymod");
+        fs::create_dir(&target).unwrap();
+
+        let result = ModManager::get_safe_target(&target);
+        assert!(result.ends_with("mymod_1"));
+        assert!(!result.exists());
+    }
+
+    #[test]
+    fn test_get_safe_target_multiple_conflicts() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join("mymod")).unwrap();
+        fs::create_dir(tmp.path().join("mymod_1")).unwrap();
+        fs::create_dir(tmp.path().join("mymod_2")).unwrap();
+
+        let target = tmp.path().join("mymod");
+        let result = ModManager::get_safe_target(&target);
+        assert!(result.ends_with("mymod_3"));
+        assert!(!result.exists());
+    }
+
+    #[test]
+    fn test_get_safe_target_file_without_extension() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("readme");
+        fs::write(&target, "content").unwrap();
+
+        let result = ModManager::get_safe_target(&target);
+        assert!(result.ends_with("readme_1"));
+        assert!(!result.exists());
+    }
+
+    // ==================== dir_contains_managed 测试 ====================
+
+    #[test]
+    fn test_dir_contains_managed_root_is_managed() {
+        let tmp = TempDir::new().unwrap();
+        let managed_dir = tmp.path().join("_MANAGED_");
+        fs::create_dir(&managed_dir).unwrap();
+
+        assert!(ModManager::dir_contains_managed(&managed_dir));
+    }
+
+    #[test]
+    fn test_dir_contains_managed_root_is_managed_case_insensitive() {
+        let tmp = TempDir::new().unwrap();
+        let managed_dir = tmp.path().join("_managed_");
+        fs::create_dir(&managed_dir).unwrap();
+
+        assert!(ModManager::dir_contains_managed(&managed_dir));
+    }
+
+    #[test]
+    fn test_dir_contains_managed_nested_managed() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("mymod");
+        fs::create_dir(&root).unwrap();
+        let nested = root.join("subdir");
+        fs::create_dir(&nested).unwrap();
+        fs::create_dir(nested.join("_MANAGED_")).unwrap();
+
+        assert!(ModManager::dir_contains_managed(&root));
+    }
+
+    #[test]
+    fn test_dir_contains_managed_no_managed() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("mymod");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("subdir")).unwrap();
+
+        assert!(!ModManager::dir_contains_managed(&root));
+    }
+
+    #[test]
+    fn test_dir_contains_managed_nonexistent() {
+        let tmp = TempDir::new().unwrap();
+        let nonexistent = tmp.path().join("nonexistent");
+        assert!(!ModManager::dir_contains_managed(&nonexistent));
+    }
+
+    // ==================== validate_drop_path 测试 ====================
+
+    /// 创建一个模拟的 Mods 目录结构，返回 group_path
+    fn create_test_mods_structure(tmp: &TempDir) -> PathBuf {
+        let mods_root = tmp.path().join("Mods");
+        let managed_dir = mods_root.join("_MANAGED_");
+        let group_dir = managed_dir.join("group_1");
+        fs::create_dir_all(&group_dir).unwrap();
+        group_dir
+    }
+
+    #[test]
+    fn test_validate_drop_path_safe_external_dir() {
+        let tmp = TempDir::new().unwrap();
+        let group_path = create_test_mods_structure(&tmp);
+        let safe_dir = tmp.path().join("external_mod");
+        fs::create_dir(&safe_dir).unwrap();
+
+        let result = ModManager::validate_drop_path(&safe_dir, group_path.to_str().unwrap());
+        assert!(result.is_ok(), "Expected safe path to pass: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_validate_drop_path_under_managed() {
+        let tmp = TempDir::new().unwrap();
+        let group_path = create_test_mods_structure(&tmp);
+        let bad_dir = group_path
+            .parent()
+            .unwrap()
+            .join("group_1")
+            .join("inside_managed");
+        fs::create_dir_all(&bad_dir).unwrap();
+
+        let result = ModManager::validate_drop_path(&bad_dir, group_path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("_MANAGED_"));
+    }
+
+    #[test]
+    fn test_validate_drop_path_contains_managed() {
+        let tmp = TempDir::new().unwrap();
+        let group_path = create_test_mods_structure(&tmp);
+        let bad_dir = tmp.path().join("mod_with_managed");
+        fs::create_dir(&bad_dir).unwrap();
+        fs::create_dir(bad_dir.join("_MANAGED_")).unwrap();
+
+        let result = ModManager::validate_drop_path(&bad_dir, group_path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("_MANAGED_"));
+    }
+
+    #[test]
+    fn test_validate_drop_path_ancestor_of_mods() {
+        let tmp = TempDir::new().unwrap();
+        let group_path = create_test_mods_structure(&tmp);
+        // tmp.path() 是 Mods 的祖先目录
+        let ancestor = tmp.path();
+        let result = ModManager::validate_drop_path(ancestor, group_path.to_str().unwrap());
+        // 应该被拒绝（要么因为包含 _MANAGED_，要么因为是祖先）
+        assert!(result.is_err(), "Ancestor directory should be rejected");
+    }
+
+    #[test]
+    fn test_validate_drop_path_mods_root_itself() {
+        let tmp = TempDir::new().unwrap();
+        let group_path = create_test_mods_structure(&tmp);
+        let mods_root = tmp.path().join("Mods");
+        // Mods 根目录包含 _MANAGED_ 子目录，应该被拒绝
+        let result = ModManager::validate_drop_path(&mods_root, group_path.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("_MANAGED_"));
+    }
 }

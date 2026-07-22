@@ -241,6 +241,40 @@ export async function invokeSimulateKeyCombination(keys: string[]): Promise<void
 }
 
 /**
+ * 保存按键绑定：修改指定 INI 文件中指定段的按键值。
+ * 对应后端命令：`save_keybind`。
+ * @param iniPath INI 文件路径
+ * @param sectionName 段名
+ * @param keyIndex key= 行序号（从 0 开始）
+ * @param newKeyValue 新的按键值
+ */
+export async function invokeSaveKeybind(
+  iniPath: string,
+  sectionName: string,
+  keyIndex: number,
+  newKeyValue: string,
+): Promise<void> {
+  return invoke('save_keybind', { iniPath, sectionName, keyIndex, newKeyValue });
+}
+
+/**
+ * 切换按键绑定的启用/禁用状态。
+ * 对应后端命令：`toggle_keybind_enabled`。
+ * @param iniPath INI 文件路径
+ * @param sectionName 段名
+ * @param keyIndex key= 行序号（从 0 开始）
+ * @param enabled true 启用，false 禁用
+ */
+export async function invokeToggleKeybindEnabled(
+  iniPath: string,
+  sectionName: string,
+  keyIndex: number,
+  enabled: boolean,
+): Promise<void> {
+  return invoke('toggle_keybind_enabled', { iniPath, sectionName, keyIndex, enabled });
+}
+
+/**
  * 校验指定游戏的 Mods 目录是否合法。
  * 对应后端命令：`validate_mods_path`。
  * @param path 待校验的 Mods 目录绝对路径
@@ -701,14 +735,25 @@ export async function invokeFindAllFiles(path: string): Promise<string[]> {
 }
 
 /**
+ * 检测压缩文件是否加密。
+ * 对应后端命令：`is_archive_encrypted`。
+ * @param file_path 压缩文件路径
+ * @returns 是否加密
+ */
+export async function invokeIsArchiveEncrypted(file_path: string): Promise<boolean> {
+  return invoke('is_archive_encrypted', { file_path });
+}
+
+/**
  * 解压压缩文件到指定目录（自动识别文件类型）。
  * 对应后端命令：`extract_archive`。
  * @param file_path 压缩文件路径
  * @param dest_dir 目标目录路径
+ * @param password 解压密码（可选）
  * @returns 是否解压成功
  */
-export async function invokeExtractArchive(file_path: string, dest_dir: string): Promise<boolean> {
-  return invoke('extract_archive', { file_path, dest_dir });
+export async function invokeExtractArchive(file_path: string, dest_dir: string, password?: string): Promise<boolean> {
+  return invoke('extract_archive', { file_path, dest_dir, password });
 }
 
 /**

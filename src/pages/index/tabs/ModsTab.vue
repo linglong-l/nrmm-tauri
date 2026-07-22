@@ -17,6 +17,8 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { InputInstance } from 'element-plus';
+import { listen } from '@tauri-apps/api/event';
+import type { UnlistenFn } from '@tauri-apps/api/event';
 import {
   Star,
   Plus,
@@ -58,6 +60,7 @@ import {
   invokeStopFileWatcher,
   invokeSetSelectedMod,
   invokeValidateArchiveFile,
+  invokeIsArchiveEncrypted,
   invokeExtractArchive,
   invokeExportMod,
   invokeExportGroup,
@@ -98,6 +101,9 @@ const contextMenuModIndex = ref(-1);                   // 右键菜单目标模�
 // 事件监听取消句柄；组件卸载时需调用以避免内存泄漏
 let fileWatcherUnlisten: (() => void) | null = null;
 let gameSwitchedUnlisten: (() => void) | null = null; // 游戏切换事件监听取消句柄
+let tauriFileDropUnlisten: UnlistenFn | null = null;
+let tauriFileDropHoverUnlisten: UnlistenFn | null = null;
+let tauriFileDropCancelledUnlisten: UnlistenFn | null = null;
 // 文件监听防抖定时器句柄；用于合并短时间内的多次刷新请求
 let refreshDebounceTimer: number | null = null;
 // 游戏切换防抖定时器句柄；防止快速连续选择游戏导致的频繁请求
@@ -106,6 +112,7 @@ const GAME_SWITCH_DEBOUNCE_DELAY = 1000; // 游戏切换防抖延迟（毫秒）
 
 // 拖拽状态
 const isDraggingOver = ref(false); // 拖拽悬停状态
+let lastDropHandledAt = 0; // 防止 Tauri 事件和 HTML5 DnD 重复触发
 
 // 左侧栏宽度和拖拽调节
 const sidebarRef = ref<HTMLElement | null>(null);
@@ -690,22 +697,23 @@ async function validateArchive(filePath: string): Promise<[boolean, string]> {
 }
 
 /**
- * 拖拽释放时获取文件路径并调用后端添加 Mod。
- * 支持：目录深度遍历、压缩文件自动解压（zip/7z）、RAR仅验证不支持解压。
- * 默认添加到当前选中的分组。
- * @param event 拖拽事件
+ * 处理文件路径列表，执行验证、解压并导入。
+ * 这是拖拽导入的核心逻辑，供 HTML5 DnD 和 Tauri file-drop 事件共用。
+ * @param filePaths 文件/目录路径列表
+ * @param isDirectoryMap 可选的路径到是否为目录的映射（HTML5 DnD 提供）
  */
-async function onDrop(event: DragEvent) {
-  event.preventDefault();
-  isDraggingOver.value = false;
+async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string, boolean>) {
+  // 防止 Tauri 事件和 HTML5 DnD 事件在短时间内重复触发
+  const now = Date.now();
+  if (now - lastDropHandledAt < 500) {
+    return;
+  }
+  lastDropHandledAt = now;
 
   if (isImporting.value) {
     ElMessage.warning(t('Import is already in progress'));
     return;
   }
-
-  const files = event.dataTransfer?.files;
-  if (!files || files.length === 0) return;
 
   const currentGroup = game.currentGroup.value;
   if (!currentGroup) {
@@ -713,22 +721,30 @@ async function onDrop(event: DragEvent) {
     return;
   }
 
+  if (!filePaths || filePaths.length === 0) return;
+
   isImporting.value = true;
   const pathsToAdd: string[] = [];
 
   try {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i] as any;
-      if (!file.path) continue;
+    for (const filePath of filePaths) {
+      if (!filePath) continue;
 
-      if (file.isDirectory) {
-        pathsToAdd.push(file.path);
+      const isDirectory = isDirectoryMap?.get(filePath) ?? (() => {
+        const lowerPath = filePath.toLowerCase();
+        return !lowerPath.endsWith('.zip') && !lowerPath.endsWith('.7z') && !lowerPath.endsWith('.rar') &&
+          !lowerPath.endsWith('.txt') && !lowerPath.endsWith('.ini') && !lowerPath.endsWith('.exe');
+      })();
+
+      if (isDirectory) {
+        pathsToAdd.push(filePath);
       } else {
-        const ext = file.name.toLowerCase().split('.').pop();
+        const ext = filePath.toLowerCase().split('.').pop();
         if (ext === 'zip' || ext === '7z' || ext === 'rar') {
-          const [valid, fileType] = await validateArchive(file.path);
+          const [valid, fileType] = await validateArchive(filePath);
           if (!valid) {
-            ElMessage.warning(t('Invalid archive file: {name}', { name: file.name }));
+            const fileName = filePath.split(/[\\/]/).pop() || filePath;
+            ElMessage.warning(t('Invalid archive file: {name}', { name: fileName }));
             continue;
           }
 
@@ -737,15 +753,42 @@ async function onDrop(event: DragEvent) {
             continue;
           }
 
-          const extractDir = file.path.replace(/\.(zip|7z)$/i, '_extracted');
+          const extractDir = filePath.replace(/\.(zip|7z)$/i, '_extracted');
           try {
-            await invokeExtractArchive(file.path, extractDir);
+            let password: string | undefined;
+            const isEncrypted = await invokeIsArchiveEncrypted(filePath);
+            if (isEncrypted) {
+              try {
+                const { value } = await ElMessageBox.prompt(
+                  t('Archive is password-protected, please enter password'),
+                  t('Archive password'),
+                  {
+                    confirmButtonText: t('Confirm'),
+                    cancelButtonText: t('Cancel'),
+                    inputType: 'password',
+                    inputValidator: (val) => {
+                      if (!val || val.trim() === '') {
+                        return t('Password cannot be empty');
+                      }
+                      return true;
+                    }
+                  }
+                );
+                password = value;
+              } catch {
+                const fileName = filePath.split(/[\\/]/).pop() || filePath;
+                ElMessage.warning(t('Password input cancelled, skipping: {name}', { name: fileName }));
+                continue;
+              }
+            }
+            await invokeExtractArchive(filePath, extractDir, password);
             pathsToAdd.push(extractDir);
           } catch {
-            ElMessage.error(t('Failed to extract archive: {name}', { name: file.name }));
+            const fileName = filePath.split(/[\\/]/).pop() || filePath;
+            ElMessage.error(t('Wrong password or extraction failed: {name}', { name: fileName }));
           }
         } else {
-          pathsToAdd.push(file.path);
+          pathsToAdd.push(filePath);
         }
       }
     }
@@ -762,6 +805,34 @@ async function onDrop(event: DragEvent) {
     ElMessage.error(t('Failed to add mods'));
   } finally {
     isImporting.value = false;
+  }
+}
+
+/**
+ * 拖拽释放时获取文件路径并调用后端添加 Mod（HTML5 DnD 事件）。
+ * 支持：目录深度遍历、压缩文件自动解压（zip/7z）、RAR仅验证不支持解压。
+ * 默认添加到当前选中的分组。
+ * @param event 拖拽事件
+ */
+async function onDrop(event: DragEvent) {
+  event.preventDefault();
+  isDraggingOver.value = false;
+
+  const files = event.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+
+  const paths: string[] = [];
+  const isDirMap = new Map<string, boolean>();
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i] as any;
+    if (file.path) {
+      paths.push(file.path);
+      isDirMap.set(file.path, !!file.isDirectory);
+    }
+  }
+
+  if (paths.length > 0) {
+    await handleDropPaths(paths, isDirMap);
   }
 }
 
@@ -1179,6 +1250,26 @@ onMounted(async () => {
   }
   await setupEventListeners();
   await setupFileWatcher();
+
+  // 注册 Tauri 原生文件拖拽事件监听（作为 HTML5 DnD 的补充，确保跨平台可靠获取文件路径）
+  try {
+    tauriFileDropHoverUnlisten = await listen<string[]>('tauri://file-drop-hover', () => {
+      isDraggingOver.value = true;
+    });
+    tauriFileDropCancelledUnlisten = await listen('tauri://file-drop-cancelled', () => {
+      isDraggingOver.value = false;
+    });
+    tauriFileDropUnlisten = await listen<string[]>('tauri://file-drop', (event) => {
+      isDraggingOver.value = false;
+      const paths = event.payload;
+      if (paths && paths.length > 0) {
+        handleDropPaths(paths).catch((e) => log.error('Tauri file drop handling failed', e));
+      }
+    });
+  } catch (e) {
+    log.warn('Failed to register Tauri file drop listeners (may be running in browser)', { reason: String(e) });
+  }
+
   // 首次加载完成后主动触发 hash 冲突检测（检测失败不影响主流程）
   if (game.targetGame.value !== 'none') {
     try {
@@ -1201,6 +1292,18 @@ onUnmounted(() => {
   }
   if (gameSwitchedUnlisten) {
     gameSwitchedUnlisten();
+  }
+  if (tauriFileDropUnlisten) {
+    tauriFileDropUnlisten();
+    tauriFileDropUnlisten = null;
+  }
+  if (tauriFileDropHoverUnlisten) {
+    tauriFileDropHoverUnlisten();
+    tauriFileDropHoverUnlisten = null;
+  }
+  if (tauriFileDropCancelledUnlisten) {
+    tauriFileDropCancelledUnlisten();
+    tauriFileDropCancelledUnlisten = null;
   }
   invokeStopFileWatcher().catch((err) => log.error('Failed to stop file watcher on unmount', err));
   document.removeEventListener('click', hideContextMenu);

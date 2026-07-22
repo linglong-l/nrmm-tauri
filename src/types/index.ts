@@ -370,14 +370,64 @@ export interface AutoIconEntry {
 }
 
 /**
+ * 日志条目，用于将后端处理过程中的信息传递给前端展示。
+ */
+export interface LogEntry {
+  /** 日志正文内容 */
+  message: string;
+  /** 日志级别：info / warn / error / success */
+  level: 'info' | 'warn' | 'error' | 'success';
+  /** 可选的详细信息 */
+  detail?: string;
+}
+
+/**
+ * INI 语法错误信息（后端 IniSyntaxError 的 camelCase 映射）
+ */
+export interface IniSyntaxErrorFull {
+  /** 错误所在文件路径 */
+  filePath: string;
+  /** 错误所在行号（0-based） */
+  lineIndex: number;
+  /** 错误行的原始文本 */
+  trimmedLine: string;
+  /** 错误原因描述 */
+  reason: string;
+}
+
+/**
+ * 错误检测汇总报告（后端 ErroredLinesReport 的 camelCase 映射）
+ */
+export interface ErroredLinesReport {
+  /** 重复的模组库命名空间 */
+  duplicateLibs: Record<string, string[]>;
+  /** 引用了不存在的模组库 */
+  nonExistentLibs: Record<string, string>;
+  /** 会导致崩溃的行 */
+  crashLines: Record<string, IniSyntaxErrorFull[]>;
+  /** 其他语法错误 */
+  otherErrors: Record<string, IniSyntaxErrorFull[]>;
+  /** 缺少 endif 的错误 */
+  missingEndifErrors: Record<string, IniSyntaxErrorFull[]>;
+  /** 路径过长的文件列表 */
+  longPathErrors: string[];
+}
+
+/**
  * 调用 update_mod_data 后端命令的返回结果。
  * 用于描述刷新/更新操作是否成功，以及 per-mod 错误列表与分组处理摘要。
  */
 export interface UpdateModDataResult {
   /** 操作是否成功完成 */
   success: boolean;
+  /** 执行过程中产生的日志条目列表 */
+  logs: LogEntry[];
   /** 总耗时（毫秒） */
   durationMs: number;
+  /** INI 语法错误检测报告 */
+  errorReport: ErroredLinesReport | null;
+  /** 启用模组的 hash 冲突报告 */
+  hashConflictReport: HashConflictReport | null;
   /** 每个模组的处理错误列表（仅当前请求周期有效） */
   perModErrors: ModManageError[];
   /** 分组处理摘要 */
@@ -406,6 +456,19 @@ export interface ModManageError {
 }
 
 /**
+ * 命名空间冲突修复记录。
+ * 描述一次命名空间冲突自动修复的详细信息。
+ */
+export interface NamespaceFix {
+  /** 发生冲突的模组名称 */
+  modName: string;
+  /** 原始命名空间 */
+  originalNamespace: string;
+  /** 修复后的新命名空间 */
+  newNamespace: string;
+}
+
+/**
  * 分组处理摘要。
  * 统计每个分组在 update_mod_data 流程中的处理结果。
  */
@@ -418,6 +481,8 @@ export interface ModProcessSummary {
   successCount: number;
   /** 处理失败的模组数 */
   errorCount: number;
+  /** 命名空间修复记录列表 */
+  namespaceFixes: NamespaceFix[];
 }
 
 /**

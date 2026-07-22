@@ -6,7 +6,7 @@
  *  - 在 update_mod_data 操作期间展示全屏遮罩，阻止用户任何交互。
  *  - 三种状态：loading（加载中）、completed（完成，展示结果）、error（异常）。
  *  - loading: 旋转加载动画 + "正在更新模组数据中..."
- *  - completed: 耗时、成功/失败统计、per-mod 错误列表（可折叠）、关闭按钮
+ *  - completed: 耗时、成功/失败统计、per-mod 错误列表、命名空间修复记录（可折叠）、关闭按钮
  *  - error: 错误图标 + 错误消息 + 关闭按钮
  *
  * 使用方式：
@@ -14,7 +14,7 @@
  */
 import { ref, computed, watch } from 'vue';
 import { Loading, CircleCheckFilled, WarningFilled, CircleCloseFilled } from '@element-plus/icons-vue';
-import type { UpdateModDataResult, ModManageError } from '../types';
+import type { UpdateModDataResult, ModManageError, NamespaceFix } from '../types';
 import { formatDuration } from '../utils/format';
 
 const props = defineProps<{
@@ -33,12 +33,35 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-/** el-collapse 的激活项，用于控制错误列表折叠 */
-const activeNames = ref<string[]>(['errors']);
+/** el-collapse 的激活项，用于控制错误列表和命名空间修复折叠 */
+const activeNames = ref<string[]>(['errors', 'namespace-fixes']);
 
 /** 是否有 per-mod 错误 */
 const hasErrors = computed(() => {
   return props.result && props.result.perModErrors && props.result.perModErrors.length > 0;
+});
+
+/** 是否有命名空间修复记录 */
+const hasNamespaceFixes = computed(() => {
+  return props.result && props.result.groupSummaries && 
+    props.result.groupSummaries.some(g => g.namespaceFixes && g.namespaceFixes.length > 0);
+});
+
+/** 收集所有命名空间修复记录 */
+const allNamespaceFixes = computed(() => {
+  if (!props.result || !props.result.groupSummaries) return [];
+  const fixes: NamespaceFix[] = [];
+  for (const group of props.result.groupSummaries) {
+    if (group.namespaceFixes) {
+      fixes.push(...group.namespaceFixes);
+    }
+  }
+  return fixes;
+});
+
+/** 命名空间修复总数 */
+const namespaceFixCount = computed(() => {
+  return allNamespaceFixes.value.length;
 });
 
 /** 成功数 */
@@ -75,10 +98,13 @@ const stageLabels: Record<string, string> = {
   validate: '路径校验异常'
 };
 
-/** 显示加载态时自动展开错误列表 */
+/** 显示加载态时自动展开错误列表和命名空间修复 */
 watch(() => props.state, (newState) => {
   if (newState === 'completed') {
-    activeNames.value = hasErrors.value ? ['errors'] : [];
+    const panels: string[] = [];
+    if (hasErrors.value) panels.push('errors');
+    if (hasNamespaceFixes.value) panels.push('namespace-fixes');
+    activeNames.value = panels;
   }
 });
 
@@ -140,10 +166,36 @@ function stopPropagation(e: MouseEvent) {
               <span class="stat-value error">{{ result.totalErrors }}</span>
               <span class="stat-label">个</span>
             </div>
+            <div v-if="namespaceFixCount > 0" class="stat-item">
+              <span class="stat-label">命名空间修复</span>
+              <span class="stat-value info">{{ namespaceFixCount }}</span>
+              <span class="stat-label">处</span>
+            </div>
             <div class="stat-item">
               <span class="stat-label">耗时</span>
               <span class="stat-value">{{ formattedDuration }}</span>
             </div>
+          </div>
+
+          <!-- 命名空间修复列表 -->
+          <div v-if="hasNamespaceFixes" class="namespace-fixes-section">
+            <el-collapse v-model="activeNames">
+              <el-collapse-item :title="`命名空间冲突修复 (${namespaceFixCount} 处)`" name="namespace-fixes">
+                <div
+                  v-for="(fix, index) in allNamespaceFixes"
+                  :key="index"
+                  class="namespace-fix-item"
+                >
+                  <div class="namespace-fix-content">
+                    <span class="fix-mod-name">{{ fix.modName }}</span>
+                    <span class="fix-arrow">：</span>
+                    <span class="fix-original">{{ fix.originalNamespace }}</span>
+                    <span class="fix-arrow"> → </span>
+                    <span class="fix-new">{{ fix.newNamespace }}</span>
+                  </div>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
           </div>
 
           <!-- Per-mod 错误列表 -->
@@ -310,6 +362,76 @@ function stopPropagation(e: MouseEvent) {
 
 .stat-value.success { color: #67c23a; }
 .stat-value.error { color: #f56c6c; }
+.stat-value.info { color: #409eff; }
+
+/* Namespace fixes section */
+.namespace-fixes-section {
+  width: 100%;
+  margin-bottom: 24px;
+}
+
+.namespace-fixes-section :deep(.el-collapse) {
+  --el-collapse-header-bg-color: rgba(64, 158, 255, 0.08);
+  --el-collapse-content-bg-color: rgba(64, 158, 255, 0.04);
+  border: 1px solid rgba(64, 158, 255, 0.2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.namespace-fixes-section :deep(.el-collapse-item__header) {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(64, 158, 255, 0.1);
+}
+
+.namespace-fixes-section :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.namespace-fixes-section :deep(.el-collapse-item__content) {
+  color: rgba(255, 255, 255, 0.65);
+  padding: 12px 16px;
+}
+
+.namespace-fix-item {
+  margin-bottom: 8px;
+}
+
+.namespace-fix-item:last-child {
+  margin-bottom: 0;
+}
+
+.namespace-fix-content {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
+  background-color: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  padding: 10px 12px;
+  line-height: 1.6;
+}
+
+.fix-mod-name {
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
+}
+
+.fix-arrow {
+  color: rgba(255, 255, 255, 0.4);
+  margin: 0 4px;
+}
+
+.fix-original {
+  color: #e6a23c;
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.fix-new {
+  color: #67c23a;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-weight: 500;
+}
 
 /* Error section */
 .error-section {

@@ -41,6 +41,56 @@ describe('fuzzyMatch', () => {
   it('关键字比文本长时返回 matched: false', () => {
     expect(fuzzyMatch('hudd', 'HUD')).toEqual({ matched: false, indices: [] });
   });
+
+  it('中文字符匹配', () => {
+    const result = fuzzyMatch('模组', '测试模组名称');
+    expect(result.matched).toBe(true);
+    expect(result.indices.length).toBe(2);
+  });
+
+  it('中文字符不匹配', () => {
+    const result = fuzzyMatch('数据', '测试模组');
+    expect(result.matched).toBe(false);
+  });
+
+  it('特殊字符空格匹配', () => {
+    const result = fuzzyMatch('H M', 'HUD Mod');
+    expect(result.matched).toBe(true);
+  });
+
+  it('特殊字符下划线匹配', () => {
+    const result = fuzzyMatch('hud_mod', 'HUD_Mod_v2');
+    expect(result.matched).toBe(true);
+  });
+
+  it('特殊字符连字符匹配', () => {
+    const result = fuzzyMatch('a-b', 'test-a-b-c');
+    expect(result.matched).toBe(true);
+  });
+
+  it('长文本匹配', () => {
+    const longText = 'This is a very long mod name with many characters for testing fuzzy matching';
+    const result = fuzzyMatch('tmn', longText);
+    expect(result.matched).toBe(true);
+  });
+
+  it('单字符关键字匹配', () => {
+    const result = fuzzyMatch('h', 'HUD Mod');
+    expect(result.matched).toBe(true);
+    expect(result.indices).toEqual([0]);
+  });
+
+  it('重复字符匹配', () => {
+    const result = fuzzyMatch('aa', 'banana');
+    expect(result.matched).toBe(true);
+    // 应匹配第一个和第三个 'a'（位置 1 和 3）
+    expect(result.indices).toEqual([1, 3]);
+  });
+
+  it('关键字含数字匹配', () => {
+    const result = fuzzyMatch('mod2', 'Mod_V2');
+    expect(result.matched).toBe(true);
+  });
 });
 
 describe('splitByIndices', () => {

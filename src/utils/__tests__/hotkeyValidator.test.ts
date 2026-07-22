@@ -38,4 +38,29 @@ describe('validateHotkeys', () => {
     expect(result.valid).toBe(true);
     expect(result.conflicts).toEqual([]);
   });
+
+  it('空字符串输入不崩溃', () => {
+    // 空字符串相等，产生冲突，但不应崩溃
+    const result = validateHotkeys('', '');
+    expect(result.valid).toBe(false);
+    expect(result.conflicts.length).toBe(1);
+  });
+
+  it('特殊字符快捷键值不崩溃', () => {
+    const result = validateHotkeys('alt!', 'alt@');
+    expect(result.valid).toBe(true);
+  });
+
+  it('超长输入不崩溃', () => {
+    const longKey = 'a'.repeat(1000);
+    const result = validateHotkeys(longKey, longKey);
+    expect(result.valid).toBe(false);
+    expect(result.conflicts.length).toBe(1);
+  });
+
+  it('两个不同的特殊快捷键不冲突', () => {
+    const result = validateHotkeys('ctrlA', 'altF');
+    // 非 alt 前缀的快捷键仍应正常处理
+    expect(result.valid).toBe(true);
+  });
 });

@@ -49,8 +49,8 @@ ini = "1.3"
 parking_lot = "0.12"
 rayon = "1.12"
 sysinfo = "0.39"
-zip = { version = "0.6", features = ["deflate"] }
-sevenz-rust = "0.6"
+zip = { version = "0.6", features = ["deflate", "aes-crypto"] }
+sevenz-rust = { version = "0.6", features = ["aes256"] }
 open = "5.3"
 
 [dev-dependencies]

@@ -123,3 +123,53 @@ pub async fn reload_mod_key_sequence() -> Result<()> {
     let simulator = KeypressSimulator::new();
     simulator.simulate_key_press_vk(VK_F10).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 验证 select_mod_key_sequence 在非 Windows 平台返回错误。
+    #[tokio::test]
+    async fn test_select_mod_non_windows_returns_error() {
+        let result = select_mod_key_sequence(0, 0).await;
+        if cfg!(target_os = "windows") {
+            // Windows 环境下可能成功，测试不报错即可
+            // 实际调用需要游戏窗口，此处仅验证编译通过
+        } else {
+            assert!(result.is_err());
+        }
+    }
+
+    /// 验证 select_mod_key_sequence 接受各种参数不崩溃。
+    #[tokio::test]
+    async fn test_select_mod_valid_params() {
+        // 测试各种参数组合，确保不 panic
+        let result = select_mod_key_sequence(0, 0).await;
+        let _ = result;
+    }
+
+    /// 验证 select_mod_key_sequence 支持大索引值不崩溃。
+    #[tokio::test]
+    async fn test_select_mod_large_indices() {
+        let result = select_mod_key_sequence(9999, 9999).await;
+        let _ = result;
+    }
+
+    /// 验证 select_mod_key_sequence 支持负索引值。
+    #[tokio::test]
+    async fn test_select_mod_negative_indices() {
+        let result = select_mod_key_sequence(-1, -1).await;
+        let _ = result;
+    }
+
+    /// 验证 reload_mod_key_sequence 在非 Windows 平台返回错误。
+    #[tokio::test]
+    async fn test_reload_mod_non_windows_returns_error() {
+        let result = reload_mod_key_sequence().await;
+        if cfg!(target_os = "windows") {
+            let _ = result;
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}

@@ -513,3 +513,151 @@ impl Default for Settings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 验证默认设置结构体字段的非空性。
+    #[test]
+    fn test_default_settings_non_empty() {
+        let settings = Settings::default();
+        assert!(!settings.hotkey_keyboard.is_empty());
+        assert!(!settings.language.is_empty());
+        assert!(!settings.theme.is_empty());
+        assert!(!settings.target_process_wuwa.is_empty());
+    }
+
+    /// 验证默认设置整体缩放比例为 1.0。
+    #[test]
+    fn test_default_overall_scale() {
+        let settings = Settings::default();
+        assert_eq!(settings.overall_scale, 1.0);
+    }
+
+    /// 验证默认设置背景透明度为 0.85。
+    #[test]
+    fn test_default_bg_transparency() {
+        let settings = Settings::default();
+        assert_eq!(settings.bg_transparency, 0.85);
+    }
+
+    /// 验证默认设置目标游戏为鸣潮。
+    #[test]
+    fn test_default_target_game() {
+        let settings = Settings::default();
+        assert_eq!(settings.target_game, TargetGame::WutheringWaves);
+    }
+
+    /// 验证默认设置键盘热键。
+    #[test]
+    fn test_default_hotkey_keyboard() {
+        let settings = Settings::default();
+        assert_eq!(settings.hotkey_keyboard, "altD");
+    }
+
+    /// 验证 validate_and_fix 钳位整体缩放。
+    #[test]
+    fn test_validate_and_fix_clamps_overall_scale() {
+        let mut settings = Settings::default();
+        settings.overall_scale = 3.0;
+        settings.validate_and_fix();
+        assert_eq!(settings.overall_scale, 2.0);
+    }
+
+    /// 验证 validate_and_fix 钳位下限。
+    #[test]
+    fn test_validate_and_fix_clamps_lower_bound() {
+        let mut settings = Settings::default();
+        settings.overall_scale = 0.1;
+        settings.validate_and_fix();
+        assert_eq!(settings.overall_scale, 0.5);
+    }
+
+    /// 验证 validate_and_fix 回填空语言。
+    #[test]
+    fn test_validate_and_fix_empty_language() {
+        let mut settings = Settings::default();
+        settings.language = String::new();
+        settings.validate_and_fix();
+        assert!(!settings.language.is_empty());
+    }
+
+    /// 验证 validate_and_fix 回填空主题。
+    #[test]
+    fn test_validate_and_fix_empty_theme() {
+        let mut settings = Settings::default();
+        settings.theme = String::new();
+        settings.validate_and_fix();
+        assert!(!settings.theme.is_empty());
+    }
+
+    /// 验证 validate_and_fix 钳位窗口尺寸下限。
+    #[test]
+    fn test_validate_and_fix_clamps_window_size() {
+        let mut settings = Settings::default();
+        settings.saved_window_width = 100;
+        settings.saved_window_height = 100;
+        settings.validate_and_fix();
+        assert!(settings.saved_window_width >= 400);
+        assert!(settings.saved_window_height >= 300);
+    }
+
+    /// 验证 Settings::new() 等价于 default。
+    #[test]
+    fn test_settings_new_equals_default() {
+        let new_settings = Settings::new();
+        let default_settings = Settings::default();
+        assert_eq!(new_settings.hotkey_keyboard, default_settings.hotkey_keyboard);
+        assert_eq!(new_settings.language, default_settings.language);
+    }
+
+    /// 验证 settings_file_path 拼接正确。
+    #[test]
+    fn test_settings_file_path() {
+        let path = Settings::settings_file_path(Path::new("/app/data"));
+        assert_eq!(path, PathBuf::from("/app/data/settings.json"));
+    }
+
+    /// 验证 JSON 序列化使用 camelCase。
+    #[test]
+    fn test_settings_serialize_camelcase() {
+        let settings = Settings::default();
+        let json = serde_json::to_string(&settings).unwrap();
+        // 字段名应使用 camelCase
+        assert!(json.contains("hotkeyKeyboard"));
+        assert!(json.contains("targetGame"));
+        assert!(json.contains("overallScale"));
+    }
+
+    /// 验证 JSON 反序列化 camelCase。
+    #[test]
+    fn test_settings_deserialize_camelcase() {
+        let json = r#"{"hotkeyKeyboard":"altX","language":"zh","theme":"dark"}"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.hotkey_keyboard, "altX");
+        assert_eq!(settings.language, "zh");
+        assert_eq!(settings.theme, "dark");
+    }
+
+    /// 验证 JSON 反序列化缺失字段时回退默认值。
+    #[test]
+    fn test_settings_deserialize_missing_fields() {
+        let json = r#"{}"#;
+        let settings: Settings = serde_json::from_str(json).unwrap();
+        // 默认值应被填充
+        assert_eq!(settings.hotkey_keyboard, "altD");
+        assert_eq!(settings.language, "en");
+    }
+
+    /// 验证 reset_to_default 重置所有字段。
+    #[test]
+    fn test_reset_to_default() {
+        let mut settings = Settings::default();
+        settings.hotkey_keyboard = "altX".to_string();
+        settings.language = "zh".to_string();
+        settings.reset_to_default();
+        assert_eq!(settings.hotkey_keyboard, "altD");
+        assert_eq!(settings.language, "en");
+    }
+}

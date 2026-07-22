@@ -645,3 +645,62 @@ describe('removeModFromGroup (realIndex not decremented)', () => {
     expect(group!.modsInGroup[2].realIndex).toBe(3); // 不被递减为 2
   });
 });
+
+describe('gameStore 通用状态', () => {
+  let gameStore: ReturnType<typeof useGameStore>;
+
+  beforeEach(() => {
+    const settingsStore = useSettingsStore();
+    vi.spyOn(settingsStore, 'getModsPath').mockReturnValue('/fake/path');
+    vi.spyOn(settingsStore, 'setTargetGame').mockImplementation(() => {});
+    gameStore = useGameStore();
+  });
+
+  it('setModGroups 空数组初始化 selectedMap', () => {
+    gameStore.setModGroups([]);
+    expect(gameStore.modGroups).toEqual([]);
+  });
+
+  it('setSelectedModPath 需要分组存在才生效', () => {
+    // setSelectedModPath 校验分组存在性，未设置分组时设置不生效
+    gameStore.setSelectedModPath('/group1', '/mod1');
+    expect(gameStore.getSelectedModPath('/group1')).toBeNull();
+  });
+
+  it('setModGroups 后 setSelectedModPath 生效', () => {
+    gameStore.setModGroups([
+      makeGroup({
+        groupPath: '/group1',
+        modsInGroup: [makeMod({ modPath: '/mod1', modName: 'Mod 1' })],
+      }),
+    ]);
+    gameStore.setSelectedModPath('/group1', '/mod1');
+    expect(gameStore.getSelectedModPath('/group1')).toBe('/mod1');
+  });
+
+  it('isModsLoaded 初始为 false', () => {
+    expect(gameStore.isModsLoaded).toBe(false);
+  });
+
+  it('setModsLoaded 设为 true', () => {
+    gameStore.setModsLoaded(true);
+    expect(gameStore.isModsLoaded).toBe(true);
+  });
+
+  it('loadStatus 初始为 idle', () => {
+    expect(gameStore.loadStatus).toBe('idle');
+  });
+
+  it('searchKeyword 更新', () => {
+    gameStore.searchKeyword = 'test';
+    expect(gameStore.searchKeyword).toBe('test');
+  });
+
+  it('isSearching 初始为 false', () => {
+    expect(gameStore.isSearching).toBe(false);
+  });
+
+  it('currentGroupIndex 初始为 0', () => {
+    expect(gameStore.currentGroupIndex).toBe(0);
+  });
+});
