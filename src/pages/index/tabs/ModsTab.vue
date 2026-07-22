@@ -97,7 +97,6 @@ const contextMenuGroupIndex = ref(-1);                 // 右键菜单目标分�
 const contextMenuModIndex = ref(-1);                   // 右键菜单目标模组索引
 // 事件监听取消句柄；组件卸载时需调用以避免内存泄漏
 let fileWatcherUnlisten: (() => void) | null = null;
-let modsUpdatedUnlisten: (() => void) | null = null;
 let gameSwitchedUnlisten: (() => void) | null = null; // 游戏切换事件监听取消句柄
 // 文件监听防抖定时器句柄；用于合并短时间内的多次刷新请求
 let refreshDebounceTimer: number | null = null;
@@ -528,6 +527,7 @@ function toggleExpand(groupPath: string) {
  */
 function selectMod(index: number) {
   if (isApplyingSelection.value) return;
+  if (index < 0 || index >= filteredMods.value.length) return;
   selectedModIndex.value = index;
 }
 
@@ -550,26 +550,20 @@ async function applyModSelection(mod: ModData) {
       const realIndex = currentGroup.modsInGroup.findIndex(m => m.modPath === mod.modPath);
       if (realIndex !== -1) {
         const childGroupPaths = new Set((currentGroup.children || []).map(c => c.groupPath));
+        // 禁用同组其他纯模组（仅执行后端操作，不本地更新）
         for (const other of currentGroup.modsInGroup) {
           if (other.realIndex === 0) continue;
           if (other.modPath === mod.modPath) continue;
           if (other.isDisabled) continue;
           if (childGroupPaths.has(other.modPath)) continue;
           try {
-            const disabledPath = await invokeDisableTreeNodeMod(other.modPath);
-            const otherIndex = currentGroup.modsInGroup.findIndex(m => m.modPath === other.modPath);
-            if (otherIndex !== -1) {
-              game.updateModInGroup(game.currentGroupPath.value, otherIndex, { ...other, modPath: disabledPath, isDisabled: true });
-            }
+            await invokeDisableTreeNodeMod(other.modPath);
           } catch (e) {
             log.error('Failed to disable tree node mod', e);
           }
         }
-
-        const [enabledPath, enabledDisabled] = await invokeToggleTreeNodeModDisabled(mod.modPath);
-        const updatedMod = { ...mod, modPath: enabledPath, isDisabled: enabledDisabled };
-        game.updateModInGroup(game.currentGroupPath.value, realIndex, updatedMod);
-
+        const [enabledPath, _] = await invokeToggleTreeNodeModDisabled(mod.modPath);
+        // 统一从后端刷新完整分组数据
         const updatedGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
         game.updateGroup(game.currentGroupPath.value, updatedGroup);
         game.setSelectedModPath(game.currentGroupPath.value, enabledPath);
@@ -611,18 +605,12 @@ async function toggleMod(mod: ModData) {
   try {
     if (isTreeNode) {
       // 树节点模式：互斥切换
-      const [newPath, newDisabled] = await invokeToggleTreeNodeModDisabled(mod.modPath);
-      const updatedMod = { ...mod, modPath: newPath, isDisabled: newDisabled };
-      game.updateModInGroup(game.currentGroupPath.value, realIndex, updatedMod);
+      await invokeToggleTreeNodeModDisabled(mod.modPath);
     } else {
       // 普通模式：独立切换
-      const success = await invokeToggleModDisabled(mod.modPath);
-      if (success) {
-        const updatedMod = { ...mod, isDisabled: !mod.isDisabled };
-        game.updateModInGroup(game.currentGroupPath.value, realIndex, updatedMod);
-      }
+      await invokeToggleModDisabled(mod.modPath);
     }
-    // 刷新分组信息，确保互斥模式下其他模组状态正确更新
+    // 统一从后端刷新完整分组数据，确保互斥模式下其他模组状态正确同步
     const updatedGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
     game.updateGroup(game.currentGroupPath.value, updatedGroup);
   } catch (error) {
@@ -1141,17 +1129,12 @@ async function setupFileWatcher() {
 /**
  * 注册前端事件监听：
  *  - FILE_WATCHER_EVENT：文件变化时触发防抖刷新。
- *  - MODS_UPDATED：后端通知模组更新时同步到 gameStore。
  *  - GAME_SWITCHED：游戏切换时重新加载模组列表并重启文件监听。
  * 返回值：保存取消函数以便组件卸载时清理。
  */
 async function setupEventListeners() {
   fileWatcherUnlisten = await eventManager.on(EventNames.FILE_WATCHER_EVENT, () => {
     debouncedRefresh();
-  });
-
-  modsUpdatedUnlisten = await eventManager.on(EventNames.MODS_UPDATED, (groups) => {
-    game.setModGroups(groups);
   });
 
   // 游戏切换时：重新加载模组列表、重启文件监听（因 modsPath 可能变化）
@@ -1215,9 +1198,6 @@ onMounted(async () => {
 onUnmounted(() => {
   if (fileWatcherUnlisten) {
     fileWatcherUnlisten();
-  }
-  if (modsUpdatedUnlisten) {
-    modsUpdatedUnlisten();
   }
   if (gameSwitchedUnlisten) {
     gameSwitchedUnlisten();

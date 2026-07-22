@@ -172,8 +172,9 @@ class EventManager {
       removeTauri = () => {
         this.removeTauriListener(event, unlisten);
       };
-    } catch {
+    } catch (e) {
       // Tauri 监听注册失败时忽略，自定义监听仍已注册
+      console.warn('[EventManager] Failed to register Tauri listener for "${event}":', e);
     }
 
     return () => {
@@ -196,8 +197,9 @@ class EventManager {
     // 触发 Tauri 跨进程事件（供后端和通过 listen 注册的监听器接收）
     try {
       await tauriEmit(event, payload);
-    } catch {
+    } catch (e) {
       // Tauri 环境不可用时忽略错误（如非 Tauri 环境或测试环境）
+      console.warn(`[EventManager] emit failed for event "${event}":`, e);
     }
 
     // 触发前端进程内的自定义监听（同步触发，可靠无延迟）
@@ -206,8 +208,9 @@ class EventManager {
       callbacks.forEach((cb) => {
         try {
           cb(payload);
-        } catch {
-          // 单个回调异常不影响其他回调，忽略
+        } catch (e) {
+          // 单个回调异常不影响其他回调
+          console.warn(`[EventManager] Callback error for custom event "${event}":`, e);
         }
       });
     }
@@ -274,17 +277,19 @@ class EventManager {
    * 通常在应用卸载或重置场景下调用，避免内存泄漏。
    */
   removeAllListeners(): void {
-    this.listeners.forEach((listeners) => {
-      listeners.forEach((unlisten) => {
+    const listenerEntries = Array.from(this.listeners.entries());
+    for (const [, unlistenFns] of listenerEntries) {
+      for (const unlisten of unlistenFns) {
         try {
           unlisten();
         } catch {
-          // 忽略
+          // 忽略单个取消失败
         }
-      });
-    });
-    this.listeners.clear();
-    this.customListeners.clear();
+      }
+    }
+    // 用新实例替换旧实例，断开消费者闭包中的旧引用链
+    this.listeners = new Map();
+    this.customListeners = new Map();
   }
 }
 

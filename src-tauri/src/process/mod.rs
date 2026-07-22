@@ -89,7 +89,7 @@ impl ProcessDetector {
     /// # 限制
     /// - 每次调用都会刷新全量进程列表，开销较大，不适合高频调用；
     /// - 异步方法但目前为同步实现，调用方应通过 `spawn_blocking` 等方式避免阻塞异步运行时。
-    pub async fn is_process_running(&self, process_name: &str) -> Result<bool> {
+    pub fn is_process_running(&self, process_name: &str) -> Result<bool> {
         let system = System::new_all();
         let process_name_lower = process_name.to_lowercase();
 
@@ -113,7 +113,7 @@ impl ProcessDetector {
     ///
     /// # 限制
     /// - 同样会刷新全量进程列表，开销较大。
-    pub async fn get_process_list(&self) -> Result<Vec<String>> {
+    pub fn get_process_list(&self) -> Result<Vec<String>> {
         let system = System::new_all();
         let mut names: HashSet<String> = HashSet::new();
 

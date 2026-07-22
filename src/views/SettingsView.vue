@@ -476,13 +476,11 @@ async function handleUpdateModData() {
         type: 'success'
       });
       // 更新模组数据成功后，重新加载模组列表并通知前端更新
-      // 注意：仅通过事件通知，由 index.vue 的 MOD_GROUPS_UPDATED 监听器和
-      // ModsTab.vue 的 MODS_UPDATED 监听器统一调用 setModGroups，避免冗余更新
+      // 注意：通过 MOD_GROUPS_UPDATED 事件通知，由 index.vue 统一调用 setModGroups
       try {
         const groups = await invokeLoadMods(game);
         gameStore.setModsLoaded(true);
         eventManager.emitLocal(EventNames.MOD_GROUPS_UPDATED, groups);
-        eventManager.emitLocal(EventNames.MODS_UPDATED, groups);
       } catch {
         // 刷新失败不影响主流程，静默忽略
       }

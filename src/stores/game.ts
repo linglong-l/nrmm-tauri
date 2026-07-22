@@ -304,6 +304,7 @@ export const useGameStore = defineStore('game', () => {
 
     // use_cache：缓存有效且游戏匹配，直接返回
     if (cacheCheck.action === 'use_cache') {
+      isLoading.value = false;
       loadStatus.value = 'completed';
       return;
     }

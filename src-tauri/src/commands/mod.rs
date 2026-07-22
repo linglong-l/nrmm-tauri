@@ -165,7 +165,7 @@ pub async fn refresh_mods(
 
     Ok(state
         .task_queue
-        .run_task("refresh_mods", async move {
+        .run_task("load_mods", async move {
             mod_manager.load_mods(&settings_clone).await
         })
         .await
@@ -1366,14 +1366,17 @@ pub async fn update_tray_tooltip(
 /// 返回：`true` 表示进程正在运行。
 #[tauri::command]
 pub async fn is_process_running(
-    state: State<'_, AppState>,
+    _state: State<'_, AppState>,
     process_name: String,
 ) -> Result<bool, String> {
-    state
-        .process_detector
-        .is_process_running(&process_name)
-        .await
-        .map_err(|e| e.to_string())
+    let process_name = process_name.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::process::ProcessDetector::new()
+            .is_process_running(&process_name)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
 /// 获取当前系统中所有正在运行的进程名称列表。
@@ -1383,12 +1386,14 @@ pub async fn is_process_running(
 ///
 /// 返回：进程名称字符串列表。
 #[tauri::command]
-pub async fn get_process_list(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    state
-        .process_detector
-        .get_process_list()
-        .await
-        .map_err(|e| e.to_string())
+pub async fn get_process_list(_state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(|| {
+        crate::process::ProcessDetector::new()
+            .get_process_list()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
 /// 获取当前前台进程的名称。

@@ -127,8 +127,8 @@ impl FileWatcher {
         // 转换为长路径形式（Windows 专用）
         let watch_path = Self::to_long_path(path);
         let is_running = self.is_running.clone();
-        // 通道容量为 1：使用 try_send 语义，事件丢失也无妨（防抖会合并处理）
-        let (debounce_tx, debounce_rx) = mpsc::channel::<()>(1);
+        // 通道容量为 8：提供适度缓冲以降低密集事件丢弃率，防抖仍能合并处理
+        let (debounce_tx, debounce_rx) = mpsc::channel::<()>(8);
 
         let app_handle_clone = app_handle.clone();
         let watch_path_clone = watch_path.clone();
