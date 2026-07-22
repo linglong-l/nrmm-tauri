@@ -12,6 +12,8 @@ declare module 'vue' {
     ElBadge: typeof import('element-plus/es')['ElBadge']
     ElButton: typeof import('element-plus/es')['ElButton']
     ElCard: typeof import('element-plus/es')['ElCard']
+    ElCollapse: typeof import('element-plus/es')['ElCollapse']
+    ElCollapseItem: typeof import('element-plus/es')['ElCollapseItem']
     ElConfigProvider: typeof import('element-plus/es')['ElConfigProvider']
     ElDescriptions: typeof import('element-plus/es')['ElDescriptions']
     ElDescriptionsItem: typeof import('element-plus/es')['ElDescriptionsItem']
@@ -36,6 +38,7 @@ declare module 'vue' {
     SideNav: typeof import('./src/components/SideNav.vue')['default']
     StatusBar: typeof import('./src/components/StatusBar.vue')['default']
     TitleBar: typeof import('./src/components/TitleBar.vue')['default']
+    UpdateModDataOverlay: typeof import('./src/components/UpdateModDataOverlay.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

@@ -371,15 +371,53 @@ export interface AutoIconEntry {
 
 /**
  * 调用 update_mod_data 后端命令的返回结果。
- * 用于描述刷新/更新操作是否成功，以及最新分组列表与可能的错误信息。
+ * 用于描述刷新/更新操作是否成功，以及 per-mod 错误列表与分组处理摘要。
  */
 export interface UpdateModDataResult {
-  /** 操作是否成功 */
+  /** 操作是否成功完成 */
   success: boolean;
-  /** 最新分组数据列表（成功时返回） */
-  groups: ModGroupData[];
-  /** 失败时的错误信息（可选） */
-  errorMessage?: string;
+  /** 总耗时（毫秒） */
+  durationMs: number;
+  /** 每个模组的处理错误列表（仅当前请求周期有效） */
+  perModErrors: ModManageError[];
+  /** 分组处理摘要 */
+  groupSummaries: ModProcessSummary[];
+  /** 总共处理的模组数量 */
+  totalModsProcessed: number;
+  /** 错误总数 */
+  totalErrors: number;
+}
+
+/**
+ * 模组级处理错误。
+ * 仅在当前 update_mod_data 请求周期内有效。
+ */
+export interface ModManageError {
+  /** 模组路径 */
+  modPath: string;
+  /** 模组显示名称 */
+  modName: string;
+  /** 错误阶段 */
+  stage: 'ini_backup' | 'ini_modify' | 'ini_write' | 'validate';
+  /** 用户友好的错误描述 */
+  message: string;
+  /** 出错的 ini 文件名（可选） */
+  iniFile?: string;
+}
+
+/**
+ * 分组处理摘要。
+ * 统计每个分组在 update_mod_data 流程中的处理结果。
+ */
+export interface ModProcessSummary {
+  /** 分组名称 */
+  groupName: string;
+  /** 该分组下处理的模组总数 */
+  totalMods: number;
+  /** 处理成功的模组数 */
+  successCount: number;
+  /** 处理失败的模组数 */
+  errorCount: number;
 }
 
 /**

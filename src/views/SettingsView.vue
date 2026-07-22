@@ -14,9 +14,9 @@
  *  - "Update Mod Data" 用于在用户通过文件管理器直接增删改模组后，重新同步后端的模组索引。
  *  - 语言切换需重启应用才能完全生效。
  */
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch, inject } from 'vue';
 import { useI18n } from 'vue-i18n';
-import { ElMessage, ElMessageBox, ElNotification } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { Folder, Delete } from '@element-plus/icons-vue';
 import appLogo from '@/assets/images/app-icon-128.png?inline';
 import { useSettingsStore } from '../stores/settings';
@@ -28,6 +28,7 @@ import {
   invokeOpenUrl, invokeCreateDesktopIcon
 } from '../utils/invoke';
 import { TargetGame, HotkeyKeyboard, HotkeyGamepad, LayoutMode, SortGroupMethod, ModsPathStatus } from '../types';
+import type { UpdateModDataResult } from '../types';
 import {
   HOTKEY_KEYBOARD_NAMES, HOTKEY_GAMEPAD_NAMES,
   LAYOUT_MODE_NAMES, SORT_GROUP_METHOD_NAMES, SUPPORTED_LANGUAGES,
@@ -43,14 +44,23 @@ const settingsStore = useSettingsStore();
 const gameStore = useGameStore();
 const log = createLogger('SettingsView');
 
+/** 注入全屏遮罩控制函数 */
+const overlayControls = inject<{
+  show: () => void;
+  finish: (result: UpdateModDataResult) => void;
+  error: (message: string) => void;
+  hide: () => void;
+}>('updateModOverlayControls', {
+  show: () => {},
+  finish: () => {},
+  error: () => {},
+  hide: () => {},
+});
+
 // 当前激活的设置 Tab（默认游戏设置）
 const activeTab = ref('game');
-// 是否正在执行"更新模组数据"操作（用于按钮 loading 状态）
-const isUpdatingModData = ref(false);
 // 是否正在打开文件夹选择对话框（防止重复触发）
 const isBrowsingFolder = ref(false);
-// "更新模组数据"操作的输出日志
-const updateModDataLog = ref('');
 // 应用版本号（从 Tauri API 获取）
 const appVersion = ref('');
 // 各游戏的 Mods 路径校验状态映射表；null 表示尚未校验
@@ -436,11 +446,12 @@ async function handleSortGroupMethodChange(value: SortGroupMethod) {
 
 /**
  * 触发"更新模组数据"操作。
+ *
  * 业务逻辑：
  *  - 必须先选择游戏，否则提示警告。
- *  - 弹窗二次确认后调用后端 invokeUpdateModData。
- *  - 成功/失败均通过 ElNotification 与日志文本框反馈。
- * 限制：操作期间禁用按钮（loading 状态）。
+ *  - 弹窗二次确认后显示全屏遮罩，调用后端 invokeUpdateModData。
+ *  - 结果通过遮罩组件展示（耗时、per-mod 错误列表等）。
+ *  - 操作期间全屏遮罩阻止用户任何交互。
  */
 async function handleUpdateModData() {
   const game = gameStore.targetGame;
@@ -460,45 +471,30 @@ async function handleUpdateModData() {
       }
     );
   } catch {
-    // 用户取消，直接返回
     return;
   }
 
-  isUpdatingModData.value = true;
-  updateModDataLog.value = '';
+  // 显示全屏遮罩（loading 态）
+  overlayControls.show();
 
   try {
     const result = await invokeUpdateModData(game);
     if (result.success) {
-      updateModDataLog.value = t('Update Mod Data completed successfully!');
-      ElNotification({
-        message: t('Mods successfully managed!'),
-        type: 'success'
-      });
+      // 切换遮罩为完成态
+      overlayControls.finish(result);
       // 更新模组数据成功后，重新加载模组列表并通知前端更新
-      // 注意：通过 MOD_GROUPS_UPDATED 事件通知，由 index.vue 统一调用 setModGroups
       try {
         const groups = await invokeLoadMods(game);
         gameStore.setModsLoaded(true);
         eventManager.emitLocal(EventNames.MOD_GROUPS_UPDATED, groups);
       } catch {
-        // 刷新失败不影响主流程，静默忽略
+        // 刷新失败不影响主流程
       }
     } else {
-      updateModDataLog.value = result.errorMessage || t('Unknown error occurred.');
-      ElNotification({
-        message: result.errorMessage || t('Unexpected error!'),
-        type: 'error'
-      });
+      overlayControls.error(t('Unknown error occurred.'));
     }
   } catch (error) {
-    updateModDataLog.value = `Error: ${error}`;
-    ElNotification({
-      message: t('Unexpected error!'),
-      type: 'error'
-    });
-  } finally {
-    isUpdatingModData.value = false;
+    overlayControls.error(`Error: ${error}`);
   }
 }
 
@@ -1172,7 +1168,6 @@ watch(
             <el-form-item :label="t('Update Mod Data')">
               <el-button
                 type="primary"
-                :loading="isUpdatingModData"
                 @click="handleUpdateModData"
                 style="width: 100%"
               >
@@ -1181,15 +1176,6 @@ watch(
               <div class="description">
                 {{ t('Press this after you add/remove/edit/fix mods (usually when add/edit/remove mods directly via File Explorer)') }}
               </div>
-            </el-form-item>
-
-            <el-form-item v-if="updateModDataLog" :label="t('Result')">
-              <el-input
-                v-model="updateModDataLog"
-                type="textarea"
-                :rows="4"
-                readonly
-              />
             </el-form-item>
 
             <div class="settings-divider" />

@@ -9,7 +9,7 @@
  *  - 根据设置中的主题与背景透明度，动态切换 dark 类与 CSS 变量。
  *  - 根据当前语言切换 Element Plus 的内置语言包。
  */
-import { onMounted, watch, computed, onUnmounted } from 'vue';
+import { onMounted, watch, computed, onUnmounted, provide, reactive, readonly } from 'vue';
 import { useI18n } from 'vue-i18n';
 import zhCn from 'element-plus/es/locale/lang/zh-cn';
 import zhTw from 'element-plus/es/locale/lang/zh-tw';
@@ -17,17 +17,70 @@ import en from 'element-plus/es/locale/lang/en';
 import ru from 'element-plus/es/locale/lang/ru';
 import id from 'element-plus/es/locale/lang/id';
 import { TitleBar, StatusBar, HashConflictFab } from './components';
+import UpdateModDataOverlay from './components/UpdateModDataOverlay.vue';
 import IndexPage from './pages/index/index.vue';
 import { useSettingsStore } from './stores/settings';
 import { useGameStore } from './stores/game';
 import { EventNames, eventManager } from './utils/events';
 import { useHashConflict } from './composables';
 import { createLogger } from './utils/logger';
+import type { UpdateModDataResult } from './types';
 
 const { locale } = useI18n();
 const settingsStore = useSettingsStore();
 const gameStore = useGameStore();
 const log = createLogger('App');
+
+/** 更新模组数据遮罩状态 */
+export interface UpdateModOverlayState {
+  visible: boolean;
+  state: 'loading' | 'completed' | 'error';
+  result: UpdateModDataResult | null;
+  errorMessage: string | null;
+}
+
+const overlayState = reactive<UpdateModOverlayState>({
+  visible: false,
+  state: 'loading',
+  result: null,
+  errorMessage: null,
+});
+
+/** 提供 overlayState 给子组件 */
+provide('updateModOverlay', readonly(overlayState));
+
+/** 提供控制函数给子组件 */
+provide('updateModOverlayControls', {
+  show: showUpdateModOverlay,
+  finish: finishUpdateModOverlay,
+  error: errorUpdateModOverlay,
+  hide: hideUpdateModOverlay,
+});
+
+/** 显示遮罩（loading 态） */
+function showUpdateModOverlay() {
+  overlayState.visible = true;
+  overlayState.state = 'loading';
+  overlayState.result = null;
+  overlayState.errorMessage = null;
+}
+
+/** 遮罩切换为完成态 */
+function finishUpdateModOverlay(result: UpdateModDataResult) {
+  overlayState.state = 'completed';
+  overlayState.result = result;
+}
+
+/** 遮罩切换为错误态 */
+function errorUpdateModOverlay(message: string) {
+  overlayState.state = 'error';
+  overlayState.errorMessage = message;
+}
+
+/** 隐藏遮罩 */
+function hideUpdateModOverlay() {
+  overlayState.visible = false;
+}
 
 // 注册全局 Hash 冲突事件监听（与 HashConflictFab 联动）
 useHashConflict();
@@ -172,6 +225,14 @@ onUnmounted(() => {
         - 不受 Tab 切换影响
       -->
       <HashConflictFab />
+      <!-- 全屏遮罩：更新模组数据 -->
+      <UpdateModDataOverlay
+        :visible="overlayState.visible"
+        :state="overlayState.state"
+        :result="overlayState.result"
+        :error-message="overlayState.errorMessage"
+        @update:visible="overlayState.visible = $event"
+      />
     </div>
   </ElConfigProvider>
 </template>

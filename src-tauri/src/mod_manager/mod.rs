@@ -16,6 +16,7 @@ pub mod path_utils;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
@@ -261,6 +262,48 @@ pub struct UpdateModDataResult {
     pub error_report: Option<ErroredLinesReport>,
     /// 启用模组的 hash 冲突报告（成功时存在）。
     pub hash_conflict_report: Option<HashConflictReport>,
+    /// 每个模组的处理错误列表（仅当前请求周期有效）。
+    pub per_mod_errors: Vec<ModManageError>,
+    /// 分组处理摘要。
+    pub group_summaries: Vec<ModProcessSummary>,
+    /// 总共处理的模组数量。
+    pub total_mods_processed: u32,
+    /// 错误总数。
+    pub total_errors: u32,
+}
+
+/// 模组级处理错误。
+///
+/// 仅在当前 `update_mod_data` 请求周期内有效，随响应返回给前端后销毁。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModManageError {
+    /// 模组路径。
+    pub mod_path: String,
+    /// 模组显示名称。
+    pub mod_name: String,
+    /// 错误阶段：`ini_backup` | `ini_modify` | `ini_write` | `validate`。
+    pub stage: String,
+    /// 用户友好的错误描述。
+    pub message: String,
+    /// 出错的 ini 文件名（可选）。
+    pub ini_file: Option<String>,
+}
+
+/// 分组处理摘要。
+///
+/// 统计每个分组在 `update_mod_data` 流程中的处理结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModProcessSummary {
+    /// 分组名称。
+    pub group_name: String,
+    /// 该分组下处理的模组总数。
+    pub total_mods: u32,
+    /// 处理成功的模组数。
+    pub success_count: u32,
+    /// 处理失败的模组数。
+    pub error_count: u32,
 }
 
 /// Mods 路径校验状态枚举。
@@ -2604,8 +2647,12 @@ impl ModManager {
         .await
         .map_err(|e| format!("Task join error: {}", e))?;
 
-        let (result_logs, error_report, result_success, hash_conflict_report) = match result {
-            Ok((logs, report, hash_report)) => (logs, Some(report), true, Some(hash_report)),
+        let (result_logs, error_report, result_success, hash_conflict_report, per_mod_errors, group_summaries, total_mods_processed, total_errors) = match result {
+            Ok((logs, report, hash_report, per_mod_errs, group_sums)) => {
+                let total_mods: u32 = group_sums.iter().map(|s| s.total_mods).sum();
+                let total_errs: u32 = group_sums.iter().map(|s| s.error_count).sum();
+                (logs, Some(report), true, Some(hash_report), per_mod_errs, group_sums, total_mods, total_errs)
+            }
             Err(e) => {
                 success = false;
                 let mut error_logs =
@@ -2613,7 +2660,7 @@ impl ModManager {
                 error_logs.push(LogEntry::error(
                     "Please check the logs above for more details".to_string(),
                 ));
-                (error_logs, None, false, None)
+                (error_logs, None, false, None, Vec::new(), Vec::new(), 0, 0)
             }
         };
 
@@ -2634,6 +2681,10 @@ impl ModManager {
             duration_ms,
             error_report,
             hash_conflict_report,
+            per_mod_errors,
+            group_summaries,
+            total_mods_processed,
+            total_errors,
         })
     }
 
@@ -2655,7 +2706,13 @@ impl ModManager {
     fn update_mod_data_sync(
         mods_path: &str,
         known_libraries: &HashMap<String, String>,
-    ) -> Result<(Vec<LogEntry>, ErroredLinesReport, HashConflictReport)> {
+    ) -> Result<(
+        Vec<LogEntry>,
+        ErroredLinesReport,
+        HashConflictReport,
+        Vec<ModManageError>,
+        Vec<ModProcessSummary>,
+    )> {
         let mut logs: Vec<LogEntry> = Vec::new();
 
         logs.push(LogEntry::info("Starting Update Mod Data..."));
@@ -2727,6 +2784,12 @@ impl ModManager {
             "[update_mod_data] starting parallel processing of {} groups",
             group_folders.len()
         );
+
+        let per_mod_errors: Arc<Mutex<Vec<ModManageError>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let group_summaries: Arc<Mutex<Vec<ModProcessSummary>>> =
+            Arc::new(Mutex::new(Vec::new()));
+
         group_folders
             .par_iter()
             .for_each(|(group_path, group_index)| {
@@ -2749,6 +2812,8 @@ impl ModManager {
                 // 管理分组内的每个模组
                 // 状态过滤系统：仅处理启用状态的模组，禁用模组（is_disabled=true）会被自动忽略
                 // 状态保护机制：本流程不会改变任何模组的启用/禁用状态，状态由目录名的 DISABLED 前缀决定
+                let mut group_total = 0u32;
+
                 match Self::get_mods_on_group(group_path) {
                     Ok(mods) => {
                         let enabled_count = mods.iter().filter(|m| !m.is_disabled && m.mod_path != "None").count();
@@ -2758,10 +2823,11 @@ impl ModManager {
                             mods.len(),
                             enabled_count
                         );
+
+                        group_total = mods.iter().filter(|m| m.mod_path != "None" && !m.is_disabled).count() as u32;
+
                         mods.par_iter().for_each(|mod_data| {
                             // 状态过滤：跳过 None 槽位和禁用模组
-                            // None 槽位（mod_path == "None"）是特殊占位符，不需要 INI 处理
-                            // 禁用模组（is_disabled == true）目录名以 DISABLED 开头，3DMigoto 会忽略，无需注入
                             if mod_data.mod_path == "None" || mod_data.is_disabled {
                                 return;
                             }
@@ -2771,19 +2837,59 @@ impl ModManager {
                                 mod_data.mod_path, mod_data.real_index, group_name
                             );
 
-                            // manage_mod 内部会进行路径安全验证，确保仅处理 _MANAGED_/group_xx 下的模组
                             if let Err(e) = Self::manage_mod(
                                 &mod_data.mod_path,
                                 &group_name,
                                 mod_data.real_index,
                                 *group_index,
                             ) {
-                                error!("update_mod_data: failed to manage mod {}: {}", mod_data.mod_path, e);
+                                let err_msg = e.to_string();
+                                // 根据错误消息确定阶段
+                                let stage = if err_msg.contains("路径无特殊字符") {
+                                    "validate"
+                                } else if err_msg.contains("无法创建模组备份") {
+                                    "ini_backup"
+                                } else {
+                                    "ini_modify"
+                                };
+
+                                let mod_err = ModManageError {
+                                    mod_path: mod_data.mod_path.clone(),
+                                    mod_name: mod_data.mod_name.clone(),
+                                    stage: stage.to_string(),
+                                    message: err_msg,
+                                    ini_file: None,
+                                };
+
+                                if let Ok(mut errors) = per_mod_errors.lock() {
+                                    errors.push(mod_err);
+                                }
                             }
                         });
                     }
                     Err(e) => {
                         error!("update_mod_data: failed to get mods for group {}: {}", group_path, e);
+                    }
+                }
+
+                // 收集该分组的摘要
+                {
+                    let group_error_count = per_mod_errors.lock().map(|errors| {
+                        errors.iter()
+                            .filter(|e| e.mod_path.starts_with(group_path))
+                            .count() as u32
+                    }).unwrap_or(0);
+                    let group_success_count = group_total.saturating_sub(group_error_count);
+
+                    let summary = ModProcessSummary {
+                        group_name,
+                        total_mods: group_total,
+                        success_count: group_success_count,
+                        error_count: group_error_count,
+                    };
+
+                    if let Ok(mut summaries) = group_summaries.lock() {
+                        summaries.push(summary);
                     }
                 }
             });
@@ -2831,7 +2937,16 @@ impl ModManager {
 
         logs.push(LogEntry::info("All groups processed"));
 
-        Ok((logs, error_report, hash_conflict_report))
+        let per_mod_errors = per_mod_errors.lock().unwrap().clone();
+        let group_summaries_list = group_summaries.lock().unwrap().clone();
+
+        Ok((
+            logs,
+            error_report,
+            hash_conflict_report,
+            per_mod_errors,
+            group_summaries_list,
+        ))
     }
 
     /// 删除分组目录下的所有 `.ini` 文件。
@@ -2997,17 +3112,16 @@ impl ModManager {
         let mods_root = match mod_path.parent().and_then(|p| p.parent()) {
             Some(p) => p,
             None => {
-                error!("manage_mod skipped: mod path has invalid parent path: {:?}", mod_path);
-                return Ok(());
+                anyhow::bail!(
+                    "请确保路径无特殊字符（\\ / : * ? \" < > |），已跳过"
+                );
             }
         };
 
         if !Self::is_valid_mod_path(mods_root, mod_path) {
-            error!(
-                "manage_mod skipped: mod path is outside _MANAGED_/group_xx or contains #: {:?}",
-                mod_path
+            anyhow::bail!(
+                "请确保路径无特殊字符（\\ / : * ? \" < > |），已跳过"
             );
-            return Ok(());
         }
 
         let ini_files = Self::find_ini_files_recursive(mod_path);
@@ -3024,10 +3138,9 @@ impl ModManager {
 
             // 仅在备份不存在时创建，避免覆盖原始备份
             if !backup_path.exists() {
-                fs::copy(ini_file, backup_path).with_context(|| {
-                    format!(
-                        "Failed to create backup: {:?} -> {:?}",
-                        ini_file, backup_path
+                fs::copy(ini_file, backup_path).map_err(|_| {
+                    anyhow::anyhow!(
+                        "无法创建模组备份，请确认文件未被占用且磁盘空间充足"
                     )
                 })?;
                 debug!(
@@ -3036,11 +3149,12 @@ impl ModManager {
                 );
             }
 
-            if let Err(e) =
-                Self::modify_ini_file(ini_file, group_folder_name, mod_index, group_index)
-            {
-                error!("manage_mod failed to modify INI file {:?}: {}", ini_file, e);
-            }
+            Self::modify_ini_file(ini_file, group_folder_name, mod_index, group_index)
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "模组数据更新失败，请确认文件未被占用且磁盘空间充足"
+                    )
+                })?;
         }
 
         Ok(())
@@ -4065,6 +4179,10 @@ mod tests {
             duration_ms: 100,
             error_report: None,
             hash_conflict_report: None,
+            per_mod_errors: Vec::new(),
+            group_summaries: Vec::new(),
+            total_mods_processed: 1,
+            total_errors: 0,
         };
 
         let json = serde_json::to_string(&result).unwrap();
