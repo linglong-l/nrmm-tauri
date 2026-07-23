@@ -344,6 +344,7 @@ pub fn run() {
             commands::is_archive_encrypted,
             commands::find_all_files,
             commands::extract_archive,
+            commands::move_to_trash,
             commands::export_mod,
             commands::export_group,
             commands::open_url,

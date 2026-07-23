@@ -2094,6 +2094,27 @@ pub async fn extract_archive(
     .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
 }
 
+/// 将文件移动到系统回收站。
+///
+/// 参数：
+/// - `file_path`: 要移入回收站的文件路径。
+///
+/// 返回：操作是否成功。
+#[tauri::command]
+pub async fn move_to_trash(
+    state: State<'_, AppState>,
+    file_path: String,
+) -> Result<bool, String> {
+    let _ = state;
+    tokio::task::spawn_blocking(move || {
+        crate::mod_manager::ModManager::move_to_trash(Path::new(&file_path))
+            .map(|_| true)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("Task join error: {}", e)))
+}
+
 /// 导出单个模组为 7z 压缩文件。
 ///
 /// 参数：

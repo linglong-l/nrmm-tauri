@@ -890,7 +890,7 @@ impl ModManager {
             let icon_name = format!("icon.{}", ext);
             let icon_path = dir_path.join(&icon_name);
             if icon_path.exists() {
-                fs::remove_file(&icon_path)
+                Self::move_to_trash(&icon_path)
                     .with_context(|| format!("Failed to remove icon: {:?}", icon_path))?;
                 return Ok(());
             }
@@ -4472,9 +4472,8 @@ impl ModManager {
         for i in 0..archive.len() {
             let mut file = if let Some(pwd) = password {
                 match archive.by_index_decrypt(i, pwd.as_bytes()) {
-                    Ok(Ok(f)) => f,
-                    Ok(Err(_)) => anyhow::bail!("Failed to decrypt ZIP entry {} (wrong password?)", i),
-                    Err(e) => anyhow::bail!("Failed to read ZIP entry {}: {}", i, e),
+                    Ok(f) => f,
+                    Err(e) => anyhow::bail!("Failed to read ZIP entry {} (wrong password?): {}", i, e),
                 }
             } else {
                 archive.by_index(i)
@@ -4488,7 +4487,7 @@ impl ModManager {
         Ok(true)
     }
 
-    fn write_zip_entry(file: &mut zip::read::ZipFile, dest_dir: &Path) -> Result<()> {
+    fn write_zip_entry<R: std::io::Read + std::io::Seek>(file: &mut zip::read::ZipFile<'_, R>, dest_dir: &Path) -> Result<()> {
         let entry_path = dest_dir.join(file.name());
 
         let mut has_parent_dir_traversal = false;
@@ -4595,7 +4594,16 @@ impl ModManager {
         Ok(true)
     }
 
-    /// 解压压缩文件到指定目录（自动识别文件类型，支持可选密码）。
+    /// 将文件移动到系统回收站。
+    /// 如果回收站操作失败，返回错误但不删除文件（调用方应捕获并忽略错误）。
+    pub fn move_to_trash(file_path: &Path) -> Result<()> {
+        trash::delete(file_path)
+            .with_context(|| format!("Failed to move file to trash: {:?}", file_path))?;
+        info!("Moved file to recycle bin: {:?}", file_path);
+        Ok(())
+    }
+
+    /// 解压压缩文件到指定目录（自动识别文件类型）。
     ///
     /// 参数：
     /// - `file_path`: 压缩文件路径。

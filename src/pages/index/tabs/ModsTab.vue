@@ -62,6 +62,7 @@ import {
   invokeValidateArchiveFile,
   invokeIsArchiveEncrypted,
   invokeExtractArchive,
+  invokeMoveToTrash,
   invokeExportMod,
   invokeExportGroup,
   invokeSimulateKeySelectMod,
@@ -725,6 +726,7 @@ async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string,
 
   isImporting.value = true;
   const pathsToAdd: string[] = [];
+  const extractedArchives: string[] = [];
 
   try {
     for (const filePath of filePaths) {
@@ -778,6 +780,7 @@ async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string,
             }
             await invokeExtractArchive(filePath, extractDir, password);
             pathsToAdd.push(extractDir);
+            extractedArchives.push(filePath);
           } catch {
             const fileName = filePath.split(/[\\/]/).pop() || filePath;
             ElMessage.error(t('Wrong password or extraction failed: {name}', { name: fileName }));
@@ -792,6 +795,14 @@ async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string,
       await invokeAddMods(pathsToAdd, currentGroup.groupPath);
       await refreshMods();
       ElMessage.success(t('Mods added successfully'));
+
+      for (const archivePath of extractedArchives) {
+        try {
+          await invokeMoveToTrash(archivePath);
+        } catch (err) {
+          log.warn('Failed to move archive to trash', archivePath, err);
+        }
+      }
     } else {
       ElMessage.warning(t('No valid files to import'));
     }

@@ -757,6 +757,16 @@ export async function invokeExtractArchive(file_path: string, dest_dir: string, 
 }
 
 /**
+ * 将文件移动到系统回收站。
+ * 对应后端命令：`move_to_trash`。
+ * @param file_path 文件路径
+ * @returns 是否成功
+ */
+export async function invokeMoveToTrash(file_path: string): Promise<boolean> {
+  return invoke('move_to_trash', { file_path });
+}
+
+/**
  * 导出单个模组为7z压缩文件。
  * 对应后端命令：`export_mod`。
  * @param mod_path 模组目录路径
