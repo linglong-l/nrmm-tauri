@@ -11,10 +11,10 @@ use std::fmt::Arguments;
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
-// logger.rs
 use time::{format_description, OffsetDateTime};
-// 使用 fern::FormatCallback 替代不存在的 tauri_plugin_log::format::FormatCallback
 use fern::FormatCallback;
+
+use crate::utils::DirWalker;
 
 /// 日志文件最长保留时间。
 ///
@@ -22,15 +22,14 @@ use fern::FormatCallback;
 /// 当前设置为 30 天，兼顾问题追溯与磁盘占用控制。
 pub const LOG_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-const MAX_TRAVERSAL_DEPTH: usize = 64;
-
 /// 清理超过保留期限的日志文件。
 ///
 /// 遍历 `logs` 目录下的所有 `.log` 文件，删除修改时间超过 `retention` 的文件。
 /// 该函数在 `init_logging` 中同步调用，此时 tokio 异步运行时尚未启动，
 /// 因此使用标准库同步 IO 是安全的。
 ///
-/// 使用 BFS 迭代遍历避免栈溢出，深度限制为 `MAX_TRAVERSAL_DEPTH`，跳过符号链接。
+/// 使用 DirWalker BFS 迭代遍历避免栈溢出，内部深度限制 DEFAULT_MAX_TRAVERSAL_DEPTH=64，
+/// 不跟随符号链接，通过 VisitedPathPool 防止循环引用。
 ///
 /// 参数：
 /// - `log_dir`: 日志根目录（如 `%LOCALAPPDATA%\xxmi-nrmm\logs`）。
@@ -46,40 +45,23 @@ pub fn cleanup_old_logs(log_dir: &Path, retention: Duration) -> usize {
         return removed;
     }
 
-    let mut queue = std::collections::VecDeque::new();
-    queue.push_back((log_dir.to_path_buf(), 0usize));
+    let entries = DirWalker::new()
+        .follow_symlinks(false)
+        .file_ext("log")
+        .include_dirs(false)
+        .skip_hidden(false)
+        .walk_bfs(log_dir);
 
-    while let Some((current_dir, depth)) = queue.pop_front() {
-        if depth >= MAX_TRAVERSAL_DEPTH {
-            continue;
-        }
-
-        let entries = match fs::read_dir(&current_dir) {
-            Ok(entries) => entries,
+    for entry in entries {
+        let metadata = match fs::metadata(&entry.real_path) {
+            Ok(meta) => meta,
             Err(_) => continue,
         };
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-
-            if path.is_symlink() {
-                continue;
-            }
-
-            let metadata = match fs::metadata(&path) {
-                Ok(meta) => meta,
-                Err(_) => continue,
-            };
-
-            if metadata.is_dir() {
-                queue.push_back((path, depth + 1));
-            } else if path.extension().and_then(|ext| ext.to_str()) == Some("log") {
-                let modified = metadata.modified().unwrap_or(now);
-                if now.duration_since(modified).unwrap_or(Duration::ZERO) > retention {
-                    if fs::remove_file(&path).is_ok() {
-                        removed += 1;
-                    }
-                }
+        let modified = metadata.modified().unwrap_or(now);
+        if now.duration_since(modified).unwrap_or(Duration::ZERO) > retention {
+            if fs::remove_file(&entry.path).is_ok() {
+                removed += 1;
             }
         }
     }
@@ -91,7 +73,8 @@ pub fn cleanup_old_logs(log_dir: &Path, retention: Duration) -> usize {
 ///
 /// 用于启动时输出一次日志目录状态，便于后续复查日志增长趋势。
 ///
-/// 使用 BFS 迭代遍历避免栈溢出，深度限制为 `MAX_TRAVERSAL_DEPTH`，跳过符号链接。
+/// 使用 DirWalker BFS 迭代遍历避免栈溢出，内部深度限制 DEFAULT_MAX_TRAVERSAL_DEPTH=64，
+/// 不跟随符号链接，通过 VisitedPathPool 防止循环引用。
 ///
 /// 参数：
 /// - `log_dir`: 日志根目录。
@@ -106,37 +89,17 @@ pub fn get_log_dir_stats(log_dir: &Path) -> (usize, u64) {
         return (count, total_bytes);
     }
 
-    let mut queue = std::collections::VecDeque::new();
-    queue.push_back((log_dir.to_path_buf(), 0usize));
+    let entries = DirWalker::new()
+        .follow_symlinks(false)
+        .file_ext("log")
+        .include_dirs(false)
+        .skip_hidden(false)
+        .walk_bfs(log_dir);
 
-    while let Some((current_dir, depth)) = queue.pop_front() {
-        if depth >= MAX_TRAVERSAL_DEPTH {
-            continue;
-        }
-
-        let entries = match fs::read_dir(&current_dir) {
-            Ok(entries) => entries,
-            Err(_) => continue,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-
-            if path.is_symlink() {
-                continue;
-            }
-
-            let metadata = match fs::metadata(&path) {
-                Ok(meta) => meta,
-                Err(_) => continue,
-            };
-
-            if metadata.is_dir() {
-                queue.push_back((path, depth + 1));
-            } else if path.extension().and_then(|ext| ext.to_str()) == Some("log") {
-                count += 1;
-                total_bytes += metadata.len();
-            }
+    for entry in entries {
+        if let Ok(metadata) = fs::metadata(&entry.real_path) {
+            count += 1;
+            total_bytes += metadata.len();
         }
     }
 

@@ -748,12 +748,7 @@ async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string,
             continue;
           }
 
-          if (fileType === 'rar') {
-            ElMessage.warning(t('RAR format is not supported for extraction'));
-            continue;
-          }
-
-          const extractDir = filePath.replace(/\.(zip|7z)$/i, '_extracted');
+          const extractDir = filePath.replace(/\.(zip|7z|rar)$/i, '');
           try {
             let password: string | undefined;
             const isEncrypted = await invokeIsArchiveEncrypted(filePath);
@@ -810,7 +805,7 @@ async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string,
 
 /**
  * 拖拽释放时获取文件路径并调用后端添加 Mod（HTML5 DnD 事件）。
- * 支持：目录深度遍历、压缩文件自动解压（zip/7z）、RAR仅验证不支持解压。
+ * 支持：目录深度遍历、压缩文件自动解压（zip/7z/rar）。
  * 默认添加到当前选中的分组。
  * @param event 拖拽事件
  */

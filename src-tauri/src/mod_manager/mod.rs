@@ -22,9 +22,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
 use rayon::prelude::*;
+use rars::ArchiveReader;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use walkdir::WalkDir;
 use zip::ZipArchive;
 use sevenz_rust::{decompress_file, Password};
 
@@ -35,13 +35,11 @@ use crate::ini_handler::{
 };
 use crate::process::TargetGame;
 use crate::settings::Settings;
+use crate::utils::{DirWalker, FileKind, VisitedPathPool, DEFAULT_MAX_TRAVERSAL_DEPTH};
 
 /// 禁用模组目录名前缀。被禁用的模组目录会被重命名为 `DISABLED<原名>`，
 /// 3DMigoto 框架会忽略此前缀开头的目录，从而实现「不删除文件即可禁用」的效果。
 pub const DISABLED_PREFIX: &str = "DISABLED";
-
-/// 目录遍历最大深度限制，防止栈溢出或循环符号链接导致的无限递归。
-const MAX_TRAVERSAL_DEPTH: usize = 64;
 
 /// 收藏标记文件名。在模组/分组目录下存在该文件即表示已被收藏，
 /// 文件内容为收藏时的时间戳字符串（用于排序）。
@@ -970,7 +968,8 @@ impl ModManager {
     /// 深度优先遍历目录树，使用显式栈迭代移除所有文件/目录名中的 DISABLED 前缀。
     ///
     /// 此函数使用迭代式显式栈进行 DFS 遍历，避免递归深度过大导致栈溢出。包含深度限制
-    /// (`MAX_TRAVERSAL_DEPTH`) 和符号链接检测，防止循环引用导致的无限遍历。若文件/目录名
+    /// (`DEFAULT_MAX_TRAVERSAL_DEPTH`) 和符号链接保护：不跟随符号链接，同时使用
+    /// canonical 路径 visited 集合防止循环引用导致的无限遍历。若文件/目录名
     /// 恰好等于 `DISABLED`（不区分大小写）本身（无后续内容），则跳过不处理，避免误删除
     /// 名称为 DISABLED 的文件/目录。
     ///
@@ -985,15 +984,23 @@ impl ModManager {
             return Ok(0);
         }
 
+        let pool = VisitedPathPool::new();
+        let root_canonical = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        pool.mark(&root_canonical);
+
         let mut stack: Vec<(PathBuf, usize)> = vec![(dir.to_path_buf(), 0)];
 
         while let Some((current_dir, depth)) = stack.pop() {
-            if depth >= MAX_TRAVERSAL_DEPTH {
+            if depth >= DEFAULT_MAX_TRAVERSAL_DEPTH {
                 warn!("Max traversal depth reached at {:?}, skipping deeper", current_dir);
                 continue;
             }
 
             if !current_dir.exists() || !current_dir.is_dir() {
+                continue;
+            }
+
+            if current_dir.is_symlink() {
                 continue;
             }
 
@@ -1004,6 +1011,12 @@ impl ModManager {
 
             for entry_path in entries {
                 if entry_path.is_symlink() {
+                    continue;
+                }
+
+                let entry_canonical = fs::canonicalize(&entry_path)
+                    .unwrap_or_else(|_| entry_path.clone());
+                if pool.check_and_mark(&entry_canonical) {
                     continue;
                 }
 
@@ -1028,6 +1041,9 @@ impl ModManager {
                         count += 1;
 
                         if new_path.is_dir() {
+                            let new_canonical = fs::canonicalize(&new_path)
+                                .unwrap_or_else(|_| new_path.clone());
+                            pool.mark(&new_canonical);
                             stack.push((new_path, depth + 1));
                         }
                     }
@@ -1345,25 +1361,35 @@ impl ModManager {
             is_disabled: bool,
         }
 
-        let mut visited: HashSet<PathBuf> = HashSet::new();
+        let pool = VisitedPathPool::new();
         let mut node_info_map: std::collections::HashMap<PathBuf, NodeInfo> =
             std::collections::HashMap::new();
         let mut post_order: Vec<PathBuf> = Vec::new();
-        let mut stack: Vec<PathBuf> = Vec::new();
+        let mut stack: Vec<(PathBuf, usize)> = Vec::new();
 
-        stack.push(base_path.to_path_buf());
+        stack.push((base_path.to_path_buf(), 0));
 
-        while let Some(path) = stack.pop() {
+        while let Some((path, depth)) = stack.pop() {
+            if depth >= DEFAULT_MAX_TRAVERSAL_DEPTH {
+                warn!("Max traversal depth reached at {:?} in scan_tree_node, skipping deeper", path);
+                continue;
+            }
+
             if !path.exists() || !path.is_dir() {
                 continue;
             }
 
-            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-            if visited.contains(&path) || visited.contains(&canonical) {
-                continue;
+            if path.is_symlink() {
+                let target_canonical = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                if pool.check_and_mark(&target_canonical) {
+                    continue;
+                }
+            } else {
+                let canonical = fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                if pool.check_and_mark(&canonical) {
+                    continue;
+                }
             }
-            visited.insert(path.clone());
-            visited.insert(canonical);
 
             let dir_name = path
                 .file_name()
@@ -1454,7 +1480,7 @@ impl ModManager {
             post_order.push(path.clone());
 
             for child in child_paths.iter().rev() {
-                stack.push(child.clone());
+                stack.push((child.clone(), depth + 1));
             }
         }
 
@@ -2393,6 +2419,10 @@ impl ModManager {
 
     /// 检查目录内部（BFS 遍历，深度限制）是否包含 `_MANAGED_` 子目录。
     ///
+    /// 使用 DirWalker BFS 遍历，内部通过 VisitedPathPool 防止符号链接循环，
+    /// 深度限制为 DEFAULT_MAX_TRAVERSAL_DEPTH。跟随符号链接（follow_symlinks=true），
+    /// 但因 visited 池使用 canonical 路径去重，不会产生无限循环。
+    ///
     /// 参数：
     /// - `dir`: 待检查的目录路径。
     ///
@@ -2409,45 +2439,26 @@ impl ModManager {
             return true;
         }
 
-        let mut queue: Vec<(PathBuf, usize)> = vec![(dir.to_path_buf(), 0)];
-        let mut visited: HashSet<PathBuf> = HashSet::new();
-
-        while let Some((current, depth)) = queue.pop() {
-            if depth >= MAX_TRAVERSAL_DEPTH {
-                warn!("Max traversal depth reached while checking for _MANAGED_ at {:?}", current);
-                continue;
-            }
-
-            let canonical = match current.canonicalize() {
-                Ok(p) => p,
-                Err(_) => current.clone(),
-            };
-            if visited.contains(&canonical) {
-                continue;
-            }
-            visited.insert(canonical);
-
-            let entries = match fs::read_dir(&current) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            for entry in entries.flatten() {
-                let entry_path = entry.path();
-                if !entry_path.is_dir() {
-                    continue;
-                }
-                if entry_path.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.eq_ignore_ascii_case(MANAGED_FOLDER))
-                {
+        let mut found = false;
+        DirWalker::new()
+            .follow_symlinks(true)
+            .include_files(false)
+            .skip_hidden(false)
+            .walk(dir, None, |entry| {
+                if entry.depth == 0 {
                     return true;
                 }
-                queue.push((entry_path, depth + 1));
-            }
-        }
+                let name = entry.path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if name.eq_ignore_ascii_case(MANAGED_FOLDER) {
+                    found = true;
+                    return false;
+                }
+                true
+            });
 
-        false
+        found
     }
 
     /// 验证拖入路径的安全性。
@@ -2455,7 +2466,7 @@ impl ModManager {
     /// 检查以下条件（任一不满足则拒绝）：
     /// a) 路径不是 `_MANAGED_` 目录的子目录
     /// b) 路径不是当前可执行文件所在目录的子目录
-    /// c) 拖入的目录不包含 `_MANAGED_` 子目录（BFS，深度限制 MAX_TRAVERSAL_DEPTH）
+    /// c) 拖入的目录不包含 `_MANAGED_` 子目录（BFS，深度限制 DEFAULT_MAX_TRAVERSAL_DEPTH）
     /// d) 路径不是 Mods 根目录的父目录或其祖先
     ///
     /// 参数：
@@ -3459,7 +3470,7 @@ impl ModManager {
                 continue;
             }
 
-            let ini_files = Self::find_ini_files_recursive(mod_path);
+            let ini_files = Self::find_ini_files_bfs(mod_path);
 
             let mut mod_original_ns: Option<String> = None;
             let mut mod_file_contents: Vec<(PathBuf, String)> = Vec::new();
@@ -3618,7 +3629,7 @@ impl ModManager {
             );
         }
 
-        let ini_files = Self::find_ini_files_recursive(mod_path);
+        let ini_files = Self::find_ini_files_bfs(mod_path);
         debug!(
             "[manage_mod] processing mod: {:?} (group: {}, mod_index: {}, group_index: {}) - found {} .ini files",
             mod_path, group_folder_name, mod_index, group_index,
@@ -3654,92 +3665,39 @@ impl ModManager {
         Ok(())
     }
 
-    /// 递归查找目录下所有 `.ini` 文件。
-    ///
-    /// 使用 `walkdir` 进行深度优先遍历，返回所有扩展名为 `.ini`（不区分大小写）的文件路径。
-    ///
-    /// 参数：
-    /// - `dir`: 起始目录路径。
-    ///
-    /// 返回：INI 文件路径列表。目录不存在或非目录时返回空 Vec。
-    fn find_ini_files_recursive(dir: &Path) -> Vec<PathBuf> {
-        let mut ini_files = Vec::new();
-
-        if !dir.exists() || !dir.is_dir() {
-            return ini_files;
-        }
-
-        for entry in WalkDir::new(dir)
-            .max_depth(MAX_TRAVERSAL_DEPTH)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext.eq_ignore_ascii_case("ini") {
-                        ini_files.push(path.to_path_buf());
-                    }
-                }
-            }
-        }
-
-        ini_files
-    }
-
     /// 使用 BFS（广度优先搜索）算法查找指定路径下的所有 `.ini` 文件。
     ///
-    /// 采用迭代式队列遍历而非递归，避免深目录导致的栈溢出问题。
+    /// 采用 DirWalker BFS 遍历，通过 VisitedPathPool 防止符号链接循环，
+    /// 深度限制为 DEFAULT_MAX_TRAVERSAL_DEPTH。跟随符号链接（follow_symlinks=true）。
     /// 支持传入文件路径（直接返回该文件，如果是.ini文件）或目录路径（递归查找）。
-    /// 遍历深度超过 MAX_TRAVERSAL_DEPTH 时跳过并记录警告。
     ///
     /// 参数：
     /// - `path`: 起始路径（文件或目录）。
     ///
     /// 返回：INI 文件路径列表。路径不存在时返回空 Vec。
     pub fn find_ini_files_bfs(path: &Path) -> Vec<PathBuf> {
-        let mut result = Vec::new();
-
         if !path.exists() {
-            return result;
+            return Vec::new();
         }
 
         if path.is_file() {
             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 if ext.eq_ignore_ascii_case("ini") {
-                    result.push(path.to_path_buf());
+                    return vec![path.to_path_buf()];
                 }
             }
-            return result;
+            return Vec::new();
         }
 
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back((path.to_path_buf(), 0));
-
-        while let Some((current, depth)) = queue.pop_front() {
-            if depth >= MAX_TRAVERSAL_DEPTH {
-                warn!("Max traversal depth reached at {:?}, skipping", current);
-                continue;
-            }
-
-            if let Ok(entries) = fs::read_dir(&current) {
-                for entry in entries.flatten() {
-                    let entry_path = entry.path();
-                    if entry_path.is_dir() {
-                        queue.push_back((entry_path, depth + 1));
-                    } else if entry_path.is_file() {
-                        if let Some(ext) = entry_path.extension().and_then(|e| e.to_str()) {
-                            if ext.eq_ignore_ascii_case("ini") {
-                                result.push(entry_path);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        result
+        DirWalker::new()
+            .follow_symlinks(true)
+            .file_ext("ini")
+            .include_dirs(false)
+            .skip_hidden(false)
+            .walk_bfs(path)
+            .into_iter()
+            .map(|e| e.path)
+            .collect()
     }
 
     /// 处理 INI 文件，移除 xxmi 专属的 INI 语句。
@@ -4143,7 +4101,7 @@ impl ModManager {
 
     /// 一次性扫描整个 `_MANAGED_` 目录树，收集所有 INI 文件的路径。
     /// 返回 `模组根路径 → INI 文件路径列表` 的映射表。
-    /// 相比逐个模组调用 `find_ini_files_recursive`，此方法将 N 次 WalkDir 合并为 1 次。
+    /// 相比逐个模组调用 `find_ini_files_bfs`，此方法将 N 次遍历合并为 1 次 DirWalker。
     fn scan_all_ini_files_in_managed(managed_path: &str) -> HashMap<String, Vec<PathBuf>> {
         let mut result: HashMap<String, Vec<PathBuf>> = HashMap::new();
         let managed = Path::new(managed_path);
@@ -4151,18 +4109,15 @@ impl ModManager {
             return result;
         }
 
-        let walker = WalkDir::new(managed)
-            .max_depth(MAX_TRAVERSAL_DEPTH)
-            .follow_links(false)
-            .into_iter();
-        for entry in walker.filter_map(|e| e.ok()) {
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("ini") {
-                continue;
-            }
+        let entries = DirWalker::new()
+            .follow_symlinks(false)
+            .file_ext("ini")
+            .include_dirs(false)
+            .skip_hidden(false)
+            .walk_bfs(managed);
+
+        for entry in entries {
+            let path = &entry.path;
 
             // 找到该文件在 _MANAGED_ 下的直接子目录（模组根目录）
             let mut ancestors = path.ancestors();
@@ -4176,7 +4131,7 @@ impl ModManager {
 
             if let Some(root) = mod_root {
                 let key = root.to_string_lossy().to_string();
-                result.entry(key).or_default().push(path.to_path_buf());
+                result.entry(key).or_default().push(path.clone());
             }
         }
 
@@ -4191,7 +4146,7 @@ impl ModManager {
     /// 返回 HashConflictReport，其中 enabled_mod_hashes 只包含有冲突的 hash
     ///
     /// 流程：
-    /// 1. 一次性扫描整个 _MANAGED_ 目录树收集所有 INI 文件（1 次 WalkDir）。
+    /// 1. 一次性扫描整个 _MANAGED_ 目录树收集所有 INI 文件（1 次 DirWalker 遍历）。
     /// 2. 遍历所有分组中启用的模组（跳过 None 槽位和禁用模组）。
     /// 3. 将每个模组下所有 INI 文件内容合并后计算 hash。
     /// 4. 按 hash 分组，仅保留出现次数 > 1 的 hash（即存在冲突）。
@@ -4207,7 +4162,7 @@ impl ModManager {
         let mut report = HashConflictReport::default();
         let mut content_by_hash: HashMap<String, Vec<HashedModInfo>> = HashMap::new();
 
-        // 一次性预扫描所有 INI 文件，避免 N 次 WalkDir 遍历
+        // 一次性预扫描所有 INI 文件，避免 N 次重复遍历
         let all_ini_files = Self::scan_all_ini_files_in_managed(managed_path);
 
         // 收集所有启用的 mod 的内容 hash
@@ -4441,7 +4396,30 @@ impl ModManager {
                 }
             }
             ArchiveType::Rar => {
-                anyhow::bail!("RAR format is not supported");
+                let archive = match ArchiveReader::read_path(file_path) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let err_msg = e.to_string().to_lowercase();
+                        if err_msg.contains("password") || err_msg.contains("encrypt") {
+                            return Ok(true);
+                        }
+                        return Err(e).with_context(|| format!("Failed to read RAR file: {:?}", file_path));
+                    }
+                };
+                let result = archive.extract_to(None, |_| {
+                    Ok(Box::new(std::io::sink()))
+                });
+                match result {
+                    Ok(_) => Ok(false),
+                    Err(e) => {
+                        let err_msg = e.to_string().to_lowercase();
+                        if err_msg.contains("password") || err_msg.contains("encrypt") || err_msg.contains("wrong password") {
+                            Ok(true)
+                        } else {
+                            Err(anyhow::Error::from(e)).with_context(|| format!("Failed to read RAR file entries: {:?}", file_path))
+                        }
+                    }
+                }
             }
             ArchiveType::Unknown => {
                 anyhow::bail!("Unknown archive format");
@@ -4449,43 +4427,28 @@ impl ModManager {
         }
     }
 
-    /// 使用 BFS 算法递归查找目录下所有文件（非递归实现）。
+    /// 使用 BFS 算法递归查找目录下所有文件。
     ///
-    /// 遍历深度超过 MAX_TRAVERSAL_DEPTH 时跳过并记录警告。
+    /// 采用 DirWalker BFS 遍历，通过 VisitedPathPool 防止符号链接循环，
+    /// 深度限制为 DEFAULT_MAX_TRAVERSAL_DEPTH。跟随符号链接（follow_symlinks=true）。
     ///
     /// 参数：
     /// - `path`: 起始目录路径。
     ///
     /// 返回：目录下所有文件的路径列表。
     pub fn find_all_files_bfs(path: &Path) -> Vec<PathBuf> {
-        let mut result = Vec::new();
-
         if !path.exists() || !path.is_dir() {
-            return result;
+            return Vec::new();
         }
 
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back((path.to_path_buf(), 0));
-
-        while let Some((current, depth)) = queue.pop_front() {
-            if depth >= MAX_TRAVERSAL_DEPTH {
-                warn!("Max traversal depth reached at {:?}, skipping", current);
-                continue;
-            }
-
-            if let Ok(entries) = fs::read_dir(&current) {
-                for entry in entries.flatten() {
-                    let entry_path = entry.path();
-                    if entry_path.is_dir() {
-                        queue.push_back((entry_path, depth + 1));
-                    } else if entry_path.is_file() {
-                        result.push(entry_path);
-                    }
-                }
-            }
-        }
-
-        result
+        DirWalker::new()
+            .follow_symlinks(true)
+            .include_dirs(false)
+            .skip_hidden(false)
+            .walk_bfs(path)
+            .into_iter()
+            .map(|e| e.path)
+            .collect()
     }
 
     /// 解压 ZIP 文件到指定目录（支持可选密码）。
@@ -4528,6 +4491,17 @@ impl ModManager {
     fn write_zip_entry(file: &mut zip::read::ZipFile, dest_dir: &Path) -> Result<()> {
         let entry_path = dest_dir.join(file.name());
 
+        let mut has_parent_dir_traversal = false;
+        for component in entry_path.components() {
+            if let std::path::Component::ParentDir = component {
+                has_parent_dir_traversal = true;
+                break;
+            }
+        }
+        if has_parent_dir_traversal {
+            anyhow::bail!("Invalid path in ZIP archive (potential Zip Slip attack): {:?}", file.name());
+        }
+
         if (*file.name()).ends_with('/') {
             fs::create_dir_all(&entry_path)
                 .with_context(|| format!("Failed to create directory: {:?}", entry_path))?;
@@ -4569,6 +4543,58 @@ impl ModManager {
         Ok(true)
     }
 
+    /// 解压 RAR 文件到指定目录（支持可选密码）。
+    ///
+    /// 参数：
+    /// - `file_path`: RAR 文件路径。
+    /// - `dest_dir`: 目标目录路径。
+    /// - `password`: 可选解压密码。
+    ///
+    /// 返回：是否解压成功。
+    pub fn extract_rar(file_path: &Path, dest_dir: &Path, password: Option<&str>) -> Result<bool> {
+        fs::create_dir_all(dest_dir)
+            .with_context(|| format!("Failed to create destination directory: {:?}", dest_dir))?;
+
+        let archive = ArchiveReader::read_path(file_path)
+            .with_context(|| format!("Failed to read RAR file: {:?}", file_path))?;
+
+        let password_bytes = password.map(|p| p.as_bytes());
+
+        archive.extract_to(password_bytes, |meta| {
+            let name_str = String::from_utf8_lossy(&meta.name);
+            let entry_path = dest_dir.join(name_str.as_ref());
+
+            let mut has_parent_dir_traversal = false;
+            for component in entry_path.components() {
+                if let std::path::Component::ParentDir = component {
+                    has_parent_dir_traversal = true;
+                    break;
+                }
+            }
+            if has_parent_dir_traversal {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Invalid path in RAR archive: {:?}", name_str),
+                ).into());
+            }
+
+            if meta.is_directory {
+                fs::create_dir_all(&entry_path)?;
+                Ok(Box::new(std::io::sink()))
+            } else {
+                if let Some(parent) = entry_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let file = fs::File::create(&entry_path)?;
+                Ok(Box::new(file))
+            }
+        }).map_err(|e| anyhow::Error::from(e))
+            .with_context(|| format!("Failed to extract RAR file: {:?}", file_path))?;
+
+        info!("Extracted RAR file: {:?} -> {:?}", file_path, dest_dir);
+        Ok(true)
+    }
+
     /// 解压压缩文件到指定目录（自动识别文件类型，支持可选密码）。
     ///
     /// 参数：
@@ -4584,23 +4610,106 @@ impl ModManager {
             anyhow::bail!("Invalid archive file: {:?}", file_path);
         }
 
-        match archive_type {
+        let archive_stem = file_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("archive");
+
+        let result = match archive_type {
             ArchiveType::Zip => Self::extract_zip(file_path, dest_dir, password),
             ArchiveType::SevenZip => Self::extract_7z(file_path, dest_dir, password),
-            ArchiveType::Rar => {
-                anyhow::bail!("RAR format is not supported for extraction");
-            }
+            ArchiveType::Rar => Self::extract_rar(file_path, dest_dir, password),
             ArchiveType::Unknown => {
                 anyhow::bail!("Unknown archive format");
             }
+        };
+
+        if result.is_ok() {
+            let _ = Self::smart_flatten_archive_root(dest_dir, archive_stem);
         }
+
+        result
     }
 
-    /// 递归复制目录内容到目标路径（使用 BFS 避免栈溢出）。
+    /// 智能扁平化解压目录（Bandizip 风格）：如果目标目录下只有一个子目录，
+    /// 且该子目录名称与压缩包文件名（不含后缀）匹配（大小写不敏感），
+    /// 则将子目录内容上移一层，避免 ArchiveName/ArchiveName/files 的双层嵌套问题。
     ///
-    /// 采用迭代式队列遍历，复制文件和目录结构。
-    /// 跳过符号链接以避免循环引用。
-    /// 遍历深度超过 MAX_TRAVERSAL_DEPTH 时跳过并记录警告。
+    /// 参数：
+    /// - `dest_dir`: 解压后的目标目录路径。
+    /// - `archive_stem`: 压缩包文件名（不含后缀），用于名称匹配。
+    ///
+    /// 返回：是否执行了目录扁平化操作。
+    fn smart_flatten_archive_root(dest_dir: &Path, archive_stem: &str) -> Result<bool> {
+        if !dest_dir.exists() || !dest_dir.is_dir() {
+            return Ok(false);
+        }
+
+        let entries = fs::read_dir(dest_dir)
+            .with_context(|| format!("Failed to read directory: {:?}", dest_dir))?
+            .filter_map(|e| e.ok())
+            .collect::<Vec<_>>();
+
+        if entries.is_empty() {
+            return Ok(false);
+        }
+
+        let has_direct_files = entries.iter().any(|e| e.path().is_file());
+        if has_direct_files {
+            return Ok(false);
+        }
+
+        let dirs = entries
+            .iter()
+            .filter(|e| e.path().is_dir())
+            .collect::<Vec<_>>();
+
+        if dirs.len() != 1 || entries.len() != 1 {
+            return Ok(false);
+        }
+
+        let inner_dir = dirs[0].path();
+        let inner_dir_name = match inner_dir.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => return Ok(false),
+        };
+
+        if inner_dir_name.to_lowercase() != archive_stem.to_lowercase() {
+            return Ok(false);
+        }
+
+        let inner_entries = fs::read_dir(&inner_dir)
+            .with_context(|| format!("Failed to read inner directory: {:?}", inner_dir))?
+            .filter_map(|e| e.ok())
+            .collect::<Vec<_>>();
+
+        for entry in inner_entries {
+            let src = entry.path();
+            let dest = dest_dir.join(entry.file_name());
+            if dest.exists() {
+                continue;
+            }
+            fs::rename(&src, &dest).with_context(|| {
+                format!("Failed to move {:?} -> {:?}", src, dest)
+            })?;
+        }
+
+        if let Ok(mut remaining) = fs::read_dir(&inner_dir) {
+            if remaining.next().is_none() {
+                let _ = fs::remove_dir(&inner_dir);
+                debug!("Smart-flattened archive root (matched stem '{}'): {:?}", archive_stem, dest_dir);
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// 递归复制目录内容到目标路径（使用 DirWalker BFS 遍历避免栈溢出）。
+    ///
+    /// 采用 DirWalker BFS 遍历，通过 VisitedPathPool 防止符号链接循环，
+    /// 深度限制为 DEFAULT_MAX_TRAVERSAL_DEPTH。不跟随符号链接，遇到符号链接条目跳过。
+    /// BFS 顺序保证父目录在子文件/子目录之前被处理。
     ///
     /// 参数：
     /// - `src`: 源目录路径。
@@ -4609,41 +4718,54 @@ impl ModManager {
         fs::create_dir_all(dst)
             .with_context(|| format!("Failed to create destination directory: {:?}", dst))?;
 
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back((src.to_path_buf(), dst.to_path_buf(), 0));
-
-        while let Some((current_src, current_dst, depth)) = queue.pop_front() {
-            if depth >= MAX_TRAVERSAL_DEPTH {
-                warn!("Max traversal depth reached at {:?}, skipping", current_src);
-                continue;
-            }
-
-            if !current_src.exists() {
-                continue;
-            }
-
-            if current_src.is_symlink() {
-                continue;
-            }
-
-            if current_src.is_dir() {
-                fs::create_dir_all(&current_dst)
-                    .with_context(|| format!("Failed to create directory: {:?}", current_dst))?;
-
-                if let Ok(entries) = fs::read_dir(&current_src) {
-                    for entry in entries.flatten() {
-                        let entry_path = entry.path();
-                        let dest_path = current_dst.join(entry.file_name());
-                        queue.push_back((entry_path, dest_path, depth + 1));
-                    }
-                }
-            } else if current_src.is_file() {
-                fs::copy(&current_src, &current_dst)
-                    .with_context(|| format!("Failed to copy file: {:?} -> {:?}", current_src, current_dst))?;
-            }
+        if !src.exists() || !src.is_dir() {
+            return Ok(());
         }
 
-        Ok(())
+        let mut first_error: Option<anyhow::Error> = None;
+
+        DirWalker::new()
+            .follow_symlinks(false)
+            .include_dirs(true)
+            .include_files(true)
+            .skip_hidden(false)
+            .walk(src, None, |entry| {
+                if entry.depth == 0 {
+                    return true;
+                }
+
+                let rel = match entry.path.strip_prefix(src) {
+                    Ok(r) => r,
+                    Err(_) => return true,
+                };
+                let dest_path = dst.join(rel);
+
+                match entry.file_type {
+                    FileKind::Dir => {
+                        if let Err(e) = fs::create_dir_all(&dest_path)
+                            .with_context(|| format!("Failed to create directory: {:?}", dest_path))
+                        {
+                            first_error = Some(e);
+                            return false;
+                        }
+                    }
+                    FileKind::File => {
+                        if let Err(e) = fs::copy(&entry.path, &dest_path)
+                            .with_context(|| format!("Failed to copy file: {:?} -> {:?}", entry.path, dest_path))
+                        {
+                            first_error = Some(e);
+                            return false;
+                        }
+                    }
+                    FileKind::Symlink => {}
+                }
+                true
+            });
+
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// 导出单个模组为 7z 压缩文件（极限压缩）。
@@ -4842,16 +4964,23 @@ impl ModManager {
                         format!("Failed to push directory entry: {:?}", source_path)
                     })?;
 
-                // 使用 WalkDir 递归遍历目录，min_depth(1) 跳过根目录自身
-                for entry in WalkDir::new(source_path)
-                    .min_depth(1)
-                    .max_depth(MAX_TRAVERSAL_DEPTH)
-                    .follow_links(false)
-                {
-                    let entry = entry.with_context(|| "Failed to read directory entry")?;
-                    // 计算相对路径并转换为正斜杠风格（兼容 7z 标准）
-                    let relative = entry
-                        .path()
+                // 使用 DirWalker 递归遍历目录，跳过 depth=0 的根目录自身
+                let dw_entries = DirWalker::new()
+                    .follow_symlinks(false)
+                    .include_dirs(true)
+                    .include_files(true)
+                    .skip_hidden(false)
+                    .walk_bfs(source_path);
+
+                for dw_entry in dw_entries {
+                    if dw_entry.depth == 0 {
+                        continue;
+                    }
+                    if dw_entry.file_type == FileKind::Symlink {
+                        continue;
+                    }
+                    let relative = dw_entry
+                        .path
                         .strip_prefix(source_path)
                         .with_context(|| "Failed to compute relative path")?;
                     let entry_name = format!(
@@ -4860,11 +4989,10 @@ impl ModManager {
                         relative.to_string_lossy().replace('\\', "/")
                     );
 
-                    let archive_entry = SevenZArchiveEntry::from_path(entry.path(), entry_name);
-                    // 文件条目需要提供 Reader；目录条目传 None
-                    let reader = if entry.path().is_file() {
-                        Some(fs::File::open(entry.path()).with_context(|| {
-                            format!("Failed to open file: {:?}", entry.path())
+                    let archive_entry = SevenZArchiveEntry::from_path(&dw_entry.path, entry_name);
+                    let reader = if dw_entry.file_type == FileKind::File {
+                        Some(fs::File::open(&dw_entry.path).with_context(|| {
+                            format!("Failed to open file: {:?}", dw_entry.path)
                         })?)
                     } else {
                         None
@@ -4872,7 +5000,7 @@ impl ModManager {
                     writer
                         .push_archive_entry(archive_entry, reader)
                         .with_context(|| {
-                            format!("Failed to push archive entry: {:?}", entry.path())
+                            format!("Failed to push archive entry: {:?}", dw_entry.path)
                         })?;
                 }
             }

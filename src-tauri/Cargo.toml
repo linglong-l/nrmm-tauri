@@ -39,7 +39,6 @@ fern = "0.7"
 dirs = "5"
 anyhow = "1.0"
 thiserror = "2.0"
-walkdir = "2.5"
 notify = "8.2"
 reqwest = { version = "0.13", features = ["json"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "sync", "time"] }
@@ -51,6 +50,7 @@ rayon = "1.12"
 sysinfo = "0.39"
 zip = { version = "0.6", features = ["deflate", "aes-crypto"] }
 sevenz-rust = { version = "0.6", features = ["aes256"] }
+rars = "0.3.1"
 open = "5.3"
 
 [dev-dependencies]

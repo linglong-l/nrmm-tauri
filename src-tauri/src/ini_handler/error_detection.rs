@@ -16,14 +16,12 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use walkdir::WalkDir;
 
 use super::{
     detect_flow_control, get_section_type, is_comment_line, parse_file, FlowControlType, IniFile,
     IniSection, SectionType,
 };
-
-const MAX_TRAVERSAL_DEPTH: usize = 64;
+use crate::utils::DirWalker;
 
 #[cfg(test)]
 use super::parse_content;
@@ -532,41 +530,33 @@ pub fn check_long_paths(file_paths: &[String], max_length: usize) -> Vec<String>
         .collect()
 }
 
-/// 递归收集基础路径下所有 `.ini` 文件。
+/// 使用 DirWalker BFS 遍历目录树，匹配扩展名为 `.ini` 或 `.INI` 的文件。
 ///
-/// 使用 `walkdir` 遍历目录树，匹配扩展名为 `.ini` 或 `.INI` 的文件。
+/// 不跟随符号链接（follow_symlinks=false），通过 VisitedPathPool 防止循环，
+/// 深度限制使用 DirWalker 默认值（DEFAULT_MAX_TRAVERSAL_DEPTH=64）。
 ///
 /// 参数：
 /// - `base_path`: 起始目录路径。
 ///
 /// 返回：INI 文件路径列表。路径不存在或非目录时返回空 Vec。
 fn collect_ini_files(base_path: &str) -> Vec<String> {
-    let mut ini_files = Vec::new();
     let base = Path::new(base_path);
 
     if !base.exists() || !base.is_dir() {
-        return ini_files;
+        return Vec::new();
     }
 
-    for entry in WalkDir::new(base)
-        .max_depth(MAX_TRAVERSAL_DEPTH)
-        .follow_links(false)
+    let entries = DirWalker::new()
+        .follow_symlinks(false)
+        .file_ext("ini")
+        .include_dirs(false)
+        .skip_hidden(false)
+        .walk_bfs(base);
+
+    entries
         .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension() {
-                if ext == "ini" || ext == "INI" {
-                    if let Some(path_str) = path.to_str() {
-                        ini_files.push(path_str.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    ini_files
+        .filter_map(|e| e.path.to_str().map(|s| s.to_string()))
+        .collect()
 }
 
 /// 将错误列表按类型分类到三个映射中。
