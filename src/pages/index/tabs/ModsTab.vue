@@ -39,7 +39,7 @@ import {
 import { useGame } from '../../../composables/useGame';
 import { sortModsForDisplay } from '../../../stores/game';
 import { useHashConflictStore } from '../../../stores/hashConflict';
-import { fuzzyMatch, splitByIndices } from '../../../utils/fuzzyMatch';
+import { fuzzyMatchWithLowerKeyword, splitByIndices } from '../../../utils/fuzzyMatch';
 import type { TextSegment } from '../../../utils/fuzzyMatch';
 import { useSettings } from '../../../composables/useSettings';
 import {
@@ -393,8 +393,10 @@ watch(searchKeyword, (newVal) => {
 // 经过搜索关键字过滤后的模组列表：在 displayMods（已应用收藏过滤与排序）基础上叠加模糊匹配
 const filteredMods = computed(() => {
   const currentMods = displayMods.value;
-  if (!searchKeyword.value) return currentMods;
-  return currentMods.filter(mod => fuzzyMatch(searchKeyword.value, mod.modName).matched);
+  const keyword = searchKeyword.value;
+  if (!keyword) return currentMods;
+  const lowerKeyword = keyword.toLowerCase();
+  return currentMods.filter(mod => fuzzyMatchWithLowerKeyword(lowerKeyword, mod.modName).matched);
 });
 
 /**
@@ -403,8 +405,9 @@ const filteredMods = computed(() => {
  * @returns 文本片段数组，每个片段标记是否高亮
  */
 function getModNameSegments(modName: string): TextSegment[] {
-  if (!searchKeyword.value) return [{ text: modName, highlight: false }];
-  const result = fuzzyMatch(searchKeyword.value, modName);
+  const keyword = searchKeyword.value;
+  if (!keyword) return [{ text: modName, highlight: false }];
+  const result = fuzzyMatchWithLowerKeyword(keyword.toLowerCase(), modName);
   return splitByIndices(modName, result.indices);
 }
 
@@ -428,6 +431,8 @@ function isModSelected(mod: ModData): boolean {
 // 窗口宽度响应式（用于 Auto 布局模式自动切换 Grid/Carousel）
 const windowWidth = ref(window.innerWidth);
 let resizeHandler: (() => void) | null = null;
+let resizeThrottleTimer: ReturnType<typeof setTimeout> | null = null;
+const RESIZE_THROTTLE_MS = 150;
 
 // 当前生效的布局模式：Auto 模式下根据窗口宽度自动选择
 const effectiveLayoutMode = computed((): LayoutMode => {
@@ -743,7 +748,7 @@ async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string,
       } else {
         const ext = filePath.toLowerCase().split('.').pop();
         if (ext === 'zip' || ext === '7z' || ext === 'rar') {
-          const [valid, fileType] = await validateArchive(filePath);
+          const [valid] = await validateArchive(filePath);
           if (!valid) {
             const fileName = filePath.split(/[\\/]/).pop() || filePath;
             ElMessage.warning(t('Invalid archive file: {name}', { name: fileName }));
@@ -800,7 +805,7 @@ async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string,
         try {
           await invokeMoveToTrash(archivePath);
         } catch (err) {
-          log.warn('Failed to move archive to trash', archivePath, err);
+          log.warn('Failed to move archive to trash', { reason: err instanceof Error ? err.message : String(err) });
         }
       }
     } else {
@@ -830,7 +835,7 @@ async function onDrop(event: DragEvent) {
   const paths: string[] = [];
   const isDirMap = new Map<string, boolean>();
   for (let i = 0; i < files.length; i++) {
-    const file = files[i] as any;
+    const file = files[i] as File & { path?: string; isDirectory?: boolean };
     if (file.path) {
       paths.push(file.path);
       isDirMap.set(file.path, !!file.isDirectory);
@@ -968,7 +973,6 @@ async function handleRemoveGroup() {
  * 限制：realIndex === 0 的空槽位不可打开。
  */
 function openModFolder(mod: ModData) {
-  console.log('openModFolder', mod);
   if (mod.realIndex === 0) {
     return
   };
@@ -1245,7 +1249,15 @@ async function setupEventListeners() {
 
 // 组件挂载：依次加载模组、注册事件监听、启动文件监听；并绑定全局点击事件用于关闭右键菜单
 onMounted(async () => {
-  resizeHandler = () => { windowWidth.value = window.innerWidth; };
+  resizeHandler = () => {
+    if (resizeThrottleTimer) {
+      clearTimeout(resizeThrottleTimer);
+    }
+    resizeThrottleTimer = setTimeout(() => {
+      windowWidth.value = window.innerWidth;
+      resizeThrottleTimer = null;
+    }, RESIZE_THROTTLE_MS);
+  };
   window.addEventListener('resize', resizeHandler);
   // 若已有当前游戏的模组数据，则跳过加载（避免切页重复读取）
   // 使用 game.loadModsForGame() 统一加载入口，利用 store 中的缓存逻辑
@@ -1295,9 +1307,11 @@ onMounted(async () => {
 onUnmounted(() => {
   if (fileWatcherUnlisten) {
     fileWatcherUnlisten();
+    fileWatcherUnlisten = null;
   }
   if (gameSwitchedUnlisten) {
     gameSwitchedUnlisten();
+    gameSwitchedUnlisten = null;
   }
   if (tauriFileDropUnlisten) {
     tauriFileDropUnlisten();
@@ -1318,11 +1332,17 @@ onUnmounted(() => {
     window.removeEventListener('resize', resizeHandler);
     resizeHandler = null;
   }
+  if (resizeThrottleTimer) {
+    clearTimeout(resizeThrottleTimer);
+    resizeThrottleTimer = null;
+  }
   if (refreshDebounceTimer) {
     clearTimeout(refreshDebounceTimer);
+    refreshDebounceTimer = null;
   }
   if (gameSwitchDebounceTimer) {
     clearTimeout(gameSwitchDebounceTimer);
+    gameSwitchDebounceTimer = null;
   }
   // 清理拖动滚动事件
   document.removeEventListener('mousemove', onSidebarMouseMove);
@@ -1333,13 +1353,6 @@ onUnmounted(() => {
   modsContainerRef.value?.removeEventListener('click', onModsContainerClick, true);
   modsContainerRef.value?.removeEventListener('contextmenu', onModsContainerContextMenu, true);
 });
-
-// 监听布局模式变化（占位 watcher，预留用于未来扩展，如布局切换动画等）
-watch(
-  () => settings.layoutMode.value,
-  () => {
-  }
-);
 
 // 监听设置加载完成：如果设置加载后 targetGame 变为有效值且模组未加载，触发加载
 // 使用 isInitialModsLoad 标志防止与 onMounted 中的加载逻辑双重触发
@@ -1530,7 +1543,7 @@ function confirmCurrentMod() {
  * @returns 原生 input 元素，未挂载时返回 null
  */
 function getSearchInputEl(): HTMLInputElement | null {
-  return (searchInputRef.value as any)?.ref ?? null;
+  return (searchInputRef.value?.$el as HTMLInputElement | undefined) ?? null;
 }
 
 /** 返回统一搜索框是否可见。 */

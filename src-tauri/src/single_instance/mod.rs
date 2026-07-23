@@ -13,7 +13,14 @@ pub fn check_single_instance() -> (bool, Option<String>) {
         }
     };
 
-    let current_name = current_exe.file_name().unwrap().to_string_lossy().to_string();
+    let current_name = match current_exe.file_name() {
+        Some(name) => name.to_string_lossy().to_string(),
+        None => {
+            log::warn!("Failed to get executable file name");
+            return (false, None);
+        }
+    };
+
     let system = System::new_all();
 
     for (_, process) in system.processes() {
@@ -62,7 +69,13 @@ pub fn send_show_signal() -> bool {
         }
     };
 
-    let addr: SocketAddr = format!("127.0.0.1:{}", SINGLE_INSTANCE_PORT).parse().unwrap();
+    let addr: SocketAddr = match format!("127.0.0.1:{}", SINGLE_INSTANCE_PORT).parse() {
+        Ok(addr) => addr,
+        Err(e) => {
+            log::warn!("Failed to parse single instance socket address: {}", e);
+            return false;
+        }
+    };
 
     for i in 0..3 {
         match socket.send_to(b"SHOW", addr) {

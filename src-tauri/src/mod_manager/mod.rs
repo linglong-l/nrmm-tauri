@@ -803,8 +803,8 @@ impl ModManager {
 
         let fav_path = path.join(FAVORITE_FILE);
         if fav_path.exists() {
-            fs::remove_file(&fav_path)
-                .with_context(|| format!("Failed to remove favorite file: {:?}", fav_path))?;
+            Self::move_to_trash(&fav_path)
+                .with_context(|| format!("Failed to move favorite file to trash: {:?}", fav_path))?;
             Ok(false)
         } else {
             let datetime = Self::current_datetime_string();
@@ -1140,7 +1140,9 @@ impl ModManager {
                     let new_name = format!("{}{}", DISABLED_PREFIX, entry_name);
                     let new_path = tree_node_dir.join(&new_name);
                     if !new_path.exists() {
-                        let _ = fs::rename(&entry_path, &new_path);
+                        if let Err(e) = fs::rename(&entry_path, &new_path) {
+                            warn!("Failed to disable tree node mod {:?} -> {:?}: {}", entry_path, new_path, e);
+                        }
                     }
                 }
             }
@@ -2221,7 +2223,11 @@ impl ModManager {
         let parent_name = parent_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         
         if parent_name == MANAGED_FOLDER {
-            Self::add_group(parent_path.parent().unwrap().to_str().unwrap(), group_name)
+            let mods_root = parent_path
+                .parent()
+                .and_then(|p| p.to_str())
+                .ok_or_else(|| anyhow::anyhow!("Failed to get parent directory of managed folder: {:?}", parent_path))?;
+            Self::add_group(mods_root, group_name)
         } else {
             Self::validate_directory_name(group_name)?;
             
@@ -2618,7 +2624,9 @@ impl ModManager {
         // 步骤 1：还原（如果处于禁用状态则启用）
         let actual_path = if Self::is_disabled_name(&dir_name) {
             let restored_name = dir_name[DISABLED_PREFIX.len()..].trim_start_matches('_').to_string();
-            let parent = path.parent().unwrap();
+            let parent = path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("Invalid mod path: cannot get parent directory: {:?}", path))?;
             let restored_path = parent.join(&restored_name);
             if restored_path.exists() {
                 anyhow::bail!("Cannot restore mod: destination path already exists: {:?}", restored_path);
@@ -3284,13 +3292,22 @@ impl ModManager {
         let (_hash_conflict_count, hash_logs, hash_conflict_report) =
             Self::check_and_report_hash_conflicts(&managed_path_str, &groups_for_hash_check);
 
-        let mut logs = logs.lock().unwrap().clone();
+        let mut logs = logs
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Logs mutex poisoned: {}", e))?
+            .clone();
         logs.extend(hash_logs);
 
         logs.push(LogEntry::info("All groups processed"));
 
-        let per_mod_errors = per_mod_errors.lock().unwrap().clone();
-        let group_summaries_list = group_summaries.lock().unwrap().clone();
+        let per_mod_errors = per_mod_errors
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Per-mod errors mutex poisoned: {}", e))?
+            .clone();
+        let group_summaries_list = group_summaries
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Group summaries mutex poisoned: {}", e))?
+            .clone();
 
         Ok((
             logs,
@@ -3328,9 +3345,12 @@ impl ModManager {
                 if path.is_file() {
                     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                         if ext.eq_ignore_ascii_case("ini") {
-                            // 删除失败时静默忽略，不影响整体流程
-                            let _ = fs::remove_file(&path);
-                            deleted_count += 1;
+                            // 将分组 INI 文件移至回收站；失败时静默忽略，不影响整体流程，但记录 debug 便于排查
+                            if let Err(e) = Self::move_to_trash(&path) {
+                                debug!("Failed to move group INI file to trash {:?}: {}", path, e);
+                            } else {
+                                deleted_count += 1;
+                            }
                         }
                     }
                 }
@@ -3908,7 +3928,7 @@ impl ModManager {
         // 匹配并移除包含 $\modmanageragl\ 的完整子表达式
         let re = regex::Regex::new(
             r"\s*(&&|\|\|)?\s*\$managed_slot_id\s*==\s*\$\\modmanageragl\\[^\s&|]*"
-        ).unwrap();
+        ).expect("Static sanitize_key_condition_expression regex should be valid");
         re.replace_all(expression, "").trim().to_string()
     }
 
@@ -4396,14 +4416,16 @@ impl ModManager {
                 }
             }
             ArchiveType::Rar => {
-                let archive = match ArchiveReader::read_path(file_path) {
+                let data = fs::read(file_path)
+                    .with_context(|| format!("Failed to read RAR file: {:?}", file_path))?;
+                let archive = match ArchiveReader::read(&data) {
                     Ok(a) => a,
                     Err(e) => {
                         let err_msg = e.to_string().to_lowercase();
                         if err_msg.contains("password") || err_msg.contains("encrypt") {
                             return Ok(true);
                         }
-                        return Err(e).with_context(|| format!("Failed to read RAR file: {:?}", file_path));
+                        return Err(e).with_context(|| format!("Failed to parse RAR file: {:?}", file_path));
                     }
                 };
                 let result = archive.extract_to(None, |_| {
@@ -4451,6 +4473,54 @@ impl ModManager {
             .collect()
     }
 
+    /// 校验解压条目路径是否安全，防止 Zip Slip 路径遍历攻击。
+    ///
+    /// 规则：
+    /// - 条目名不得以 `/` 或 `\\` 开头（绝对路径）。
+    /// - 条目名中不得包含 `..` 组件。
+    /// - 规范化后的最终路径必须仍位于 `base_dir` 之下。
+    ///
+    /// 参数：
+    /// - `base_dir`: 解压目标根目录。
+    /// - `entry_name`: 压缩包内的原始条目名称。
+    ///
+    /// 返回：校验通过后的安全路径。
+    fn sanitize_extract_path(base_dir: &Path, entry_name: &str) -> Result<PathBuf> {
+        let normalized = entry_name.replace('\\', "/");
+        if normalized.starts_with('/') {
+            anyhow::bail!("Absolute path in archive is not allowed: {:?}", entry_name);
+        }
+
+        let mut components = Vec::new();
+        for part in normalized.split('/') {
+            match part {
+                "" | "." => continue,
+                ".." => {
+                    if components.pop().is_none() {
+                        anyhow::bail!(
+                            "Invalid archive entry path (potential Zip Slip attack): {:?}",
+                            entry_name
+                        );
+                    }
+                }
+                _ => components.push(part),
+            }
+        }
+
+        let rel_path = components.join("/");
+        let final_path = base_dir.join(&rel_path);
+
+        // 再次确认最终路径以 base_dir 开头（防御性校验）
+        if !final_path.starts_with(base_dir) {
+            anyhow::bail!(
+                "Invalid archive entry path (potential Zip Slip attack): {:?}",
+                entry_name
+            );
+        }
+
+        Ok(final_path)
+    }
+
     /// 解压 ZIP 文件到指定目录（支持可选密码）。
     ///
     /// 参数：
@@ -4488,18 +4558,7 @@ impl ModManager {
     }
 
     fn write_zip_entry<R: std::io::Read + std::io::Seek>(file: &mut zip::read::ZipFile<'_, R>, dest_dir: &Path) -> Result<()> {
-        let entry_path = dest_dir.join(file.name());
-
-        let mut has_parent_dir_traversal = false;
-        for component in entry_path.components() {
-            if let std::path::Component::ParentDir = component {
-                has_parent_dir_traversal = true;
-                break;
-            }
-        }
-        if has_parent_dir_traversal {
-            anyhow::bail!("Invalid path in ZIP archive (potential Zip Slip attack): {:?}", file.name());
-        }
+        let entry_path = Self::sanitize_extract_path(dest_dir, file.name())?;
 
         if (*file.name()).ends_with('/') {
             fs::create_dir_all(&entry_path)
@@ -4521,6 +4580,9 @@ impl ModManager {
 
     /// 解压 7z 文件到指定目录（支持可选密码）。
     ///
+    /// 先解压到临时目录，再逐项校验路径安全后移动到目标目录，
+    /// 防止 sevenz-rust 内部出现路径穿越（Zip Slip）。
+    ///
     /// 参数：
     /// - `file_path`: 7z 文件路径。
     /// - `dest_dir`: 目标目录路径。
@@ -4531,11 +4593,39 @@ impl ModManager {
         fs::create_dir_all(dest_dir)
             .with_context(|| format!("Failed to create destination directory: {:?}", dest_dir))?;
 
+        let temp_dir = tempfile::tempdir()
+            .with_context(|| "Failed to create temporary directory for 7z extraction")?;
+        let temp_path = temp_dir.path();
+
         match password {
-            Some(pwd) => sevenz_rust::decompress_file_with_password(file_path, dest_dir, pwd.into())
+            Some(pwd) => sevenz_rust::decompress_file_with_password(file_path, temp_path, pwd.into())
                 .with_context(|| format!("Failed to extract encrypted 7z file: {:?}", file_path))?,
-            None => decompress_file(file_path, dest_dir)
+            None => decompress_file(file_path, temp_path)
                 .with_context(|| format!("Failed to extract 7z file: {:?}", file_path))?,
+        }
+
+        // 遍历临时目录，校验并移动文件到目标目录
+        let entries = fs::read_dir(temp_path)
+            .with_context(|| format!("Failed to read temporary directory: {:?}", temp_path))?;
+        for entry in entries {
+            let entry = entry.with_context(|| "Failed to read entry in temporary directory")?;
+            let src = entry.path();
+            let entry_name = src.strip_prefix(temp_path)
+                .with_context(|| format!("Failed to strip prefix from {:?}", src))?;
+            let entry_name_str = entry_name.to_string_lossy().replace('\\', "/");
+            let dest = Self::sanitize_extract_path(dest_dir, &entry_name_str)?;
+
+            if src.is_dir() {
+                fs::create_dir_all(&dest)
+                    .with_context(|| format!("Failed to create directory: {:?}", dest))?;
+            } else {
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("Failed to create parent directory: {:?}", parent))?;
+                }
+                fs::rename(&src, &dest)
+                    .with_context(|| format!("Failed to move file: {:?} -> {:?}", src, dest))?;
+            }
         }
 
         info!("Extracted 7z file: {:?} -> {:?}", file_path, dest_dir);
@@ -4554,28 +4644,24 @@ impl ModManager {
         fs::create_dir_all(dest_dir)
             .with_context(|| format!("Failed to create destination directory: {:?}", dest_dir))?;
 
-        let archive = ArchiveReader::read_path(file_path)
+        let data = fs::read(file_path)
             .with_context(|| format!("Failed to read RAR file: {:?}", file_path))?;
+        let archive = ArchiveReader::read(&data)
+            .with_context(|| format!("Failed to parse RAR file: {:?}", file_path))?;
 
         let password_bytes = password.map(|p| p.as_bytes());
 
         archive.extract_to(password_bytes, |meta| {
             let name_str = String::from_utf8_lossy(&meta.name);
-            let entry_path = dest_dir.join(name_str.as_ref());
-
-            let mut has_parent_dir_traversal = false;
-            for component in entry_path.components() {
-                if let std::path::Component::ParentDir = component {
-                    has_parent_dir_traversal = true;
-                    break;
+            let entry_path = match Self::sanitize_extract_path(dest_dir, &name_str) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Invalid path in RAR archive: {:?} - {}", name_str, e),
+                    ).into());
                 }
-            }
-            if has_parent_dir_traversal {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Invalid path in RAR archive: {:?}", name_str),
-                ).into());
-            }
+            };
 
             if meta.is_directory {
                 fs::create_dir_all(&entry_path)?;
@@ -4633,7 +4719,9 @@ impl ModManager {
         };
 
         if result.is_ok() {
-            let _ = Self::smart_flatten_archive_root(dest_dir, archive_stem);
+            if let Err(e) = Self::smart_flatten_archive_root(dest_dir, archive_stem) {
+                warn!("Smart flatten archive root failed: {}", e);
+            }
         }
 
         result
@@ -4704,7 +4792,9 @@ impl ModManager {
 
         if let Ok(mut remaining) = fs::read_dir(&inner_dir) {
             if remaining.next().is_none() {
-                let _ = fs::remove_dir(&inner_dir);
+                if let Err(e) = fs::remove_dir(&inner_dir) {
+                    debug!("Failed to remove empty inner directory {:?}: {}", inner_dir, e);
+                }
                 debug!("Smart-flattened archive root (matched stem '{}'): {:?}", archive_stem, dest_dir);
                 return Ok(true);
             }
@@ -5822,5 +5912,109 @@ mod tests {
         let result = ModManager::validate_drop_path(&mods_root, group_path.to_str().unwrap());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("_MANAGED_"));
+    }
+
+    #[test]
+    fn test_sanitize_extract_path_allows_safe_relative_paths() {
+        let base = Path::new("/tmp/extract");
+        assert_eq!(
+            ModManager::sanitize_extract_path(base, "file.txt").unwrap(),
+            PathBuf::from("/tmp/extract/file.txt")
+        );
+        assert_eq!(
+            ModManager::sanitize_extract_path(base, "dir/subdir/file.txt").unwrap(),
+            PathBuf::from("/tmp/extract/dir/subdir/file.txt")
+        );
+        assert_eq!(
+            ModManager::sanitize_extract_path(base, "./file.txt").unwrap(),
+            PathBuf::from("/tmp/extract/file.txt")
+        );
+    }
+
+    #[test]
+    fn test_sanitize_extract_path_rejects_zip_slip() {
+        let base = Path::new("/tmp/extract");
+        assert!(ModManager::sanitize_extract_path(base, "../secret.txt").is_err());
+        assert!(ModManager::sanitize_extract_path(base, "dir/../../secret.txt").is_err());
+        assert!(ModManager::sanitize_extract_path(base, "dir/./../../secret.txt").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_extract_path_rejects_absolute_paths() {
+        let base = Path::new("/tmp/extract");
+        assert!(ModManager::sanitize_extract_path(base, "/etc/passwd").is_err());
+        assert!(ModManager::sanitize_extract_path(base, "\\Windows\\System32").is_err());
+    }
+
+    #[test]
+    fn test_move_to_trash_removes_original_file() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("to_trash.txt");
+        fs::write(&file_path, "trash me").unwrap();
+        assert!(file_path.exists());
+
+        ModManager::move_to_trash(&file_path).unwrap();
+
+        assert!(!file_path.exists(), "Original file should be moved to trash");
+    }
+
+    /// 验证 extract_archive 能拒绝包含路径穿越的恶意 ZIP 文件（Zip Slip）。
+    #[test]
+    fn test_extract_archive_rejects_zip_slip() {
+        use std::io::Write;
+
+        let tmp = TempDir::new().unwrap();
+        let archive_path = tmp.path().join("zip_slip.zip");
+        let dest_dir = tmp.path().join("extracted");
+
+        let file = fs::File::create(&archive_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("../evil.txt", options).unwrap();
+        zip.write_all(b"malicious").unwrap();
+        zip.finish().unwrap();
+
+        let result = ModManager::extract_archive(&archive_path, &dest_dir, None);
+        assert!(result.is_err(), "Zip Slip attack should be rejected");
+    }
+
+    /// 验证 smart_flatten_archive_root 对各种目录结构的处理。
+    #[test]
+    fn test_smart_flatten_archive_root_scenarios() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path();
+
+        // 空目录：不应扁平化
+        let empty = base.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        assert!(!ModManager::smart_flatten_archive_root(&empty, "archive").unwrap());
+
+        // 顶层包含文件：不应扁平化
+        let with_file = base.join("with_file");
+        fs::create_dir_all(&with_file).unwrap();
+        fs::write(with_file.join("readme.txt"), "hello").unwrap();
+        assert!(!ModManager::smart_flatten_archive_root(&with_file, "archive").unwrap());
+
+        // 顶层包含多个目录：不应扁平化
+        let multi_dir = base.join("multi_dir");
+        fs::create_dir_all(&multi_dir.join("a")).unwrap();
+        fs::create_dir_all(&multi_dir.join("b")).unwrap();
+        assert!(!ModManager::smart_flatten_archive_root(&multi_dir, "archive").unwrap());
+
+        // 顶层单个目录但名称不匹配：不应扁平化
+        let mismatch = base.join("mismatch");
+        let mismatch_inner = mismatch.join("wrong_name");
+        fs::create_dir_all(&mismatch_inner).unwrap();
+        fs::write(mismatch_inner.join("file.txt"), "x").unwrap();
+        assert!(!ModManager::smart_flatten_archive_root(&mismatch, "archive").unwrap());
+
+        // 顶层单个目录且名称与压缩包 stem 匹配：应提升内部文件并删除空目录
+        let matched = base.join("matched");
+        let matched_inner = matched.join("MyArchive");
+        fs::create_dir_all(&matched_inner).unwrap();
+        fs::write(matched_inner.join("file.txt"), "content").unwrap();
+        assert!(ModManager::smart_flatten_archive_root(&matched, "MyArchive").unwrap());
+        assert!(matched.join("file.txt").exists());
+        assert!(!matched_inner.exists());
     }
 }

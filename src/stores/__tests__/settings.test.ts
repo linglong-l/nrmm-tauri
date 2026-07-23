@@ -95,7 +95,7 @@ describe('useSettingsStore', () => {
 
   it('resetToDefaults 重置为默认值', () => {
     const store = useSettingsStore();
-    store.setTargetGame('none' as any);
+    store.setTargetGame(TargetGame.none);
     store.setLanguage('en');
     store.resetToDefaults();
     // 重置后 targetGame 恢复为默认值

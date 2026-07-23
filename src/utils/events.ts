@@ -11,6 +11,9 @@ import type {
   IniSyntaxError
 } from '../types';
 import type { HashConflictReport } from '../types';
+import { createLogger } from './logger';
+
+const log = createLogger('EventManager');
 
 /**
  * 全局事件名称常量集合。
@@ -174,7 +177,7 @@ class EventManager {
       };
     } catch (e) {
       // Tauri 监听注册失败时忽略，自定义监听仍已注册
-      console.warn('[EventManager] Failed to register Tauri listener for "${event}":', e);
+      log.warn(`Failed to register Tauri listener for "${event}"`, { reason: e instanceof Error ? e.message : String(e) });
     }
 
     return () => {
@@ -199,7 +202,7 @@ class EventManager {
       await tauriEmit(event, payload);
     } catch (e) {
       // Tauri 环境不可用时忽略错误（如非 Tauri 环境或测试环境）
-      console.warn(`[EventManager] emit failed for event "${event}":`, e);
+      log.warn(`emit failed for event "${event}"`, { reason: e instanceof Error ? e.message : String(e) });
     }
 
     // 触发前端进程内的自定义监听（同步触发，可靠无延迟）
@@ -210,7 +213,7 @@ class EventManager {
           cb(payload);
         } catch (e) {
           // 单个回调异常不影响其他回调
-          console.warn(`[EventManager] Callback error for custom event "${event}":`, e);
+          log.warn(`Callback error for custom event "${event}"`, { reason: e instanceof Error ? e.message : String(e) });
         }
       });
     }

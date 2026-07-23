@@ -768,7 +768,7 @@ pub async fn add_group(
             }
 
             let parent_path_str = parent_path
-                .expect("parent_path should exist after None check")
+                .ok_or_else(|| "Invalid target group path: no parent directory".to_string())?
                 .to_string_lossy()
                 .to_string();
 

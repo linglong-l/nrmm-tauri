@@ -957,7 +957,18 @@ pub fn save_keybind(
 
     if is_commented {
         if let Some((indent_part, content_part)) = parse_commented_key_line(line) {
-            let eq_pos = content_part.find('=').unwrap();
+            if let Some(eq_pos) = content_part.find('=') {
+                let key_part = &content_part[..eq_pos + 1];
+                let before_eq_spaces = {
+                    let after_key = &content_part[3..eq_pos];
+                    after_key.len() - after_key.trim_start().len()
+                };
+                let spaces = &content_part[3..3 + before_eq_spaces];
+                *line = format!("{}{}{}{}", indent_part, key_part, spaces, new_key_value);
+            }
+        }
+    } else if let Some((indent_part, content_part)) = parse_active_key_line(line) {
+        if let Some(eq_pos) = content_part.find('=') {
             let key_part = &content_part[..eq_pos + 1];
             let before_eq_spaces = {
                 let after_key = &content_part[3..eq_pos];
@@ -966,15 +977,6 @@ pub fn save_keybind(
             let spaces = &content_part[3..3 + before_eq_spaces];
             *line = format!("{}{}{}{}", indent_part, key_part, spaces, new_key_value);
         }
-    } else if let Some((indent_part, content_part)) = parse_active_key_line(line) {
-        let eq_pos = content_part.find('=').unwrap();
-        let key_part = &content_part[..eq_pos + 1];
-        let before_eq_spaces = {
-            let after_key = &content_part[3..eq_pos];
-            after_key.len() - after_key.trim_start().len()
-        };
-        let spaces = &content_part[3..3 + before_eq_spaces];
-        *line = format!("{}{}{}{}", indent_part, key_part, spaces, new_key_value);
     }
 
     write_lines_to_file(&lines, ini_path)?;

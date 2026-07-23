@@ -34,7 +34,22 @@ export function fuzzyMatch(keyword: string, text: string): FuzzyMatchResult {
     return { matched: true, indices: [] };
   }
 
-  const lowerKeyword = keyword.toLowerCase();
+  return fuzzyMatchWithLowerKeyword(keyword.toLowerCase(), text);
+}
+
+/**
+ * 使用已转换为小写的关键字执行模糊匹配。
+ * 当对大量文本使用同一关键字匹配时，可避免重复对关键字调用 toLowerCase()。
+ *
+ * @param lowerKeyword 已小写的搜索关键字
+ * @param text 目标文本
+ * @returns 匹配结果，含匹配字符索引数组
+ */
+export function fuzzyMatchWithLowerKeyword(lowerKeyword: string, text: string): FuzzyMatchResult {
+  if (lowerKeyword.length === 0) {
+    return { matched: true, indices: [] };
+  }
+
   const lowerText = text.toLowerCase();
   const indices: number[] = [];
   let keywordIndex = 0;

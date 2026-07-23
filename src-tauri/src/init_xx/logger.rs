@@ -126,7 +126,8 @@ pub fn get_log_dir_stats(log_dir: &Path) -> (usize, u64) {
 /// - `record`: `log` 框架的日志记录，包含级别、模块路径、行号等元信息。
 pub fn custom_log_format(out: FormatCallback, message: &Arguments, record: &log::Record) {
     // 1. 格式化时间：YYYY-MM-DD HH:MM:SS
-    let format = format_description::parse_borrowed::<2>("[year]-[month]-[day] [hour]:[minute]:[second]").unwrap();
+    let format = format_description::parse_borrowed::<2>("[year]-[month]-[day] [hour]:[minute]:[second]")
+        .expect("Static log time format should be valid");
     let time_str = OffsetDateTime::now_local()
         .unwrap_or_else(|_| OffsetDateTime::now_utc())
         .format(&format)

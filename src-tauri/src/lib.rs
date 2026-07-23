@@ -114,7 +114,7 @@ pub fn run() {
     // 构造全局共享状态，所有命令通过 Tauri 的 State 注入获取
     let app_state = AppState::new();
 
-    tauri::Builder::default()
+    match tauri::Builder::default()
         .manage(app_state) // 将 AppState 注入 Tauri 状态管理
         .plugin(tauri_plugin_dialog::init()) // 前端需要对话框（选择目录/文件）
         .plugin(tauri_plugin_shell::init()) // 前端需要打开外部 URL（Gitee/GitHub 链接）
@@ -351,7 +351,13 @@ pub fn run() {
             commands::create_desktop_icon,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    {
+        Ok(_) => {}
+        Err(e) => {
+            log::error!("Fatal error while running tauri application: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 /// 初始化 fern 日志系统。
@@ -377,7 +383,7 @@ pub fn run() {
 ///   未设置或无效值时，通过编译宏条件编译决定默认级别：dev（debug_assertions）构建默认 `Debug`，release 构建默认 `Info`；
 /// - 日志文件按日期分层存储（year/month/day.log），无自动清理。
 
-/// dev 构建的默认日志级别（编译宏条件编译，release 构建不编译此常量）。
+///   dev 构建的默认日志级别（编译宏条件编译，release 构建不编译此常量）。
 #[cfg(debug_assertions)]
 const DEFAULT_LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;
 

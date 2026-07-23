@@ -13,7 +13,6 @@
 //! [`HotkeyManager::handle_out_of_game_hotkey`]。
 
 use anyhow::{Context, Result};
-use serde_json;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
