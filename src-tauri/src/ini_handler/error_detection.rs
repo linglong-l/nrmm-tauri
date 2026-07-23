@@ -567,6 +567,7 @@ fn collect_ini_files(base_path: &str) -> Vec<String> {
 /// - 其他 → `other_errors`
 ///
 /// 返回：`(crash_lines, other_errors, missing_endif_errors)`。
+#[allow(clippy::type_complexity)]
 fn classify_errors(errors: Vec<IniSyntaxError>) -> (
     HashMap<String, Vec<IniSyntaxError>>,
     HashMap<String, Vec<IniSyntaxError>>,

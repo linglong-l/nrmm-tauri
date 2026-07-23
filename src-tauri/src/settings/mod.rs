@@ -458,23 +458,6 @@ impl Settings {
             .unwrap_or_default()
     }
 
-    /// 异步保存设置。
-    ///
-    /// 通过 `tokio::task::spawn_blocking` 在阻塞线程池中执行同步 [`Settings::save`]，
-    /// 避免阻塞异步运行时。
-    ///
-    /// # 参数
-    /// - `app_data_dir`：应用数据目录。
-    ///
-    /// # 返回值
-    /// 成功返回 `Ok(())`；若线程 join 失败，将 join 错误转换为 `Err`。
-    pub async fn save_async(&self, app_data_dir: &Path) -> Result<()> {
-        let self_clone = self.clone();
-        let app_data_dir = app_data_dir.to_path_buf();
-        tokio::task::spawn_blocking(move || self_clone.save(&app_data_dir))
-            .await
-            .unwrap_or_else(|e| Err(anyhow::anyhow!("Task join error: {}", e)))
-    }
 }
 
 impl Default for Settings {
@@ -559,8 +542,7 @@ mod tests {
     /// 验证 validate_and_fix 钳位整体缩放。
     #[test]
     fn test_validate_and_fix_clamps_overall_scale() {
-        let mut settings = Settings::default();
-        settings.overall_scale = 3.0;
+        let mut settings = Settings { overall_scale: 3.0, ..Default::default() };
         settings.validate_and_fix();
         assert_eq!(settings.overall_scale, 2.0);
     }
@@ -568,8 +550,7 @@ mod tests {
     /// 验证 validate_and_fix 钳位下限。
     #[test]
     fn test_validate_and_fix_clamps_lower_bound() {
-        let mut settings = Settings::default();
-        settings.overall_scale = 0.1;
+        let mut settings = Settings { overall_scale: 0.1, ..Default::default() };
         settings.validate_and_fix();
         assert_eq!(settings.overall_scale, 0.5);
     }
@@ -577,8 +558,7 @@ mod tests {
     /// 验证 validate_and_fix 回填空语言。
     #[test]
     fn test_validate_and_fix_empty_language() {
-        let mut settings = Settings::default();
-        settings.language = String::new();
+        let mut settings = Settings { language: String::new(), ..Default::default() };
         settings.validate_and_fix();
         assert!(!settings.language.is_empty());
     }
@@ -586,8 +566,7 @@ mod tests {
     /// 验证 validate_and_fix 回填空主题。
     #[test]
     fn test_validate_and_fix_empty_theme() {
-        let mut settings = Settings::default();
-        settings.theme = String::new();
+        let mut settings = Settings { theme: String::new(), ..Default::default() };
         settings.validate_and_fix();
         assert!(!settings.theme.is_empty());
     }
@@ -595,9 +574,7 @@ mod tests {
     /// 验证 validate_and_fix 钳位窗口尺寸下限。
     #[test]
     fn test_validate_and_fix_clamps_window_size() {
-        let mut settings = Settings::default();
-        settings.saved_window_width = 100;
-        settings.saved_window_height = 100;
+        let mut settings = Settings { saved_window_width: 100, saved_window_height: 100, ..Default::default() };
         settings.validate_and_fix();
         assert!(settings.saved_window_width >= 400);
         assert!(settings.saved_window_height >= 300);
@@ -653,9 +630,7 @@ mod tests {
     /// 验证 reset_to_default 重置所有字段。
     #[test]
     fn test_reset_to_default() {
-        let mut settings = Settings::default();
-        settings.hotkey_keyboard = "altX".to_string();
-        settings.language = "zh".to_string();
+        let mut settings = Settings { hotkey_keyboard: "altX".to_string(), language: "zh".to_string(), ..Default::default() };
         settings.reset_to_default();
         assert_eq!(settings.hotkey_keyboard, "altD");
         assert_eq!(settings.language, "en");

@@ -16,6 +16,7 @@ import { createPinia } from 'pinia';
 import App from './App.vue';
 import { i18n } from './locales';
 import appIcon from '@/assets/images/app-icon-32.png';
+import { setupVueErrorHandler } from './utils/errorBoundary';
 
 // 动态注入 favicon（构建时 appIcon 会被 Vite 内联为 base64 data URL）
 const faviconLink = document.createElement('link');
@@ -32,6 +33,9 @@ const pinia = createPinia();
 // Element Plus 由 vite 插件按需自动导入，无需 app.use(ElementPlus)
 app.use(pinia);
 app.use(i18n);
+
+// 注册 Vue 应用级错误处理器（捕获组件渲染/侦听器/生命周期中的未捕获异常）
+setupVueErrorHandler(app);
 
 // 将应用挂载到 index.html 中的 #app 元素
 app.mount('#app');

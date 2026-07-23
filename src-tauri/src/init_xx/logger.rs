@@ -59,10 +59,10 @@ pub fn cleanup_old_logs(log_dir: &Path, retention: Duration) -> usize {
         };
 
         let modified = metadata.modified().unwrap_or(now);
-        if now.duration_since(modified).unwrap_or(Duration::ZERO) > retention {
-            if fs::remove_file(&entry.path).is_ok() {
-                removed += 1;
-            }
+        if now.duration_since(modified).unwrap_or(Duration::ZERO) > retention
+            && fs::remove_file(&entry.path).is_ok()
+        {
+            removed += 1;
         }
     }
 

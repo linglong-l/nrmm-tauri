@@ -23,7 +23,7 @@ pub fn check_single_instance() -> (bool, Option<String>) {
 
     let system = System::new_all();
 
-    for (_, process) in system.processes() {
+    for process in system.processes().values() {
         if process.pid().as_u32() == std::process::id() {
             continue;
         }
@@ -104,22 +104,24 @@ pub fn start_listener(app_handle: tauri::AppHandle) {
 
     let mut buf = [0u8; 64];
     std::thread::spawn(move || {
-        log::info!("Single instance listener started on port {}", SINGLE_INSTANCE_PORT);
-        loop {
-            match socket.recv_from(&mut buf) {
-                Ok((len, _)) => {
-                    let msg = String::from_utf8_lossy(&buf[..len]);
-                    if msg == "SHOW" {
-                        log::info!("Received show signal, activating window");
-                        let _ = crate::window_manager::WindowManager::show_window(&app_handle);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            log::info!("Single instance listener started on port {}", SINGLE_INSTANCE_PORT);
+            loop {
+                match socket.recv_from(&mut buf) {
+                    Ok((len, _)) => {
+                        let msg = String::from_utf8_lossy(&buf[..len]);
+                        if msg == "SHOW" {
+                            log::info!("Received show signal, activating window");
+                            let _ = crate::window_manager::WindowManager::show_window(&app_handle);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("UDP listener error: {}", e);
+                        break;
                     }
                 }
-                Err(e) => {
-                    log::warn!("UDP listener error: {}", e);
-                    break;
-                }
             }
-        }
+        }));
     });
 }
 
@@ -133,7 +135,7 @@ mod tests {
         let (has_duplicate, _) = check_single_instance();
         // 测试环境中通常只有一个进程，应返回 false
         // 但在 CI 并行运行场景下可能有同名进程，仅验证不崩溃
-        assert!(has_duplicate == false || has_duplicate == true);
+        assert!(has_duplicate || !has_duplicate);
     }
 
     /// 验证 send_show_signal 在不绑定监听端口时返回预期结果。
@@ -142,7 +144,7 @@ mod tests {
         let result = send_show_signal();
         // UDP 是无连接协议，send_to 可能成功（数据发送到端口但无监听者）
         // 仅验证不崩溃且返回布尔值
-        assert!(result == true || result == false);
+        assert!(result || !result);
     }
 
     /// 验证 send_show_signal 在监听端口存在时成功发送。

@@ -29,6 +29,7 @@ mod utils; // 通用工具集（日志采样器等）
 mod window_manager; // 主窗口的显示/隐藏/尺寸/置顶等管理
 mod image_converter; // PNG 转 ICO 图像格式转换
 mod single_instance; // 单实例检测与进程间通信
+mod panic_hook; // 全局 panic hook，release 下弹出原生对话框并重启
 
 // 暴露给前端的 Tauri 命令
 
@@ -111,6 +112,9 @@ pub fn run() {
     // 初始化日志系统（使用 fern 替代 tauri-plugin-log）
     init_logging();
 
+    // 安装全局 panic hook（debug 记录日志+abort，release 弹出原生对话框+重启）
+    panic_hook::install_panic_hook();
+
     // 构造全局共享状态，所有命令通过 Tauri 的 State 注入获取
     let app_state = AppState::new();
 
@@ -149,7 +153,7 @@ pub fn run() {
 
             // 2) 应用初始窗口状态（最小尺寸 + 恢复上次的位置/尺寸/置顶）
             if let Err(e) = crate::window_manager::WindowManager::setup_initial_window(
-                &app_handle,
+                app_handle,
                 &state.settings,
             ) {
                 log::error!("Failed to setup initial window state: {}", e);
@@ -159,7 +163,7 @@ pub fn run() {
             {
                 let settings = state.settings.read();
                 if let Err(e) =
-                    crate::hotkey::HotkeyManager::register_from_settings(&app_handle, &settings)
+                    crate::hotkey::HotkeyManager::register_from_settings(app_handle, &settings)
                 {
                     log::error!("Failed to register hotkeys from settings: {}", e);
                 }
@@ -169,7 +173,7 @@ pub fn run() {
             {
                 let settings = state.settings.read();
                 let locale = settings.language.as_str();
-                if let Err(e) = crate::tray::TrayManager::setup_tray(&app_handle, locale) {
+                if let Err(e) = crate::tray::TrayManager::setup_tray(app_handle, locale) {
                     log::error!("Failed to setup tray: {}", e);
                 }
             }
@@ -200,7 +204,7 @@ pub fn run() {
             //    为避免 Move/Resized 高频触发导致写入风暴，使用独立线程 + sleep 500ms 进行防抖
             let settings_arc = state.settings.clone();
             let app_handle_clone = app_handle.clone();
-            app_handle.get_webview_window("main").map(|window| {
+            if let Some(window) = app_handle.get_webview_window("main") {
                 window.on_window_event(move |event| {
                     let settings = settings_arc.clone();
                     let app = app_handle_clone.clone();
@@ -216,14 +220,16 @@ pub fn run() {
                                 let settings_clone = settings.clone();
                                 // 在独立线程执行文件 IO，避免阻塞 UI 线程
                                 std::thread::spawn(move || {
-                                    let s = {
-                                        // 仅短时持有读锁以克隆设置，随后立即释放
-                                        let guard = settings_clone.read();
-                                        guard.clone()
-                                    };
-                                    if let Err(e) = s.save(&app_data_dir) {
-                                        log::error!("Failed to save settings file on close: {}", e);
-                                    }
+                                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        let s = {
+                                            // 仅短时持有读锁以克隆设置，随后立即释放
+                                            let guard = settings_clone.read();
+                                            guard.clone()
+                                        };
+                                        if let Err(e) = s.save(&app_data_dir) {
+                                            log::error!("Failed to save settings file on close: {}", e);
+                                        }
+                                    }));
                                 });
                             }
                         }
@@ -231,34 +237,38 @@ pub fn run() {
                         // 使用 std::thread::spawn + sleep，避免在窗口事件回调中引入 Tokio 运行时
                         tauri::WindowEvent::Moved(_) => {
                             std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
-                                if let Err(e) =
-                                    crate::window_manager::WindowManager::save_window_state(
-                                        &app, &settings,
-                                    )
-                                {
-                                    log::error!("Failed to save window state on move: {}", e);
-                                }
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                    if let Err(e) =
+                                        crate::window_manager::WindowManager::save_window_state(
+                                            &app, &settings,
+                                        )
+                                    {
+                                        log::error!("Failed to save window state on move: {}", e);
+                                    }
+                                }));
                             });
                         }
                         // 窗口尺寸变化：防抖 500ms 后保存窗口状态
                         // 使用 std::thread::spawn + sleep，避免在窗口事件回调中引入 Tokio 运行时
                         tauri::WindowEvent::Resized(_) => {
                             std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(500));
-                                if let Err(e) =
-                                    crate::window_manager::WindowManager::save_window_state(
-                                        &app, &settings,
-                                    )
-                                {
-                                    log::error!("Failed to save window state on resize: {}", e);
-                                }
+                                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    std::thread::sleep(std::time::Duration::from_millis(500));
+                                    if let Err(e) =
+                                        crate::window_manager::WindowManager::save_window_state(
+                                            &app, &settings,
+                                        )
+                                    {
+                                        log::error!("Failed to save window state on resize: {}", e);
+                                    }
+                                }));
                             });
                         }
                         _ => {}
                     }
                 });
-            });
+            }
 
             Ok(())
         })
@@ -349,6 +359,7 @@ pub fn run() {
             commands::export_group,
             commands::open_url,
             commands::create_desktop_icon,
+            commands::restart_application,
         ])
         .run(tauri::generate_context!())
     {
@@ -382,7 +393,7 @@ pub fn run() {
 /// - 日志级别可通过环境变量 `XXMI_LOG_LEVEL` 动态配置（取值：`trace`/`debug`/`info`/`warn`/`error`/`off`，大小写不敏感，优先级最高）；
 ///   未设置或无效值时，通过编译宏条件编译决定默认级别：dev（debug_assertions）构建默认 `Debug`，release 构建默认 `Info`；
 /// - 日志文件按日期分层存储（year/month/day.log），无自动清理。
-
+///
 ///   dev 构建的默认日志级别（编译宏条件编译，release 构建不编译此常量）。
 #[cfg(debug_assertions)]
 const DEFAULT_LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;

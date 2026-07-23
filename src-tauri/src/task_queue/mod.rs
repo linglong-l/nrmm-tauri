@@ -136,6 +136,7 @@ impl TaskQueue {
     ///
     /// 参数：
     /// - `task_type`: 任务类型标识。
+    #[allow(dead_code)]
     pub async fn is_running(&self, task_type: &str) -> bool {
         let tasks = self.tasks.lock().await;
         tasks.contains_key(task_type)

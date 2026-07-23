@@ -64,7 +64,7 @@ impl LogSampler {
         let mut map = self
             .last_log
             .lock()
-            .expect("LogSampler mutex poisoned; sampling state unavailable");
+            .unwrap_or_else(|e| e.into_inner());
 
         match map.get(key) {
             // 该 key 之前输出过：检查是否已超出窗口期

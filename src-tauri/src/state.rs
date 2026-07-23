@@ -23,7 +23,6 @@ use crate::file_watcher::FileWatcher;
 use crate::hotkey::HotkeyManager;
 use crate::window_manager::WindowManager;
 use crate::tray::TrayManager;
-use crate::process::ProcessDetector;
 use crate::settings::Settings;
 use crate::cloud_data::CloudData;
 use crate::keypress_simulator::KeypressSimulator;
@@ -65,10 +64,6 @@ pub struct AppState {
     #[allow(dead_code)]
     pub tray_manager: Arc<TrayManager>,
 
-    /// 进程检测器：检测目标游戏是否在运行、获取前台进程名等。
-    /// 内部无共享可变状态，外层仅用 `Arc` 包裹。
-    pub process_detector: Arc<ProcessDetector>,
-
     /// 用户设置：读多写少，使用 `RwLock` 允许多读单写。
     /// 设置变更后会异步落盘到 `settings.json`。
     pub settings: Arc<RwLock<Settings>>,
@@ -105,7 +100,6 @@ impl AppState {
             hotkey_manager: Arc::new(HotkeyManager::new()),
             window_manager: Arc::new(WindowManager::new()),
             tray_manager: Arc::new(TrayManager::new()),
-            process_detector: Arc::new(ProcessDetector::new()),
             settings: Arc::new(RwLock::new(Settings::new())),
             cloud_data: Arc::new(RwLock::new(CloudData::new())),
             keypress_simulator: Arc::new(KeypressSimulator::new()),

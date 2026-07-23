@@ -163,7 +163,7 @@ pub async fn refresh_mods(
     let mod_manager = state.mod_manager.clone();
     let settings_clone = settings.clone();
 
-    Ok(state
+    state
         .task_queue
         .run_task("load_mods", async move {
             mod_manager.load_mods(&settings_clone).await
@@ -172,7 +172,7 @@ pub async fn refresh_mods(
         .map_err(|e| match e {
             TaskQueueError::TaskCancelled(t) => format!("Task '{}' was cancelled", t),
             TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e),
-        })?)
+        })
 }
 
 /// 根据指定路径刷新模组数据（不依赖全局设置）。
@@ -722,7 +722,7 @@ pub async fn check_hash_conflicts(
     let mod_manager = state.mod_manager.clone();
     let settings_clone = state.settings.read().clone();
 
-    Ok(state
+    state
         .task_queue
         .run_task("check_hash_conflicts", async move {
             mod_manager
@@ -733,7 +733,7 @@ pub async fn check_hash_conflicts(
         .map_err(|e| match e {
             TaskQueueError::TaskCancelled(t) => format!("Task '{}' was cancelled", t),
             TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e),
-        })?)
+        })
 }
 
 /// 在指定位置新建一个分组。
@@ -1749,7 +1749,7 @@ pub async fn open_path(state: State<'_, AppState>, path: String) -> Result<(), S
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
-        return Err(format!("Path does not exist: {}", &path));
+        return Err(format!("Path does not exist: {}", path));
     }
 
     let is_dir = path_buf.is_dir();
@@ -2184,4 +2184,18 @@ pub async fn open_url(url: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn create_desktop_icon(name: Option<String>) -> Result<(), String> {
     crate::desktop_entry::DesktopEntryManager::create_desktop_entry(name)
+}
+
+/// 重启应用（用于前端全局错误处理器或 release 模式 panic 后恢复）。
+///
+/// 获取当前可执行文件路径，启动新进程后立即退出当前进程。
+/// 使用同步命令以避免 tokio 运行时在退出前被销毁。
+#[tauri::command]
+pub fn restart_application() -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Cannot get executable path: {}", e))?;
+    std::process::Command::new(exe)
+        .spawn()
+        .map_err(|e| format!("Cannot restart application: {}", e))?;
+    std::process::exit(0);
 }

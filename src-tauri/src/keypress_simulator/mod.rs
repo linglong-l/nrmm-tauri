@@ -840,7 +840,7 @@ impl KeypressSimulator {
     /// `select_mod_key_sequence` 和 `reload_mod_key_sequence` 已迁移至
     /// `mod_manager::game_interaction` 模块。
     /// 请使用 `crate::mod_manager::game_interaction` 中的对应函数。
-
+    ///
     /// Windows 平台 `keybd_event` 的封装。
     ///
     /// 参数对应 Windows API 的 `keybd_event` 签名：

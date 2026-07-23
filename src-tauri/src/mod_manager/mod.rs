@@ -546,7 +546,7 @@ impl ModManager {
 
         let mut group_paths: Vec<(i32, PathBuf)> = Vec::new();
 
-        if let Ok(entries) = fs::read_dir(&managed_path) {
+        if let Ok(entries) = fs::read_dir(managed_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
@@ -563,7 +563,7 @@ impl ModManager {
         }
 
         // 按分组索引升序排序，保证返回顺序稳定
-        group_paths.sort_by(|a, b| a.0.cmp(&b.0));
+        group_paths.sort_by_key(|a| a.0);
 
         Ok(group_paths
             .into_iter()
@@ -1266,7 +1266,7 @@ impl ModManager {
         // 用于递归/普通目录的递增索引（group_ 形式有自己的索引）
         let mut index: i32 = 1;
 
-        if let Ok(entries) = fs::read_dir(&managed_path) {
+        if let Ok(entries) = fs::read_dir(managed_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
@@ -1305,7 +1305,7 @@ impl ModManager {
         // 若存在 group_<index> 目录，创建虚拟 "Group" 父分类节点
         if !group_children.is_empty() {
             // 子分组按 real_index 升序排序，保证分类内顺序稳定
-            group_children.sort_by(|a, b| a.real_index.cmp(&b.real_index));
+            group_children.sort_by_key(|a| a.real_index);
             let group_node = ModGroupData {
                 group_path: format!("{}__virtual__Group", managed_path_str),
                 icon_path: None,
@@ -2086,7 +2086,7 @@ impl ModManager {
     /// 3. 未收藏分组按 `sort_method` 指定的方式排序：
     ///    - `ByIndex`：按 `real_index` 升序。
     ///    - `ByName`：按 `group_name`（小写）字母序。
-    fn sort_groups(groups: &mut Vec<ModGroupData>, sort_method: SortGroupMethod) {
+    fn sort_groups(groups: &mut [ModGroupData], sort_method: SortGroupMethod) {
         groups.sort_by(|a, b| {
             let a_fav = a.favorite_date_time.is_some();
             let b_fav = b.favorite_date_time.is_some();
@@ -2097,9 +2097,8 @@ impl ModManager {
             }
 
             if a_fav && b_fav {
-                match (&a.favorite_date_time, &b.favorite_date_time) {
-                    (Some(ad), Some(bd)) => return bd.cmp(ad),
-                    _ => {}
+                if let (Some(ad), Some(bd)) = (&a.favorite_date_time, &b.favorite_date_time) {
+                    return bd.cmp(ad);
                 }
             }
 
@@ -2833,7 +2832,7 @@ impl ModManager {
     ///
     /// 返回：分组数据列表。
     pub async fn load_mods(&self, settings: &Settings) -> Result<Vec<ModGroupData>> {
-        log::debug!("读取游戏模组：{:?}", &settings.target_game);
+        log::debug!("读取游戏模组：{:?}", settings.target_game);
         let target_game: TargetGame = settings.target_game;
         let mods_path: String = Self::get_mods_path_for_game(settings, target_game);
 
@@ -3023,6 +3022,7 @@ impl ModManager {
     /// - `known_libraries`: 已知模组库命名空间映射。
     ///
     /// 返回：`(日志列表, 错误报告, hash 冲突报告)`。
+    #[allow(clippy::type_complexity)]
     fn update_mod_data_sync(
         mods_path: &str,
         known_libraries: &HashMap<String, String>,
@@ -3133,7 +3133,6 @@ impl ModManager {
                 // 管理分组内的每个模组
                 // 状态过滤系统：仅处理启用状态的模组，禁用模组（is_disabled=true）会被自动忽略
                 // 状态保护机制：本流程不会改变任何模组的启用/禁用状态，状态由目录名的 DISABLED 前缀决定
-                let mut group_total = 0u32;
 
                 match Self::get_mods_on_group(group_path) {
                     Ok(mods) => {
@@ -3145,7 +3144,7 @@ impl ModManager {
                             enabled_count
                         );
 
-                        group_total = mods.iter().filter(|m| m.mod_path != "None" && !m.is_disabled).count() as u32;
+                        let group_total = mods.iter().filter(|m| m.mod_path != "None" && !m.is_disabled).count() as u32;
 
                         let mut namespace_fixes = Vec::new();
                         match Self::fix_namespace_conflicts_for_group(group_path, &mods, known_libraries) {
@@ -3339,18 +3338,16 @@ impl ModManager {
             .with_context(|| format!("Failed to read group directory: {:?}", group_path))?;
 
         let mut deleted_count = 0;
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ext.eq_ignore_ascii_case("ini") {
-                            // 将分组 INI 文件移至回收站；失败时静默忽略，不影响整体流程，但记录 debug 便于排查
-                            if let Err(e) = Self::move_to_trash(&path) {
-                                debug!("Failed to move group INI file to trash {:?}: {}", path, e);
-                            } else {
-                                deleted_count += 1;
-                            }
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext.eq_ignore_ascii_case("ini") {
+                        // 将分组 INI 文件移至回收站；失败时静默忽略，不影响整体流程，但记录 debug 便于排查
+                        if let Err(e) = Self::move_to_trash(&path) {
+                            debug!("Failed to move group INI file to trash {:?}: {}", path, e);
+                        } else {
+                            deleted_count += 1;
                         }
                     }
                 }
@@ -3476,7 +3473,7 @@ impl ModManager {
         let mut fixes: Vec<NamespaceFix> = Vec::new();
         let mut used_namespaces: HashSet<String> = HashSet::new();
 
-        for (ns_lower, _) in known_libraries {
+        for ns_lower in known_libraries.keys() {
             used_namespaces.insert(ns_lower.clone());
         }
 
@@ -3833,12 +3830,9 @@ impl ModManager {
             }
 
             // 清理 condition= 行中的管理表达式
-            match Self::sanitize_condition_line(line) {
-                Some(processed) => {
-                    result.push(processed);
-                    continue;
-                }
-                None => {} // 非 condition 行，继续后续检查
+            if let Some(processed) = Self::sanitize_condition_line(line) {
+                result.push(processed);
+                continue;
             }
 
             // 处理 manager if 行（使用栈追踪配对）
@@ -3939,8 +3933,8 @@ impl ModManager {
     ///
     /// 返回：移除 4 空格后的行文本。
     fn remove_first_four_spaces(line: &str) -> String {
-        if line.starts_with("    ") {
-            line[4..].to_string()
+        if let Some(stripped) = line.strip_prefix("    ") {
+            stripped.to_string()
         } else {
             line.to_string()
         }
@@ -4051,7 +4045,7 @@ impl ModManager {
         );
 
         // 从后向前插入条件块，避免行号变化影响前面的插入位置
-        sections_with_commandlist.sort_by(|a, b| b.0.cmp(&a.0));
+        sections_with_commandlist.sort_by_key(|b| std::cmp::Reverse(b.0));
 
         for (start, end) in &sections_with_commandlist {
             // 找到段内第一条实际内容行（跳过空行和注释）
@@ -4142,7 +4136,7 @@ impl ModManager {
             // 找到该文件在 _MANAGED_ 下的直接子目录（模组根目录）
             let mut ancestors = path.ancestors();
             let mut mod_root = None;
-            while let Some(ancestor) = ancestors.next() {
+            for ancestor in &mut ancestors {
                 if ancestor == managed {
                     break;
                 }
@@ -4357,9 +4351,9 @@ impl ModManager {
 
         let actual_type = Self::detect_archive_type(path);
 
-        if expected_type != ArchiveType::Unknown && expected_type == actual_type {
-            (true, actual_type)
-        } else if actual_type != ArchiveType::Unknown {
+        if (expected_type != ArchiveType::Unknown && expected_type == actual_type)
+            || actual_type != ArchiveType::Unknown
+        {
             (true, actual_type)
         } else {
             (false, ArchiveType::Unknown)
@@ -4673,7 +4667,7 @@ impl ModManager {
                 let file = fs::File::create(&entry_path)?;
                 Ok(Box::new(file))
             }
-        }).map_err(|e| anyhow::Error::from(e))
+        }).map_err(anyhow::Error::from)
             .with_context(|| format!("Failed to extract RAR file: {:?}", file_path))?;
 
         info!("Extracted RAR file: {:?} -> {:?}", file_path, dest_dir);
@@ -4897,7 +4891,7 @@ impl ModManager {
             .unwrap_or("mod");
 
         let clean_name = if Self::is_disabled_name(mod_name) {
-            &mod_name[DISABLED_PREFIX.len()..].trim_start_matches('_')
+            mod_name[DISABLED_PREFIX.len()..].trim_start_matches('_')
         } else {
             mod_name
         };
@@ -4928,7 +4922,7 @@ impl ModManager {
             }
 
             // 4. 压缩为 7z
-            Self::compress_to_7z(&[temp_mod_dir.clone()], &dest_file)?;
+            Self::compress_to_7z(std::slice::from_ref(&temp_mod_dir), &dest_file)?;
             Ok(())
         })();
 
@@ -5997,8 +5991,8 @@ mod tests {
 
         // 顶层包含多个目录：不应扁平化
         let multi_dir = base.join("multi_dir");
-        fs::create_dir_all(&multi_dir.join("a")).unwrap();
-        fs::create_dir_all(&multi_dir.join("b")).unwrap();
+        fs::create_dir_all(multi_dir.join("a")).unwrap();
+        fs::create_dir_all(multi_dir.join("b")).unwrap();
         assert!(!ModManager::smart_flatten_archive_root(&multi_dir, "archive").unwrap());
 
         // 顶层单个目录但名称不匹配：不应扁平化

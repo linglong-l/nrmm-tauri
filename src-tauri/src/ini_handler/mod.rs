@@ -876,7 +876,7 @@ fn parse_active_key_line(line: &str) -> Option<(String, String)> {
         return None;
     }
     if let Some((key, _)) = parse_key_value(line) {
-        if key.to_ascii_lowercase() != "key" {
+        if !key.eq_ignore_ascii_case("key") {
             return None;
         }
     } else {

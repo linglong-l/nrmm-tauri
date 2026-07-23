@@ -278,7 +278,7 @@ mod tests {
         let png_bytes = create_test_png_bytes(32, 32);
         let ico_bytes = png_to_ico_bytes(&png_bytes).unwrap();
 
-        let entry_offset = 6 + 1 * 16;
+        let entry_offset = 6 + 16;
         let data_size = u32::from_le_bytes([
             ico_bytes[entry_offset + 8],
             ico_bytes[entry_offset + 9],

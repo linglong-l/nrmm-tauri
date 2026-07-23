@@ -66,6 +66,7 @@ pub struct VisitedPathPool {
     inner: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
+#[allow(dead_code)]
 impl VisitedPathPool {
     /// 创建一个新的空路径池。
     pub fn new() -> Self {
@@ -172,6 +173,7 @@ impl DirWalker {
     }
 
     /// 设置最大遍历深度（0 表示仅起始目录自身）。
+    #[allow(dead_code)]
     pub fn max_depth(mut self, depth: usize) -> Self {
         self.max_depth = depth;
         self
@@ -312,10 +314,8 @@ impl DirWalker {
 
                 let is_dir_entry = kind == FileKind::Dir;
 
-                if self.accept_entry(&dir_entry) {
-                    if !callback(&dir_entry) {
-                        return;
-                    }
+                if self.accept_entry(&dir_entry) && !callback(&dir_entry) {
+                    return;
                 }
 
                 if is_dir_entry {

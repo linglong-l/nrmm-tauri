@@ -1,0 +1,890 @@
+﻿cargo : [1m[93mwarning[0m[1m[97m: empty line after doc comment[0m
+At line:15 char:8854
++ ...  src-tauri; cargo clippy --workspace --all-targets 2> clippy_output.t ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([1m[93mwarnin...doc comment[0m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   [1m[96m--> [0msrc\keypress_simulator\mod.rs:842:5
+    [1m[96m|[0m
+[1m[96m842[0m [1m[96m|[0m [1m[93m/[0m     /// 请使用 `crate::mod_manager::game_interaction` 中的对应函数。
+[1m[96m843[0m [1m[96m|[0m [1m[93m|[0m
+    [1m[96m|[0m [1m[93m|_^[0m
+[1m[96m...[0m
+[1m[96m852[0m [1m[96m|[0m       fn keybd_event_windows(
+    [1m[96m|[0m       [1m[96m----------------------[0m [1m[96mthe comment documents this function[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#empty_line_after_doc_comments
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::empty_line_after_doc_comments)]` on by default
+    [1m[96m= [0m[1m[97mhelp[0m: if the empty line is unintentional, remove it
+[1m[96mhelp[0m: if the documentation should include the empty line include it in the comment
+    [1m[96m|[0m
+[1m[96m843[0m [1m[96m| [0m[92m    ///[0m
+    [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: unused imports: `AtomicBool` and `Ordering`[0m
+  [1m[96m--> [0msrc\panic_hook.rs:11:25
+   [1m[96m|[0m
+[1m[96m11[0m [1m[96m|[0m use std::sync::atomic::{AtomicBool, Ordering};
+   [1m[96m|[0m                         [1m[93m^^^^^^^^^^[0m  [1m[93m^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: empty line after doc comment[0m
+   [1m[96m--> [0msrc\lib.rs:395:1
+    [1m[96m|[0m
+[1m[96m395[0m [1m[96m|[0m [1m[93m/[0m /// - 日志文件按日期分层存储（year/month/day.log），无自动清理。
+[1m[96m396[0m [1m[96m|[0m [1m[93m|[0m
+    [1m[96m|[0m [1m[93m|_^[0m
+[1m[96m...[0m
+[1m[96m399[0m [1m[96m|[0m   const DEFAULT_LOG_LEVEL: log::LevelFilter = log::LevelFilter::Debug;
+    [1m[96m|[0m   [1m[96m-----------------------[0m [1m[96mthe comment documents this constant item[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#empty_line_after_doc_comments
+    [1m[96m= [0m[1m[97mhelp[0m: if the empty line is unintentional, remove it
+[1m[96mhelp[0m: if the documentation should include the empty line include it in the comment
+    [1m[96m|[0m
+[1m[96m396[0m [1m[96m| [0m[92m///[0m
+    [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: value assigned to `group_total` is never read[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:3136:39
+     [1m[96m|[0m
+[1m[96m3136[0m [1m[96m|[0m                 let mut group_total = 0u32;
+     [1m[96m|[0m                                       [1m[93m^^^^[0m [1m[93mthis value is reassigned later and
+ never used[0m
+[1m[96m...[0m
+[1m[96m3148[0m [1m[96m|[0m                         group_total = mods.iter().filter(|m| m.mod_path != "None" && !
+m.is_disabled).count() as u32;
+     [1m[96m|[0m                         [1m[96m------------------------------------------------------------------
+-------------------------[0m [1m[96m`group_total` is overwritten here before the previous value is read[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: method `save_async` is never used[0m
+   [1m[96m--> [0msrc\settings\mod.rs:471:18
+    [1m[96m|[0m
+[1m[96m311[0m [1m[96m|[0m impl Settings {
+    [1m[96m|[0m [1m[96m-------------[0m [1m[96mmethod in this implementation[0m
+[1m[96m...[0m
+[1m[96m471[0m [1m[96m|[0m     pub async fn save_async(&self, app_data_dir: &Path) -> Result<()> {
+    [1m[96m|[0m                  [1m[93m^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: field `process_detector` is never read[0m
+  [1m[96m--> [0msrc\state.rs:70:9
+   [1m[96m|[0m
+[1m[96m39[0m [1m[96m|[0m pub struct AppState {
+   [1m[96m|[0m            [1m[96m--------[0m [1m[96mfield in this struct[0m
+[1m[96m...[0m
+[1m[96m70[0m [1m[96m|[0m     pub process_detector: Arc<ProcessDetector>,
+   [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: method `is_running` is never used[0m
+   [1m[96m--> [0msrc\task_queue\mod.rs:139:18
+    [1m[96m|[0m
+[1m[96m 55[0m [1m[96m|[0m impl TaskQueue {
+    [1m[96m|[0m [1m[96m--------------[0m [1m[96mmethod in this implementation[0m
+[1m[96m...[0m
+[1m[96m139[0m [1m[96m|[0m     pub async fn is_running(&self, task_type: &str) -> bool {
+    [1m[96m|[0m                  [1m[93m^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `is_linux` is never used[0m
+  [1m[96m--> [0msrc\utils\mod.rs:18:8
+   [1m[96m|[0m
+[1m[96m18[0m [1m[96m|[0m pub fn is_linux() -> bool {
+   [1m[96m|[0m        [1m[93m^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `is_wsl` is never used[0m
+  [1m[96m--> [0msrc\utils\mod.rs:36:8
+   [1m[96m|[0m
+[1m[96m36[0m [1m[96m|[0m pub fn is_wsl() -> bool {
+   [1m[96m|[0m        [1m[93m^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: methods `contains`, `len`, and `is_empty` are never used[0m
+   [1m[96m--> [0msrc\utils\dir_walker.rs:96:12
+    [1m[96m|[0m
+[1m[96m 69[0m [1m[96m|[0m impl VisitedPathPool {
+    [1m[96m|[0m [1m[96m--------------------[0m [1m[96mmethods in this implementation[0m
+[1m[96m...[0m
+[1m[96m 96[0m [1m[96m|[0m     pub fn contains(&self, real_path: &Path) -> bool {
+    [1m[96m|[0m            [1m[93m^^^^^^^^[0m
+[1m[96m...[0m
+[1m[96m101[0m [1m[96m|[0m     pub fn len(&self) -> usize {
+    [1m[96m|[0m            [1m[93m^^^[0m
+[1m[96m...[0m
+[1m[96m106[0m [1m[96m|[0m     pub fn is_empty(&self) -> bool {
+    [1m[96m|[0m            [1m[93m^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: method `max_depth` is never used[0m
+   [1m[96m--> [0msrc\utils\dir_walker.rs:175:12
+    [1m[96m|[0m
+[1m[96m147[0m [1m[96m|[0m impl DirWalker {
+    [1m[96m|[0m [1m[96m--------------[0m [1m[96mmethod in this implementation[0m
+[1m[96m...[0m
+[1m[96m175[0m [1m[96m|[0m     pub fn max_depth(mut self, depth: usize) -> Self {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `catch_panic` is never used[0m
+  [1m[96m--> [0msrc\utils\error_boundary.rs:27:8
+   [1m[96m|[0m
+[1m[96m27[0m [1m[96m|[0m pub fn catch_panic<F, R>(module: &str, fn_name: &str, params: &str, caller: &str, f: F) 
+-> R
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: enclosing `Ok` and `?` operator are unneeded[0m
+   [1m[96m--> [0msrc\commands\mod.rs:166:5
+    [1m[96m|[0m
+[1m[96m166[0m [1m[96m|[0m [1m[93m/[0m     Ok(state
+[1m[96m167[0m [1m[96m|[0m [1m[93m|[0m         .task_queue
+[1m[96m168[0m [1m[96m|[0m [1m[93m|[0m         .run_task("load_mods", async move {
+[1m[96m169[0m [1m[96m|[0m [1m[93m|[0m             mod_manager.load_mods(&settings_clone).await
+[1m[96m...[0m   [1m[93m|[0m
+[1m[96m174[0m [1m[96m|[0m [1m[93m|[0m             TaskQueueError::ExecutionError(e) => format!("Task execution
+ failed: {}", e),
+[1m[96m175[0m [1m[96m|[0m [1m[93m|[0m         })?)
+    [1m[96m|[0m [1m[93m|____________^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#needless_question_mark
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::needless_question_mark)]` on by default
+[1m[96mhelp[0m: remove the enclosing `Ok` and `?` operator
+    [1m[96m|[0m
+[1m[96m166[0m [92m~ [0m    state
+[1m[96m167[0m [1m[96m|[0m         .task_queue
+[1m[96m...[0m
+[1m[96m174[0m [1m[96m|[0m             TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e
+),
+[1m[96m175[0m [92m~ [0m        })
+    [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: enclosing `Ok` and `?` operator are unneeded[0m
+   [1m[96m--> [0msrc\commands\mod.rs:725:5
+    [1m[96m|[0m
+[1m[96m725[0m [1m[96m|[0m [1m[93m/[0m     Ok(state
+[1m[96m726[0m [1m[96m|[0m [1m[93m|[0m         .task_queue
+[1m[96m727[0m [1m[96m|[0m [1m[93m|[0m         .run_task("check_hash_conflicts", async move {
+[1m[96m728[0m [1m[96m|[0m [1m[93m|[0m             mod_manager
+[1m[96m...[0m   [1m[93m|[0m
+[1m[96m735[0m [1m[96m|[0m [1m[93m|[0m             TaskQueueError::ExecutionError(e) => format!("Task execution
+ failed: {}", e),
+[1m[96m736[0m [1m[96m|[0m [1m[93m|[0m         })?)
+    [1m[96m|[0m [1m[93m|____________^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#needless_question_mark
+[1m[96mhelp[0m: remove the enclosing `Ok` and `?` operator
+    [1m[96m|[0m
+[1m[96m725[0m [92m~ [0m    state
+[1m[96m726[0m [1m[96m|[0m         .task_queue
+[1m[96m...[0m
+[1m[96m735[0m [1m[96m|[0m             TaskQueueError::ExecutionError(e) => format!("Task execution failed: {}", e
+),
+[1m[96m736[0m [92m~ [0m        })
+    [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: redundant reference in `format!` argument[0m
+    [1m[96m--> [0msrc\commands\mod.rs:1752:55
+     [1m[96m|[0m
+[1m[96m1752[0m [1m[96m|[0m         return Err(format!("Path does not exist: {}", &path));
+     [1m[96m|[0m                                                       [1m[93m^^^^^[0m [1m[93mhelp: remove the 
+redundant `&`: `path`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#useless_borrows_in_formatting
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::useless_borrows_in_formatting)]` on by default
+
+[1m[93mwarning[0m[1m[97m: very complex type used. Consider factoring parts into `type` definitions[0m
+   [1m[96m--> [0msrc\ini_handler\error_detection.rs:570:52
+    [1m[96m|[0m
+[1m[96m570[0m [1m[96m|[0m   fn classify_errors(errors: Vec<IniSyntaxError>) -> (
+    [1m[96m|[0m [1m[93m ____________________________________________________^[0m
+[1m[96m571[0m [1m[96m|[0m [1m[93m|[0m     HashMap<String, Vec<IniSyntaxError>>,
+[1m[96m572[0m [1m[96m|[0m [1m[93m|[0m     HashMap<String, Vec<IniSyntaxError>>,
+[1m[96m573[0m [1m[96m|[0m [1m[93m|[0m     HashMap<String, Vec<IniSyntaxError>>,
+[1m[96m574[0m [1m[96m|[0m [1m[93m|[0m ) {
+    [1m[96m|[0m [1m[93m|_^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#type_complexity
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::type_complexity)]` on by default
+
+[1m[93mwarning[0m[1m[97m: manual case-insensitive ASCII comparison[0m
+   [1m[96m--> [0msrc\ini_handler\mod.rs:879:12
+    [1m[96m|[0m
+[1m[96m879[0m [1m[96m|[0m         if key.to_ascii_lowercase() != "key" {
+    [1m[96m|[0m            [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#manual_ignore_case_cmp
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::manual_ignore_case_cmp)]` on by default
+[1m[96mhelp[0m: consider using `.eq_ignore_ascii_case()` instead
+    [1m[96m|[0m
+[1m[96m879[0m [91m- [0m        if [91mkey.to_ascii_lowercase() != "key"[0m {
+[1m[96m879[0m [92m+ [0m        if [92m!key.eq_ignore_ascii_case("key")[0m {
+    [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: this `if` statement can be collapsed[0m
+  [1m[96m--> [0msrc\init_xx\logger.rs:62:9
+   [1m[96m|[0m
+[1m[96m62[0m [1m[96m|[0m [1m[93m/[0m         if now.duration_since(modified).unwrap_or(Duration::ZERO) > reten
+tion {
+[1m[96m63[0m [1m[96m|[0m [1m[93m|[0m             if fs::remove_file(&entry.path).is_ok() {
+[1m[96m64[0m [1m[96m|[0m [1m[93m|[0m                 removed += 1;
+[1m[96m65[0m [1m[96m|[0m [1m[93m|[0m             }
+[1m[96m66[0m [1m[96m|[0m [1m[93m|[0m         }
+   [1m[96m|[0m [1m[93m|_________^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/
+index.html#collapsible_if
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::collapsible_if)]` on by default
+[1m[96mhelp[0m: collapse nested if block
+   [1m[96m|[0m
+[1m[96m62[0m [92m~ [0m        if now.duration_since(modified).unwrap_or(Duration::ZERO) > retention
+[1m[96m63[0m [92m~ [0m            [92m&&[0m fs::remove_file(&entry.path).is_ok() {
+[1m[96m64[0m [1m[96m|[0m                 removed += 1;
+[1m[96m65[0m [92m~ [0m            }
+   [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: consider using `sort_by_key`[0m
+   [1m[96m--> [0msrc\mod_manager\mod.rs:566:9
+    [1m[96m|[0m
+[1m[96m566[0m [1m[96m|[0m         group_paths.sort_by(|a, b| a.0.cmp(&b.0));
+    [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#unnecessary_sort_by
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::unnecessary_sort_by)]` on by default
+[1m[96mhelp[0m: try
+    [1m[96m|[0m
+[1m[96m566[0m [91m- [0m        group_paths.[91msort_by(|a, b| a.0.cmp(&b.0))[0m;
+[1m[96m566[0m [92m+ [0m        group_paths.[92msort_by_key(|a| a.0)[0m;
+    [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: the borrowed expression implements the required traits[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:1269:43
+     [1m[96m|[0m
+[1m[96m1269[0m [1m[96m|[0m         if let Ok(entries) = fs::read_dir(&managed_path) {
+     [1m[96m|[0m                                           [1m[93m^^^^^^^^^^^^^[0m [1m[93mhelp: change this to:
+ `managed_path`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#needless_borrows_for_generic_args
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::needless_borrows_for_generic_args)]` on by default
+
+[1m[93mwarning[0m[1m[97m: consider using `sort_by_key`[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:1308:13
+     [1m[96m|[0m
+[1m[96m1308[0m [1m[96m|[0m             group_children.sort_by(|a, b| a.real_index.cmp(&b.real_index));
+     [1m[96m|[0m             [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#unnecessary_sort_by
+[1m[96mhelp[0m: try
+     [1m[96m|[0m
+[1m[96m1308[0m [91m- [0m            group_children.[91msort_by(|a, b| a.real_index.cmp(&b.real_index))[0m;
+[1m[96m1308[0m [92m+ [0m            group_children.[92msort_by_key(|a| a.real_index)[0m;
+     [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: writing `&mut Vec` instead of `&mut [_]` involves a new object where a slice will do[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:2089:28
+     [1m[96m|[0m
+[1m[96m2089[0m [1m[96m|[0m     fn sort_groups(groups: &mut Vec<ModGroupData>, sort_method: SortGroupMethod) {
+     [1m[96m|[0m                            [1m[93m^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#ptr_arg
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::ptr_arg)]` on by default
+[1m[96mhelp[0m: change this to
+     [1m[96m|[0m
+[1m[96m2089[0m [91m- [0m    fn sort_groups(groups: [91m&mut Vec<ModGroupData>[0m, sort_method: SortGroupMethod) 
+{
+[1m[96m2089[0m [92m+ [0m    fn sort_groups(groups: [92m&mut [ModGroupData][0m, sort_method: SortGroupMethod) {
+     [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: you seem to be trying to use `match` for destructuring a single pattern. Consider using 
+`if let`[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:2100:17
+     [1m[96m|[0m
+[1m[96m2100[0m [1m[96m|[0m [1m[93m/[0m                 match (&a.favorite_date_time, &b.favorite_date_time) {
+[1m[96m2101[0m [1m[96m|[0m [1m[93m|[0m                     (Some(ad), Some(bd)) => return bd.cmp(ad),
+[1m[96m2102[0m [1m[96m|[0m [1m[93m|[0m                     _ => {}
+[1m[96m2103[0m [1m[96m|[0m [1m[93m|[0m                 }
+     [1m[96m|[0m [1m[93m|_________________^[0m [1m[93mhelp: try: `if let (Some(ad), Some(bd)) = (&a.favorite_da
+te_time, &b.favorite_date_time) { return bd.cmp(ad) }`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#single_match
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::single_match)]` on by default
+
+[1m[93mwarning[0m[1m[97m: redundant reference in `debug!` argument[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:2836:36
+     [1m[96m|[0m
+[1m[96m2836[0m [1m[96m|[0m         log::debug!("读取游戏模组：{:?}", &settings.target_game);
+     [1m[96m|[0m                                           [1m[93m^^^^^^^^^^^^^^^^^^^^^[0m [1m[93mhelp: remove 
+the redundant `&`: `settings.target_game`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#useless_borrows_in_formatting
+
+[1m[93mwarning[0m[1m[97m: very complex type used. Consider factoring parts into `type` definitions[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:3029:10
+     [1m[96m|[0m
+[1m[96m3029[0m [1m[96m|[0m       ) -> Result<(
+     [1m[96m|[0m [1m[93m __________^[0m
+[1m[96m3030[0m [1m[96m|[0m [1m[93m|[0m         Vec<LogEntry>,
+[1m[96m3031[0m [1m[96m|[0m [1m[93m|[0m         ErroredLinesReport,
+[1m[96m3032[0m [1m[96m|[0m [1m[93m|[0m         HashConflictReport,
+[1m[96m3033[0m [1m[96m|[0m [1m[93m|[0m         Vec<ModManageError>,
+[1m[96m3034[0m [1m[96m|[0m [1m[93m|[0m         Vec<ModProcessSummary>,
+[1m[96m3035[0m [1m[96m|[0m [1m[93m|[0m     )> {
+     [1m[96m|[0m [1m[93m|______^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#type_complexity
+
+[1m[93mwarning[0m[1m[97m: unnecessary `if let` since only the `Ok` variant of the iterator element is used[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:3342:9
+     [1m[96m|[0m
+[1m[96m3342[0m [1m[96m|[0m [1m[93m/[0m         for entry in entries {
+[1m[96m3343[0m [1m[96m|[0m [1m[93m|[0m             if let Ok(entry) = entry {
+[1m[96m3344[0m [1m[96m|[0m [1m[93m|[0m                 let path = entry.path();
+[1m[96m3345[0m [1m[96m|[0m [1m[93m|[0m                 if path.is_file() {
+[1m[96m...[0m    [1m[93m|[0m
+[1m[96m3358[0m [1m[96m|[0m [1m[93m|[0m         }
+     [1m[96m|[0m [1m[93m|_________^[0m
+     [1m[96m|[0m
+[1m[96mhelp[0m: try `.flatten()` and remove the `if let` statement in the for loop
+    [1m[96m--> [0msrc\mod_manager\mod.rs:3343:13
+     [1m[96m|[0m
+[1m[96m3343[0m [1m[96m|[0m [1m[96m/[0m             if let Ok(entry) = entry {
+[1m[96m3344[0m [1m[96m|[0m [1m[96m|[0m                 let path = entry.path();
+[1m[96m3345[0m [1m[96m|[0m [1m[96m|[0m                 if path.is_file() {
+[1m[96m3346[0m [1m[96m|[0m [1m[96m|[0m                     if let Some(ext) = path.extension().and_then(|e| e.
+to_str()) {
+[1m[96m...[0m    [1m[96m|[0m
+[1m[96m3357[0m [1m[96m|[0m [1m[96m|[0m             }
+     [1m[96m|[0m [1m[96m|_____________^[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#manual_flatten
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::manual_flatten)]` on by default
+[1m[96mhelp[0m: try
+     [1m[96m|[0m
+[1m[96m3342[0m [92m~ [0m        for entry in entries[92m.flatten()[0m [92m{[0m
+[1m[96m3343[0m [92m+             let path = entry.path();[0m
+[1m[96m3344[0m [92m+             if path.is_file() {[0m
+[1m[96m3345[0m [92m+                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {[0m
+[1m[96m3346[0m [92m+                     if ext.eq_ignore_ascii_case("ini") {[0m
+[1m[96m3347[0m [92m~                         // 将分组 INI 文件移至回收站；失败时静默忽略，不影响整体流程，但记录 debug 便于排查[0m
+[1m[96m3348[0m [92m+                         if let Err(e) = Self::move_to_trash(&path) {[0m
+[1m[96m3349[0m [92m+                             debug!("Failed to move group INI file to trash {:?}: {}", path, e)
+;[0m
+[1m[96m3350[0m [92m+                         } else {[0m
+[1m[96m3351[0m [92m+                             deleted_count += 1;[0m
+[1m[96m3352[0m [92m+                         }[0m
+[1m[96m3353[0m [92m+                     }[0m
+[1m[96m3354[0m [92m+                 }[0m
+[1m[96m3355[0m [92m+             }[0m
+[1m[96m3356[0m [92m+         }[0m
+     [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: you seem to want to iterate on a map's keys[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:3479:30
+     [1m[96m|[0m
+[1m[96m3479[0m [1m[96m|[0m         for (ns_lower, _) in known_libraries {
+     [1m[96m|[0m                              [1m[93m^^^^^^^^^^^^^^^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#for_kv_map
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::for_kv_map)]` on by default
+[1m[96mhelp[0m: use the corresponding method
+     [1m[96m|[0m
+[1m[96m3479[0m [91m- [0m        for [91m(ns_lower, _)[0m in known_libraries {
+[1m[96m3479[0m [92m+ [0m        for [92mns_lower[0m in known_libraries[92m.keys()[0m {
+     [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: you seem to be trying to use `match` for destructuring a single pattern. Consider using 
+`if let`[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:3836:13
+     [1m[96m|[0m
+[1m[96m3836[0m [1m[96m|[0m [1m[93m/[0m             match Self::sanitize_condition_line(line) {
+[1m[96m3837[0m [1m[96m|[0m [1m[93m|[0m                 Some(processed) => {
+[1m[96m3838[0m [1m[96m|[0m [1m[93m|[0m                     result.push(processed);
+[1m[96m3839[0m [1m[96m|[0m [1m[93m|[0m                     continue;
+[1m[96m3840[0m [1m[96m|[0m [1m[93m|[0m                 }
+[1m[96m3841[0m [1m[96m|[0m [1m[93m|[0m                 None => {} // 非 condition 行，继续后续检查
+[1m[96m3842[0m [1m[96m|[0m [1m[93m|[0m             }
+     [1m[96m|[0m [1m[93m|_____________^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mnote[0m: you might want to preserve the comments from inside the `match`
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#single_match
+[1m[96mhelp[0m: try
+     [1m[96m|[0m
+[1m[96m3836[0m [92m~ [0m            [92mif let Some(processed) = Self::sanitize_condition_line(line) {[0m
+[1m[96m3837[0m [92m+                 result.push(processed);[0m
+[1m[96m3838[0m [92m+                 continue;[0m
+[1m[96m3839[0m [92m+             }[0m
+     [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: stripping a prefix manually[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:3943:13
+     [1m[96m|[0m
+[1m[96m3943[0m [1m[96m|[0m             line[4..].to_string()
+     [1m[96m|[0m             [1m[93m^^^^^^^^^[0m
+     [1m[96m|[0m
+[1m[92mnote[0m: the prefix was tested here
+    [1m[96m--> [0msrc\mod_manager\mod.rs:3942:9
+     [1m[96m|[0m
+[1m[96m3942[0m [1m[96m|[0m         if line.starts_with("    ") {
+     [1m[96m|[0m         [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#manual_strip
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::manual_strip)]` on by default
+[1m[96mhelp[0m: try using the `strip_prefix` method
+     [1m[96m|[0m
+[1m[96m3942[0m [92m~ [0m        [92mif let Some(<stripped>) = line.strip_prefix("    ") [0m{
+[1m[96m3943[0m [92m~ [0m            [92m<stripped>[0m.to_string()
+     [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: consider using `sort_by_key`[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:4054:9
+     [1m[96m|[0m
+[1m[96m4054[0m [1m[96m|[0m         sections_with_commandlist.sort_by(|a, b| b.0.cmp(&a.0));
+     [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#unnecessary_sort_by
+[1m[96mhelp[0m: try
+     [1m[96m|[0m
+[1m[96m4054[0m [91m- [0m        sections_with_commandlist.[91msort_by(|a, b| b.0.cmp(&a.0))[0m;
+[1m[96m4054[0m [92m+ [0m        sections_with_commandlist.[92msort_by_key(|b| std::cmp::Reverse(b.0))[0m;
+     [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: this loop could be written as a `for` loop[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:4145:13
+     [1m[96m|[0m
+[1m[96m4145[0m [1m[96m|[0m             while let Some(ancestor) = ancestors.next() {
+     [1m[96m|[0m             [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[93mhelp: try: `for ances
+tor in ancestors`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#while_let_on_iterator
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::while_let_on_iterator)]` on by default
+
+[1m[93mwarning[0m[1m[97m: this `if` has identical blocks[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:4360:82
+     [1m[96m|[0m
+[1m[96m4360[0m [1m[96m|[0m           if expected_type != ArchiveType::Unknown && expected_type == actual_type {
+     [1m[96m|[0m [1m[93m __________________________________________________________________________________^[0m
+[1m[96m4361[0m [1m[96m|[0m [1m[93m|[0m             (true, actual_type)
+[1m[96m4362[0m [1m[96m|[0m [1m[93m|[0m         } else if actual_type != ArchiveType::Unknown {
+     [1m[96m|[0m [1m[93m|_________^[0m
+     [1m[96m|[0m
+[1m[92mnote[0m: same as this
+    [1m[96m--> [0msrc\mod_manager\mod.rs:4362:55
+     [1m[96m|[0m
+[1m[96m4362[0m [1m[96m|[0m           } else if actual_type != ArchiveType::Unknown {
+     [1m[96m|[0m [1m[92m _______________________________________________________^[0m
+[1m[96m4363[0m [1m[96m|[0m [1m[92m|[0m             (true, actual_type)
+[1m[96m4364[0m [1m[96m|[0m [1m[92m|[0m         } else {
+     [1m[96m|[0m [1m[92m|_________^[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#if_same_then_else
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::if_same_then_else)]` on by default
+
+[1m[93mwarning[0m[1m[97m: redundant closure[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:4676:20
+     [1m[96m|[0m
+[1m[96m4676[0m [1m[96m|[0m         }).map_err(|e| anyhow::Error::from(e))
+     [1m[96m|[0m                    [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[93mhelp: replace the closure with 
+the associated function itself: `anyhow::Error::from`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#redundant_closure
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::redundant_closure)]` on by default
+
+[1m[93mwarning[0m[1m[97m: this expression creates a reference which is immediately dereferenced by the compiler[0
+m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:4900:13
+     [1m[96m|[0m
+[1m[96m4900[0m [1m[96m|[0m             &mod_name[DISABLED_PREFIX.len()..].trim_start_matches('_')
+     [1m[96m|[0m             [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[93mhelp: 
+change this to: `mod_name[DISABLED_PREFIX.len()..].trim_start_matches('_')`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#needless_borrow
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::needless_borrow)]` on by default
+
+[1m[93mwarning[0m[1m[97m: unnecessary use of `clone` to create a slice from a reference[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:4931:34
+     [1m[96m|[0m
+[1m[96m4931[0m [1m[96m|[0m             Self::compress_to_7z(&[temp_mod_dir.clone()], &dest_file)?;
+     [1m[96m|[0m                                  [1m[93m^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[93mhelp: try: `std::sli
+ce::from_ref(&temp_mod_dir)`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#cloned_ref_to_slice_refs
+     [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::cloned_ref_to_slice_refs)]` on by default
+
+[1m[93mwarning[0m[1m[97m: this `if` statement can be collapsed[0m
+   [1m[96m--> [0msrc\utils\dir_walker.rs:315:17
+    [1m[96m|[0m
+[1m[96m315[0m [1m[96m|[0m [1m[93m/[0m                 if self.accept_entry(&dir_entry) {
+[1m[96m316[0m [1m[96m|[0m [1m[93m|[0m                     if !callback(&dir_entry) {
+[1m[96m317[0m [1m[96m|[0m [1m[93m|[0m                         return;
+[1m[96m318[0m [1m[96m|[0m [1m[93m|[0m                     }
+[1m[96m319[0m [1m[96m|[0m [1m[93m|[0m                 }
+    [1m[96m|[0m [1m[93m|_________________^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#collapsible_if
+[1m[96mhelp[0m: collapse nested if block
+    [1m[96m|[0m
+[1m[96m315[0m [92m~ [0m                if self.accept_entry(&dir_entry)
+[1m[96m316[0m [92m~ [0m                    [92m&&[0m !callback(&dir_entry) {
+[1m[96m317[0m [1m[96m|[0m                         return;
+[1m[96m318[0m [92m~ [0m                    }
+    [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: you seem to want to iterate on a map's values[0m
+  [1m[96m--> [0msrc\single_instance\mod.rs:26:25
+   [1m[96m|[0m
+[1m[96m26[0m [1m[96m|[0m     for (_, process) in system.processes() {
+   [1m[96m|[0m                         [1m[93m^^^^^^^^^^^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/
+index.html#for_kv_map
+[1m[96mhelp[0m: use the corresponding method
+   [1m[96m|[0m
+[1m[96m26[0m [91m- [0m    for [91m(_, process)[0m in system.processes() {
+[1m[96m26[0m [92m+ [0m    for [92mprocess[0m in system.processes()[92m.values()[0m {
+   [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: unneeded `return` statement[0m
+  [1m[96m--> [0msrc\panic_hook.rs:38:13
+   [1m[96m|[0m
+[1m[96m38[0m [1m[96m|[0m             return;
+   [1m[96m|[0m             [1m[93m^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0/
+index.html#needless_return
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::needless_return)]` on by default
+[1m[96mhelp[0m: remove `return`
+   [1m[96m|[0m
+[1m[96m37[0m [91m- [0m            default_hook(info);
+[1m[96m38[0m [91m-             return;[0m
+[1m[96m37[0m [92m+ [0m            default_hook(info);
+   [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: this expression creates a reference which is immediately dereferenced by the compiler[0
+m
+   [1m[96m--> [0msrc\lib.rs:156:17
+    [1m[96m|[0m
+[1m[96m156[0m [1m[96m|[0m                 &app_handle,
+    [1m[96m|[0m                 [1m[93m^^^^^^^^^^^[0m [1m[93mhelp: change this to: `app_handle`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#needless_borrow
+
+[1m[93mwarning[0m[1m[97m: this expression creates a reference which is immediately dereferenced by the compiler[0
+m
+   [1m[96m--> [0msrc\lib.rs:166:74
+    [1m[96m|[0m
+[1m[96m166[0m [1m[96m|[0m                     crate::hotkey::HotkeyManager::register_from_settings(&app_handle, &
+settings)
+    [1m[96m|[0m                                                                          [1m[93m^^^^^^^^^^^[0m [
+1m[93mhelp: change this to: `app_handle`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#needless_borrow
+
+[1m[93mwarning[0m[1m[97m: this expression creates a reference which is immediately dereferenced by the compiler[0
+m
+   [1m[96m--> [0msrc\lib.rs:176:70
+    [1m[96m|[0m
+[1m[96m176[0m [1m[96m|[0m                 if let Err(e) = crate::tray::TrayManager::setup_tray(&app_handle, local
+e) {
+    [1m[96m|[0m                                                                      [1m[93m^^^^^^^^^^^[0m [1m[
+93mhelp: change this to: `app_handle`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#needless_borrow
+
+[1m[93mwarning[0m[1m[97m: called `map(f)` on an `Option` value where `f` is a closure that returns the unit type `
+()`[0m
+   [1m[96m--> [0msrc\lib.rs:207:13
+    [1m[96m|[0m
+[1m[96m207[0m [1m[96m|[0m [1m[93m/[0m             app_handle.get_webview_window("main").map(|window| {
+[1m[96m208[0m [1m[96m|[0m [1m[93m|[0m                 window.on_window_event(move |event| {
+[1m[96m209[0m [1m[96m|[0m [1m[93m|[0m                     let settings = settings_arc.clone();
+[1m[96m210[0m [1m[96m|[0m [1m[93m|[0m                     let app = app_handle_clone.clone();
+[1m[96m...[0m   [1m[93m|[0m
+[1m[96m270[0m [1m[96m|[0m [1m[93m|[0m                 });
+[1m[96m271[0m [1m[96m|[0m [1m[93m|[0m             });
+    [1m[96m|[0m [1m[93m|______________^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#option_map_unit_fn
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::option_map_unit_fn)]` on by default
+[1m[96mhelp[0m: use `if let` instead
+    [1m[96m|[0m
+[1m[96m207[0m [92m~ [0m            [92mif let Some(window) = app_handle.get_webview_window("main") { window.on_wi
+ndow_event(move |event| {[0m
+[1m[96m208[0m [92m+                     let settings = settings_arc.clone();[0m
+[1m[96m209[0m [92m+                     let app = app_handle_clone.clone();[0m
+[1m[96m210[0m [92m+                     match event {[0m
+[1m[96m211[0m [92m~                         // 关闭请求：保存窗口状态，并在独立线程中保存设置文件[0m
+[1m[96m212[0m [92m+                         tauri::WindowEvent::CloseRequested { .. } => {[0m
+[1m[96m213[0m [92m+                             if let Err(e) = crate::window_manager::WindowManager::save_window_s
+tate([0m
+[1m[96m214[0m [92m+                                 &app, &settings,[0m
+[1m[96m215[0m [92m+                             ) {[0m
+[1m[96m216[0m [92m+                                 log::error!("Failed to save window state on close: {}", e);[0m
+[1m[96m217[0m [92m+                             }[0m
+[1m[96m218[0m [92m+                             if let Some(app_data_dir) = get_app_data_dir() {[0m
+[1m[96m219[0m [92m+                                 let settings_clone = settings.clone();[0m
+[1m[96m220[0m [92m~                                 // 在独立线程执行文件 IO，避免阻塞 UI 线程[0m
+[1m[96m221[0m [92m+                                 std::thread::spawn(move || {[0m
+[1m[96m222[0m [92m+                                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSa
+fe(|| {[0m
+[1m[96m223[0m [92m+                                         let s = {[0m
+[1m[96m224[0m [92m~                                             // 仅短时持有读锁以克隆设置，随后立即释放[0m
+[1m[96m225[0m [92m+                                             let guard = settings_clone.read();[0m
+[1m[96m226[0m [92m+                                             guard.clone()[0m
+[1m[96m227[0m [92m+                                         };[0m
+[1m[96m228[0m [92m+                                         if let Err(e) = s.save(&app_data_dir) {[0m
+[1m[96m229[0m [92m+                                             log::error!("Failed to save settings file on close:
+ {}", e);[0m
+[1m[96m230[0m [92m+                                         }[0m
+[1m[96m231[0m [92m+                                     }));[0m
+[1m[96m232[0m [92m+                                 });[0m
+[1m[96m233[0m [92m+                             }[0m
+[1m[96m234[0m [92m+                         }[0m
+[1m[96m235[0m [92m~                         // 窗口移动：防抖 500ms 后保存窗口状态[0m
+[1m[96m236[0m [92m~                         // 使用 std::thread::spawn + sleep，避免在窗口事件回调中引入 Tokio 运行时[0m
+[1m[96m237[0m [92m+                         tauri::WindowEvent::Moved(_) => {[0m
+[1m[96m238[0m [92m+                             std::thread::spawn(move || {[0m
+[1m[96m239[0m [92m+                                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|
+| {[0m
+[1m[96m240[0m [92m+                                     std::thread::sleep(std::time::Duration::from_millis(500));
+[0m
+[1m[96m241[0m [92m+                                     if let Err(e) =[0m
+[1m[96m242[0m [92m+                                         crate::window_manager::WindowManager::save_window_state
+([0m
+[1m[96m243[0m [92m+                                             &app, &settings,[0m
+[1m[96m244[0m [92m+                                         )[0m
+[1m[96m245[0m [92m+                                     {[0m
+[1m[96m246[0m [92m+                                         log::error!("Failed to save window state on move: {}", 
+e);[0m
+[1m[96m247[0m [92m+                                     }[0m
+[1m[96m248[0m [92m+                                 }));[0m
+[1m[96m249[0m [92m+                             });[0m
+[1m[96m250[0m [92m+                         }[0m
+[1m[96m251[0m [92m~                         // 窗口尺寸变化：防抖 500ms 后保存窗口状态[0m
+[1m[96m252[0m [92m~                         // 使用 std::thread::spawn + sleep，避免在窗口事件回调中引入 Tokio 运行时[0m
+[1m[96m253[0m [92m+                         tauri::WindowEvent::Resized(_) => {[0m
+[1m[96m254[0m [92m+                             std::thread::spawn(move || {[0m
+[1m[96m255[0m [92m+                                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|
+| {[0m
+[1m[96m256[0m [92m+                                     std::thread::sleep(std::time::Duration::from_millis(500));
+[0m
+[1m[96m257[0m [92m+                                     if let Err(e) =[0m
+[1m[96m258[0m [92m+                                         crate::window_manager::WindowManager::save_window_state
+([0m
+[1m[96m259[0m [92m+                                             &app, &settings,[0m
+[1m[96m260[0m [92m+                                         )[0m
+[1m[96m261[0m [92m+                                     {[0m
+[1m[96m262[0m [92m+                                         log::error!("Failed to save window state on resize: {}"
+, e);[0m
+[1m[96m263[0m [92m+                                     }[0m
+[1m[96m264[0m [92m+                                 }));[0m
+[1m[96m265[0m [92m+                             });[0m
+[1m[96m266[0m [92m+                         }[0m
+[1m[96m267[0m [92m+                         _ => {}[0m
+[1m[96m268[0m [92m+                     }[0m
+[1m[96m269[0m [92m+                 }); }[0m
+    [1m[96m|[0m
+
+[1m[93mwarning[0m[1m[97m: method `is_empty` is never used[0m
+   [1m[96m--> [0msrc\utils\dir_walker.rs:106:12
+    [1m[96m|[0m
+[1m[96m 69[0m [1m[96m|[0m impl VisitedPathPool {
+    [1m[96m|[0m [1m[96m--------------------[0m [1m[96mmethod in this implementation[0m
+[1m[96m...[0m
+[1m[96m106[0m [1m[96m|[0m     pub fn is_empty(&self) -> bool {
+    [1m[96m|[0m            [1m[93m^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: the borrowed expression implements the required traits[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:6000:28
+     [1m[96m|[0m
+[1m[96m6000[0m [1m[96m|[0m         fs::create_dir_all(&multi_dir.join("a")).unwrap();
+     [1m[96m|[0m                            [1m[93m^^^^^^^^^^^^^^^^^^^^[0m [1m[93mhelp: change this to: `multi_
+dir.join("a")`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#needless_borrows_for_generic_args
+
+[1m[93mwarning[0m[1m[97m: the borrowed expression implements the required traits[0m
+    [1m[96m--> [0msrc\mod_manager\mod.rs:6001:28
+     [1m[96m|[0m
+[1m[96m6001[0m [1m[96m|[0m         fs::create_dir_all(&multi_dir.join("b")).unwrap();
+     [1m[96m|[0m                            [1m[93m^^^^^^^^^^^^^^^^^^^^[0m [1m[93mhelp: change this to: `multi_
+dir.join("b")`[0m
+     [1m[96m|[0m
+     [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.
+0/index.html#needless_borrows_for_generic_args
+
+[1m[93mwarning[0m[1m[97m: field assignment outside of initializer for an instance created with Default::default()
+[0m
+   [1m[96m--> [0msrc\settings\mod.rs:563:9
+    [1m[96m|[0m
+[1m[96m563[0m [1m[96m|[0m         settings.overall_scale = 3.0;
+    [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: consider initializing the variable with `settings::Settings { overall_scale: 3.0, ..Default::default
+() }` and removing relevant reassignments
+   [1m[96m--> [0msrc\settings\mod.rs:562:9
+    [1m[96m|[0m
+[1m[96m562[0m [1m[96m|[0m         let mut settings = Settings::default();
+    [1m[96m|[0m         [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#field_reassign_with_default
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::field_reassign_with_default)]` on by default
+
+[1m[93mwarning[0m[1m[97m: field assignment outside of initializer for an instance created with Default::default()
+[0m
+   [1m[96m--> [0msrc\settings\mod.rs:572:9
+    [1m[96m|[0m
+[1m[96m572[0m [1m[96m|[0m         settings.overall_scale = 0.1;
+    [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: consider initializing the variable with `settings::Settings { overall_scale: 0.1, ..Default::default
+() }` and removing relevant reassignments
+   [1m[96m--> [0msrc\settings\mod.rs:571:9
+    [1m[96m|[0m
+[1m[96m571[0m [1m[96m|[0m         let mut settings = Settings::default();
+    [1m[96m|[0m         [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#field_reassign_with_default
+
+[1m[93mwarning[0m[1m[97m: field assignment outside of initializer for an instance created with Default::default()
+[0m
+   [1m[96m--> [0msrc\settings\mod.rs:581:9
+    [1m[96m|[0m
+[1m[96m581[0m [1m[96m|[0m         settings.language = String::new();
+    [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: consider initializing the variable with `settings::Settings { language: String::new(), ..Default::de
+fault() }` and removing relevant reassignments
+   [1m[96m--> [0msrc\settings\mod.rs:580:9
+    [1m[96m|[0m
+[1m[96m580[0m [1m[96m|[0m         let mut settings = Settings::default();
+    [1m[96m|[0m         [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#field_reassign_with_default
+
+[1m[93mwarning[0m[1m[97m: field assignment outside of initializer for an instance created with Default::default()
+[0m
+   [1m[96m--> [0msrc\settings\mod.rs:590:9
+    [1m[96m|[0m
+[1m[96m590[0m [1m[96m|[0m         settings.theme = String::new();
+    [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: consider initializing the variable with `settings::Settings { theme: String::new(), ..Default::defau
+lt() }` and removing relevant reassignments
+   [1m[96m--> [0msrc\settings\mod.rs:589:9
+    [1m[96m|[0m
+[1m[96m589[0m [1m[96m|[0m         let mut settings = Settings::default();
+    [1m[96m|[0m         [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#field_reassign_with_default
+
+[1m[93mwarning[0m[1m[97m: field assignment outside of initializer for an instance created with Default::default()
+[0m
+   [1m[96m--> [0msrc\settings\mod.rs:599:9
+    [1m[96m|[0m
+[1m[96m599[0m [1m[96m|[0m         settings.saved_window_width = 100;
+    [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: consider initializing the variable with `settings::Settings { saved_window_width: 100, saved_window_
+height: 100, ..Default::default() }` and removing relevant reassignments
+   [1m[96m--> [0msrc\settings\mod.rs:598:9
+    [1m[96m|[0m
+[1m[96m598[0m [1m[96m|[0m         let mut settings = Settings::default();
+    [1m[96m|[0m         [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#field_reassign_with_default
+
+[1m[93mwarning[0m[1m[97m: field assignment outside of initializer for an instance created with Default::default()
+[0m
+   [1m[96m--> [0msrc\settings\mod.rs:657:9
+    [1m[96m|[0m
+[1m[96m657[0m [1m[96m|[0m         settings.hotkey_keyboard = "altX".to_string();
+    [1m[96m|[0m         [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m|[0m
+[1m[92mnote[0m: consider initializing the variable with `settings::Settings { hotkey_keyboard: "altX".to_string(), l
+anguage: "zh".to_string(), ..Default::default() }` and removing relevant reassignments
+   [1m[96m--> [0msrc\settings\mod.rs:656:9
+    [1m[96m|[0m
+[1m[96m656[0m [1m[96m|[0m         let mut settings = Settings::default();
+    [1m[96m|[0m         [1m[92m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#field_reassign_with_default
+
+[1m[93mwarning[0m[1m[97m: this operation has no effect[0m
+   [1m[96m--> [0msrc\image_converter\mod.rs:281:32
+    [1m[96m|[0m
+[1m[96m281[0m [1m[96m|[0m         let entry_offset = 6 + 1 * 16;
+    [1m[96m|[0m                                [1m[93m^^^^^^[0m [1m[93mhelp: consider reducing it to: `16`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#identity_op
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::identity_op)]` on by default
+
+[1m[93mwarning[0m[1m[97m: equality checks against false can be replaced by a negation[0m
+   [1m[96m--> [0msrc\single_instance\mod.rs:138:17
+    [1m[96m|[0m
+[1m[96m138[0m [1m[96m|[0m         assert!(has_duplicate == false || has_duplicate == true);
+    [1m[96m|[0m                 [1m[93m^^^^^^^^^^^^^^^^^^^^^^[0m [1m[93mhelp: try: `!has_duplicate`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#bool_comparison
+    [1m[96m= [0m[1m[97mnote[0m: `#[warn(clippy::bool_comparison)]` on by default
+
+[1m[93mwarning[0m[1m[97m: equality checks against true are unnecessary[0m
+   [1m[96m--> [0msrc\single_instance\mod.rs:138:43
+    [1m[96m|[0m
+[1m[96m138[0m [1m[96m|[0m         assert!(has_duplicate == false || has_duplicate == true);
+    [1m[96m|[0m                                           [1m[93m^^^^^^^^^^^^^^^^^^^^^[0m [1m[93mhelp: try: `ha
+s_duplicate`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#bool_comparison
+
+[1m[93mwarning[0m[1m[97m: equality checks against true are unnecessary[0m
+   [1m[96m--> [0msrc\single_instance\mod.rs:147:17
+    [1m[96m|[0m
+[1m[96m147[0m [1m[96m|[0m         assert!(result == true || result == false);
+    [1m[96m|[0m                 [1m[93m^^^^^^^^^^^^^^[0m [1m[93mhelp: try: `result`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#bool_comparison
+
+[1m[93mwarning[0m[1m[97m: equality checks against false can be replaced by a negation[0m
+   [1m[96m--> [0msrc\single_instance\mod.rs:147:35
+    [1m[96m|[0m
+[1m[96m147[0m [1m[96m|[0m         assert!(result == true || result == false);
+    [1m[96m|[0m                                   [1m[93m^^^^^^^^^^^^^^^[0m [1m[93mhelp: try: `!result`[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.97.0
+/index.html#bool_comparison
+
+[1m[93mwarning[0m: `nrmm-rust` (lib) generated 42 warnings (run `cargo clippy --fix --lib -p nrmm-rust -- ` to apply
+ 23 suggestions)
+[1m[93mwarning[0m: `nrmm-rust` (lib test) generated 53 warnings (39 duplicates) (run `cargo clippy --fix --lib -p nr
+mm-rust --tests -- ` to apply 7 suggestions)
+[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 1.89s

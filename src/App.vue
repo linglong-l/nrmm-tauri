@@ -24,6 +24,7 @@ import { useGameStore } from './stores/game';
 import { EventNames, eventManager } from './utils/events';
 import { useHashConflict } from './composables';
 import { createLogger } from './utils/logger';
+import { setupGlobalErrorHandlers } from './utils/errorBoundary';
 import type { UpdateModDataResult } from './types';
 
 const { locale } = useI18n();
@@ -183,6 +184,9 @@ function handleContextMenu(e: MouseEvent) {
 
 // 组件挂载：初始化应用，并注册全局热键事件监听
 onMounted(() => {
+  // 注册全局运行时错误处理器（unhandledrejection + window.onerror）
+  setupGlobalErrorHandlers();
+
   // 全局禁用默认右键菜单，防止与自定义右键功能冲突
   document.addEventListener('contextmenu', handleContextMenu);
 
