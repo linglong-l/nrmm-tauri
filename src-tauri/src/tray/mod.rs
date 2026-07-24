@@ -27,7 +27,7 @@ use crate::window_manager::WindowManager;
 const TRAY_ID: &str = "main-tray";
 
 /// 托盘默认提示文本（鼠标悬停时显示）。
-const TRAY_TOOLTIP: &str = "No Reload Mod Manager";
+const TRAY_TOOLTIP: &str = "No Reload Mod Manager - Tauri";
 
 /// 托盘管理器（无状态）。
 ///
@@ -156,12 +156,20 @@ impl TrayManager {
 
         // 各游戏的“显示”菜单项
         let show_wuwa = MenuItem::with_id(app, "show-wuwa", show_wuwa_text, true, None::<&str>)?;
-        let show_genshin = MenuItem::with_id(app, "show-genshin", show_genshin_text, true, None::<&str>)?;
+        let show_genshin =
+            MenuItem::with_id(app, "show-genshin", show_genshin_text, true, None::<&str>)?;
         let show_hsr = MenuItem::with_id(app, "show-hsr", show_hsr_text, true, None::<&str>)?;
         let show_zzz = MenuItem::with_id(app, "show-zzz", show_zzz_text, true, None::<&str>)?;
-        let show_endfield = MenuItem::with_id(app, "show-endfield", show_endfield_text, true, None::<&str>)?;
+        let show_endfield =
+            MenuItem::with_id(app, "show-endfield", show_endfield_text, true, None::<&str>)?;
         // 窗口操作菜单项
-        let reset_position = MenuItem::with_id(app, "reset-position", reset_position_text, true, None::<&str>)?;
+        let reset_position = MenuItem::with_id(
+            app,
+            "reset-position",
+            reset_position_text,
+            true,
+            None::<&str>,
+        )?;
         let hide = MenuItem::with_id(app, "hide", hide_text, true, None::<&str>)?;
         // 退出菜单项
         let exit = MenuItem::with_id(app, "exit", exit_text, true, None::<&str>)?;
@@ -375,14 +383,8 @@ impl TrayManager {
 
                 // 子步骤 3：重新加载模组数据
                 match mod_manager.load_mods(&settings_clone).await {
-                    Ok(_) => log::info!(
-                        "Mods reloaded successfully for game: {:?}",
-                        target_game
-                    ),
-                    Err(e) => log::error!(
-                        "Failed to reload mods after game switch: {}",
-                        e
-                    ),
+                    Ok(_) => log::info!("Mods reloaded successfully for game: {:?}", target_game),
+                    Err(e) => log::error!("Failed to reload mods after game switch: {}", e),
                 }
 
                 // 通知前端游戏已切换

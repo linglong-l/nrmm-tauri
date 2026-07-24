@@ -1,4 +1,4 @@
-//! XXMI-NRMM 后端核心库入口模块。
+//! nrmm-rust 后端核心库入口模块。
 //!
 //! 本模块是 Tauri 应用的 Rust 侧根模块，负责：
 //! - 声明各功能子模块
@@ -37,7 +37,7 @@ use fern::Dispatch;
 use state::AppState;
 use tauri::Manager;
 
-/// 获取应用数据目录（%LOCALAPPDATA%\xxmi-nrmm 或 ~/.local/share/xxmi-nrmm）。
+/// 获取应用数据目录（%LOCALAPPDATA%\nrmm-rust 或 ~/.local/share/nrmm-rust）。
 ///
 /// 用于统一配置文件、日志等所有应用数据的存储位置。
 /// 日志目录为 `app_data_dir()/logs`，配置文件为 `app_data_dir()/settings.json`。
@@ -53,7 +53,7 @@ use tauri::Manager;
 pub fn get_app_data_dir() -> Option<std::path::PathBuf> {
     if let Some(dir) = dirs::data_local_dir() {
         log::debug!("Using data_local_dir: {:?}", dir);
-        return Some(dir.join("xxmi-nrmm"));
+        return Some(dir.join("nrmm-rust"));
     }
 
     #[cfg(target_os = "linux")]
@@ -61,13 +61,13 @@ pub fn get_app_data_dir() -> Option<std::path::PathBuf> {
         if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
             let dir = std::path::PathBuf::from(xdg_data_home);
             log::debug!("Using XDG_DATA_HOME: {:?}", dir);
-            return Some(dir.join("xxmi-nrmm"));
+            return Some(dir.join("nrmm-rust"));
         }
 
         if let Some(home) = dirs::home_dir() {
             let dir = home.join(".local").join("share");
             log::debug!("Using fallback ~/.local/share: {:?}", dir);
-            return Some(dir.join("xxmi-nrmm"));
+            return Some(dir.join("nrmm-rust"));
         }
     }
 
@@ -333,6 +333,7 @@ pub fn run() {
             commands::get_foreground_process,
             commands::get_foreground_game,
             commands::get_settings,
+            commands::update_setting,
             commands::save_settings,
             commands::is_admin,
             commands::get_cloud_data,
@@ -359,7 +360,7 @@ pub fn run() {
             commands::export_group,
             commands::open_url,
             commands::create_desktop_icon,
-            commands::restart_application,
+
         ])
         .run(tauri::generate_context!())
     {
@@ -375,7 +376,7 @@ pub fn run() {
 ///
 /// 配置两级日志输出链：
 /// 1. **stdout**：始终启用，级别为 `Debug`，格式由 [`init_xx::logger::custom_log_format`] 决定；
-/// 2. **文件**：尝试在 `dirs::data_local_dir()/xxmi-nrmm/logs/app.log` 创建/追加日志文件。
+/// 2. **文件**：尝试在 `dirs::data_local_dir()/nrmm-rust/logs/app.log` 创建/追加日志文件。
 ///    - 目录不存在时自动创建；
 ///    - 文件创建或打开失败时回退到仅 stdout 输出。
 ///
@@ -423,7 +424,7 @@ fn init_logging() {
 
     // 尝试添加文件日志（可选）：失败则回退到仅 stdout
     if let Some(log_dir) = dirs::data_local_dir() {
-        let app_log_dir = log_dir.join("xxmi-nrmm").join("logs");
+        let app_log_dir = log_dir.join("nrmm-rust").join("logs");
         // 确保日志根目录存在
         if std::fs::create_dir_all(&app_log_dir).is_ok() {
             // 启动时清理超过保留期的旧日志，防止磁盘无限增长

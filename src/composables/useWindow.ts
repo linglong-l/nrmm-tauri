@@ -6,6 +6,7 @@ import { useUiStore } from '../stores/ui';
 import { invokeShowWindow, invokeHideWindow, invokePinWindow, invokeIsWindowPinned, invokeGetWindowPosition, invokeSetWindowPosition, invokeSetWindowSize, invokeOpenPath } from '../utils/invoke';
 import type { WindowPosition, TabType, DialogStates } from '../types';
 import { useEvent, EventNames } from '../utils/events';
+import { createLogger } from '../utils/logger';
 
 /**
  * 窗口与 UI 状态组合式函数。
@@ -28,6 +29,8 @@ export function useWindow() {
   const uiStore = useUiStore();
   // 取出事件订阅/分发方法，用于桥接窗口相关事件
   const { on, emit } = useEvent();
+
+  const log = createLogger('useWindow');
 
   // 将 store 中的 state/getter 转为 ref，保证解构后仍具响应性
   const {
@@ -66,7 +69,11 @@ export function useWindow() {
    */
   async function showWindow(): Promise<void> {
     try {
-      await invokeShowWindow();
+      const result = await invokeShowWindow();
+      if (!result.ok) {
+        log.error(`[useWindow] showWindow failed: ${result.error}`);
+        return;
+      }
       uiStore.setWindowVisible(true);
       emit(EventNames.WINDOW_SHOWN, { visible: true, source: 'frontend' });
     } catch {
@@ -81,7 +88,11 @@ export function useWindow() {
    */
   async function hideWindow(): Promise<void> {
     try {
-      await invokeHideWindow();
+      const result = await invokeHideWindow();
+      if (!result.ok) {
+        log.error(`[useWindow] hideWindow failed: ${result.error}`);
+        return;
+      }
       uiStore.setWindowVisible(false);
       emit(EventNames.WINDOW_HIDDEN, { visible: false, source: 'frontend' });
     } catch {
@@ -106,7 +117,11 @@ export function useWindow() {
    */
   async function pinWindow(pinned: boolean): Promise<void> {
     try {
-      await invokePinWindow(pinned);
+      const result = await invokePinWindow(pinned);
+      if (!result.ok) {
+        log.error(`[useWindow] pinWindow failed: ${result.error}`);
+        return;
+      }
       uiStore.setWindowPinned(pinned);
     } catch {
       // ignore
@@ -126,9 +141,13 @@ export function useWindow() {
    */
   async function checkWindowPinned(): Promise<boolean> {
     try {
-      const pinned = await invokeIsWindowPinned();
-      uiStore.setWindowPinned(pinned);
-      return pinned;
+      const result = await invokeIsWindowPinned();
+      if (!result.ok) {
+        log.error(`[useWindow] checkWindowPinned failed: ${result.error}`);
+        return false;
+      }
+      uiStore.setWindowPinned(result.data);
+      return result.data;
     } catch {
       return false;
     }
@@ -141,9 +160,13 @@ export function useWindow() {
    */
   async function getWindowPosition(): Promise<WindowPosition | null> {
     try {
-      const pos = await invokeGetWindowPosition();
-      emit(EventNames.WINDOW_POSITION_CHANGED, pos);
-      return pos;
+      const result = await invokeGetWindowPosition();
+      if (!result.ok) {
+        log.error(`[useWindow] getWindowPosition failed: ${result.error}`);
+        return null;
+      }
+      emit(EventNames.WINDOW_POSITION_CHANGED, result.data);
+      return result.data;
     } catch {
       return null;
     }
@@ -157,7 +180,11 @@ export function useWindow() {
    */
   async function setWindowPosition(x: number, y: number): Promise<void> {
     try {
-      await invokeSetWindowPosition(x, y);
+      const result = await invokeSetWindowPosition(x, y);
+      if (!result.ok) {
+        log.error(`[useWindow] setWindowPosition failed: ${result.error}`);
+        return;
+      }
       emit(EventNames.WINDOW_POSITION_CHANGED, { x, y, width: 0, height: 0 });
     } catch {
       // ignore
@@ -172,7 +199,11 @@ export function useWindow() {
    */
   async function setWindowSize(width: number, height: number): Promise<void> {
     try {
-      await invokeSetWindowSize(width, height);
+      const result = await invokeSetWindowSize(width, height);
+      if (!result.ok) {
+        log.error(`[useWindow] setWindowSize failed: ${result.error}`);
+        return;
+      }
       emit(EventNames.WINDOW_SIZE_CHANGED, { width, height });
     } catch {
       // ignore
@@ -286,7 +317,10 @@ export function useWindow() {
    */
   async function openPath(path: string): Promise<void> {
     try {
-      await invokeOpenPath(path);
+      const result = await invokeOpenPath(path);
+      if (!result.ok) {
+        addNotification('error', 'Failed to open folder', result.error);
+      }
     } catch (error) {
       const errMsg = String(error);
       addNotification('error', 'Failed to open folder', errMsg);

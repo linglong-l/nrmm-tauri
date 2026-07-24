@@ -32,21 +32,30 @@ export type { HashConflictReport };
 const log = createLogger('Invoke');
 
 /**
+ * Tauri 命令调用结果类型。
+ * - `{ ok: true; data: T }`：调用成功，data 为返回值
+ * - `{ ok: false; error: string }`：调用失败，error 为错误描述
+ */
+export type InvokeResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+/**
  * 安全调用 Tauri 后端命令的统一中间件。
  *
- * 包装 `tauriInvoke`，在调用失败时记录错误日志，然后重新抛出异常。
+ * 包装 `tauriInvoke`，在调用失败时记录错误日志，然后返回错误结果。
  * 所有本模块中的 `invokeXxx` 函数均应通过此函数调用，而非直接调用 `tauriInvoke`。
  *
  * @param cmd Tauri 命令名称
  * @param args 命令参数（可选）
- * @returns 后端返回的 Promise 结果
+ * @returns 返回 InvokeResult<T>，调用方需检查 .ok 字段
  */
-async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function safeInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<InvokeResult<T>> {
   try {
-    return await tauriInvoke<T>(cmd, args);
+    const data = await tauriInvoke<T>(cmd, args);
+    return { ok: true, data };
   } catch (error) {
-    log.error(`Invoke failed: ${cmd}`, error, args ? { env: args } : undefined);
-    throw error;
+    const msg = typeof error === 'string' ? error : error instanceof Error ? error.message : String(error);
+    log.error(`Invoke failed: ${cmd}`, error);
+    return { ok: false, error: msg };
   }
 }
 
@@ -68,7 +77,7 @@ export function convertToAssetUrl(path: string | null | undefined): string {
  * @param game 目标游戏（可选，不传则使用后端设置中的当前游戏）
  * @returns 分组数据数组
  */
-export async function invokeLoadMods(game?: TargetGame): Promise<ModGroupData[]> {
+export async function invokeLoadMods(game?: TargetGame): Promise<InvokeResult<ModGroupData[]>> {
   return safeInvoke('load_mods', { game });
 }
 
@@ -78,7 +87,7 @@ export async function invokeLoadMods(game?: TargetGame): Promise<ModGroupData[]>
  * @param game 目标游戏（可选，不传则使用后端设置中的当前游戏）
  * @returns 最新分组数据数组
  */
-export async function invokeRefreshMods(game?: TargetGame): Promise<ModGroupData[]> {
+export async function invokeRefreshMods(game?: TargetGame): Promise<InvokeResult<ModGroupData[]>> {
   return safeInvoke('refresh_mods', { game });
 }
 
@@ -88,7 +97,7 @@ export async function invokeRefreshMods(game?: TargetGame): Promise<ModGroupData
  * @param groupPath 分组目录路径
  * @returns 更新后的分组数据（仅包含最新的 mods，保留原有 children）
  */
-export async function invokeRefreshSingleGroup(groupPath: string): Promise<ModGroupData> {
+export async function invokeRefreshSingleGroup(groupPath: string): Promise<InvokeResult<ModGroupData>> {
   return safeInvoke('refresh_single_group', { groupPath });
 }
 
@@ -97,7 +106,7 @@ export async function invokeRefreshSingleGroup(groupPath: string): Promise<ModGr
  * 对应后端命令：`load_ini`。
  * @param path INI 文件绝对路径
  */
-export async function invokeLoadIni(path: string): Promise<void> {
+export async function invokeLoadIni(path: string): Promise<InvokeResult<void>> {
   return safeInvoke('load_ini', { path });
 }
 
@@ -106,7 +115,7 @@ export async function invokeLoadIni(path: string): Promise<void> {
  * 对应后端命令：`save_ini`。
  * @param path 目标 INI 文件绝对路径
  */
-export async function invokeSaveIni(path: string): Promise<void> {
+export async function invokeSaveIni(path: string): Promise<InvokeResult<void>> {
   return safeInvoke('save_ini', { path });
 }
 
@@ -116,7 +125,7 @@ export async function invokeSaveIni(path: string): Promise<void> {
  * @param path 模组目录绝对路径
  * @returns INI 文件绝对路径数组
  */
-export async function invokeFindModIniFiles(path: string): Promise<string[]> {
+export async function invokeFindModIniFiles(path: string): Promise<InvokeResult<string[]>> {
   return safeInvoke('find_ini_files', { path });
 }
 
@@ -126,7 +135,7 @@ export async function invokeFindModIniFiles(path: string): Promise<string[]> {
  * @param path INI 文件绝对路径
  * @returns INI 文件数据结构
  */
-export async function invokeLoadIniData(path: string): Promise<IniFileData> {
+export async function invokeLoadIniData(path: string): Promise<InvokeResult<IniFileData>> {
   return safeInvoke('load_ini', { path });
 }
 
@@ -135,7 +144,7 @@ export async function invokeLoadIniData(path: string): Promise<IniFileData> {
  * 对应后端命令：`start_file_watcher`。
  * @param path 被监听目录绝对路径
  */
-export async function invokeStartFileWatcher(path: string): Promise<void> {
+export async function invokeStartFileWatcher(path: string): Promise<InvokeResult<void>> {
   return safeInvoke('start_file_watcher', { path });
 }
 
@@ -143,7 +152,7 @@ export async function invokeStartFileWatcher(path: string): Promise<void> {
  * 停止当前正在运行的文件监听。
  * 对应后端命令：`stop_file_watcher`。
  */
-export async function invokeStopFileWatcher(): Promise<void> {
+export async function invokeStopFileWatcher(): Promise<InvokeResult<void>> {
   return safeInvoke('stop_file_watcher');
 }
 
@@ -152,7 +161,7 @@ export async function invokeStopFileWatcher(): Promise<void> {
  * 对应后端命令：`register_hotkey`。
  * @param key 热键标识字符串
  */
-export async function invokeRegisterHotkey(key: string): Promise<void> {
+export async function invokeRegisterHotkey(key: string): Promise<InvokeResult<void>> {
   return safeInvoke('register_hotkey', { key });
 }
 
@@ -161,7 +170,7 @@ export async function invokeRegisterHotkey(key: string): Promise<void> {
  * 对应后端命令：`unregister_hotkey`。
  * @param key 热键标识字符串
  */
-export async function invokeUnregisterHotkey(key: string): Promise<void> {
+export async function invokeUnregisterHotkey(key: string): Promise<InvokeResult<void>> {
   return safeInvoke('unregister_hotkey', { key });
 }
 
@@ -169,7 +178,7 @@ export async function invokeUnregisterHotkey(key: string): Promise<void> {
  * 显示主窗口。
  * 对应后端命令：`show_window`。
  */
-export async function invokeShowWindow(): Promise<void> {
+export async function invokeShowWindow(): Promise<InvokeResult<void>> {
   return safeInvoke('show_window');
 }
 
@@ -177,7 +186,7 @@ export async function invokeShowWindow(): Promise<void> {
  * 隐藏主窗口。
  * 对应后端命令：`hide_window`。
  */
-export async function invokeHideWindow(): Promise<void> {
+export async function invokeHideWindow(): Promise<InvokeResult<void>> {
   return safeInvoke('hide_window');
 }
 
@@ -185,7 +194,7 @@ export async function invokeHideWindow(): Promise<void> {
  * 切换主窗口显隐状态。
  * 对应后端命令：`toggle_window`。
  */
-export async function invokeToggleWindow(): Promise<void> {
+export async function invokeToggleWindow(): Promise<InvokeResult<void>> {
   return safeInvoke('toggle_window');
 }
 
@@ -193,7 +202,7 @@ export async function invokeToggleWindow(): Promise<void> {
  * 初始化/设置系统托盘菜单。
  * 对应后端命令：`setup_tray`。
  */
-export async function invokeSetupTray(): Promise<void> {
+export async function invokeSetupTray(): Promise<InvokeResult<void>> {
   return safeInvoke('setup_tray');
 }
 
@@ -203,7 +212,7 @@ export async function invokeSetupTray(): Promise<void> {
  * @param processName 进程名（含扩展名）
  * @returns 进程是否运行中
  */
-export async function invokeIsProcessRunning(processName: string): Promise<boolean> {
+export async function invokeIsProcessRunning(processName: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('is_process_running', { processName });
 }
 
@@ -212,7 +221,7 @@ export async function invokeIsProcessRunning(processName: string): Promise<boole
  * 对应后端命令：`get_process_list`。
  * @returns 进程名数组
  */
-export async function invokeGetProcessList(): Promise<string[]> {
+export async function invokeGetProcessList(): Promise<InvokeResult<string[]>> {
   return safeInvoke('get_process_list');
 }
 
@@ -221,7 +230,7 @@ export async function invokeGetProcessList(): Promise<string[]> {
  * 对应后端命令：`get_settings`。
  * @returns 应用设置对象
  */
-export async function invokeGetSettings(): Promise<AppSettings> {
+export async function invokeGetSettings(): Promise<InvokeResult<AppSettings>> {
   return safeInvoke('get_settings');
 }
 
@@ -230,7 +239,7 @@ export async function invokeGetSettings(): Promise<AppSettings> {
  * 对应后端命令：`save_settings`。
  * @param settings 应用设置对象
  */
-export async function invokeSaveSettings(settings: AppSettings): Promise<void> {
+export async function invokeSaveSettings(settings: AppSettings): Promise<InvokeResult<void>> {
   return safeInvoke('save_settings', { settings });
 }
 
@@ -238,7 +247,7 @@ export async function invokeSaveSettings(settings: AppSettings): Promise<void> {
  * 从远端拉取云端数据并写入本地缓存。
  * 对应后端命令：`fetch_cloud_data`。
  */
-export async function invokeFetchCloudData(): Promise<void> {
+export async function invokeFetchCloudData(): Promise<InvokeResult<void>> {
   return safeInvoke('fetch_cloud_data');
 }
 
@@ -246,7 +255,7 @@ export async function invokeFetchCloudData(): Promise<void> {
  * 将本地缓存与远端云端数据同步。
  * 对应后端命令：`sync_cloud_data`。
  */
-export async function invokeSyncCloudData(): Promise<void> {
+export async function invokeSyncCloudData(): Promise<InvokeResult<void>> {
   return safeInvoke('sync_cloud_data');
 }
 
@@ -255,7 +264,7 @@ export async function invokeSyncCloudData(): Promise<void> {
  * 对应后端命令：`simulate_key_press`。
  * @param key 按键标识字符串
  */
-export async function invokeSimulateKeyPress(key: string): Promise<void> {
+export async function invokeSimulateKeyPress(key: string): Promise<InvokeResult<void>> {
   return safeInvoke('simulate_key_press', { key });
 }
 
@@ -264,7 +273,7 @@ export async function invokeSimulateKeyPress(key: string): Promise<void> {
  * 对应后端命令：`simulate_key_combination`。
  * @param keys 按键标识数组，按顺序按下
  */
-export async function invokeSimulateKeyCombination(keys: string[]): Promise<void> {
+export async function invokeSimulateKeyCombination(keys: string[]): Promise<InvokeResult<void>> {
   return safeInvoke('simulate_key_combination', { keys });
 }
 
@@ -281,7 +290,7 @@ export async function invokeSaveKeybind(
   sectionName: string,
   keyIndex: number,
   newKeyValue: string,
-): Promise<void> {
+): Promise<InvokeResult<void>> {
   return safeInvoke('save_keybind', { iniPath, sectionName, keyIndex, newKeyValue });
 }
 
@@ -298,7 +307,7 @@ export async function invokeToggleKeybindEnabled(
   sectionName: string,
   keyIndex: number,
   enabled: boolean,
-): Promise<void> {
+): Promise<InvokeResult<void>> {
   return safeInvoke('toggle_keybind_enabled', { iniPath, sectionName, keyIndex, enabled });
 }
 
@@ -309,7 +318,7 @@ export async function invokeToggleKeybindEnabled(
  * @param game 目标游戏
  * @returns 校验状态枚举值
  */
-export async function invokeValidateModsPath(path: string, game: TargetGame): Promise<ModsPathStatus> {
+export async function invokeValidateModsPath(path: string, game: TargetGame): Promise<InvokeResult<ModsPathStatus>> {
   return safeInvoke('validate_mods_path', { path, game });
 }
 
@@ -319,7 +328,7 @@ export async function invokeValidateModsPath(path: string, game: TargetGame): Pr
  * @param game 目标游戏
  * @returns 分组数据数组
  */
-export async function invokeGetModGroups(game: TargetGame): Promise<ModGroupData[]> {
+export async function invokeGetModGroups(game: TargetGame): Promise<InvokeResult<ModGroupData[]>> {
   return safeInvoke('get_mod_groups', { game });
 }
 
@@ -329,7 +338,7 @@ export async function invokeGetModGroups(game: TargetGame): Promise<ModGroupData
  * @param groupPath 分组绝对路径
  * @returns Mod 数据数组
  */
-export async function invokeGetModsInGroup(groupPath: string): Promise<ModData[]> {
+export async function invokeGetModsInGroup(groupPath: string): Promise<InvokeResult<ModData[]>> {
   return safeInvoke('get_mods_in_group', { groupPath });
 }
 
@@ -339,7 +348,7 @@ export async function invokeGetModsInGroup(groupPath: string): Promise<ModData[]
  * @param game 目标游戏
  * @returns 操作结果（含成功标志、最新分组列表、可选错误信息）
  */
-export async function invokeUpdateModData(game: TargetGame): Promise<UpdateModDataResult> {
+export async function invokeUpdateModData(game: TargetGame): Promise<InvokeResult<UpdateModDataResult>> {
   return safeInvoke('update_mod_data', { game, knownLibraries: {} });
 }
 
@@ -350,7 +359,7 @@ export async function invokeUpdateModData(game: TargetGame): Promise<UpdateModDa
  * @param groupIndex 分组索引
  * @param modIndex 模组索引
  */
-export async function invokeSimulateKeySelectMod(groupIndex: number, modIndex: number): Promise<void> {
+export async function invokeSimulateKeySelectMod(groupIndex: number, modIndex: number): Promise<InvokeResult<void>> {
   return safeInvoke('simulate_key_select_mod', { groupIndex, modIndex });
 }
 
@@ -360,7 +369,7 @@ export async function invokeSimulateKeySelectMod(groupIndex: number, modIndex: n
  * @param modPath Mod 绝对路径
  * @returns 切换后是否处于收藏状态
  */
-export async function invokeToggleModFavorite(modPath: string): Promise<boolean> {
+export async function invokeToggleModFavorite(modPath: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('toggle_mod_favorite', { modPath });
 }
 
@@ -370,7 +379,7 @@ export async function invokeToggleModFavorite(modPath: string): Promise<boolean>
  * @param groupPath 分组绝对路径
  * @returns 切换后是否处于收藏状态
  */
-export async function invokeToggleGroupFavorite(groupPath: string): Promise<boolean> {
+export async function invokeToggleGroupFavorite(groupPath: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('toggle_group_favorite', { groupPath });
 }
 
@@ -381,7 +390,7 @@ export async function invokeToggleGroupFavorite(groupPath: string): Promise<bool
  * @param targetGroupPath 目标分组路径（可选）。指定后新分组将与该分组处于同一目录层级
  * @returns 新建分组在列表中的索引，失败时为 null
  */
-export async function invokeAddGroup(groupName: string, targetGroupPath?: string): Promise<number | null> {
+export async function invokeAddGroup(groupName: string, targetGroupPath?: string): Promise<InvokeResult<number | null>> {
   return safeInvoke('add_group', { groupName, targetGroupPath });
 }
 
@@ -391,7 +400,7 @@ export async function invokeAddGroup(groupName: string, targetGroupPath?: string
  * @param groupPath 分组绝对路径
  * @returns 是否删除成功
  */
-export async function invokeRemoveGroup(groupPath: string): Promise<boolean> {
+export async function invokeRemoveGroup(groupPath: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('remove_group', { groupPath });
 }
 
@@ -399,7 +408,7 @@ export async function invokeRemoveGroup(groupPath: string): Promise<boolean> {
  * 移除单个模组（先还原再移动到 DISABLED_MANAGED_REMOVED）。
  * 对应后端命令：`remove_mod`。
  */
-export async function invokeRemoveMod(modPath: string): Promise<void> {
+export async function invokeRemoveMod(modPath: string): Promise<InvokeResult<void>> {
   return safeInvoke('remove_mod', { modPath });
 }
 
@@ -410,7 +419,7 @@ export async function invokeRemoveMod(modPath: string): Promise<void> {
  * @param newName 新分组名称
  * @returns 是否重命名成功
  */
-export async function invokeRenameGroup(groupPath: string, newName: string): Promise<boolean> {
+export async function invokeRenameGroup(groupPath: string, newName: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('rename_group', { groupPath, newName });
 }
 
@@ -421,7 +430,7 @@ export async function invokeRenameGroup(groupPath: string, newName: string): Pro
  * @param newName 新模组名称（不含 DISABLED 前缀）
  * @returns 是否重命名成功
  */
-export async function invokeRenameMod(modPath: string, newName: string): Promise<boolean> {
+export async function invokeRenameMod(modPath: string, newName: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('rename_mod', { modPath, newName });
 }
 
@@ -431,7 +440,7 @@ export async function invokeRenameMod(modPath: string, newName: string): Promise
  * @param groupPaths 分组路径的有序数组
  * @returns 是否重排成功
  */
-export async function invokeReorderGroups(groupPaths: string[]): Promise<boolean> {
+export async function invokeReorderGroups(groupPaths: string[]): Promise<InvokeResult<boolean>> {
   return safeInvoke('reorder_groups', { groupPaths });
 }
 
@@ -442,7 +451,7 @@ export async function invokeReorderGroups(groupPaths: string[]): Promise<boolean
  * @param game 目标游戏
  * @returns 命中的 Mod 数据数组
  */
-export async function invokeSearchMods(keyword: string, game: TargetGame): Promise<ModData[]> {
+export async function invokeSearchMods(keyword: string, game: TargetGame): Promise<InvokeResult<ModData[]>> {
   return safeInvoke('search_mods', { keyword, game });
 }
 
@@ -452,7 +461,7 @@ export async function invokeSearchMods(keyword: string, game: TargetGame): Promi
  * @param modPath Mod 绝对路径
  * @returns 切换后是否处于禁用状态
  */
-export async function invokeToggleModDisabled(modPath: string): Promise<boolean> {
+export async function invokeToggleModDisabled(modPath: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('toggle_mod_disabled', { modPath });
 }
 
@@ -464,7 +473,7 @@ export async function invokeToggleModDisabled(modPath: string): Promise<boolean>
  * @param modPath Mod 绝对路径
  * @returns [新模组路径, 切换后是否处于禁用状态]
  */
-export async function invokeToggleTreeNodeModDisabled(modPath: string): Promise<[string, boolean]> {
+export async function invokeToggleTreeNodeModDisabled(modPath: string): Promise<InvokeResult<[string, boolean]>> {
   return safeInvoke('toggle_tree_node_mod_disabled', { modPath });
 }
 
@@ -475,7 +484,7 @@ export async function invokeToggleTreeNodeModDisabled(modPath: string): Promise<
  * @param modPath Mod 绝对路径
  * @returns 操作后的新模组路径
  */
-export async function invokeDisableTreeNodeMod(modPath: string): Promise<string> {
+export async function invokeDisableTreeNodeMod(modPath: string): Promise<InvokeResult<string>> {
   return safeInvoke('disable_tree_node_mod', { modPath });
 }
 
@@ -485,7 +494,7 @@ export async function invokeDisableTreeNodeMod(modPath: string): Promise<string>
  * @param groupPath 分组绝对路径
  * @returns 切换后的禁用状态（true = 已禁用，false = 已启用）
  */
-export async function invokeToggleTreeNodeGroupDisabled(groupPath: string): Promise<boolean> {
+export async function invokeToggleTreeNodeGroupDisabled(groupPath: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('toggle_tree_node_group_disabled', { groupPath });
 }
 
@@ -495,7 +504,7 @@ export async function invokeToggleTreeNodeGroupDisabled(groupPath: string): Prom
  * @param groupPath 分组绝对路径
  * @param index 选中的 Mod 索引
  */
-export async function invokeSetSelectedMod(groupPath: string, index: number): Promise<void> {
+export async function invokeSetSelectedMod(groupPath: string, index: number): Promise<InvokeResult<void>> {
   return safeInvoke('set_selected_mod', { groupPath, index });
 }
 
@@ -506,7 +515,7 @@ export async function invokeSetSelectedMod(groupPath: string, index: number): Pr
  * @param modsCount 该分组下 Mod 数量（用于越界保护）
  * @returns 当前选中的 Mod 索引
  */
-export async function invokeGetSelectedMod(groupPath: string, modsCount: number): Promise<number> {
+export async function invokeGetSelectedMod(groupPath: string, modsCount: number): Promise<InvokeResult<number>> {
   return safeInvoke('get_selected_mod', { groupPath, modsCount });
 }
 
@@ -516,7 +525,7 @@ export async function invokeGetSelectedMod(groupPath: string, modsCount: number)
  * @param managedPath Managed 目录绝对路径
  * @param index 选中的分组索引
  */
-export async function invokeSetSelectedGroup(managedPath: string, index: number): Promise<void> {
+export async function invokeSetSelectedGroup(managedPath: string, index: number): Promise<InvokeResult<void>> {
   return safeInvoke('set_selected_group', { managedPath, index });
 }
 
@@ -527,7 +536,7 @@ export async function invokeSetSelectedGroup(managedPath: string, index: number)
  * @param groupCount 该目录下分组数量（用于越界保护）
  * @returns 当前选中的分组索引
  */
-export async function invokeGetSelectedGroup(managedPath: string, groupCount: number): Promise<number> {
+export async function invokeGetSelectedGroup(managedPath: string, groupCount: number): Promise<InvokeResult<number>> {
   return safeInvoke('get_selected_group', { managedPath, groupCount });
 }
 
@@ -537,7 +546,7 @@ export async function invokeGetSelectedGroup(managedPath: string, groupCount: nu
  * @param iniPath INI 文件绝对路径
  * @returns 语法错误信息数组（无错误时为空数组）
  */
-export async function invokeGetIniSyntaxErrors(iniPath: string): Promise<IniSyntaxError[]> {
+export async function invokeGetIniSyntaxErrors(iniPath: string): Promise<InvokeResult<IniSyntaxError[]>> {
   return safeInvoke('get_ini_syntax_errors', { iniPath });
 }
 
@@ -547,7 +556,7 @@ export async function invokeGetIniSyntaxErrors(iniPath: string): Promise<IniSynt
  * @param iniPath INI 文件绝对路径
  * @returns 是否修复成功
  */
-export async function invokeFixIniSyntaxErrors(iniPath: string): Promise<boolean> {
+export async function invokeFixIniSyntaxErrors(iniPath: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('fix_ini_syntax_errors', { iniPath });
 }
 
@@ -556,7 +565,7 @@ export async function invokeFixIniSyntaxErrors(iniPath: string): Promise<boolean
  * 对应后端命令：`get_window_position`。
  * @returns 窗口位置与尺寸信息
  */
-export async function invokeGetWindowPosition(): Promise<WindowPosition> {
+export async function invokeGetWindowPosition(): Promise<InvokeResult<WindowPosition>> {
   return safeInvoke('get_window_position');
 }
 
@@ -566,7 +575,7 @@ export async function invokeGetWindowPosition(): Promise<WindowPosition> {
  * @param x 窗口左上角 X 坐标
  * @param y 窗口左上角 Y 坐标
  */
-export async function invokeSetWindowPosition(x: number, y: number): Promise<void> {
+export async function invokeSetWindowPosition(x: number, y: number): Promise<InvokeResult<void>> {
   return safeInvoke('set_window_position', { x, y });
 }
 
@@ -576,7 +585,7 @@ export async function invokeSetWindowPosition(x: number, y: number): Promise<voi
  * @param width 窗口宽度
  * @param height 窗口高度
  */
-export async function invokeSetWindowSize(width: number, height: number): Promise<void> {
+export async function invokeSetWindowSize(width: number, height: number): Promise<InvokeResult<void>> {
   return safeInvoke('set_window_size', { width, height });
 }
 
@@ -585,7 +594,7 @@ export async function invokeSetWindowSize(width: number, height: number): Promis
  * 对应后端命令：`pin_window`。
  * @param pinned 是否置顶
  */
-export async function invokePinWindow(pinned: boolean): Promise<void> {
+export async function invokePinWindow(pinned: boolean): Promise<InvokeResult<void>> {
   return safeInvoke('pin_window', { pinned });
 }
 
@@ -594,7 +603,7 @@ export async function invokePinWindow(pinned: boolean): Promise<void> {
  * 对应后端命令：`is_window_pinned`。
  * @returns 是否置顶
  */
-export async function invokeIsWindowPinned(): Promise<boolean> {
+export async function invokeIsWindowPinned(): Promise<InvokeResult<boolean>> {
   return safeInvoke('is_window_pinned');
 }
 
@@ -603,7 +612,7 @@ export async function invokeIsWindowPinned(): Promise<boolean> {
  * 对应后端命令：`set_tray_menu`。
  * @param items 托盘菜单项数组
  */
-export async function invokeSetTrayMenu(items: TrayMenuItem[]): Promise<void> {
+export async function invokeSetTrayMenu(items: TrayMenuItem[]): Promise<InvokeResult<void>> {
   return safeInvoke('set_tray_menu', { items });
 }
 
@@ -612,7 +621,7 @@ export async function invokeSetTrayMenu(items: TrayMenuItem[]): Promise<void> {
  * 对应后端命令：`set_tray_tooltip`。
  * @param tooltip 提示文本
  */
-export async function invokeSetTrayTooltip(tooltip: string): Promise<void> {
+export async function invokeSetTrayTooltip(tooltip: string): Promise<InvokeResult<void>> {
   return safeInvoke('set_tray_tooltip', { tooltip });
 }
 
@@ -621,7 +630,7 @@ export async function invokeSetTrayTooltip(tooltip: string): Promise<void> {
  * 对应后端命令：`get_cloud_data`。
  * @returns 云端数据聚合对象
  */
-export async function invokeGetCloudData(): Promise<CloudData> {
+export async function invokeGetCloudData(): Promise<InvokeResult<CloudData>> {
   return safeInvoke('get_cloud_data');
 }
 
@@ -631,7 +640,7 @@ export async function invokeGetCloudData(): Promise<CloudData> {
  * @param game 目标游戏
  * @returns Mods 目录绝对路径
  */
-export async function invokeGetModsPath(game: TargetGame): Promise<string> {
+export async function invokeGetModsPath(game: TargetGame): Promise<InvokeResult<string>> {
   return safeInvoke('get_mods_path', { game });
 }
 
@@ -641,7 +650,7 @@ export async function invokeGetModsPath(game: TargetGame): Promise<string> {
  * @param game 目标游戏
  * @param path Mods 目录绝对路径
  */
-export async function invokeSetModsPath(game: TargetGame, path: string): Promise<void> {
+export async function invokeSetModsPath(game: TargetGame, path: string): Promise<InvokeResult<void>> {
   return safeInvoke('set_mods_path', { game, path });
 }
 
@@ -650,7 +659,7 @@ export async function invokeSetModsPath(game: TargetGame, path: string): Promise
  * 对应后端命令：`select_directory`。
  * @returns 选中目录绝对路径，用户取消时为 null
  */
-export async function invokeSelectDirectory(): Promise<string | null> {
+export async function invokeSelectDirectory(): Promise<InvokeResult<string | null>> {
   return safeInvoke('select_directory');
 }
 
@@ -659,7 +668,7 @@ export async function invokeSelectDirectory(): Promise<string | null> {
  * 对应后端命令：`open_path`。
  * @param path 待打开路径
  */
-export async function invokeOpenPath(path: string): Promise<void> {
+export async function invokeOpenPath(path: string): Promise<InvokeResult<void>> {
   return safeInvoke('open_path', { path });
 }
 
@@ -668,7 +677,7 @@ export async function invokeOpenPath(path: string): Promise<void> {
  * 对应后端命令：`open_mod_folder`。
  * @param game 目标游戏
  */
-export async function invokeOpenModFolder(game: TargetGame): Promise<void> {
+export async function invokeOpenModFolder(game: TargetGame): Promise<InvokeResult<void>> {
   return safeInvoke('open_mod_folder', { game });
 }
 
@@ -718,7 +727,7 @@ export function getDefaultSettings(): AppSettings {
  * @param targetGroupPath 目标分组目录路径
  * @returns 是否添加成功
  */
-export async function invokeAddMods(sourcePaths: string[], targetGroupPath: string): Promise<boolean> {
+export async function invokeAddMods(sourcePaths: string[], targetGroupPath: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('add_mods', { sourcePaths, targetGroupPath });
 }
 
@@ -728,7 +737,7 @@ export async function invokeAddMods(sourcePaths: string[], targetGroupPath: stri
  * @param path 起始路径（文件或目录）
  * @returns .ini文件路径列表
  */
-export async function invokeFindIniFiles(path: string): Promise<string[]> {
+export async function invokeFindIniFiles(path: string): Promise<InvokeResult<string[]>> {
   return safeInvoke('find_ini_files', { path });
 }
 
@@ -738,7 +747,7 @@ export async function invokeFindIniFiles(path: string): Promise<string[]> {
  * @param paths .ini文件路径列表
  * @returns 是否处理成功
  */
-export async function invokeProcessIniFiles(paths: string[]): Promise<boolean> {
+export async function invokeProcessIniFiles(paths: string[]): Promise<InvokeResult<boolean>> {
   return safeInvoke('process_ini_files', { paths });
 }
 
@@ -748,7 +757,7 @@ export async function invokeProcessIniFiles(paths: string[]): Promise<boolean> {
  * @param path 文件路径
  * @returns (是否有效, 文件类型字符串: "zip"/"7z"/"rar"/"unknown")
  */
-export async function invokeValidateArchiveFile(path: string): Promise<[boolean, string]> {
+export async function invokeValidateArchiveFile(path: string): Promise<InvokeResult<[boolean, string]>> {
   return safeInvoke('validate_archive_file', { path });
 }
 
@@ -758,7 +767,7 @@ export async function invokeValidateArchiveFile(path: string): Promise<[boolean,
  * @param path 起始目录路径
  * @returns 目录下所有文件的路径列表
  */
-export async function invokeFindAllFiles(path: string): Promise<string[]> {
+export async function invokeFindAllFiles(path: string): Promise<InvokeResult<string[]>> {
   return safeInvoke('find_all_files', { path });
 }
 
@@ -768,7 +777,7 @@ export async function invokeFindAllFiles(path: string): Promise<string[]> {
  * @param file_path 压缩文件路径
  * @returns 是否加密
  */
-export async function invokeIsArchiveEncrypted(file_path: string): Promise<boolean> {
+export async function invokeIsArchiveEncrypted(file_path: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('is_archive_encrypted', { file_path });
 }
 
@@ -780,7 +789,7 @@ export async function invokeIsArchiveEncrypted(file_path: string): Promise<boole
  * @param password 解压密码（可选）
  * @returns 是否解压成功
  */
-export async function invokeExtractArchive(file_path: string, dest_dir: string, password?: string): Promise<boolean> {
+export async function invokeExtractArchive(file_path: string, dest_dir: string, password?: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('extract_archive', { file_path, dest_dir, password });
 }
 
@@ -790,7 +799,7 @@ export async function invokeExtractArchive(file_path: string, dest_dir: string, 
  * @param file_path 文件路径
  * @returns 是否成功
  */
-export async function invokeMoveToTrash(file_path: string): Promise<boolean> {
+export async function invokeMoveToTrash(file_path: string): Promise<InvokeResult<boolean>> {
   return safeInvoke('move_to_trash', { file_path });
 }
 
@@ -801,7 +810,7 @@ export async function invokeMoveToTrash(file_path: string): Promise<boolean> {
  * @param dest_dir 目标目录路径
  * @returns 导出文件的完整路径
  */
-export async function invokeExportMod(mod_path: string, dest_dir: string): Promise<string> {
+export async function invokeExportMod(mod_path: string, dest_dir: string): Promise<InvokeResult<string>> {
   return safeInvoke('export_mod', { mod_path, dest_dir });
 }
 
@@ -812,7 +821,7 @@ export async function invokeExportMod(mod_path: string, dest_dir: string): Promi
  * @param dest_dir 目标目录路径
  * @returns 导出文件的完整路径
  */
-export async function invokeExportGroup(group_path: string, dest_dir: string): Promise<string> {
+export async function invokeExportGroup(group_path: string, dest_dir: string): Promise<InvokeResult<string>> {
   return safeInvoke('export_group', { group_path, dest_dir });
 }
 
@@ -821,12 +830,12 @@ export async function invokeExportGroup(group_path: string, dest_dir: string): P
  * 对应后端命令：`open_url`。
  * @param url 要打开的 URL（必须包含协议，如 `https://`）
  */
-export async function invokeOpenUrl(url: string): Promise<void> {
+export async function invokeOpenUrl(url: string): Promise<InvokeResult<void>> {
   return safeInvoke('open_url', { url });
 }
 
 /** 创建桌面快捷方式（Linux 为 .desktop，Windows 为 .lnk）。 */
-export async function invokeCreateDesktopIcon(name?: string): Promise<void> {
+export async function invokeCreateDesktopIcon(name?: string): Promise<InvokeResult<void>> {
   return safeInvoke('create_desktop_icon', { name });
 }
 
@@ -841,6 +850,6 @@ export async function invokeCreateDesktopIcon(name?: string): Promise<void> {
  * @returns `HashConflictReport`（包含 `enabledModHashes` 与 `conflicts` 字段）。
  *          若任务被取消则返回 rejected Promise，错误信息以 `Task 'check_hash_conflicts' was cancelled` 开头。
  */
-export async function invokeCheckHashConflicts(): Promise<HashConflictReport> {
+export async function invokeCheckHashConflicts(): Promise<InvokeResult<HashConflictReport>> {
   return safeInvoke<HashConflictReport>('check_hash_conflicts');
 }

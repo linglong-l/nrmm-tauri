@@ -57,7 +57,7 @@ describe('hashConflictStore', () => {
 
   it('checkHashConflicts 成功时状态变 done，lastReport 正确填充', async () => {
     const report = makeReport(2);
-    mockedInvokeCheckHashConflicts.mockResolvedValueOnce(report);
+    mockedInvokeCheckHashConflicts.mockResolvedValueOnce({ ok: true, data: report });
     const store = useHashConflictStore();
     await store.checkHashConflicts();
     expect(store.status).toBe('done');
@@ -79,7 +79,7 @@ describe('hashConflictStore', () => {
   it('checkHashConflicts 取消时状态变 cancelled，lastReport 保留', async () => {
     const report = makeReport(1);
     // 第一次成功
-    mockedInvokeCheckHashConflicts.mockResolvedValueOnce(report);
+    mockedInvokeCheckHashConflicts.mockResolvedValueOnce({ ok: true, data: report });
     const store = useHashConflictStore();
     await store.checkHashConflicts();
     expect(store.lastReport).toEqual(report);
@@ -95,7 +95,7 @@ describe('hashConflictStore', () => {
 
   it('ignoreHash 后 conflictCount 减少，ignoredHashes 包含该 hash', async () => {
     const report = makeReport(3);
-    mockedInvokeCheckHashConflicts.mockResolvedValueOnce(report);
+    mockedInvokeCheckHashConflicts.mockResolvedValueOnce({ ok: true, data: report });
     const store = useHashConflictStore();
     await store.checkHashConflicts();
     expect(store.conflictCount).toBe(3);
@@ -121,7 +121,7 @@ describe('hashConflictStore', () => {
 
   it('unignoreHash 解除忽略后 conflictCount 恢复', async () => {
     const report = makeReport(1);
-    mockedInvokeCheckHashConflicts.mockResolvedValueOnce(report);
+    mockedInvokeCheckHashConflicts.mockResolvedValueOnce({ ok: true, data: report });
     const store = useHashConflictStore();
     await store.checkHashConflicts();
     const hash = report.conflicts[0].hash;
@@ -134,7 +134,7 @@ describe('hashConflictStore', () => {
 
   it('clearIgnored 清空忽略集合后 conflictCount 恢复', async () => {
     const report = makeReport(2);
-    mockedInvokeCheckHashConflicts.mockResolvedValueOnce(report);
+    mockedInvokeCheckHashConflicts.mockResolvedValueOnce({ ok: true, data: report });
     const store = useHashConflictStore();
     await store.checkHashConflicts();
     store.ignoreHash(report.conflicts[0].hash);
@@ -155,7 +155,7 @@ describe('hashConflictStore', () => {
 
   it('reset 重置所有状态', async () => {
     const report = makeReport(1);
-    mockedInvokeCheckHashConflicts.mockResolvedValueOnce(report);
+    mockedInvokeCheckHashConflicts.mockResolvedValueOnce({ ok: true, data: report });
     const store = useHashConflictStore();
     await store.checkHashConflicts();
     store.ignoreHash(report.conflicts[0].hash);

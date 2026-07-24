@@ -1,8 +1,11 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { AppSettings, LayoutMode, SortGroupMethod, HotkeyKeyboard, HotkeyGamepad, TargetGame } from '../types';
-import { invokeGetSettings, invokeSaveSettings, getDefaultSettings } from '../utils/invoke';
+import { invokeGetSettings, invokeSaveSettings, getDefaultSettings, safeInvoke } from '../utils/invoke';
 import { EventNames, eventManager } from '../utils/events';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('Settings');
 
 /**
  * 应用设置 Store
@@ -270,13 +273,12 @@ export const useSettingsStore = defineStore('settings', () => {
   async function loadSettings(): Promise<boolean> {
     isLoading.value = true;
     try {
-      const loadedSettings = await invokeGetSettings();
-      if (loadedSettings) {
-        // 以默认值为基底合并后端数据，确保后端缺失的新增字段仍取默认值
-        settings.value = { ...getDefaultSettings(), ...loadedSettings };
+      const result = await invokeGetSettings();
+      if (result.ok) {
+        settings.value = { ...getDefaultSettings(), ...result.data };
       }
       isLoaded.value = true;
-      return true;
+      return result.ok;
     } catch {
       // 加载失败时回退到默认设置，避免界面因无数据而异常
       settings.value = getDefaultSettings();
@@ -299,11 +301,45 @@ export const useSettingsStore = defineStore('settings', () => {
   async function saveSettings(): Promise<boolean> {
     isSaving.value = true;
     try {
-      await invokeSaveSettings(settings.value);
-      // 保存成功后通知全局，便于热键、UI 等模块同步刷新
-      eventManager.emit(EventNames.SETTINGS_UPDATED, undefined);
-      return true;
+      const result = await invokeSaveSettings(settings.value);
+      if (result.ok) {
+        eventManager.emit(EventNames.SETTINGS_UPDATED, undefined);
+        return true;
+      }
+      return false;
     } catch {
+      return false;
+    } finally {
+      isSaving.value = false;
+    }
+  }
+
+  /**
+   * 更新单个设置字段并立即持久化。
+   * 通过后端 update_setting 命令实现 per-field 增量更新，
+   * 避免全量保存的反序列化兼容性问题。
+   *
+   * @param key AppSettings 的字段名
+   * @param value 对应字段的新值
+   * @returns 保存是否成功
+   */
+  async function saveSetting<K extends keyof AppSettings>(
+    key: K,
+    value: AppSettings[K]
+  ): Promise<boolean> {
+    isSaving.value = true;
+    try {
+      const jsonVal = typeof value === 'string' ? value : JSON.stringify(value);
+      const result = await safeInvoke('update_setting', { key, value: jsonVal });
+      if (result.ok) {
+        eventManager.emit(EventNames.SETTINGS_UPDATED, undefined);
+        return true;
+      } else {
+        log.error(`Failed to save setting ${key}: ${result.error}`);
+        return false;
+      }
+    } catch (error) {
+      log.error(`Unexpected error saving setting ${key}:`, error);
       return false;
     } finally {
       isSaving.value = false;
@@ -374,6 +410,7 @@ export const useSettingsStore = defineStore('settings', () => {
     updateSettings,
     loadSettings,
     saveSettings,
+    saveSetting,
     updateSetting,
     resetToDefaults
   };

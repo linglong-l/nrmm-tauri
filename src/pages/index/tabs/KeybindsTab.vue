@@ -164,8 +164,19 @@ async function loadKeybinds(path: string | null) {
 
   loading.value = true;
   try {
-    const iniPaths = await invokeFindModIniFiles(path);
-    iniFiles.value = await Promise.all(iniPaths.map((p) => invokeLoadIniData(p)));
+    const iniPathsResult = await invokeFindModIniFiles(path);
+    if (!iniPathsResult.ok) {
+      error.value = iniPathsResult.error;
+      return;
+    }
+    const iniPaths = iniPathsResult.data;
+    const iniDataResults = await Promise.all(iniPaths.map((p) => invokeLoadIniData(p)));
+    const firstBad = iniDataResults.find(r => !r.ok);
+    if (firstBad) {
+      error.value = firstBad.error;
+      return;
+    }
+    iniFiles.value = iniDataResults.map(r => (r as { ok: true; data: IniFileData }).data);
   } catch (e) {
     error.value = String(e);
   } finally {
@@ -178,8 +189,19 @@ async function refreshCurrentKeybinds() {
   if (!path) return;
   if (isPathUnderHashDir(path)) return;
   try {
-    const iniPaths = await invokeFindModIniFiles(path);
-    iniFiles.value = await Promise.all(iniPaths.map((p) => invokeLoadIniData(p)));
+    const iniPathsResult = await invokeFindModIniFiles(path);
+    if (!iniPathsResult.ok) {
+      error.value = iniPathsResult.error;
+      return;
+    }
+    const iniPaths = iniPathsResult.data;
+    const iniDataResults = await Promise.all(iniPaths.map((p) => invokeLoadIniData(p)));
+    const firstBad = iniDataResults.find(r => !r.ok);
+    if (firstBad) {
+      error.value = firstBad.error;
+      return;
+    }
+    iniFiles.value = iniDataResults.map(r => (r as { ok: true; data: IniFileData }).data);
   } catch (e) {
     error.value = String(e);
   }
@@ -221,9 +243,17 @@ async function handleKeybindClick(_bindIndex: number, kb: KeybindEntry, keyIdx: 
   if (keyEntry.disabled) return;
   try {
     if (kb.keys.filter(k => !k.disabled).length === 1) {
-      await invokeSimulateKeyPress(keyEntry.value);
+      const result = await invokeSimulateKeyPress(keyEntry.value);
+      if (!result.ok) {
+        ElMessage.error(result.error);
+        return;
+      }
     } else {
-      await invokeSimulateKeyCombination(kb.keys.filter(k => !k.disabled).map(k => k.value));
+      const result = await invokeSimulateKeyCombination(kb.keys.filter(k => !k.disabled).map(k => k.value));
+      if (!result.ok) {
+        ElMessage.error(result.error);
+        return;
+      }
     }
   } catch (e) {
     ElMessage.error(String(e));
@@ -368,7 +398,11 @@ async function saveEdit() {
   }
 
   try {
-    await invokeSaveKeybind(kb.filePath, kb.sectionName, entry.keyIndex, currentValue);
+    const result = await invokeSaveKeybind(kb.filePath, kb.sectionName, entry.keyIndex, currentValue);
+    if (!result.ok) {
+      ElMessage.error(t('keybinds.saveFailed', { error: result.error }));
+      return;
+    }
     ElMessage.success(t('keybinds.saveSuccess'));
     cancelEdit();
     await refreshCurrentKeybinds();
@@ -384,7 +418,11 @@ async function toggleEnabled(bindIndex: number, keyIdx: number, enabled: boolean
   if (!entry) return;
   if (entry.disabled === !enabled) {
     try {
-      await invokeToggleKeybindEnabled(kb.filePath, kb.sectionName, entry.keyIndex, enabled);
+      const result = await invokeToggleKeybindEnabled(kb.filePath, kb.sectionName, entry.keyIndex, enabled);
+      if (!result.ok) {
+        ElMessage.error(t('keybinds.toggleFailed', { error: result.error }));
+        return;
+      }
       await refreshCurrentKeybinds();
     } catch (e) {
       ElMessage.error(t('keybinds.toggleFailed', { error: String(e) }));

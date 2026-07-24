@@ -28,7 +28,6 @@ use crate::state::AppState;
 use crate::task_queue::TaskQueueError;
 
 /// 加载模组数据。
-///
 /// 若指定了 `game` 参数则按该游戏加载（覆盖设置中的 target_game）；
 /// 未指定则从全局设置中读取当前目标游戏。
 /// 通过 `TaskQueue` 保证同一时刻只有一个 `load_mods` 任务在执行，避免并发冲突。
@@ -1468,7 +1467,7 @@ pub async fn get_foreground_game(state: State<'_, AppState>) -> Result<String, S
     let settings = state.settings.read();
     let game = crate::process::ProcessDetector::match_game_process(&foreground_process, &settings);
 
-    Ok(game.as_str().to_string())
+    Ok(format!("{:?}", game))
 }
 
 /// 获取全局设置。
@@ -1480,6 +1479,124 @@ pub async fn get_foreground_game(state: State<'_, AppState>) -> Result<String, S
 #[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<crate::settings::Settings, String> {
     Ok(state.settings.read().clone())
+}
+
+/// 更新单个设置字段并持久化。
+///
+/// 替代全量 `save_settings`，支持按字段增量更新。
+/// 每个字段独立校验，失败时仅影响该字段，不污染其他字段。
+///
+/// 参数：
+/// - `state`: 应用全局状态。
+/// - `key`: 设置字段名（驼峰式，如 `"language"`、`"overallScale"`）。
+/// - `value`: 字段新值的 JSON Value。
+///
+/// 返回：成功返回 `Ok(())`，失败返回错误描述。
+#[tauri::command]
+pub async fn update_setting(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    let app_data_dir = crate::get_app_data_dir().ok_or_else(|| "Failed to get app data dir".to_string())?;
+
+    // 1. 读取当前 settings，克隆以释放读锁
+    let settings_snapshot = state.settings.read().clone();
+
+    // 2. 解析 JSON 值
+    let parsed: serde_json::Value = serde_json::from_str(&value)
+        .map_err(|e| format!("Invalid JSON value for key '{}': {}", key, e))?;
+
+    // 3. 根据 key 更新对应字段
+    let mut settings = settings_snapshot;
+    let json_to_string = |v: &serde_json::Value| -> Result<String, String> {
+        v.as_str().map(String::from).ok_or_else(|| format!("Expected string for key '{}', got {:?}", key, v))
+    };
+    let json_to_f64 = |v: &serde_json::Value| -> Result<f64, String> {
+        v.as_f64().ok_or_else(|| format!("Expected number for key '{}', got {:?}", key, v))
+    };
+    let json_to_i32 = |v: &serde_json::Value| -> Result<i32, String> {
+        v.as_i64().map(|n| n as i32).ok_or_else(|| format!("Expected integer for key '{}', got {:?}", key, v))
+    };
+    let json_to_bool = |v: &serde_json::Value| -> Result<bool, String> {
+        v.as_bool().ok_or_else(|| format!("Expected boolean for key '{}', got {:?}", key, v))
+    };
+
+    match key.as_str() {
+        "language" => settings.language = json_to_string(&parsed)?,
+        "theme" => settings.theme = json_to_string(&parsed)?,
+        "hotkeyKeyboard" => settings.hotkey_keyboard = json_to_string(&parsed)?,
+        "hotkeyGamepad" => settings.hotkey_gamepad = json_to_string(&parsed)?,
+        "searchHotkey" => settings.search_hotkey = json_to_string(&parsed)?,
+        "overallScale" => settings.overall_scale = json_to_f64(&parsed)?,
+        "bgTransparency" => settings.bg_transparency = json_to_f64(&parsed)?,
+        "layoutMode" => settings.layout_mode = json_to_i32(&parsed)?,
+        "targetGame" => {
+            settings.target_game = serde_json::from_value(parsed.clone())
+                .map_err(|e| format!("Invalid targetGame value: {}", e))?;
+        }
+        "isAutoGenerateFolderIcon" => settings.is_auto_generate_folder_icon = json_to_bool(&parsed)?,
+        "isAutoPinWindow" => settings.is_auto_pin_window = json_to_bool(&parsed)?,
+        "showMenuWhenTogglingOutsideGame" => settings.show_menu_when_toggling_outside_game = json_to_bool(&parsed)?,
+        "keybindSimulateKeypress" => settings.keybind_simulate_keypress = json_to_bool(&parsed)?,
+        "sortGroupMethod" => settings.sort_group_method = json_to_i32(&parsed)?,
+        "targetProcessWuwa" => settings.target_process_wuwa = json_to_string(&parsed)?,
+        "targetProcessGenshin" => settings.target_process_genshin = json_to_string(&parsed)?,
+        "targetProcessHsr" => settings.target_process_hsr = json_to_string(&parsed)?,
+        "targetProcessZzz" => settings.target_process_zzz = json_to_string(&parsed)?,
+        "targetProcessEndfield" => settings.target_process_endfield = json_to_string(&parsed)?,
+        "modsPathWuwa" => settings.mods_path_wuwa = json_to_string(&parsed)?,
+        "modsPathGenshin" => settings.mods_path_genshin = json_to_string(&parsed)?,
+        "modsPathHsr" => settings.mods_path_hsr = json_to_string(&parsed)?,
+        "modsPathZzz" => settings.mods_path_zzz = json_to_string(&parsed)?,
+        "modsPathEndfield" => settings.mods_path_endfield = json_to_string(&parsed)?,
+        "savedWindowWidth" => settings.saved_window_width = json_to_i32(&parsed)?,
+        "savedWindowHeight" => settings.saved_window_height = json_to_i32(&parsed)?,
+        _ => return Err(format!("Unknown setting key: {}", key)),
+    }
+
+    // 4. 校验并修复
+    settings.validate_and_fix();
+
+    // 5. 写回内存
+    {
+        let mut current = state.settings.write();
+        *current = settings.clone();
+    }
+
+    // 6. 落盘
+    let app_data_dir_clone = app_data_dir.clone();
+    let settings_clone = settings.clone();
+    let save_result = tokio::task::spawn_blocking(move || {
+        settings_clone.save(&app_data_dir_clone)
+    }).await;
+
+    match save_result {
+        Ok(Ok(())) => {
+            log::info!("Setting '{}' saved successfully", key);
+        }
+        Ok(Err(e)) => {
+            log::error!("Failed to save setting '{}': {}", key, e);
+            return Err(format!("Failed to save setting '{}': {}", key, e));
+        }
+        Err(e) => {
+            log::error!("Failed to join save setting task: {}", e);
+            return Err(format!("Failed to save setting '{}': {}", key, e));
+        }
+    }
+
+    // 7. 热键变更检测（只在热键相关字段变化时执行）
+    if key == "hotkeyKeyboard" || key == "hotkeyGamepad" {
+        log::debug!("[update_setting] Hotkey config changed (key: {}), re-registering", key);
+        if let Err(e) = crate::hotkey::HotkeyManager::register_from_settings(&app, &settings) {
+            log::error!("[update_setting] Failed to re-register hotkeys: {}", e);
+        } else {
+            log::debug!("[update_setting] Hotkeys re-registered successfully");
+        }
+    }
+
+    Ok(())
 }
 
 /// 检测当前应用是否以管理员权限运行。
@@ -2186,16 +2303,3 @@ pub async fn create_desktop_icon(name: Option<String>) -> Result<(), String> {
     crate::desktop_entry::DesktopEntryManager::create_desktop_entry(name)
 }
 
-/// 重启应用（用于前端全局错误处理器或 release 模式 panic 后恢复）。
-///
-/// 获取当前可执行文件路径，启动新进程后立即退出当前进程。
-/// 使用同步命令以避免 tokio 运行时在退出前被销毁。
-#[tauri::command]
-pub fn restart_application() -> Result<(), String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("Cannot get executable path: {}", e))?;
-    std::process::Command::new(exe)
-        .spawn()
-        .map_err(|e| format!("Cannot restart application: {}", e))?;
-    std::process::exit(0);
-}

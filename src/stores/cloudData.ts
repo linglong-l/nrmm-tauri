@@ -4,6 +4,7 @@ import type { CloudData, CloudLinks, CloudMessages, AutoIconData } from '../type
 import { CONSTANTS } from '../utils/constants';
 import { invokeFetchCloudData, invokeSyncCloudData, invokeGetCloudData } from '../utils/invoke';
 import { EventNames, eventManager } from '../utils/events';
+import { createLogger } from '../utils/logger';
 
 /**
  * 云数据 Store
@@ -18,6 +19,7 @@ import { EventNames, eventManager } from '../utils/events';
  * 同时维护加载、同步、错误等运行时状态，便于 UI 反馈。
  */
 export const useCloudDataStore = defineStore('cloudData', () => {
+  const log = createLogger('CloudDataStore');
   // 支持 / 教程 / 联系三类入口的图标与跳转链接。图标先以内置 CONSTANTS 默认值填充，链接默认空。
   const links = ref<CloudLinks>({
     supportIcon: CONSTANTS.cloudDataUrls.supportIcon,
@@ -135,11 +137,19 @@ export const useCloudDataStore = defineStore('cloudData', () => {
     isFetching.value = true;
     fetchError.value = null;
     try {
-      await invokeFetchCloudData();
+      const fetchResult = await invokeFetchCloudData();
+      if (!fetchResult.ok) {
+        log.error(`Failed to fetch cloud data: ${fetchResult.error}`);
+        return false;
+      }
       try {
         // 后端拉取完成后，再次读取后端缓存的数据并合并到前端状态
-        const data = await invokeGetCloudData();
-        setCloudData(data);
+        const getResult = await invokeGetCloudData();
+        if (getResult.ok) {
+          setCloudData(getResult.data);
+        } else {
+          log.error(`Failed to get cloud data after fetch: ${getResult.error}`);
+        }
       } catch {
         // 读取阶段失败不影响整体流程，忽略即可
         // ignore
@@ -177,10 +187,18 @@ export const useCloudDataStore = defineStore('cloudData', () => {
   async function syncCloudData(): Promise<boolean> {
     isSyncing.value = true;
     try {
-      await invokeSyncCloudData();
+      const syncResult = await invokeSyncCloudData();
+      if (!syncResult.ok) {
+        log.error(`Failed to sync cloud data: ${syncResult.error}`);
+        return false;
+      }
       try {
-        const data = await invokeGetCloudData();
-        setCloudData(data);
+        const getResult = await invokeGetCloudData();
+        if (getResult.ok) {
+          setCloudData(getResult.data);
+        } else {
+          log.error(`Failed to get cloud data after sync: ${getResult.error}`);
+        }
       } catch {
         // 读取阶段失败不影响整体流程，忽略即可
         // ignore

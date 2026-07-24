@@ -240,7 +240,7 @@ export const useGameStore = defineStore('game', () => {
    * 模组加载由调用方（如 useGame.ts 的防抖回调或 ModsTab.vue 的事件监听器）显式控制，
    * 避免状态更新与加载操作耦合导致的事件循环和重复加载问题。
    *
-   * 同时同步更新 settingsStore 中的 targetGame 并持久化到配置文件，
+   * 同时同步更新 settingsStore 中的 targetGame（仅内存，不持久化），
    * 确保 gameStore 与 settingsStore 的目标游戏状态始终一致。
    *
    * @param game 新的目标游戏
@@ -250,11 +250,8 @@ export const useGameStore = defineStore('game', () => {
     targetGame.value = game;
     const settingsStore = useSettingsStore();
     modsPath.value = settingsStore.getModsPath(game);
-    // 同步更新 settings 中的 targetGame 并持久化
+    // 同步更新 settings 中的 targetGame（仅内存，不持久化）
     settingsStore.setTargetGame(game);
-    settingsStore.saveSettings().catch(() => {
-      log.warn('Failed to save settings after game change', { reason: 'saveSettings failed', impact: 'Game preference may not persist on restart' });
-    });
     eventManager.emitLocal(EventNames.GAME_SWITCHED, { game });
   }
 
@@ -485,8 +482,10 @@ export const useGameStore = defineStore('game', () => {
       // # 目录分组不使用 selectedindex 机制，跳过重置
       const conflictGroup = findGroupByPath(conflict.groupPath);
       if (conflictGroup && conflictGroup.isTreeNode && !conflictGroup.isVirtual) continue;
-      invokeSetSelectedMod(conflict.groupPath, 0).catch((e) => {
-        log.error(`Failed to reset selectedindex for group '${conflict.groupName}'`, e, { trigger: 'setModGroups', suggestion: 'Check file permissions or disk space' });
+      invokeSetSelectedMod(conflict.groupPath, 0).then((setResult) => {
+        if (!setResult.ok) {
+          log.error(`Failed to reset selectedindex for group '${conflict.groupName}'`, setResult.error, { trigger: 'setModGroups', suggestion: 'Check file permissions or disk space' });
+        }
       });
     }
 
@@ -634,7 +633,13 @@ export const useGameStore = defineStore('game', () => {
     }
     isSearching.value = true;
     try {
-      searchResults.value = await invokeSearchMods(keyword, targetGame.value);
+      const searchResult = await invokeSearchMods(keyword, targetGame.value);
+      if (!searchResult.ok) {
+        log.error(`[gameStore] searchMods failed: ${searchResult.error}`);
+        searchResults.value = [];
+      } else {
+        searchResults.value = searchResult.data;
+      }
     } catch {
       // 搜索失败时清空结果，避免展示上一次的过期数据
       searchResults.value = [];
@@ -665,20 +670,25 @@ export const useGameStore = defineStore('game', () => {
    */
   async function toggleModFavorite(modPath: string): Promise<boolean> {
     try {
-      const result = await invokeToggleModFavorite(modPath);
+      const toggleResult = await invokeToggleModFavorite(modPath);
+      if (!toggleResult.ok) {
+        log.error(`[gameStore] toggleModFavorite failed: ${toggleResult.error}`);
+        return false;
+      }
+      const isFav = toggleResult.data;
       // 同步更新平铺列表中的收藏时间
       const mod = mods.value.find(m => m.modPath === modPath);
       if (mod) {
-        mod.favoriteDateTime = result ? new Date().toISOString() : null;
+        mod.favoriteDateTime = isFav ? new Date().toISOString() : null;
       }
       // 同步更新各分组内同一 Mod 的收藏时间，保证多处展示一致
       for (const group of modGroups.value) {
         const groupMod = group.modsInGroup.find(m => m.modPath === modPath);
         if (groupMod) {
-          groupMod.favoriteDateTime = result ? new Date().toISOString() : null;
+          groupMod.favoriteDateTime = isFav ? new Date().toISOString() : null;
         }
       }
-      return result;
+      return isFav;
     } catch {
       return false;
     }
@@ -692,12 +702,17 @@ export const useGameStore = defineStore('game', () => {
    */
   async function toggleGroupFavorite(groupPath: string): Promise<boolean> {
     try {
-      const result = await invokeToggleGroupFavorite(groupPath);
+      const toggleResult = await invokeToggleGroupFavorite(groupPath);
+      if (!toggleResult.ok) {
+        log.error(`[gameStore] toggleGroupFavorite failed: ${toggleResult.error}`);
+        return false;
+      }
+      const isFav = toggleResult.data;
       const group = findGroupByPath(groupPath);
       if (group) {
-        group.favoriteDateTime = result ? new Date().toISOString() : null;
+        group.favoriteDateTime = isFav ? new Date().toISOString() : null;
       }
-      return result;
+      return isFav;
     } catch {
       return false;
     }

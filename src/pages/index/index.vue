@@ -33,11 +33,11 @@ import { TargetGame } from '../../types';
  * 此映射表用于 HOTKEY_PRESSED 事件中将后端游戏名转换为前端枚举值。
  */
 const BACKEND_GAME_TO_TARGET_GAME: Record<string, TargetGame> = {
-  'WutheringWaves': TargetGame.Wuthering_Waves,
-  'GenshinImpact': TargetGame.Genshin_Impact,
-  'HonkaiStarRail': TargetGame.Honkai_Star_Rail,
-  'ZenlessZoneZero': TargetGame.Zenless_Zone_Zero,
-  'ArknightsEndfield': TargetGame.Arknights_Endfield,
+  'Wuthering_Waves': TargetGame.Wuthering_Waves,
+  'Genshin_Impact': TargetGame.Genshin_Impact,
+  'Honkai_Star_Rail': TargetGame.Honkai_Star_Rail,
+  'Zenless_Zone_Zero': TargetGame.Zenless_Zone_Zero,
+  'Arknights_Endfield': TargetGame.Arknights_Endfield,
 };
 
 const { t } = useI18n();

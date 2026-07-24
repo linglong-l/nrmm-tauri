@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import type { HotkeyKeyboard, HotkeyGamepad, HotkeyState } from '../types';
 import { invokeRegisterHotkey, invokeUnregisterHotkey } from '../utils/invoke';
+import { createLogger } from '../utils/logger';
 import { EventNames, eventManager } from '../utils/events';
 
 /**
@@ -15,6 +16,7 @@ import { EventNames, eventManager } from '../utils/events';
  * - registerHotkeyBackend / unregisterHotkeyBackend：同步调用 Tauri 后端完成系统级注册/注销。
  */
 export const useHotkeyStore = defineStore('hotkey', () => {
+  const log = createLogger('HotkeyStore');
   // 已注册的热键标识列表（前端内存态）。仅反映前端认知，未必与系统级注册完全同步。
   const registeredHotkeys = ref<string[]>([]);
   // 热键总开关。为 false 时即便已注册也不会响应（业务层判断使用）。
@@ -80,7 +82,12 @@ export const useHotkeyStore = defineStore('hotkey', () => {
    */
   async function registerHotkeyBackend(key: string): Promise<boolean> {
     try {
-      await invokeRegisterHotkey(key);
+      const regResult = await invokeRegisterHotkey(key);
+      if (!regResult.ok) {
+        log.error(`[hotkeyStore] Failed to register hotkey ${key}: ${regResult.error}`);
+        eventManager.emit(EventNames.HOTKEY_REGISTERED, { key, success: false });
+        return false;
+      }
       registerHotkey(key);
       eventManager.emit(EventNames.HOTKEY_REGISTERED, { key, success: true });
       return true;
@@ -101,7 +108,12 @@ export const useHotkeyStore = defineStore('hotkey', () => {
    */
   async function unregisterHotkeyBackend(key: string): Promise<boolean> {
     try {
-      await invokeUnregisterHotkey(key);
+      const unregResult = await invokeUnregisterHotkey(key);
+      if (!unregResult.ok) {
+        log.error(`[hotkeyStore] Failed to unregister hotkey ${key}: ${unregResult.error}`);
+        eventManager.emit(EventNames.HOTKEY_UNREGISTERED, { key, success: false });
+        return false;
+      }
       unregisterHotkey(key);
       eventManager.emit(EventNames.HOTKEY_UNREGISTERED, { key, success: true });
       return true;

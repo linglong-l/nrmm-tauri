@@ -274,8 +274,12 @@ async function validateModsPath(game: TargetGame, path: string) {
     return;
   }
   try {
-    const status = await invokeValidateModsPath(path, game);
-    pathValidationStatus.value[game] = status;
+    const result = await invokeValidateModsPath(path, game);
+    if (result.ok) {
+      pathValidationStatus.value[game] = result.data;
+    } else {
+      pathValidationStatus.value[game] = ModsPathStatus.invalidNotExist;
+    }
   } catch {
     // 后端调用异常时，默认标记为"路径不存在"
     pathValidationStatus.value[game] = ModsPathStatus.invalidNotExist;
@@ -314,8 +318,8 @@ async function browseFolder(game: TargetGame) {
   isBrowsingFolder.value = true;
   try {
     const selected = await invokeSelectDirectory();
-    if (selected && typeof selected === 'string') {
-      await handleModsPathChange(game, selected);
+    if (selected.ok && selected.data && typeof selected.data === 'string') {
+      await handleModsPathChange(game, selected.data);
     }
   } catch (error) {
     log.error('Failed to open folder dialog:', error);
@@ -342,7 +346,11 @@ const debouncedHandleTargetProcessChange = createDebounce(handleTargetProcessCha
 /** 键盘热键变更处理 */
 async function handleHotkeyKeyboardChange(value: HotkeyKeyboard) {
   settingsStore.setHotkeyKeyboard(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('hotkeyKeyboard', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+    return;
+  }
   // 保存设置后，后端 save_settings 命令会检测热键配置变化并自动调用
   // HotkeyManager::register_from_settings() 完成系统级热键重注册。
   // 前端无需再调用 index.vue 的 registerHotkeys()，避免与后端管理流程竞争导致旧键残留。
@@ -352,7 +360,10 @@ async function handleHotkeyKeyboardChange(value: HotkeyKeyboard) {
 /** 手柄热键变更处理 */
 async function handleHotkeyGamepadChange(value: HotkeyGamepad) {
   settingsStore.setHotkeyGamepad(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('hotkeyGamepad', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /**
@@ -360,31 +371,46 @@ async function handleHotkeyGamepadChange(value: HotkeyGamepad) {
  * 仅保存设置到后端，无需向后端注册热键（窗口内快捷键由前端监听）。
  */
 async function handleSearchHotkeyChange() {
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('searchHotkey', settingsStore.searchHotkey);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /** 整体缩放变更处理 */
 async function handleOverallScaleChange(value: number) {
   settingsStore.setOverallScale(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('overallScale', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /** 背景透明度变更处理 */
 async function handleBgTransparencyChange(value: number) {
   settingsStore.setBgTransparency(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('bgTransparency', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /** 布局模式变更处理 */
 async function handleLayoutModeChange(value: LayoutMode) {
   settingsStore.setLayoutMode(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('layoutMode', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /** 主题变更处理 */
 async function handleThemeChange(value: string) {
   settingsStore.setTheme(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('theme', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /**
@@ -393,38 +419,57 @@ async function handleThemeChange(value: string) {
  */
 async function handleLanguageChange(value: string) {
   settingsStore.setLanguage(value);
-  await settingsStore.saveSettings();
-  ElMessage.info(t('Language changed, please Restart.'));
+  const ok = await settingsStore.saveSetting('language', value);
+  if (ok) {
+    ElMessage.info(t('Language changed, please Restart.'));
+  } else {
+    ElMessage.error(t('保存语言设置失败'));
+  }
 }
 
 /** 自动生成文件夹图标开关变更处理 */
 async function handleAutoGenerateFolderIconChange(value: boolean) {
   settingsStore.setAutoGenerateFolderIcon(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('isAutoGenerateFolderIcon', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /** 自动置顶窗口开关变更处理 */
 async function handleAutoPinWindowChange(value: boolean) {
   settingsStore.setAutoPinWindow(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('isAutoPinWindow', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /** 游戏外切换时显示托盘菜单开关变更处理 */
 async function handleShowMenuWhenTogglingOutsideGameChange(value: boolean) {
   settingsStore.setShowMenuWhenTogglingOutsideGame(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('showMenuWhenTogglingOutsideGame', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /** 点击 keybind 时模拟按键开关变更处理 */
 async function handleKeybindSimulateKeypressChange(value: boolean) {
   settingsStore.setKeybindSimulateKeypress(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('keybindSimulateKeypress', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /** 分组排序方式变更处理 */
 async function handleSortGroupMethodChange(value: SortGroupMethod) {
   settingsStore.setSortGroupMethod(value);
-  await settingsStore.saveSettings();
+  const ok = await settingsStore.saveSetting('sortGroupMethod', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
 }
 
 /**
@@ -462,19 +507,25 @@ async function handleUpdateModData() {
 
   try {
     const result = await invokeUpdateModData(game);
-    if (result.success) {
-      // 切换遮罩为完成态
-      overlayControls.finish(result);
-      // 更新模组数据成功后，重新加载模组列表并通知前端更新
-      try {
-        const groups = await invokeLoadMods(game);
-        gameStore.setModsLoaded(true);
-        eventManager.emitLocal(EventNames.MOD_GROUPS_UPDATED, groups);
-      } catch {
-        // 刷新失败不影响主流程
+    if (result.ok) {
+      if (result.data.success) {
+        // 切换遮罩为完成态
+        overlayControls.finish(result.data);
+        // 更新模组数据成功后，重新加载模组列表并通知前端更新
+        try {
+          const groupsResult = await invokeLoadMods(game);
+          if (groupsResult.ok) {
+            gameStore.setModsLoaded(true);
+            eventManager.emitLocal(EventNames.MOD_GROUPS_UPDATED, groupsResult.data);
+          }
+        } catch {
+          // 刷新失败不影响主流程
+        }
+      } else {
+        overlayControls.error(t('Unknown error occurred.'));
       }
     } else {
-      overlayControls.error(t('Unknown error occurred.'));
+      overlayControls.error(`${result.error}`);
     }
   } catch (error) {
     overlayControls.error(`Error: ${error}`);
@@ -576,10 +627,13 @@ async function onRestoreZoneDrop(event: DragEvent) {
 async function findIniFilesInPath(path: string): Promise<Array<{ name: string; path: string }>> {
   try {
     const result = await invokeFindIniFiles(path);
-    return result.map((p: string) => ({
-      name: p.split(/[\\/]/).pop() || '',
-      path: p
-    }));
+    if (result.ok) {
+      return result.data.map((p: string) => ({
+        name: p.split(/[\\/]/).pop() || '',
+        path: p
+      }));
+    }
+    return [];
   } catch (error) {
     log.error('Failed to find ini files:', error);
     return [];
@@ -592,8 +646,9 @@ async function findIniFilesInPath(path: string): Promise<Array<{ name: string; p
  */
 async function handleSelectDirectoryForRestore() {
   try {
-    const dirPath = await invokeSelectDirectory();
-    if (!dirPath) return;
+    const dirResult = await invokeSelectDirectory();
+    if (!dirResult.ok || !dirResult.data) return;
+    const dirPath = dirResult.data;
 
     const iniFiles = await findIniFilesInPath(dirPath);
     if (iniFiles.length === 0) {

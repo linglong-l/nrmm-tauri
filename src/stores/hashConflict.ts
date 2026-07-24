@@ -73,8 +73,11 @@ export const useHashConflictStore = defineStore('hashConflict', () => {
     status.value = 'checking';
     errorMessage.value = '';
     try {
-      const report = await invokeCheckHashConflicts();
-      lastReport.value = report;
+      const result = await invokeCheckHashConflicts();
+      if (!result.ok) {
+        throw new Error(`Hash conflict check failed: ${result.error}`);
+      }
+      lastReport.value = result.data;
       status.value = 'done';
       log.debug('Hash conflict check completed', { status: status.value, conflictCount: conflictCount.value });
     } catch (e) {

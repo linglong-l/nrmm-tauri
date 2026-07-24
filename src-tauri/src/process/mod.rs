@@ -30,37 +30,26 @@ use crate::settings::Settings;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetGame {
     /// 未匹配到任何目标游戏。
+    #[serde(rename = "none", alias = "None")]
     None,
     /// 鸣潮（Wuthering Waves）。
+    #[serde(rename = "Wuthering_Waves", alias = "WutheringWaves")]
     WutheringWaves,
     /// 原神（Genshin Impact）。
+    #[serde(rename = "Genshin_Impact", alias = "GenshinImpact")]
     GenshinImpact,
     /// 崩坏：星穹铁道（Honkai: Star Rail）。
+    #[serde(rename = "Honkai_Star_Rail", alias = "HonkaiStarRail")]
     HonkaiStarRail,
     /// 绝区零（Zenless Zone Zero）。
+    #[serde(rename = "Zenless_Zone_Zero", alias = "ZenlessZoneZero")]
     ZenlessZoneZero,
     /// 明日方舟：终末地（Arknights: Endfield）。
+    #[serde(rename = "Arknights_Endfield", alias = "ArknightsEndfield")]
     ArknightsEndfield,
 }
 
-impl TargetGame {
-    /// 返回枚举对应的字符串标识。
-    ///
-    /// 用于序列化到设置文件、与前端通信等场景。
-    ///
-    /// # 返回值
-    /// 返回 `&'static str`，如 `"WutheringWaves"`、`"None"`。
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TargetGame::None => "None",
-            TargetGame::WutheringWaves => "WutheringWaves",
-            TargetGame::GenshinImpact => "GenshinImpact",
-            TargetGame::HonkaiStarRail => "HonkaiStarRail",
-            TargetGame::ZenlessZoneZero => "ZenlessZoneZero",
-            TargetGame::ArknightsEndfield => "ArknightsEndfield",
-        }
-    }
-}
+
 
 /// 进程检测器（无状态）。
 ///
@@ -283,17 +272,6 @@ impl Default for ProcessDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 验证 TargetGame 各变体的字符串标识。
-    #[test]
-    fn test_target_game_as_str() {
-        assert_eq!(TargetGame::None.as_str(), "None");
-        assert_eq!(TargetGame::WutheringWaves.as_str(), "WutheringWaves");
-        assert_eq!(TargetGame::GenshinImpact.as_str(), "GenshinImpact");
-        assert_eq!(TargetGame::HonkaiStarRail.as_str(), "HonkaiStarRail");
-        assert_eq!(TargetGame::ZenlessZoneZero.as_str(), "ZenlessZoneZero");
-        assert_eq!(TargetGame::ArknightsEndfield.as_str(), "ArknightsEndfield");
-    }
 
     /// 验证 ProcessDetector 构造不崩溃。
     #[test]

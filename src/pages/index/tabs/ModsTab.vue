@@ -470,8 +470,9 @@ function isGroupActive(group: ModGroupData): boolean {
 async function refreshMods() {
     isLoading.value = true;
     try {
-      const groups = await invokeRefreshMods(game.targetGame.value);
-      game.setModGroups(groups);
+      const r = await invokeRefreshMods(game.targetGame.value);
+      if (!r.ok) throw new Error(r.error);
+      game.setModGroups(r.data);
     } catch (error) {
       // 任务取消是 TaskQueue 的正常行为（新请求取消旧请求），不作为错误
       const errMsg = String(error);
@@ -569,26 +570,29 @@ async function applyModSelection(mod: ModData) {
           if (other.modPath === mod.modPath) continue;
           if (other.isDisabled) continue;
           if (childGroupPaths.has(other.modPath)) continue;
-          try {
-            await invokeDisableTreeNodeMod(other.modPath);
-          } catch (e) {
-            log.error('Failed to disable tree node mod', e);
-          }
+          const rDisable = await invokeDisableTreeNodeMod(other.modPath);
+          if (!rDisable.ok) log.error('[ModsTab] disableTreeNodeMod failed:', rDisable.error);
         }
-        const [enabledPath, _] = await invokeToggleTreeNodeModDisabled(mod.modPath);
+        const rToggle = await invokeToggleTreeNodeModDisabled(mod.modPath);
+        if (!rToggle.ok) { log.error('[ModsTab] toggleTreeNodeModDisabled failed:', rToggle.error); return; }
+        const [enabledPath, _] = rToggle.data;
         // 统一从后端刷新完整分组数据
-        const updatedGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
-        game.updateGroup(game.currentGroupPath.value, updatedGroup);
+        const rGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
+        if (!rGroup.ok) { log.error('[ModsTab] refreshSingleGroup failed:', rGroup.error); return; }
+        game.updateGroup(game.currentGroupPath.value, rGroup.data);
         game.setSelectedModPath(game.currentGroupPath.value, enabledPath);
       }
     } else {
       // 对齐 NRMM：写 selectedindex + 向游戏发送按键信号（并行）
       game.setSelectedModPath(game.currentGroupPath.value, mod.modPath);
       const groupIndex = currentGroup.realIndex ?? arrayIndex;
-      await Promise.all([
+      const results = await Promise.all([
         invokeSetSelectedMod(game.currentGroupPath.value, arrayIndex),
         invokeSimulateKeySelectMod(groupIndex, arrayIndex),
       ]);
+      for (const res of results) {
+        if (!res.ok) log.error('[ModsTab] selection command failed:', res.error);
+      }
     }
   } catch (error) {
     log.error('Failed to select mod', error);
@@ -618,14 +622,17 @@ async function toggleMod(mod: ModData) {
   try {
     if (isTreeNode) {
       // 树节点模式：互斥切换
-      await invokeToggleTreeNodeModDisabled(mod.modPath);
+      const rToggle = await invokeToggleTreeNodeModDisabled(mod.modPath);
+      if (!rToggle.ok) { log.error('[ModsTab] toggleTreeNodeModDisabled failed:', rToggle.error); return; }
     } else {
       // 普通模式：独立切换
-      await invokeToggleModDisabled(mod.modPath);
+      const rToggle = await invokeToggleModDisabled(mod.modPath);
+      if (!rToggle.ok) { log.error('[ModsTab] toggleModDisabled failed:', rToggle.error); return; }
     }
     // 统一从后端刷新完整分组数据，确保互斥模式下其他模组状态正确同步
-    const updatedGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
-    game.updateGroup(game.currentGroupPath.value, updatedGroup);
+    const rGroup = await invokeRefreshSingleGroup(game.currentGroupPath.value);
+    if (!rGroup.ok) { log.error('[ModsTab] refreshSingleGroup failed:', rGroup.error); return; }
+    game.updateGroup(game.currentGroupPath.value, rGroup.data);
   } catch (error) {
     log.error('Failed to toggle mod', error);
     ElMessage.error(mod.isDisabled ? t('Failed to enable mod') : t('Failed to disable mod'));
@@ -659,9 +666,11 @@ async function toggleGroupFavorite(group: ModGroupData) {
 async function toggleTreeNodeGroupDisabled(group: ModGroupData) {
   if (!group.isTreeNode || group.isVirtual) return;
   try {
-    await invokeToggleTreeNodeGroupDisabled(group.groupPath);
-    const updatedGroup = await invokeRefreshSingleGroup(group.groupPath);
-    game.updateGroup(group.groupPath, updatedGroup);
+    const rToggle = await invokeToggleTreeNodeGroupDisabled(group.groupPath);
+    if (!rToggle.ok) { log.error('[ModsTab] toggleTreeNodeGroupDisabled failed:', rToggle.error); return; }
+    const rGroup = await invokeRefreshSingleGroup(group.groupPath);
+    if (!rGroup.ok) { log.error('[ModsTab] refreshSingleGroup failed:', rGroup.error); return; }
+    game.updateGroup(group.groupPath, rGroup.data);
     ElMessage.success(group.isDisabled ? t('Group enabled') : t('Group disabled'));
   } catch (error) {
     log.error('Failed to toggle group disabled', error);
@@ -695,11 +704,12 @@ function onDragLeave() {
  * @returns (是否有效, 文件类型)
  */
 async function validateArchive(filePath: string): Promise<[boolean, string]> {
-  try {
-    return await invokeValidateArchiveFile(filePath);
-  } catch {
+  const r = await invokeValidateArchiveFile(filePath);
+  if (!r.ok) {
+    log.error('[ModsTab] validateArchiveFile failed:', r.error);
     return [false, 'unknown'];
   }
+  return r.data;
 }
 
 /**
@@ -756,40 +766,44 @@ async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string,
           }
 
           const extractDir = filePath.replace(/\.(zip|7z|rar)$/i, '');
-          try {
-            let password: string | undefined;
-            const isEncrypted = await invokeIsArchiveEncrypted(filePath);
-            if (isEncrypted) {
-              try {
-                const { value } = await ElMessageBox.prompt(
-                  t('Archive is password-protected, please enter password'),
-                  t('Archive password'),
-                  {
-                    confirmButtonText: t('Confirm'),
-                    cancelButtonText: t('Cancel'),
-                    inputType: 'password',
-                    inputValidator: (val) => {
-                      if (!val || val.trim() === '') {
-                        return t('Password cannot be empty');
-                      }
-                      return true;
+          let password: string | undefined;
+          const rEnc = await invokeIsArchiveEncrypted(filePath);
+          if (!rEnc.ok) {
+            log.error('[ModsTab] isArchiveEncrypted failed:', rEnc.error);
+          }
+          const isEncrypted = rEnc.ok ? rEnc.data : false;
+          if (isEncrypted) {
+            try {
+              const { value } = await ElMessageBox.prompt(
+                t('Archive is password-protected, please enter password'),
+                t('Archive password'),
+                {
+                  confirmButtonText: t('Confirm'),
+                  cancelButtonText: t('Cancel'),
+                  inputType: 'password',
+                  inputValidator: (val) => {
+                    if (!val || val.trim() === '') {
+                      return t('Password cannot be empty');
                     }
+                    return true;
                   }
-                );
-                password = value;
-              } catch {
-                const fileName = filePath.split(/[\\/]/).pop() || filePath;
-                ElMessage.warning(t('Password input cancelled, skipping: {name}', { name: fileName }));
-                continue;
-              }
+                }
+              );
+              password = value;
+            } catch {
+              const fileName = filePath.split(/[\\/]/).pop() || filePath;
+              ElMessage.warning(t('Password input cancelled, skipping: {name}', { name: fileName }));
+              continue;
             }
-            await invokeExtractArchive(filePath, extractDir, password);
-            pathsToAdd.push(extractDir);
-            extractedArchives.push(filePath);
-          } catch {
+          }
+          const rExtract = await invokeExtractArchive(filePath, extractDir, password);
+          if (!rExtract.ok) {
             const fileName = filePath.split(/[\\/]/).pop() || filePath;
             ElMessage.error(t('Wrong password or extraction failed: {name}', { name: fileName }));
+            continue;
           }
+          pathsToAdd.push(extractDir);
+          extractedArchives.push(filePath);
         } else {
           pathsToAdd.push(filePath);
         }
@@ -797,15 +811,15 @@ async function handleDropPaths(filePaths: string[], isDirectoryMap?: Map<string,
     }
 
     if (pathsToAdd.length > 0) {
-      await invokeAddMods(pathsToAdd, currentGroup.groupPath);
+      const rAddMods = await invokeAddMods(pathsToAdd, currentGroup.groupPath);
+      if (!rAddMods.ok) { log.error('[ModsTab] addMods failed:', rAddMods.error); throw new Error(rAddMods.error); }
       await refreshMods();
       ElMessage.success(t('Mods added successfully'));
 
       for (const archivePath of extractedArchives) {
-        try {
-          await invokeMoveToTrash(archivePath);
-        } catch (err) {
-          log.warn('Failed to move archive to trash', { reason: err instanceof Error ? err.message : String(err) });
+        const rTrash = await invokeMoveToTrash(archivePath);
+        if (!rTrash.ok) {
+          log.warn('Failed to move archive to trash', { reason: rTrash.error });
         }
       }
     } else {
@@ -869,7 +883,8 @@ async function handleAddGroup() {
     return;
   }
   try {
-    await invokeAddGroup(newGroupName.value.trim(), targetGroupPath.value);
+    const r = await invokeAddGroup(newGroupName.value.trim(), targetGroupPath.value);
+    if (!r.ok) { log.error('[ModsTab] addGroup failed:', r.error); throw new Error(r.error); }
     await refreshMods();
     dialogAddGroupVisible.value = false;
     ElMessage.success(t('Group added successfully'));
@@ -900,7 +915,8 @@ async function handleRenameGroup() {
   const group = game.currentGroup.value;
   if (!group) return;
   try {
-    await invokeRenameGroup(group.groupPath, renameGroupName.value.trim());
+    const r = await invokeRenameGroup(group.groupPath, renameGroupName.value.trim());
+    if (!r.ok) { log.error('[ModsTab] renameGroup failed:', r.error); throw new Error(r.error); }
     await refreshMods();
     dialogRenameGroupVisible.value = false;
     ElMessage.success(t('Group renamed successfully'));
@@ -926,7 +942,8 @@ async function handleRenameMod() {
   const mod = contextMenuData.value as ModData;
   if (!mod) return;
   try {
-    await invokeRenameMod(mod.modPath, renameModName.value.trim());
+    const r = await invokeRenameMod(mod.modPath, renameModName.value.trim());
+    if (!r.ok) { log.error('[ModsTab] renameMod failed:', r.error); throw new Error(r.error); }
     await refreshMods();
     dialogRenameModVisible.value = false;
     ElMessage.success(t('Mod renamed successfully'));
@@ -956,7 +973,8 @@ async function handleRemoveGroup() {
         type: 'warning'
       }
     );
-    await invokeRemoveGroup(group.groupPath);
+    const r = await invokeRemoveGroup(group.groupPath);
+    if (!r.ok) { log.error('[ModsTab] removeGroup failed:', r.error); throw new Error(r.error); }
     await refreshMods();
     ElMessage.success(t('Group removed successfully'));
   } catch (error) {
@@ -980,10 +998,13 @@ function openModFolder(mod: ModData) {
     ElMessage.warning(t('Mod path is empty, cannot open'));
     return;
   }
-  invokeOpenPath(mod.modPath).catch((err) => {
-    log.error('Failed to open mod folder', err);
-    ElMessage.error(t('Failed to open folder'));
-  });
+  (async () => {
+    const r = await invokeOpenPath(mod.modPath);
+    if (!r.ok) {
+      log.error('[ModsTab] openPath failed:', r.error);
+      ElMessage.error(t('Failed to open folder'));
+    }
+  })();
 }
 
 /**
@@ -995,10 +1016,13 @@ function openGroupFolder(group: ModGroupData) {
     ElMessage.warning(t('Group path is empty, cannot open'));
     return;
   }
-  invokeOpenPath(group.groupPath).catch((err) => {
-    log.error('Failed to open group folder', err);
-    ElMessage.error(t('Failed to open folder'));
-  });
+  (async () => {
+    const r = await invokeOpenPath(group.groupPath);
+    if (!r.ok) {
+      log.error('[ModsTab] openPath failed:', r.error);
+      ElMessage.error(t('Failed to open folder'));
+    }
+  })();
 }
 
 /**
@@ -1127,7 +1151,8 @@ async function removeModFromGroup(mod: ModData) {
       }
     );
     // 调用后端命令：先还原（启用）再移动到 DISABLED_MANAGED_REMOVED
-    await invokeRemoveMod(mod.modPath);
+    const r = await invokeRemoveMod(mod.modPath);
+    if (!r.ok) { log.error('[ModsTab] removeMod failed:', r.error); throw new Error(r.error); }
     await refreshMods();
     ElMessage.success(t('Mod removed successfully'));
   } catch (error) {
@@ -1150,8 +1175,9 @@ async function exportMod(mod: ModData) {
     if (!result) return;
 
     const destDir = result.path;
-    const exportPath = await invokeExportMod(mod.modPath, destDir);
-    ElMessage.success(t('Mod exported to: {path}', { path: exportPath }));
+    const r = await invokeExportMod(mod.modPath, destDir);
+    if (!r.ok) { log.error('[ModsTab] exportMod failed:', r.error); throw new Error(r.error); }
+    ElMessage.success(t('Mod exported to: {path}', { path: r.data }));
   } catch (error) {
     log.error('Failed to export mod', error);
     ElMessage.error(t('Failed to export mod'));
@@ -1168,8 +1194,9 @@ async function exportGroup(group: ModGroupData) {
     if (!result) return;
 
     const destDir = result.path;
-    const exportPath = await invokeExportGroup(group.groupPath, destDir);
-    ElMessage.success(t('Group exported to: {path}', { path: exportPath }));
+    const r = await invokeExportGroup(group.groupPath, destDir);
+    if (!r.ok) { log.error('[ModsTab] exportGroup failed:', r.error); throw new Error(r.error); }
+    ElMessage.success(t('Group exported to: {path}', { path: r.data }));
   } catch (error) {
     log.error('Failed to export group', error);
     ElMessage.error(t('Failed to export group'));
@@ -1193,13 +1220,15 @@ function onModDoubleClick(mod: ModData, _index: number) {
 async function setupFileWatcher() {
   try {
     // 先停止旧的文件监听器，避免泄漏
-    try {
-      await invokeStopFileWatcher();
-    } catch {
-      // 忽略停止失败（可能没有正在运行的监听器）
+    {
+      const r = await invokeStopFileWatcher();
+      if (!r.ok) {
+        // 忽略停止失败（可能没有正在运行的监听器）
+      }
     }
     if (game.modsPath.value) {
-      await invokeStartFileWatcher(game.modsPath.value);
+      const r = await invokeStartFileWatcher(game.modsPath.value);
+      if (!r.ok) { log.error('[ModsTab] startFileWatcher failed:', r.error); }
       log.debug('File watcher setup complete', { path: game.modsPath.value, game: game.targetGame.value });
     }
   } catch (error) {
@@ -1325,7 +1354,10 @@ onUnmounted(() => {
     tauriFileDropCancelledUnlisten();
     tauriFileDropCancelledUnlisten = null;
   }
-  invokeStopFileWatcher().catch((err) => log.error('Failed to stop file watcher on unmount', err));
+  (async () => {
+    const r = await invokeStopFileWatcher();
+    if (!r.ok) log.error('[ModsTab] stopFileWatcher on unmount failed:', r.error);
+  })();
   document.removeEventListener('click', hideContextMenu);
   document.removeEventListener('keydown', handleKeyDown);
   if (resizeHandler) {

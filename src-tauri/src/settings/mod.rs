@@ -42,13 +42,9 @@ pub struct Settings {
     #[serde(default = "default_hotkey_gamepad")]
     pub hotkey_gamepad: String,
 
-    /// 分组搜索快捷键（窗口内绑定，前端 keydown 监听）。默认 "altG"。
-    #[serde(default = "default_group_search_hotkey")]
-    pub group_search_hotkey: String,
-
-    /// 模组搜索快捷键（窗口内绑定，前端 keydown 监听）。默认 "altF"。
-    #[serde(default = "default_mod_search_hotkey")]
-    pub mod_search_hotkey: String,
+    /// 搜索快捷键（窗口内绑定，前端 keydown 监听）。默认 "altF"。
+    #[serde(default = "default_search_hotkey")]
+    pub search_hotkey: String,
 
     /// 鸣潮（Wuthering Waves）目标进程名，用于进程匹配。
     #[serde(default = "default_target_process_wuwa")]
@@ -168,13 +164,8 @@ fn default_hotkey_gamepad() -> String {
     "none".to_string()
 }
 
-/// 分组搜索快捷键默认值。
-fn default_group_search_hotkey() -> String {
-    "altG".to_string()
-}
-
-/// 模组搜索快捷键默认值。
-fn default_mod_search_hotkey() -> String {
+/// 搜索快捷键默认值。
+fn default_search_hotkey() -> String {
     "altF".to_string()
 }
 
@@ -375,6 +366,10 @@ impl Settings {
                 match serde_json::from_str::<Settings>(&content) {
                     Ok(mut settings) => {
                         settings.validate_and_fix();
+                        // 静默迁移：以新格式写回，消除旧格式兼容问题
+                        if let Err(e) = settings.save(app_data_dir) {
+                            log::warn!("Failed to migrate settings file: {}", e);
+                        }
                         log::info!("Settings loaded successfully from {:?}", path);
                         settings
                     }
@@ -466,8 +461,7 @@ impl Default for Settings {
         Self {
             hotkey_keyboard: default_hotkey_keyboard(),
             hotkey_gamepad: default_hotkey_gamepad(),
-            group_search_hotkey: default_group_search_hotkey(),
-            mod_search_hotkey: default_mod_search_hotkey(),
+            search_hotkey: default_search_hotkey(),
             target_process_wuwa: default_target_process_wuwa(),
             target_process_genshin: default_target_process_genshin(),
             target_process_hsr: default_target_process_hsr(),
