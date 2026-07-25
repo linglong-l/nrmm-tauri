@@ -44,7 +44,7 @@ export const CONSTANTS = {
   /** 分组管理元数据文件名（记录分组与 Mod 的关系） */
   managerGroupFileName: 'manager_group.ini',
   /** 本程序自身的进程名（用于自检，避免重复启动等） */
-  thisProcessName: 'XXMI-NRMM.exe',
+  thisProcessName: 'nrmm-rust.exe',
   /** 资源管理器视图下图像缓存宽度（像素） */
   explorerViewImageCacheWidth: 192,
   /** 分组图标缓存宽度（像素） */
