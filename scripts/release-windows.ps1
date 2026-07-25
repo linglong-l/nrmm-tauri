@@ -125,10 +125,18 @@ if (-not $SkipBuild) {
         Write-Warn2 "未找到 NSIS 安装包（$BundleDir/nsis/*.exe）"
     }
 
-    $msi = Get-ChildItem -Path "$BundleDir/msi/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($msi) {
-        Copy-Item $msi.FullName -Destination "$DistDir/nrmm-rust-x86_64.msi"
-        Write-Ok "MSI 安装包 -> nrmm-rust-x86_64.msi"
+    $msiFiles = Get-ChildItem -Path "$BundleDir/msi/*.msi" -ErrorAction SilentlyContinue
+    if ($msiFiles) {
+        foreach ($msi in $msiFiles) {
+            if ($msi.Name -match "(en-US|zh-CN)") {
+                $lang = $Matches[1]
+                $destName = "nrmm-rust-x86_64-$lang.msi"
+            } else {
+                $destName = "nrmm-rust-x86_64.msi"
+            }
+            Copy-Item $msi.FullName -Destination "$DistDir/$destName"
+            Write-Ok "MSI 安装包 -> $destName"
+        }
     } else {
         Write-Warn2 "未找到 MSI 安装包（$BundleDir/msi/*.msi），可能需要安装 WiX Toolset"
     }
