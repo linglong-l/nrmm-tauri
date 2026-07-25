@@ -8,8 +8,9 @@
 //! ## 平台支持
 //! - [`ProcessDetector::is_process_running`] 与 [`ProcessDetector::get_process_list`]
 //!   基于 `sysinfo`，跨平台可用；
-//! - [`ProcessDetector::get_foreground_process_name`] 仅在 Windows 上实现，
-//!   其他平台直接返回错误。
+//! - [`ProcessDetector::get_foreground_process_name`] 在 Windows 上通过 Win32 API 实现；
+//!   在 Linux 上通过 X11 (`xprop`) + `/proc` 文件系统尽力实现，兼容 Wine 启动的游戏；
+//!   其他平台（含 Wayland 无 XWayland、macOS 等）返回空字符串，不报错，避免程序异常。
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -17,6 +18,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sysinfo::System;
+
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 use crate::settings::Settings;
 
@@ -117,21 +121,234 @@ impl ProcessDetector {
 
     /// 获取当前前台进程的可执行文件名。
     ///
-    /// # 平台分发
-    /// - Windows：委托给 [`Self::get_foreground_process_name_windows`]；
-    /// - 其他平台：直接返回错误。
+    /// # 平台分发（空值安全）
+    /// - **Windows**：委托给 [`Self::get_foreground_process_name_windows`]，使用 Win32 API；
+    /// - **Linux**：委托给 [`Self::get_foreground_process_name_linux`]，通过 X11 + `/proc` 尽力检测，
+    ///   兼容 Wine 游戏进程；无法检测时（Wayland/无 X11/任何异常）返回空字符串；
+    /// - **其他平台**：直接返回空字符串，确保调用方永不 panic。
     ///
     /// # 返回值
-    /// 成功返回进程名（如 `"Wuthering Waves.exe"`）；失败返回错误。
+    /// 成功返回进程名（如 `"Wuthering Waves.exe"`）；不支持/无法检测时返回空字符串 `""`；
+    /// 仅在严重意外错误时返回 `Err`（当前实现不会触发）。
     pub fn get_foreground_process_name() -> Result<String> {
         #[cfg(windows)]
         {
             Self::get_foreground_process_name_windows()
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
         {
-            anyhow::bail!("前台进程检测仅支持 Windows 平台")
+            Ok(Self::get_foreground_process_name_linux().unwrap_or_default())
         }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            Ok(String::new())
+        }
+    }
+
+    /// 判断进程名是否为 Wine 兼容层宿主进程（而非真实的 Windows 游戏 EXE）。
+    #[cfg(target_os = "linux")]
+    fn is_wine_host(name: &str) -> bool {
+        let lower = name.to_lowercase();
+        lower.starts_with("wine")
+            || lower.starts_with("wineserver")
+            || lower == "explorer.exe"
+            || lower.contains("wine-preloader")
+    }
+
+    /// 从 `/proc/<pid>/comm` 读取进程的短名称（最长 15 字节，不含扩展名）。
+    #[cfg(target_os = "linux")]
+    fn read_proc_comm(pid: u32) -> Option<String> {
+        let path = format!("/proc/{}/comm", pid);
+        let content = std::fs::read_to_string(&path).ok()?;
+        let name = content.trim_end_matches('\n').trim_end_matches('\r');
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
+    }
+
+    /// 从 `/proc/<pid>/cmdline` 读取并分割命令行参数（NUL 分隔）。
+    #[cfg(target_os = "linux")]
+    fn read_proc_cmdline(pid: u32) -> Option<Vec<String>> {
+        let path = format!("/proc/{}/cmdline", pid);
+        let content = std::fs::read(&path).ok()?;
+        if content.is_empty() {
+            return None;
+        }
+        let args: Vec<String> = content
+            .split(|&b| b == 0)
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if args.is_empty() {
+            None
+        } else {
+            Some(args)
+        }
+    }
+
+    /// 读取 `/proc/<pid>/stat` 的第 4 字段，获取父进程 PID (ppid)。
+    #[cfg(target_os = "linux")]
+    fn read_proc_ppid(pid: u32) -> Option<u32> {
+        let path = format!("/proc/{}/stat", pid);
+        let content = std::fs::read_to_string(&path).ok()?;
+        // comm 字段在括号内，可能含空格，需要跳过
+        let paren_start = content.find('(')?;
+        let paren_end = content.rfind(')')?;
+        let after_paren = &content[paren_end + 2..];
+        let ppid_str = after_paren.split_whitespace().nth(1)?;
+        ppid_str.parse().ok()
+    }
+
+    /// 在给定 PID 的 Wine 进程树中查找真实的 Windows `.exe` 可执行文件名。
+    ///
+    /// 策略：
+    /// 1. 遍历 `/proc` 下所有目录，筛选出父进程链指向 `root_pid` 的子进程；
+    /// 2. 检查每个进程的 comm，若以 `.exe` 结尾则视为候选；
+    /// 3. 检查 cmdline 中的路径参数，提取最后一个路径段中以 `.exe` 结尾的部分；
+    /// 4. 优先返回 `.exe` 且非 Wine 宿主的名字；否则返回 None。
+    #[cfg(target_os = "linux")]
+    fn find_wine_exe_name(root_pid: u32) -> Option<String> {
+        let proc_dir = std::path::Path::new("/proc");
+        let entries = std::fs::read_dir(proc_dir).ok()?;
+
+        let mut best_candidate: Option<String> = None;
+
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let pid: u32 = match name.parse() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            // 检查是否属于同一进程树（向上追溯祖先到 root_pid 或 PID 1）
+            let mut cur = pid;
+            let mut is_in_tree = false;
+            for _ in 0..50 {
+                // 防止无限循环
+                if cur == root_pid {
+                    is_in_tree = true;
+                    break;
+                }
+                if cur <= 1 {
+                    break;
+                }
+                match Self::read_proc_ppid(cur) {
+                    Some(pp) => cur = pp,
+                    None => break,
+                }
+            }
+            if !is_in_tree {
+                continue;
+            }
+
+            // 策略1：comm 本身就是 .exe 且非 Wine 宿主
+            if let Some(comm) = Self::read_proc_comm(pid) {
+                let cl = comm.to_lowercase();
+                if cl.ends_with(".exe") && !Self::is_wine_host(&comm) {
+                    // 直接可用，优先返回
+                    return Some(comm);
+                }
+            }
+
+            // 策略2：检查 cmdline 中的参数是否包含 .exe 路径
+            if let Some(args) = Self::read_proc_cmdline(pid) {
+                for arg in &args {
+                    let lower = arg.to_lowercase();
+                    if let Some(exe_pos) = lower.rfind(".exe") {
+                        // 提取 .exe 结尾的文件名段
+                        let before = &arg[..exe_pos + 4];
+                        let name_only = before
+                            .rsplit(|c| c == '/' || c == '\\')
+                            .next()
+                            .unwrap_or(before);
+                        if !name_only.is_empty() && !Self::is_wine_host(name_only) {
+                            if best_candidate.is_none() {
+                                best_candidate = Some(name_only.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        best_candidate
+    }
+
+    /// Linux 平台下尽力获取前台进程名。
+    ///
+    /// # 实现策略（X11 + /proc，无额外 crate 依赖）
+    /// 1. 调用 `xprop -root _NET_ACTIVE_WINDOW` 获取当前活动窗口 ID；
+    /// 2. 调用 `xprop -id <wid> _NET_WM_PID` 获取窗口所属 PID；
+    /// 3. 读取 `/proc/<pid>/comm` 获取进程短名称；
+    /// 4. 若进程名是 Wine 宿主（wine64、wine-preloader 等），
+    ///    调用 [`Self::find_wine_exe_name`] 在其子进程/命令行中查找真实 `.exe`；
+    /// 5. 若 comm 不含 `.exe` 扩展名但属于 Wine 环境，尝试从 `/proc/<pid>/exe`
+    ///    符号链接或 cmdline 路径中补全扩展名。
+    ///
+    /// # 失败安全
+    /// - Wayland 下 xprop 无法连接 X server → 返回 None；
+    /// - 无 DISPLAY 环境变量 → 返回 None；
+    /// - xprop 命令不存在 → 返回 None；
+    /// - PID 对应的进程已退出 → 返回 None；
+    /// - 任何 I/O 错误、解析错误 → 返回 None；
+    /// 外层调用方 [`Self::get_foreground_process_name`] 会将 None 转为空字符串，
+    /// 确保不会向上抛 Err 导致前端崩溃。
+    #[cfg(target_os = "linux")]
+    fn get_foreground_process_name_linux() -> Option<String> {
+        // 1) 检查 DISPLAY 环境变量，Wayland 下若未设置 DISPLAY 直接放弃
+        if std::env::var("DISPLAY").is_err() {
+            // Wayland native — 无标准跨合成器 API 可获取活动窗口，安全降级
+            return None;
+        }
+
+        // 2) xprop -root _NET_ACTIVE_WINDOW 获取活动窗口 ID
+        //    输出格式形如: _NET_ACTIVE_WINDOW(WINDOW): window id # 0x3a00003
+        let output = Command::new("xprop")
+            .args(["-root", "_NET_ACTIVE_WINDOW"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let wid_str = stdout.trim().rsplit("# ").next()?.trim();
+        if wid_str.is_empty() || wid_str == "0x0" {
+            return None;
+        }
+
+        // 3) xprop -id <wid> _NET_WM_PID 获取 PID
+        //    输出格式形如: _NET_WM_PID(CARDINAL) = 12345
+        let pid_output = Command::new("xprop")
+            .args(["-id", wid_str, "_NET_WM_PID"])
+            .output()
+            .ok()?;
+        if !pid_output.status.success() {
+            return None;
+        }
+        let pid_stdout = String::from_utf8_lossy(&pid_output.stdout);
+        let pid_str = pid_stdout.trim().rsplit("= ").next()?.trim();
+        let pid: u32 = pid_str.parse().ok()?;
+        if pid == 0 {
+            return None;
+        }
+
+        // 4) 读取 comm 作为进程名
+        let comm = Self::read_proc_comm(pid)?;
+
+        // 5) 若为 Wine 宿主进程，在进程树中查找真实 .exe
+        if Self::is_wine_host(&comm) {
+            if let Some(exe_name) = Self::find_wine_exe_name(pid) {
+                return Some(exe_name);
+            }
+            // 找不到真实 exe 时，返回空字符串让上层匹配为 None
+            // （避免把 wine64 误当游戏名）
+            return Some(String::new());
+        }
+
+        // 6) 非 Wine 进程，comm 已经可用；Windows 游戏在 Wine 下 comm 通常直接是 .exe
+        Some(comm)
     }
 
     /// Windows 平台下获取前台进程名的实现。

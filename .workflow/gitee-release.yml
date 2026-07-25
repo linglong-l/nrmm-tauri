@@ -1,0 +1,130 @@
+version: '1.0'
+name: nrmm-rust-release
+displayName: nrmm-rust 发布流水线
+
+triggers:
+  push:
+    tags:
+      precise: []
+      include:
+        - '^v\d+\.\d+\.\d+$'
+      prefix: []
+      exclude: []
+
+variables:
+  CARGO_PROFILE_RELEASE_LTO: 'true'
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '1'
+  CARGO_PROFILE_RELEASE_STRIP: 'true'
+  GITEE_OWNER: Yezi26
+  GITEE_REPO: nrmm-tauri
+
+stages:
+  - stage: build-linux
+    displayName: Linux 构建
+    strategy: fast
+    trigger: auto
+    steps:
+      - step: build@rust
+        name: build_linux
+        displayName: 构建 Linux (AppImage/deb/rpm)
+        rustVersion: stable
+        commands:
+          - set -e
+          - |
+            echo "===== [1/8] 安装系统依赖 (Tauri Linux prerequisites) ====="
+            sudo apt-get update -y
+            sudo apt-get install -y --no-install-recommends \
+              libwebkit2gtk-4.1-dev \
+              libappindicator3-dev \
+              librsvg2-dev \
+              patchelf \
+              libssl-dev \
+              libgtk-3-dev \
+              libayatana-appindicator3-dev \
+              libsoup-3.0-dev \
+              libjavascriptcoregtk-4.1-dev \
+              curl wget file xz-utils ca-certificates
+          - |
+            echo "===== [2/8] 安装 Node.js 20 ====="
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+            sudo apt-get install -y nodejs
+            node --version
+            npm --version
+          - |
+            echo "===== [3/8] 配置 Rust target ====="
+            rustup target add x86_64-unknown-linux-gnu
+            rustc --version
+          - |
+            echo "===== [4/8] 安装 Tauri CLI ====="
+            npm install -g @tauri-apps/cli@2
+          - |
+            echo "===== [5/8] 安装 npm 依赖 ====="
+            npm ci
+          - |
+            echo "===== [6/8] 构建前版本校验 ====="
+            npm run verify:release
+          - |
+            echo "===== [7/8] Tauri 构建 ====="
+            npm run tauri build -- --target x86_64-unknown-linux-gnu
+          - |
+            echo "===== [8/8] 收集构建产物 ====="
+            set +e
+            BUNDLE_DIR="src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
+            mkdir -p dist
+            copy_if_exists() {
+              local src="$1"; local dst="$2"
+              if [ -f "$src" ]; then
+                cp "$src" "$dst"
+                echo "  [OK] $(basename "$dst")"
+              else
+                echo "  [WARN] $(basename "$dst") not found at $src"
+              fi
+            }
+            copy_if_exists "$(find "$BUNDLE_DIR/appimage" -maxdepth 1 -name '*.AppImage' 2>/dev/null | head -1)" \
+                          "dist/nrmm-rust-x86_64.AppImage"
+            copy_if_exists "$(find "$BUNDLE_DIR/deb" -maxdepth 1 -name '*.deb' 2>/dev/null | head -1)" \
+                          "dist/nrmm-rust-x86_64.deb"
+            copy_if_exists "$(find "$BUNDLE_DIR/rpm" -maxdepth 1 -name '*.rpm' 2>/dev/null | head -1)" \
+                          "dist/nrmm-rust-x86_64.rpm"
+            copy_if_exists "$(find "$BUNDLE_DIR" -maxdepth 3 -name 'latest.json' 2>/dev/null | head -1)" \
+                          "dist/latest-linux.json"
+            echo "--- dist/ contents ---"
+            ls -la dist/ 2>/dev/null || echo "  dist/ is empty"
+        artifacts:
+          - name: LINUX_BUILD
+            path:
+              - dist/
+
+  - stage: release
+    displayName: 创建 Release 并上传
+    strategy: fast
+    trigger: auto
+    steps:
+      - step: build@nodejs
+        name: publish_release
+        displayName: 合并 Manifest & 发布到 Gitee Releases
+        nodeVersion: 20.11.0
+        dependArtifact: LINUX_BUILD
+        commands:
+          - set -e
+          - |
+            echo "===== 准备发布环境 ====="
+            echo "Artifact dir: ${LINUX_BUILD}"
+            ls -la "${LINUX_BUILD}/" || true
+            node --version
+          - |
+            echo "===== 合并 latest.json ====="
+            LINUX_LATEST="${LINUX_BUILD}/latest-linux.json"
+            INPUTS=""
+            [ -f "$LINUX_LATEST" ] && INPUTS="$INPUTS $LINUX_LATEST"
+            if [ -n "$INPUTS" ]; then
+              node scripts/merge-updater-manifest.mjs $INPUTS -o latest.json
+              echo "--- merged latest.json ---"
+              cat latest.json
+            else
+              echo "WARN: 未找到 latest.json，跳过 manifest 合并"
+            fi
+          - |
+            echo "===== 创建/更新 Release 并上传附件 ====="
+            export GITEE_TAG="${GITEE_TAG:-${GITEE_BRANCH}}"
+            node scripts/gitee-release.mjs "${LINUX_BUILD}"
