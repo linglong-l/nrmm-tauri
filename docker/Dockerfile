@@ -6,17 +6,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# ===== 1. APT 源：尝试阿里云镜像，不可达则回退到官方源 =====
-# - Ubuntu 24.04 的 deb822 源文件是 /etc/apt/sources.list.d/ubuntu.sources
-# - 22.04/更早用 /etc/apt/sources.list
-# - 通过 getent + HTTP 双重检测 mirrors.aliyun.com 是否可达；不可达就不换源，避免 DNS 解析失败造成 apt 空库
+# ===== 1. APT 源配置 + update（单层完成，避免层间 apt 缓存失效） =====
+# Ubuntu 24.04 使用 deb822 格式：/etc/apt/sources.list.d/ubuntu.sources
+# 先执行一次 update 让 apt 可用（用于探测镜像），然后决定是否换源再 update 一次
 RUN set -eux; \
+    apt-get update -o Acquire::Retries=3 >/dev/null 2>&1 || true; \
     APT_REACHABLE=0; \
     if command -v getent >/dev/null 2>&1 && getent hosts mirrors.aliyun.com >/dev/null 2>&1; then \
         APT_REACHABLE=1; \
-    elif (apt-get update -o Acquire::Retries=1 >/dev/null 2>&1) && \
-         (curl -fsSL --max-time 5 http://mirrors.aliyun.com/ubuntu/ >/dev/null 2>&1 || \
-          wget -q --timeout=5 -O /dev/null http://mirrors.aliyun.com/ubuntu/ >/dev/null 2>&1); then \
+    elif curl -fsSL --max-time 5 http://mirrors.aliyun.com/ubuntu/ >/dev/null 2>&1 \
+         || wget -q --timeout=5 -O /dev/null http://mirrors.aliyun.com/ubuntu/ >/dev/null 2>&1; then \
         APT_REACHABLE=1; \
     fi; \
     if [ "$APT_REACHABLE" = "1" ]; then \
@@ -24,7 +23,7 @@ RUN set -eux; \
         if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
             sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
             sed -i 's|http://security.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources; \
-        else \
+        elif [ -f /etc/apt/sources.list ]; then \
             sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list; \
             sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list; \
         fi; \
@@ -33,18 +32,40 @@ RUN set -eux; \
     fi; \
     apt-get update -o Acquire::Retries=3
 
-# ===== 2. 安装系统依赖 =====
-# Tauri v2 WebKit: Ubuntu 24.04 同时提供 libwebkit2gtk-4.1-dev 和 4.0-dev，优先 4.1；
-# 如果目标镜像缺失则回退到 4.0 或 6.0（webextension-gtk）。
-# 追加 apt-get install -f -y 修复任何依赖破损
+# ===== 2. 安装系统依赖（单层内：apt-get update → 带 || 链式回退的 webkit 安装 → 其他包 → 修复依赖 → 清理） =====
+# 注意：set -e 下 if/then 中的失败不会终止脚本；但 "set -eux + if apt-get install" 在 dash/sh 中某些场景有兼容性问题。
+#       为完全稳妥改用 || 链式，并在失败后 echo "已尝试 N，继续"
 RUN set -eux; \
-    if apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev; then \
-        echo "[APT] 使用 libwebkit2gtk-4.1-dev"; \
-    elif apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev; then \
-        echo "[APT] 回退到 libwebkit2gtk-4.0-dev"; \
-    else \
-        echo "[APT] 回退到 libwebkitgtk-6.0-dev"; \
-        apt-get install -y --no-install-recommends libwebkitgtk-6.0-dev libjavascriptcoregtk-6.0-dev; \
+    apt-get update -o Acquire::Retries=3; \
+    WEBKIT_OK=0; \
+    (apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev && WEBKIT_OK=1) \
+        || echo "[APT][WARN] libwebkit2gtk-4.1-dev 不可用"; \
+    if [ "$WEBKIT_OK" != "1" ]; then \
+        (apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev && WEBKIT_OK=1) \
+            || echo "[APT][WARN] libwebkit2gtk-4.0-dev 不可用"; \
+    fi; \
+    if [ "$WEBKIT_OK" != "1" ]; then \
+        (apt-get install -y --no-install-recommends libwebkitgtk-6.0-dev libjavascriptcoregtk-6.0-dev && WEBKIT_OK=1) \
+            || echo "[APT][WARN] libwebkitgtk-6.0-dev 不可用"; \
+    fi; \
+    if [ "$WEBKIT_OK" != "1" ]; then \
+        echo "[APT] 尝试 universe/multiverse 组件后重装 libwebkit2gtk-4.1-dev"; \
+        if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
+            sed -i 's|Components: main restricted|Components: main restricted universe multiverse|g' /etc/apt/sources.list.d/ubuntu.sources; \
+        elif [ -f /etc/apt/sources.list ]; then \
+            sed -i 's/main restricted/main restricted universe multiverse/g' /etc/apt/sources.list; \
+        fi; \
+        apt-get update -o Acquire::Retries=3; \
+        (apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev && WEBKIT_OK=1) \
+            || true; \
+        if [ "$WEBKIT_OK" != "1" ]; then \
+            (apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev libjavascriptcoregtk-4.0-dev && WEBKIT_OK=1) \
+                || true; \
+        fi; \
+    fi; \
+    if [ "$WEBKIT_OK" != "1" ]; then \
+        echo "[APT][FAIL] 所有 WebKit 变体均无法安装，请检查 APT 源是否包含 universe 组件"; \
+        exit 1; \
     fi; \
     apt-get install -y --no-install-recommends \
         build-essential \
