@@ -19,8 +19,10 @@
 //! 错误处理约定：所有命令返回 `Result<T, String>`，将底层错误转换为字符串返回给前端。
 
 use std::collections::HashMap;
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::mod_manager::{HashConflictReport, ModGroupData, ModsPathStatus, UpdateModDataResult};
@@ -2330,121 +2332,430 @@ pub fn get_version_info() -> VersionInfo {
     }
 }
 
-/// 触发一次更新检查（内部通过 updater plugin 执行，异步）；
-/// 返回是否发现可用更新（true = 有更新；false = 无；Err 串描述失败原因如网络/签名）。
-#[tauri::command]
-pub async fn check_update(app: AppHandle) -> Result<bool, String> {
-    use tauri_plugin_updater::UpdaterExt;
-    let updater = app.updater_builder().build().map_err(|e| e.to_string())?;
-    match updater.check().await {
-        Ok(update) => {
-            let available = update.is_some();
-            if available {
-                let u = update.unwrap();
-                let _ = app.emit(
-                    "tauri://update-available",
-                    serde_json::json!({
-                        "version": u.version,
-                        "body": u.body.clone().unwrap_or_default(),
-                        "date": u.date.map(|d| d.to_string()).unwrap_or_default(),
-                    }),
-                );
-            }
-            Ok(available)
+// =========================================================================
+// 自更新（Updater）- 通过 Gitee Releases API 手动检查更新，不依赖 tauri-plugin-updater endpoints
+// =========================================================================
+
+const GITEE_API_URL: &str = "https://gitee.com/api/v5/repos/Yezi26/nrmm-tauri/releases/latest";
+
+/// 更新下载缓存：避免 check 和 download 之间重复请求 Gitee API
+pub struct UpdateCache {
+    pub download_url: parking_lot::Mutex<Option<String>>,
+    pub version: parking_lot::Mutex<Option<String>>,
+    pub body: parking_lot::Mutex<Option<String>>,
+    pub date: parking_lot::Mutex<Option<String>>,
+}
+
+impl Default for UpdateCache {
+    fn default() -> Self {
+        Self {
+            download_url: parking_lot::Mutex::new(None),
+            version: parking_lot::Mutex::new(None),
+            body: parking_lot::Mutex::new(None),
+            date: parking_lot::Mutex::new(None),
         }
-        Err(e) => Err(e.to_string()),
     }
 }
 
-/// 触发 下载 + 校验 + 安装（安装后由前端弹窗二次确认是否重启）。
-/// 下载/校验/安装由插件后台线程执行；本命令 spawn 任务后立即返回 Ok(())，不阻塞前端 UI。
-#[tauri::command]
-pub async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
-    use tauri_plugin_updater::UpdaterExt;
-    let app_c = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let updater = match app_c.updater_builder().build() {
-            Ok(u) => u,
-            Err(e) => {
-                log::error!("[updater-plugin] Builder build failed: {}", e);
-                let _ = app_c.emit(
-                    "tauri://update-status",
-                    serde_json::json!({
-                        "status": "error",
-                        "error": e.to_string(),
-                    }),
-                );
-                return;
-            }
-        };
-        match updater.check().await {
-            Ok(Some(update)) => {
-                log::info!(
-                    "[updater-plugin] Download+Install started for v{}",
-                    update.version
-                );
-                let _ = app_c.emit(
-                    "tauri://update-status",
-                    serde_json::json!({
-                        "status": "installing",
-                        "version": update.version,
-                    }),
-                );
-                let result = update
-                    .download_and_install(
-                        |chunk_length, content_length| {
-                            if let Some(total) = content_length {
-                                log::debug!("[updater-plugin] Downloaded {} / {} bytes", chunk_length, total);
-                            }
-                        },
-                        || {
-                            log::info!("[updater-plugin] Download finished, starting install");
-                        },
-                    )
-                    .await;
-                match result {
-                    Ok(()) => {
-                        log::info!("[updater-plugin] Install finished");
-                        let _ = app_c.emit(
-                            "tauri://update-status",
-                            serde_json::json!({
-                                "status": "done",
-                            }),
-                        );
-                    }
-                    Err(e) => {
-                        log::error!("[updater-plugin] download_and_install failed: {}", e);
-                        let _ = app_c.emit(
-                            "tauri://update-status",
-                            serde_json::json!({
-                                "status": "error",
-                                "error": e.to_string(),
-                            }),
-                        );
-                    }
-                }
-            }
-            Ok(None) => {
-                log::warn!("[updater-plugin] download_and_install: no update available");
-                let _ = app_c.emit(
-                    "tauri://update-status",
-                    serde_json::json!({
-                        "status": "not-available",
-                    }),
-                );
-            }
-            Err(e) => {
-                log::error!("[updater-plugin] check before install failed: {}", e);
-                let _ = app_c.emit(
-                    "tauri://update-status",
-                    serde_json::json!({
-                        "status": "error",
-                        "error": e.to_string(),
-                    }),
-                );
+/// Gitee Releases API 返回的单个资产信息
+#[derive(Debug, Deserialize)]
+struct GiteeAsset {
+    name: String,
+    browser_download_url: String,
+    #[allow(dead_code)]
+    size: Option<u64>,
+}
+
+/// Gitee Releases API /releases/latest 响应（只解析需要的字段）
+#[derive(Debug, Deserialize)]
+struct GiteeRelease {
+    tag_name: String,
+    #[allow(dead_code)]
+    name: Option<String>,
+    body: Option<String>,
+    created_at: Option<String>,
+    #[allow(dead_code)]
+    prerelease: bool,
+    assets: Vec<GiteeAsset>,
+}
+
+/// 比较两个 semver 版本字符串（如 "0.3.0" vs "0.1.1"，支持带 v 前缀）
+fn compare_versions(a: &str, b: &str) -> Option<Ordering> {
+    fn parse_parts(v: &str) -> Option<Vec<u64>> {
+        let stripped = v.trim().trim_start_matches('v');
+        let parts: Vec<u64> = stripped
+            .split('.')
+            .map(|s| s.parse::<u64>().ok())
+            .collect::<Option<Vec<_>>>()?;
+        if parts.is_empty() || parts.len() > 4 {
+            return None;
+        }
+        Some(parts)
+    }
+    let pa = parse_parts(a)?;
+    let pb = parse_parts(b)?;
+    let max_len = pa.len().max(pb.len());
+    for i in 0..max_len {
+        let ai = pa.get(i).copied().unwrap_or(0);
+        let bi = pb.get(i).copied().unwrap_or(0);
+        match ai.cmp(&bi) {
+            Ordering::Equal => continue,
+            ord => return Some(ord),
+        }
+    }
+    Some(Ordering::Equal)
+}
+
+/// 根据当前平台从资产列表中匹配安装包
+fn find_installer_asset(assets: &[GiteeAsset]) -> Option<&GiteeAsset> {
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: 优先 NSIS 安装包（.exe 安装程序），回退到任意 .exe
+        let mut best: Option<&GiteeAsset> = None;
+        for a in assets {
+            let lower = a.name.to_lowercase();
+            if lower.ends_with(".nsis.zip") || lower.contains("setup") && lower.ends_with(".exe") {
+                best = Some(a);
+                break;
             }
         }
+        if best.is_none() {
+            for a in assets {
+                let lower = a.name.to_lowercase();
+                if lower.ends_with(".exe") && !lower.contains("debug") {
+                    best = Some(a);
+                    break;
+                }
+            }
+        }
+        best
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: 优先 AppImage，回退到 deb
+        let mut best: Option<&GiteeAsset> = None;
+        for a in assets {
+            if a.name.to_lowercase().ends_with(".appimage") {
+                best = Some(a);
+                break;
+            }
+        }
+        if best.is_none() {
+            for a in assets {
+                let lower = a.name.to_lowercase();
+                if lower.ends_with(".deb") && (lower.contains("amd64") || lower.contains("x86_64")) {
+                    best = Some(a);
+                    break;
+                }
+            }
+        }
+        best
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        None
+    }
+}
+
+/// 从 Gitee API 获取最新 Release 信息
+async fn fetch_latest_release() -> Result<GiteeRelease, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("nrmm-rust-updater")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+    let resp = client
+        .get(GITEE_API_URL)
+        .send()
+        .await
+        .map_err(|e| format!("网络请求失败，请检查网络连接。{}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        // Gitee API 错误可能返回中文 HTML（如 404 页面），截取前 200 字符即可
+        let snippet: String = text.chars().take(200).collect();
+        return Err(format!("Gitee API 返回错误 (HTTP {}): {}", status.as_u16(), snippet));
+    }
+
+    let release: GiteeRelease = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析 Gitee API 响应失败: {}", e))?;
+
+    Ok(release)
+}
+
+/// 触发一次更新检查（异步）；
+/// 返回是否发现可用更新（true = 有更新；false = 无；Err 串描述失败原因）。
+#[tauri::command]
+pub async fn check_update(
+    app: AppHandle,
+    cache: State<'_, UpdateCache>,
+) -> Result<bool, String> {
+    let release = fetch_latest_release().await?;
+
+    let remote_version = release.tag_name.trim().trim_start_matches('v').to_string();
+    let current_version = env!("CARGO_PKG_VERSION");
+
+    let cmp = compare_versions(&remote_version, current_version)
+        .ok_or_else(|| format!("无法解析版本号: 远程='{}', 当前='{}'", remote_version, current_version))?;
+
+    // 预发布版本忽略（可选，这里默认不忽略 prerelease 标记，因为 Gitee 上都是正式发布）
+    if cmp != Ordering::Greater {
+        // 远程版本 <= 当前版本，已是最新
+        // 清除缓存
+        *cache.download_url.lock() = None;
+        *cache.version.lock() = None;
+        *cache.body.lock() = None;
+        *cache.date.lock() = None;
+        return Ok(false);
+    }
+
+    // 有新版本，查找安装包
+    let asset = find_installer_asset(&release.assets)
+        .ok_or_else(|| format!("版本 {} 未找到适用于当前平台的安装包", remote_version))?;
+
+    let notes = release.body.clone().unwrap_or_default();
+    let date = release.created_at.clone().unwrap_or_default();
+
+    // 缓存更新信息
+    *cache.download_url.lock() = Some(asset.browser_download_url.clone());
+    *cache.version.lock() = Some(remote_version.clone());
+    *cache.body.lock() = Some(notes.clone());
+    *cache.date.lock() = Some(date.clone());
+
+    log::info!(
+        "[updater] New version found: v{} (current: v{}), asset: {}",
+        remote_version, current_version, asset.name
+    );
+
+    let _ = app.emit(
+        "tauri://update-available",
+        serde_json::json!({
+            "version": remote_version,
+            "body": notes,
+            "date": date,
+        }),
+    );
+
+    Ok(true)
+}
+
+/// 触发 下载 + 安装（后台异步执行，通过事件推送进度给前端）。
+/// 本命令 spawn 任务后立即返回 Ok(())，不阻塞前端 UI。
+#[tauri::command]
+pub async fn download_and_install_update(
+    app: AppHandle,
+    cache: State<'_, UpdateCache>,
+) -> Result<(), String> {
+    // 获取下载 URL（优先从缓存取，缓存为空则重新请求 API）
+    // 注意：必须在 await 前释放 MutexGuard（parking_lot::MutexGuard 不是 Send）
+    let (download_url, version_str) = {
+        let cached_url = cache.download_url.lock().clone();
+        let cached_ver = cache.version.lock().clone();
+        if let (Some(url), Some(ver)) = (cached_url, cached_ver) {
+            (url, ver)
+        } else {
+            log::info!("[updater] Cache empty, re-fetching release info...");
+            let release = fetch_latest_release().await?;
+            let remote_version = release.tag_name.trim().trim_start_matches('v').to_string();
+            let asset = find_installer_asset(&release.assets)
+                .ok_or_else(|| format!("版本 {} 未找到适用于当前平台的安装包", remote_version))?;
+            let notes = release.body.unwrap_or_default();
+            let date = release.created_at.unwrap_or_default();
+            *cache.download_url.lock() = Some(asset.browser_download_url.clone());
+            *cache.version.lock() = Some(remote_version.clone());
+            *cache.body.lock() = Some(notes);
+            *cache.date.lock() = Some(date);
+            (asset.browser_download_url.clone(), remote_version)
+        }
+    };
+
+    let app_c = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = do_download_and_install(app_c.clone(), &download_url, &version_str).await {
+            log::error!("[updater] Download/Install failed: {}", e);
+            let _ = app_c.emit(
+                "tauri://update-status",
+                serde_json::json!({
+                    "status": "error",
+                    "error": e,
+                }),
+            );
+        }
     });
+
+    Ok(())
+}
+
+/// 实际的下载+安装逻辑（在 spawned task 中执行）
+async fn do_download_and_install(
+    app: AppHandle,
+    download_url: &str,
+    version_str: &str,
+) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+
+    log::info!("[updater] Starting download: v{} from {}", version_str, download_url);
+
+    let _ = app.emit(
+        "tauri://update-status",
+        serde_json::json!({
+            "status": "downloading",
+            "version": version_str,
+        }),
+    );
+
+    // 创建 HTTP 客户端并发起请求
+    let client = reqwest::Client::builder()
+        .user_agent("nrmm-rust-updater")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+    let resp = client
+        .get(download_url)
+        .send()
+        .await
+        .map_err(|e| format!("下载请求失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("下载失败，服务器返回 HTTP {}", resp.status().as_u16()));
+    }
+
+    let total_size = resp.content_length();
+    log::info!(
+        "[updater] Download started, total size: {} bytes",
+        total_size.unwrap_or(0)
+    );
+
+    // 通知前端总大小
+    if let Some(total) = total_size {
+        let _ = app.emit(
+            "tauri://update-download-progress",
+            serde_json::json!({
+                "chunkLength": 0,
+                "contentLength": total,
+            }),
+        );
+    }
+
+    // 创建临时文件
+    let ext = if cfg!(windows) { ".exe" } else { ".AppImage" };
+    let temp_dir = std::env::temp_dir();
+    let installer_name = format!("nrmm-rust-update-{}{}", version_str, ext);
+    let installer_path = temp_dir.join(&installer_name);
+
+    let mut file = tokio::fs::File::create(&installer_path)
+        .await
+        .map_err(|e| format!("创建临时文件失败: {}", e))?;
+
+    let mut downloaded: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
+
+    // 流式下载
+    let mut response = resp;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("下载数据失败: {}", e))?
+    {
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("写入临时文件失败: {}", e))?;
+        downloaded += chunk.len() as u64;
+
+        // 每 200ms 或 每 256KB 发射一次进度事件，避免事件风暴
+        let now = std::time::Instant::now();
+        if now.duration_since(last_emit).as_millis() > 200 || chunk.len() > 256 * 1024 {
+            last_emit = now;
+            let _ = app.emit(
+                "tauri://update-download-progress",
+                serde_json::json!({
+                    "chunkLength": chunk.len(),
+                    "contentLength": total_size,
+                }),
+            );
+        }
+    }
+    file.flush().await.map_err(|e| format!("刷新文件失败: {}", e))?;
+    drop(file);
+
+    log::info!(
+        "[updater] Download complete: {} bytes, saved to {:?}",
+        downloaded, installer_path
+    );
+
+    // 发射 installing 状态
+    let _ = app.emit(
+        "tauri://update-status",
+        serde_json::json!({
+            "status": "installing",
+            "version": version_str,
+        }),
+    );
+
+    // 执行安装
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // Windows NSIS 安装包: /S 静默安装，安装完后自动启动新版本
+        // CREATE_NO_WINDOW (0x08000000) 防止弹出命令行窗口
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let status = std::process::Command::new(&installer_path)
+            .arg("/S")
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+
+        match status {
+            Ok(_child) => {
+                log::info!("[updater] Installer launched successfully, restarting app...");
+                let _ = app.emit(
+                    "tauri://update-status",
+                    serde_json::json!({
+                        "status": "done",
+                    }),
+                );
+                // 延迟一点再重启，确保安装程序启动
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tauri::process::restart(&app.env());
+                });
+            }
+            Err(e) => {
+                return Err(format!("启动安装程序失败: {}", e));
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Linux: 给 AppImage 添加执行权限并启动
+        if let Err(e) = std::fs::set_permissions(&installer_path, std::fs::Permissions::from_mode(0o755)) {
+            log::warn!("[updater] Failed to set executable permission: {}", e);
+        }
+        match std::process::Command::new(&installer_path).spawn() {
+            Ok(_child) => {
+                log::info!("[updater] AppImage launched, restarting app...");
+                let _ = app.emit(
+                    "tauri://update-status",
+                    serde_json::json!({
+                        "status": "done",
+                    }),
+                );
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tauri::process::restart(&app.env());
+                });
+            }
+            Err(e) => {
+                return Err(format!("启动安装程序失败: {}", e));
+            }
+        }
+    }
+
     Ok(())
 }
 

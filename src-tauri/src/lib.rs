@@ -36,6 +36,7 @@ mod panic_hook; // 全局 panic hook，release 下弹出原生对话框并重启
 use fern::Dispatch;
 use state::AppState;
 use tauri::Manager;
+use crate::commands::UpdateCache;
 
 /// 获取应用数据目录（%LOCALAPPDATA%\nrmm-rust 或 ~/.local/share/nrmm-rust）。
 ///
@@ -120,9 +121,10 @@ pub fn run() {
 
     match tauri::Builder::default()
         .manage(app_state) // 将 AppState 注入 Tauri 状态管理
+        .manage(UpdateCache::default()) // 注入更新缓存状态
         .plugin(tauri_plugin_dialog::init()) // 前端需要对话框（选择目录/文件）
         .plugin(tauri_plugin_shell::init()) // 前端需要打开外部 URL（Gitee/GitHub 链接）
-        .plugin(tauri_plugin_updater::Builder::new().build()) // 官方自更新插件
+        .plugin(tauri_plugin_updater::Builder::new().build()) // 官方自更新插件（保留用于未来签名验证）
         .plugin(
             // 全局快捷键插件：所有快捷键事件统一路由到 HotkeyManager::handle_hotkey_event
             tauri_plugin_global_shortcut::Builder::new()
