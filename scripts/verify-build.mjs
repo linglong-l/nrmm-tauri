@@ -300,14 +300,30 @@ function verifyPost(targetTriple) {
     : ARTIFACT_SPECS_WIN;
 
   for (const s of specs) {
-    const dir = s.portable ? PROJECT_ROOT : join(bundleDir, s.subdir);
-    const files = s.portable
-      ? (existsSync(dir) ? readdirSync(dir).filter(f => s.pattern.test(f)).map(f => join(dir, f)) : [])
-      : findByGlob(dir, s.pattern);
+    let files = [];
+    let searchedDirs = [];
+    if (s.portable) {
+      const searchDirs = [
+        PROJECT_ROOT,
+        resolve(PROJECT_ROOT, 'dist'),
+        resolve(PROJECT_ROOT, 'dist-win'),
+        resolve(PROJECT_ROOT, 'dist-linux'),
+      ];
+      for (const d of searchDirs) {
+        searchedDirs.push(d);
+        if (!existsSync(d)) continue;
+        const matches = readdirSync(d).filter(f => s.pattern.test(f)).map(f => join(d, f));
+        files.push(...matches);
+      }
+    } else {
+      const dir = join(bundleDir, s.subdir);
+      searchedDirs.push(dir);
+      files = findByGlob(dir, s.pattern);
+    }
 
     if (files.length === 0) {
       if (s.optional) warn(`${s.label} 未找到（可选产物）`);
-      else fail(`${s.label} 未找到！(搜索目录: ${dir}, pattern: ${s.pattern})`);
+      else fail(`${s.label} 未找到！(搜索目录: ${searchedDirs.join(', ')}, pattern: ${s.pattern})`);
       continue;
     }
     for (const f of files) {
@@ -348,9 +364,13 @@ function verifyPost(targetTriple) {
 
   // 便携版兜底提示
   if (platform === 'linux' || (triple && triple.includes('linux'))) {
-    const tgz = findByGlob(PROJECT_ROOT, /nrmm-rust-portable-.*\.tar\.gz$/);
+    const tgzSearchDirs = [PROJECT_ROOT, resolve(PROJECT_ROOT, 'dist'), resolve(PROJECT_ROOT, 'dist-linux')];
+    let tgz = [];
+    for (const d of tgzSearchDirs) {
+      if (existsSync(d)) tgz.push(...readdirSync(d).filter(f => /nrmm-rust-portable-.*\.tar\.gz$/.test(f)).map(f => join(d, f)));
+    }
     if (tgz.length > 0) info(`✅ 便携版 tar.gz 存在: ${basename(tgz[0])}（可作为 AppImage 构建失败时的兜底）`);
-    else warn('未生成便携版 tar.gz，可运行:  node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o .');
+    else warn('未生成便携版 tar.gz，可运行:  node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o dist-linux');
   }
 
   summary('构建后产物');

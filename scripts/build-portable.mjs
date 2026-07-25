@@ -17,7 +17,8 @@
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, cpSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
+import { Buffer } from 'node:buffer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -150,15 +151,32 @@ console.log(`[portable] 创建压缩包: ${archiveName}`);
 if (existsSync(archivePath)) rmSync(archivePath);
 
 if (isWindows) {
-  // Windows: 使用 .NET ZipFile (通过 PowerShell 调用，编码 UTF8)
-  const psScript = [
+  function psEscapeQuote(str) {
+    return str.replace(/'/g, "''");
+  }
+  const psCmd = [
     `Add-Type -AssemblyName System.IO.Compression.FileSystem`,
-    `[System.IO.Compression.ZipFile]::CreateFromDirectory("${stageDir.replace(/\\/g, '\\\\')}", "${archivePath.replace(/\\/g, '\\\\')}", [System.IO.Compression.CompressionLevel]::Optimal, $false)`,
+    `$s = '${psEscapeQuote(stageDir)}'`,
+    `$a = '${psEscapeQuote(archivePath)}'`,
+    `$l = [System.IO.Compression.CompressionLevel]::Optimal`,
+    `[System.IO.Compression.ZipFile]::CreateFromDirectory($s, $a, $l, $false)`,
   ].join('; ');
-  execSync(`powershell -NoProfile -Command "${psScript}"`, { stdio: 'inherit' });
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psCmd], {
+    stdio: 'inherit',
+    windowsVerbatimArguments: false,
+  });
+  if (r.status !== 0) {
+    console.error(`[portable] ERROR: PowerShell 压缩失败 (exit code: ${r.status})`);
+    process.exit(r.status || 1);
+  }
 } else {
-  // Linux/macOS: 使用系统 tar
-  execSync(`tar -czf "${archivePath}" -C "${stageDir}" .`, { stdio: 'inherit' });
+  const r = spawnSync('tar', ['-czf', archivePath, '-C', stageDir, '.'], {
+    stdio: 'inherit',
+  });
+  if (r.status !== 0) {
+    console.error(`[portable] ERROR: tar 压缩失败 (exit code: ${r.status})`);
+    process.exit(r.status || 1);
+  }
 }
 
 // ---------- 3. 清理 staging ----------
