@@ -65,8 +65,7 @@ function readCargoVersion(relPath) {
 }
 
 const EXPECTED_PUBKEY_PREFIX = 'dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6';
-const EXPECTED_TARGETS = ['nsis', 'deb', 'appimage', 'rpm'];
-const EXPECTED_PLATFORMS_POST = ['windows-x86_64', 'linux-x86_64'];
+const EXPECTED_TARGETS = ['nsis', 'msi', 'deb', 'appimage', 'rpm'];
 
 function verifyPre() {
   console.log('\n🔍 Pre-build verification:');
@@ -98,9 +97,11 @@ function verifyPre() {
     hasError = true;
   }
 
-  // Check 3: endpoints
+  // Check 3: endpoints (optional — custom update logic may omit this)
   const endpoints = tauriConf.plugins?.updater?.endpoints;
-  if (Array.isArray(endpoints) && endpoints.length > 0 && endpoints.every(e => typeof e === 'string' && e.startsWith('http'))) {
+  if (endpoints === undefined || endpoints === null) {
+    pass(`updater endpoints 未配置（使用自定义更新逻辑，符合预期）`);
+  } else if (Array.isArray(endpoints) && endpoints.length > 0 && endpoints.every(e => typeof e === 'string' && e.startsWith('http'))) {
     pass(`updater endpoints 配置正确 (${endpoints.length} 个端点)`);
   } else {
     fail(`updater endpoints 配置无效: ${JSON.stringify(endpoints)}`);

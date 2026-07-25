@@ -26,12 +26,12 @@ stages:
     steps:
       - step: build@rust
         name: build_linux
-        displayName: 构建 Linux (AppImage/deb/rpm)
+        displayName: 构建 Linux (AppImage/deb/rpm + portable tar.gz)
         rustVersion: stable
         commands:
           - set -e
           - |
-            echo "===== [1/8] 安装系统依赖 (Tauri Linux prerequisites) ====="
+            echo "===== [1/9] 安装系统依赖 (Tauri Linux prerequisites) ====="
             sudo apt-get update -y
             sudo apt-get install -y --no-install-recommends \
               libwebkit2gtk-4.1-dev \
@@ -45,29 +45,32 @@ stages:
               libjavascriptcoregtk-4.1-dev \
               curl wget file xz-utils ca-certificates
           - |
-            echo "===== [2/8] 安装 Node.js 20 ====="
+            echo "===== [2/9] 安装 Node.js 20 ====="
             curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
             sudo apt-get install -y nodejs
             node --version
             npm --version
           - |
-            echo "===== [3/8] 配置 Rust target ====="
+            echo "===== [3/9] 配置 Rust target ====="
             rustup target add x86_64-unknown-linux-gnu
             rustc --version
           - |
-            echo "===== [4/8] 安装 Tauri CLI ====="
+            echo "===== [4/9] 安装 Tauri CLI ====="
             npm install -g @tauri-apps/cli@2
           - |
-            echo "===== [5/8] 安装 npm 依赖 ====="
+            echo "===== [5/9] 安装 npm 依赖 ====="
             npm ci
           - |
-            echo "===== [6/8] 构建前版本校验 ====="
+            echo "===== [6/9] 构建前版本校验 ====="
             npm run verify:release
           - |
-            echo "===== [7/8] Tauri 构建 ====="
+            echo "===== [7/9] Tauri 构建 ====="
             npm run tauri build -- --target x86_64-unknown-linux-gnu
           - |
-            echo "===== [8/8] 收集构建产物 ====="
+            echo "===== [8/9] 生成 Linux 便携版 (tar.gz) ====="
+            node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o dist
+          - |
+            echo "===== [9/9] 收集构建产物 ====="
             set +e
             BUNDLE_DIR="src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
             mkdir -p dist
@@ -86,6 +89,12 @@ stages:
                           "dist/nrmm-rust-x86_64.deb"
             copy_if_exists "$(find "$BUNDLE_DIR/rpm" -maxdepth 1 -name '*.rpm' 2>/dev/null | head -1)" \
                           "dist/nrmm-rust-x86_64.rpm"
+            # portable tar.gz 由 build-portable.mjs 直接输出到 dist/
+            if [ -f "dist/nrmm-rust-portable-x86_64.tar.gz" ]; then
+              echo "  [OK] nrmm-rust-portable-x86_64.tar.gz"
+            else
+              echo "  [WARN] nrmm-rust-portable-x86_64.tar.gz not generated"
+            fi
             copy_if_exists "$(find "$BUNDLE_DIR" -maxdepth 3 -name 'latest.json' 2>/dev/null | head -1)" \
                           "dist/latest-linux.json"
             echo "--- dist/ contents ---"

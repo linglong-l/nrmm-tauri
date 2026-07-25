@@ -129,6 +129,16 @@ if (-not $SkipBuild) {
     if ($msi) {
         Copy-Item $msi.FullName -Destination "$DistDir/nrmm-rust-x86_64.msi"
         Write-Ok "MSI 安装包 -> nrmm-rust-x86_64.msi"
+    } else {
+        Write-Warn2 "未找到 MSI 安装包（$BundleDir/msi/*.msi），可能需要安装 WiX Toolset"
+    }
+
+    Write-Step "生成 Windows 便携版 (zip)"
+    node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o $DistDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn2 "便携版 zip 生成失败（不影响安装包上传）"
+    } else {
+        Write-Ok "便携版 zip 已生成"
     }
 
     $latest = Get-ChildItem -Path $BundleDir -Filter "latest.json" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1

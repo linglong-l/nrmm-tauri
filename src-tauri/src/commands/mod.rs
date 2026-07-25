@@ -2344,6 +2344,7 @@ pub struct UpdateCache {
     pub version: parking_lot::Mutex<Option<String>>,
     pub body: parking_lot::Mutex<Option<String>>,
     pub date: parking_lot::Mutex<Option<String>>,
+    pub asset_name: parking_lot::Mutex<Option<String>>,
 }
 
 impl Default for UpdateCache {
@@ -2353,6 +2354,7 @@ impl Default for UpdateCache {
             version: parking_lot::Mutex::new(None),
             body: parking_lot::Mutex::new(None),
             date: parking_lot::Mutex::new(None),
+            asset_name: parking_lot::Mutex::new(None),
         }
     }
 }
@@ -2410,46 +2412,49 @@ fn compare_versions(a: &str, b: &str) -> Option<Ordering> {
 fn find_installer_asset(assets: &[GiteeAsset]) -> Option<&GiteeAsset> {
     #[cfg(target_os = "windows")]
     {
-        // Windows: 优先 NSIS 安装包（.exe 安装程序），回退到任意 .exe
-        let mut best: Option<&GiteeAsset> = None;
+        // Windows: 匹配优先级 NSIS setup.exe > MSI > 其他 .exe；
+        // 排除便携版 (portable*.zip)、调试包 (debug)
+        let lower = |a: &&GiteeAsset| a.name.to_lowercase();
+        let is_portable = |s: &str| s.contains("portable");
+        let is_debug = |s: &str| s.contains("debug");
+
+        // 1. 优先 NSIS setup.exe
         for a in assets {
-            let lower = a.name.to_lowercase();
-            if lower.ends_with(".nsis.zip") || lower.contains("setup") && lower.ends_with(".exe") {
-                best = Some(a);
-                break;
+            let l = lower(&a);
+            if !is_portable(&l) && !is_debug(&l)
+                && (l.contains("setup") || l.contains("nsis"))
+                && l.ends_with(".exe")
+            {
+                return Some(a);
             }
         }
-        if best.is_none() {
-            for a in assets {
-                let lower = a.name.to_lowercase();
-                if lower.ends_with(".exe") && !lower.contains("debug") {
-                    best = Some(a);
-                    break;
-                }
+        // 2. 次选 MSI 安装包
+        for a in assets {
+            let l = lower(&a);
+            if !is_portable(&l) && !is_debug(&l) && l.ends_with(".msi") {
+                return Some(a);
             }
         }
-        best
+        // 3. 最后回退到任意 .exe（非 setup/非 msi）
+        for a in assets {
+            let l = lower(&a);
+            if !is_portable(&l) && !is_debug(&l) && l.ends_with(".exe") {
+                return Some(a);
+            }
+        }
+        None
     }
     #[cfg(target_os = "linux")]
     {
-        // Linux: 优先 AppImage，回退到 deb
-        let mut best: Option<&GiteeAsset> = None;
+        // Linux: 仅使用 AppImage 做自动更新（自包含，直接执行即可；deb/rpm 需 root，不支持静默自动安装）
+        // 排除便携版 (portable*.tar.gz)
         for a in assets {
-            if a.name.to_lowercase().ends_with(".appimage") {
-                best = Some(a);
-                break;
+            let l = a.name.to_lowercase();
+            if l.ends_with(".appimage") && !l.contains("portable") {
+                return Some(a);
             }
         }
-        if best.is_none() {
-            for a in assets {
-                let lower = a.name.to_lowercase();
-                if lower.ends_with(".deb") && (lower.contains("amd64") || lower.contains("x86_64")) {
-                    best = Some(a);
-                    break;
-                }
-            }
-        }
-        best
+        None
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
@@ -2510,6 +2515,7 @@ pub async fn check_update(
         *cache.version.lock() = None;
         *cache.body.lock() = None;
         *cache.date.lock() = None;
+        *cache.asset_name.lock() = None;
         return Ok(false);
     }
 
@@ -2525,6 +2531,7 @@ pub async fn check_update(
     *cache.version.lock() = Some(remote_version.clone());
     *cache.body.lock() = Some(notes.clone());
     *cache.date.lock() = Some(date.clone());
+    *cache.asset_name.lock() = Some(asset.name.clone());
 
     log::info!(
         "[updater] New version found: v{} (current: v{}), asset: {}",
@@ -2552,11 +2559,12 @@ pub async fn download_and_install_update(
 ) -> Result<(), String> {
     // 获取下载 URL（优先从缓存取，缓存为空则重新请求 API）
     // 注意：必须在 await 前释放 MutexGuard（parking_lot::MutexGuard 不是 Send）
-    let (download_url, version_str) = {
+    let (download_url, version_str, asset_name) = {
         let cached_url = cache.download_url.lock().clone();
         let cached_ver = cache.version.lock().clone();
-        if let (Some(url), Some(ver)) = (cached_url, cached_ver) {
-            (url, ver)
+        let cached_name = cache.asset_name.lock().clone();
+        if let (Some(url), Some(ver), Some(name)) = (cached_url, cached_ver, cached_name) {
+            (url, ver, name)
         } else {
             log::info!("[updater] Cache empty, re-fetching release info...");
             let release = fetch_latest_release().await?;
@@ -2569,13 +2577,14 @@ pub async fn download_and_install_update(
             *cache.version.lock() = Some(remote_version.clone());
             *cache.body.lock() = Some(notes);
             *cache.date.lock() = Some(date);
-            (asset.browser_download_url.clone(), remote_version)
+            *cache.asset_name.lock() = Some(asset.name.clone());
+            (asset.browser_download_url.clone(), remote_version, asset.name.clone())
         }
     };
 
     let app_c = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = do_download_and_install(app_c.clone(), &download_url, &version_str).await {
+        if let Err(e) = do_download_and_install(app_c.clone(), &download_url, &version_str, &asset_name).await {
             log::error!("[updater] Download/Install failed: {}", e);
             let _ = app_c.emit(
                 "tauri://update-status",
@@ -2595,10 +2604,14 @@ async fn do_download_and_install(
     app: AppHandle,
     download_url: &str,
     version_str: &str,
+    asset_name: &str,
 ) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
 
-    log::info!("[updater] Starting download: v{} from {}", version_str, download_url);
+    log::info!(
+        "[updater] Starting download: v{} (asset: {}) from {}",
+        version_str, asset_name, download_url
+    );
 
     let _ = app.emit(
         "tauri://update-status",
@@ -2641,8 +2654,14 @@ async fn do_download_and_install(
         );
     }
 
-    // 创建临时文件
-    let ext = if cfg!(windows) { ".exe" } else { ".AppImage" };
+    // 根据 asset_name 推断临时文件扩展名
+    let ext = std::path::Path::new(asset_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{}", e))
+        .unwrap_or_else(|| {
+            if cfg!(windows) { ".exe".to_string() } else { ".AppImage".to_string() }
+        });
     let temp_dir = std::env::temp_dir();
     let installer_name = format!("nrmm-rust-update-{}{}", version_str, ext);
     let installer_path = temp_dir.join(&installer_name);
@@ -2696,17 +2715,32 @@ async fn do_download_and_install(
         }),
     );
 
+    let lower_name = asset_name.to_lowercase();
+
     // 执行安装
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        // Windows NSIS 安装包: /S 静默安装，安装完后自动启动新版本
-        // CREATE_NO_WINDOW (0x08000000) 防止弹出命令行窗口
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let status = std::process::Command::new(&installer_path)
-            .arg("/S")
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn();
+
+        let status = if lower_name.ends_with(".msi") {
+            // MSI 安装包: msiexec /i "path" /passive /norestart
+            log::info!("[updater] Launching MSI installer via msiexec...");
+            std::process::Command::new("msiexec")
+                .arg("/i")
+                .arg(&installer_path)
+                .arg("/passive")
+                .arg("/norestart")
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+        } else {
+            // NSIS 安装包 (.exe): /S 静默安装
+            log::info!("[updater] Launching NSIS installer (/S)...");
+            std::process::Command::new(&installer_path)
+                .arg("/S")
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+        };
 
         match status {
             Ok(_child) => {
@@ -2719,7 +2753,7 @@ async fn do_download_and_install(
                 );
                 // 延迟一点再重启，确保安装程序启动
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                     tauri::process::restart(&app.env());
                 });
             }
@@ -2732,7 +2766,7 @@ async fn do_download_and_install(
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::PermissionsExt;
-        // Linux: 给 AppImage 添加执行权限并启动
+        // Linux: AppImage 添加执行权限并启动
         if let Err(e) = std::fs::set_permissions(&installer_path, std::fs::Permissions::from_mode(0o755)) {
             log::warn!("[updater] Failed to set executable permission: {}", e);
         }

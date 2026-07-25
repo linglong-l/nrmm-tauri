@@ -13,7 +13,7 @@ env:
 
 jobs:
   build-windows:
-    name: Build Windows (NSIS)
+    name: Build Windows (NSIS + MSI + portable zip)
     runs-on: windows-latest
     steps:
       - name: Checkout code
@@ -44,15 +44,23 @@ jobs:
       - name: Build Tauri app (Windows)
         run: npm run tauri build -- --target x86_64-pc-windows-msvc
 
-      - name: Find and upload Windows artifacts
+      - name: Generate portable zip
+        run: node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o .
+
+      - name: Find and copy Windows artifacts
         run: |
           $bundleDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
-          $installer = Get-ChildItem -Path "$bundleDir/nsis/*.exe" | Select-Object -First 1
-          if (-not $installer) { Write-Error "NSIS installer not found"; exit 1 }
-          Copy-Item $installer.FullName -Destination "nrmm-rust-setup-x86_64.exe"
-          # Tauri updater generates latest.json in target dir after build
-          $latest = Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle" -Filter "latest.json" -Recurse | Select-Object -First 1
+          # NSIS installer
+          $nsis = Get-ChildItem -Path "$bundleDir/nsis/*.exe" | Select-Object -First 1
+          if (-not $nsis) { Write-Error "NSIS installer not found"; exit 1 }
+          Copy-Item $nsis.FullName -Destination "nrmm-rust-setup-x86_64.exe"
+          # MSI installer (optional)
+          $msi = Get-ChildItem -Path "$bundleDir/msi/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($msi) { Copy-Item $msi.FullName -Destination "nrmm-rust-x86_64.msi" }
+          # Tauri updater latest.json
+          $latest = Get-ChildItem -Path $bundleDir -Filter "latest.json" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($latest) { Copy-Item $latest.FullName -Destination "latest-windows.json" }
+          Get-ChildItem nrmm-rust-*,latest-* | Format-Table Name, Length
         shell: powershell
 
       - name: Upload Windows artifacts
@@ -61,10 +69,12 @@ jobs:
           name: windows-artifacts
           path: |
             nrmm-rust-setup-x86_64.exe
+            nrmm-rust-x86_64.msi
+            nrmm-rust-portable-x86_64.zip
             latest-windows.json
 
   build-linux:
-    name: Build Linux (AppImage/deb/rpm)
+    name: Build Linux (AppImage/deb/rpm + portable tar.gz)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -97,7 +107,10 @@ jobs:
       - name: Build Tauri app (Linux)
         run: npm run tauri build -- --target x86_64-unknown-linux-gnu
 
-      - name: Find and upload Linux artifacts
+      - name: Generate portable tar.gz
+        run: node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o .
+
+      - name: Find and copy Linux artifacts
         run: |
           set -e
           BUNDLE_DIR="src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
@@ -113,7 +126,7 @@ jobs:
           # latest.json
           LATEST=$(find "$BUNDLE_DIR" -name "latest.json" | head -1)
           if [ -n "$LATEST" ]; then cp "$LATEST" latest-linux.json; fi
-          ls -la *.AppImage *.deb *.rpm latest-linux.json 2>/dev/null || true
+          ls -la nrmm-rust-* latest-linux.json 2>/dev/null || true
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -123,6 +136,7 @@ jobs:
             nrmm-rust-x86_64.AppImage
             nrmm-rust-x86_64.deb
             nrmm-rust-x86_64.rpm
+            nrmm-rust-portable-x86_64.tar.gz
             latest-linux.json
 
   release:
@@ -166,19 +180,27 @@ jobs:
         with:
           files: |
             artifacts/windows-artifacts/nrmm-rust-setup-x86_64.exe
+            artifacts/windows-artifacts/nrmm-rust-x86_64.msi
+            artifacts/windows-artifacts/nrmm-rust-portable-x86_64.zip
             artifacts/linux-artifacts/nrmm-rust-x86_64.AppImage
             artifacts/linux-artifacts/nrmm-rust-x86_64.deb
             artifacts/linux-artifacts/nrmm-rust-x86_64.rpm
+            artifacts/linux-artifacts/nrmm-rust-portable-x86_64.tar.gz
             latest.json
           draft: false
           prerelease: false
           body: |
             ## nrmm-rust ${{ github.ref_name }}
 
-            自动构建发布。请下载对应平台的安装包进行安装/更新。
+            自动构建发布（GitHub Actions）。请下载对应平台的安装包进行安装/更新。
 
-            ### 下载
-            - **Windows**: `nrmm-rust-setup-x86_64.exe`
-            - **Linux (AppImage)**: `nrmm-rust-x86_64.AppImage`
-            - **Linux (deb)**: `nrmm-rust-x86_64.deb`
-            - **Linux (rpm)**: `nrmm-rust-x86_64.rpm`
+            ### Windows 产物
+            - **NSIS 安装包**: `nrmm-rust-setup-x86_64.exe` — 推荐，带安装向导
+            - **MSI 安装包**: `nrmm-rust-x86_64.msi` — 企业部署
+            - **便携版 (zip)**: `nrmm-rust-portable-x86_64.zip` — 解压即用
+
+            ### Linux 产物
+            - **AppImage**: `nrmm-rust-x86_64.AppImage` — 通用 Linux 包
+            - **deb**: `nrmm-rust-x86_64.deb` — Debian/Ubuntu 系
+            - **rpm**: `nrmm-rust-x86_64.rpm` — Fedora/RHEL 系
+            - **便携版 (tar.gz)**: `nrmm-rust-portable-x86_64.tar.gz` — 解压即用
