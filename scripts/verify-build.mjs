@@ -179,6 +179,10 @@ const ERROR_PATTERNS = [
   { re: /File: .*\.nsi|File: .*\.wxs|error.*nsis|error.*wix/i, lvl: 'fail', msg: 'NSIS/WiX 安装包构建错误' },
   // GLIBC / ELF 常见
   { re: /No such file or directory.*ld-linux|not a dynamic executable|Invalid ELF/i, lvl: 'fail', msg: 'ELF 可执行文件异常（可能架构不匹配或损坏）' },
+  // ⭐ Fedora 39+ (glibc 2.38+) 默认用 DT_RELR (.relr.dyn section, type=0x13)，老的 binutils strip 不认识
+  // linuxdeploy 内置的 strip 极其古老（~2020 年），在 Fedora 44 Ubuntu 24.04 等新系统上 100% 复现，症状：所有库 strip 失败 -> 最终 failed to run linuxdeploy
+  // 修复：设置 NO_STRIP=1 或 STRIP=/usr/bin/strip（使用系统的新 strip）
+  { re: /\.relr\.dyn|unknown type \[0x13\] section|Unable to recognise the format of the input file.*strip/i, lvl: 'fail', msg: '⭐ [Fedora44/WSL2根因命中] glibc 2.38+ 库使用 .relr.dyn (DT_RELR)，但 linuxdeploy 内置 strip 过于古老不认识。修复：export NO_STRIP=1 或 STRIP=$(command -v strip) 重新构建' },
   // deb/rpm
   { re: /dpkg-shlibdeps|dpkg-deb|rpmbuild failed/i, lvl: 'fail', msg: 'deb/rpm 打包失败' },
   // 网络

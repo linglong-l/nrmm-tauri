@@ -13,6 +13,11 @@ env:
   # ===== AppImage 构建兜底（核心）：即使 FUSE 不可用也能解压运行 AppImage 工具 =====
   APPIMAGE_EXTRACT_AND_RUN: '1'
   ARCH: 'x86_64'
+  # ===== 关键：Ubuntu 24.04+ / Fedora39+ glibc>=2.38 默认 DT_RELR (.relr.dyn) =====
+  # linuxdeploy 内置 strip 太老无法识别，导致 failed to run linuxdeploy
+  # NO_STRIP=1 让 linuxdeploy 跳过 strip（本项目 Cargo.toml profile.release.strip=true 已做过一次）
+  NO_STRIP: '1'
+  STRIP: '/usr/bin/strip'
 
 jobs:
   build-windows:

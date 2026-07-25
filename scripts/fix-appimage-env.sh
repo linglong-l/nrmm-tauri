@@ -296,6 +296,13 @@ echo "--- [7/7] 总结 & 执行建议 ---"
 EXPORT_BLOCK="# ===== nrmm-rust AppImage 构建环境变量（fix-appimage-env.sh 自动生成） =====
 export APPIMAGE_EXTRACT_AND_RUN=1
 export ARCH=x86_64
+# ===== 关键：Fedora 39+ / Ubuntu 24.04+ glibc >=2.38 默认使用 DT_RELR (.relr.dyn 段 type=0x13) =====
+# linuxdeploy 内置的 strip binutils 非常古老（~2020 年），根本不认识 .relr.dyn，导致所有库 strip 失败 -> 最终 failed to run linuxdeploy
+# 方案A（推荐，零副作用）：直接跳过 linuxdeploy 的 strip 调用。系统库和 Rust 可执行文件本项目已在 Cargo.toml profile.release.strip=true 阶段剥离过，再 strip 一次是多余操作。
+export NO_STRIP=1
+# 方案B（如果不希望放弃 strip）：强制使用系统本地的 binutils strip，它一定认识当前系统库生成的 ELF 段格式。
+#   如果 NO_STRIP=1 生效则这行会被忽略，两者共存无害。
+export STRIP=$(command -v strip || echo /usr/bin/strip)
 "
 if [ -f "$LINUXDEPLOY_BIN" ] && [ -x "$LINUXDEPLOY_BIN" ]; then
     EXPORT_BLOCK+="export TAURI_BUNDLER_LINUXDEPLOY_BINARY=\"$LINUXDEPLOY_BIN\"
