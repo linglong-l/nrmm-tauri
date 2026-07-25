@@ -58,6 +58,22 @@ function Write-Ok([string]$msg)   { Write-Host "  [OK] $msg" -ForegroundColor Gr
 function Write-Warn2([string]$msg){ Write-Host "  [WARN] $msg" -ForegroundColor Yellow }
 function Write-Fail([string]$msg) { Write-Host "  [FAIL] $msg" -ForegroundColor Red }
 
+# ---------- 外部命令执行（避免 PS5 将 stderr 当致命错误） ----------
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory=$true, Position=0)][string]$File,
+        [Parameter(Position=1, ValueFromRemainingArguments=$true)][string[]]$Arguments
+    )
+    $oldEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $File @Arguments 2>&1 | Out-Host
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oldEAP
+    }
+}
+
 # ---------- 检查 Token ----------
 if (-not $Token) { $Token = $env:GITEE_TOKEN }
 if (-not $Token) {
@@ -98,18 +114,18 @@ $env:GITEE_TAG = $Tag
 $DistDir = Join-Path $ProjectRoot "dist-win"
 if (-not $SkipBuild) {
     Write-Step "安装 npm 依赖"
-    npm ci 2>&1 | Select-Object -Last 5
-    if ($LASTEXITCODE -ne 0) { Write-Fail "npm ci 失败"; exit 1 }
+    $exitCode = Invoke-Native npm ci
+    if ($exitCode -ne 0) { Write-Fail "npm ci 失败 (exit code: $exitCode)"; exit 1 }
     Write-Ok "npm 依赖安装完成"
 
     Write-Step "构建前校验 (npm run verify:release)"
-    npm run verify:release
-    if ($LASTEXITCODE -ne 0) { Write-Fail "版本校验失败，请修复后重试"; exit 1 }
+    $exitCode = Invoke-Native npm run verify:release
+    if ($exitCode -ne 0) { Write-Fail "版本校验失败，请修复后重试"; exit 1 }
     Write-Ok "校验通过"
 
     Write-Step "Tauri Windows 构建 (x86_64-pc-windows-msvc)"
-    npm run tauri build -- --target x86_64-pc-windows-msvc
-    if ($LASTEXITCODE -ne 0) { Write-Fail "Tauri 构建失败"; exit 1 }
+    $exitCode = Invoke-Native npm run tauri build -- --target x86_64-pc-windows-msvc
+    if ($exitCode -ne 0) { Write-Fail "Tauri 构建失败 (exit code: $exitCode)"; exit 1 }
     Write-Ok "构建完成"
 
     Write-Step "收集 Windows 产物"
@@ -142,8 +158,8 @@ if (-not $SkipBuild) {
     }
 
     Write-Step "生成 Windows 便携版 (zip)"
-    node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o $DistDir
-    if ($LASTEXITCODE -ne 0) {
+    $exitCode = Invoke-Native node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o $DistDir
+    if ($exitCode -ne 0) {
         Write-Warn2 "便携版 zip 生成失败（不影响安装包上传）"
     } else {
         Write-Ok "便携版 zip 已生成"
@@ -166,8 +182,8 @@ if (-not $SkipBuild) {
     if ($MergeInputs) {
         Write-Step "合并多平台 latest.json"
         $OutLatest = Join-Path $ProjectRoot "latest.json"
-        node scripts/merge-updater-manifest.mjs $MergeInputs -o $OutLatest
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $OutLatest)) {
+        $exitCode = Invoke-Native node scripts/merge-updater-manifest.mjs $MergeInputs -o $OutLatest
+        if ($exitCode -eq 0 -and (Test-Path $OutLatest)) {
             Copy-Item $OutLatest -Destination "$DistDir/latest.json" -Force
             Write-Ok "已生成合并后的 latest.json"
             Get-Content $OutLatest
@@ -189,8 +205,8 @@ $UploadArgs = @("scripts/gitee-release.mjs", $DistDir, "--tag", $Tag)
 if ($UploadOnly) { $UploadArgs += "--upload-only" }
 if ($Force) { $UploadArgs += "--force" }
 
-& node $UploadArgs
-if ($LASTEXITCODE -ne 0) {
+$exitCode = Invoke-Native node @UploadArgs
+if ($exitCode -ne 0) {
     Write-Fail "上传失败，请检查错误信息"
     exit 1
 }
