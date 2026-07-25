@@ -71,7 +71,6 @@
       "deb": {},
       "rpm": {},
       "appimage": {
-        "bundleMediaFramework": true,
         "files": {
           "/usr/share/README.md": "../README.md",
           "/usr/assets": "../src/assets/"
