@@ -173,8 +173,8 @@ const ERROR_PATTERNS = [
   { re: /error\[E\d{4}\]/, lvl: 'fail', msg: 'Rust 编译错误' },
   { re: /error: aborting due to \d+ previous error/i, lvl: 'fail', msg: 'Rust 编译终止' },
   { re: /could not compile |compilation failed/i, lvl: 'fail', msg: 'Cargo 编译失败' },
-  // 通用前端错误
-  { re: /TypeScript error|TS\d{4}:|vue-tsc|vite build failed/i, lvl: 'fail', msg: '前端类型/构建错误' },
+  // 通用前端错误（仅当出现 TS 错误号或失败关键字才算错误；'vue-tsc' 单独出现在命令行/info中忽略）
+  { re: /TypeScript error|TS\d{4}:\s|vue-tsc\s+.*(error|fail)|vite\s+build\s+failed|error\s+during\s+build/i, lvl: 'fail', msg: '前端类型/构建错误' },
   // NSIS / WiX
   { re: /File: .*\.nsi|File: .*\.wxs|error.*nsis|error.*wix/i, lvl: 'fail', msg: 'NSIS/WiX 安装包构建错误' },
   // GLIBC / ELF 常见
@@ -215,10 +215,20 @@ function verifyScan(logPath) {
 
   if (hits.length === 0) { pass('日志未发现异常模式（扫描通过）'); return true; }
 
+  // 去重：相同 lvl+msg 的重复命中只保留1条（避免同一个错误被 tauri bundler 重复打印多行造成虚假计数）
+  const seen = new Set();
+  const dedup = [];
+  for (const h of hits) {
+    const k = `${h.lvl}|${h.msg}`;
+    if (!seen.has(k)) { seen.add(k); dedup.push(h); }
+  }
+  if (dedup.length !== hits.length) info(`去重：原命中 ${hits.length} 条 -> ${dedup.length} 条（相同错误被多次打印仅统计1次）`);
+  const H = dedup;
+
   // 按严重程度输出
-  const f = hits.filter(h => h.lvl === 'fail');
-  const w = hits.filter(h => h.lvl === 'warn');
-  const n = hits.filter(h => h.lvl === 'info');
+  const f = H.filter(h => h.lvl === 'fail');
+  const w = H.filter(h => h.lvl === 'warn');
+  const n = H.filter(h => h.lvl === 'info');
   if (f.length) section(`FAIL (${f.length})`);
   for (const h of f) { console.log(`    L${h.ln} [FAIL] ${h.msg}`); console.log(`         ${h.raw}`); fail(h.msg); }
   if (w.length) section(`WARN (${w.length})`);

@@ -1,0 +1,55 @@
+﻿===== 1) 关键env =====
+  APPIMAGE_EXTRACT_AND_RUN = <未设置>
+  ARCH = <未设置>
+  NO_STRIP = <未设置>
+  STRIP = <未设置>
+
+===== 2) glibc 版本 =====
+ldd (GNU libc) 2.43
+
+===== 3) FUSE =====
+crw-rw-rw- 1 root root 10, 229 Jul 25 16:55 /dev/fuse
+rpm packages:
+fuse3-libs-3.18.2-1.fc44.x86_64
+fuse-common-3.18.2-1.fc44.x86_64
+fuse3-3.18.2-1.fc44.x86_64
+fuse-libs-2.9.9-25.fc44.x86_64
+fuse-devel-2.9.9-25.fc44.x86_64
+fuse-2.9.9-25.fc44.x86_64
+libfuse so:
+/usr/lib64/libfuse.so
+/usr/lib64/libfuse.so.2
+/usr/lib64/libfuse.so.2.9.9
+/usr/sbin/fusermount
+
+===== 4) ~/.cache/tauri 文件 =====
+total 29M
+drwxr-xr-x  2 ye ye 4.0K Jul 25 11:13 .
+drwxr-xr-x 13 ye ye 4.0K Jul  3 11:02 ..
+-rwxrwx---  1 ye ye  31K Jul  3 11:02 AppRun-x86_64
+-rwxrwx---  1 ye ye  16M Jul 25 11:13 linuxdeploy-plugin-appimage.AppImage
+-rwxrwx---  1 ye ye 4.8K Jul 25 11:03 linuxdeploy-plugin-gstreamer.sh
+-rwxrwx---  1 ye ye  12K Jul 25 11:03 linuxdeploy-plugin-gtk.sh
+-rwxrwx---  1 ye ye  13M Jul 25 18:03 linuxdeploy-x86_64.AppImage
+  -- /home/ye/.cache/tauri/linuxdeploy-plugin-appimage.AppImage
+     size : 16484856 bytes
+     perms: 770 ye:ye
+     file : ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, BuildID[sha1]=804289becc7fc6672c279ca50542e32508c1e518, stripped
+     ver  : AppImage runtime version: https://github.com/AppImage/type2-runtime/commit/75849dc
+  -- /home/ye/.cache/tauri/linuxdeploy-x86_64.AppImage
+     size : 13264064 bytes
+     perms: 770 ye:ye
+     file : ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=30e06184968532b6a9aa36f44ada39e4af0bda56, for GNU/Li
+     ver  : Flag could not be matched: appimage-version
+  /tmp/appimage_extracted_5a27dadc81a3abf452534fdbee9c58ee/AppRun {OPTIONS}
+  -- /home/ye/.cache/tauri/linuxdeploy-plugin-appimage.AppImage
+     size : 16484856 bytes
+     perms: 770 ye:ye
+     file : ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), static-pie linked, BuildID[sha1]=804289becc7fc6672c279ca50542e32508c1e518, stripped
+     ver  : AppImage runtime version: https://github.com/AppImage/type2-runtime/commit/75849dc
+
+===== 5) strip 版本 =====
+/usr/sbin/strip
+GNU strip version 2.46.1-1.fc44
+
+===== 6) mount 选项 (noexec?) =====
