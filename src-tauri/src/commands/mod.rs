@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::mod_manager::{HashConflictReport, ModGroupData, ModsPathStatus, UpdateModDataResult};
 use crate::state::AppState;
@@ -1553,6 +1553,7 @@ pub async fn update_setting(
         "modsPathEndfield" => settings.mods_path_endfield = json_to_string(&parsed)?,
         "savedWindowWidth" => settings.saved_window_width = json_to_i32(&parsed)?,
         "savedWindowHeight" => settings.saved_window_height = json_to_i32(&parsed)?,
+        "enableAutoUpdate" => settings.enable_auto_update = json_to_bool(&parsed)?,
         _ => return Err(format!("Unknown setting key: {}", key)),
     }
 
@@ -2301,5 +2302,155 @@ pub async fn open_url(url: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn create_desktop_icon(name: Option<String>) -> Result<(), String> {
     crate::desktop_entry::DesktopEntryManager::create_desktop_entry(name)
+}
+
+// =========================================================================
+// 自更新：官方 tauri-plugin-updater 的透传命令 + 版本信息
+// =========================================================================
+
+#[derive(serde::Serialize, Clone)]
+pub struct VersionInfo {
+    pub version: String,
+    pub commit: Option<String>,
+    pub build_date: Option<String>,
+}
+
+/// 返回当前应用的版本号（Cargo.toml package.version），供前端 TitleBar/Settings 显示。
+#[tauri::command]
+pub fn get_version_info() -> VersionInfo {
+    VersionInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        commit: option_env!("GIT_COMMIT").map(|s| s.to_string()),
+        build_date: option_env!("BUILD_DATE").map(|s| s.to_string()).or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| format!("{}", d.as_secs()))
+                .ok()
+        }),
+    }
+}
+
+/// 触发一次更新检查（内部通过 updater plugin 执行，异步）；
+/// 返回是否发现可用更新（true = 有更新；false = 无；Err 串描述失败原因如网络/签名）。
+#[tauri::command]
+pub async fn check_update(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater_builder().build().map_err(|e| e.to_string())?;
+    match updater.check().await {
+        Ok(update) => {
+            let available = update.is_some();
+            if available {
+                let u = update.unwrap();
+                let _ = app.emit(
+                    "tauri://update-available",
+                    serde_json::json!({
+                        "version": u.version,
+                        "body": u.body.clone().unwrap_or_default(),
+                        "date": u.date.map(|d| d.to_string()).unwrap_or_default(),
+                    }),
+                );
+            }
+            Ok(available)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 触发 下载 + 校验 + 安装（安装后由前端弹窗二次确认是否重启）。
+/// 下载/校验/安装由插件后台线程执行；本命令 spawn 任务后立即返回 Ok(())，不阻塞前端 UI。
+#[tauri::command]
+pub async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let app_c = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let updater = match app_c.updater_builder().build() {
+            Ok(u) => u,
+            Err(e) => {
+                log::error!("[updater-plugin] Builder build failed: {}", e);
+                let _ = app_c.emit(
+                    "tauri://update-status",
+                    serde_json::json!({
+                        "status": "error",
+                        "error": e.to_string(),
+                    }),
+                );
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                log::info!(
+                    "[updater-plugin] Download+Install started for v{}",
+                    update.version
+                );
+                let _ = app_c.emit(
+                    "tauri://update-status",
+                    serde_json::json!({
+                        "status": "installing",
+                        "version": update.version,
+                    }),
+                );
+                let result = update
+                    .download_and_install(
+                        |chunk_length, content_length| {
+                            if let Some(total) = content_length {
+                                log::debug!("[updater-plugin] Downloaded {} / {} bytes", chunk_length, total);
+                            }
+                        },
+                        || {
+                            log::info!("[updater-plugin] Download finished, starting install");
+                        },
+                    )
+                    .await;
+                match result {
+                    Ok(()) => {
+                        log::info!("[updater-plugin] Install finished");
+                        let _ = app_c.emit(
+                            "tauri://update-status",
+                            serde_json::json!({
+                                "status": "done",
+                            }),
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("[updater-plugin] download_and_install failed: {}", e);
+                        let _ = app_c.emit(
+                            "tauri://update-status",
+                            serde_json::json!({
+                                "status": "error",
+                                "error": e.to_string(),
+                            }),
+                        );
+                    }
+                }
+            }
+            Ok(None) => {
+                log::warn!("[updater-plugin] download_and_install: no update available");
+                let _ = app_c.emit(
+                    "tauri://update-status",
+                    serde_json::json!({
+                        "status": "not-available",
+                    }),
+                );
+            }
+            Err(e) => {
+                log::error!("[updater-plugin] check before install failed: {}", e);
+                let _ = app_c.emit(
+                    "tauri://update-status",
+                    serde_json::json!({
+                        "status": "error",
+                        "error": e.to_string(),
+                    }),
+                );
+            }
+        }
+    });
+    Ok(())
+}
+
+/// 重启应用（安装完更新后由前端弹窗确认后调用）。
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    tauri::process::restart(&app.env());
 }
 

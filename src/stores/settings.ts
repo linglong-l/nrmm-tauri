@@ -62,6 +62,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const sortGroupMethod = computed(() => settings.value.sortGroupMethod);
   /** 当前目标游戏 */
   const targetGame = computed(() => settings.value.targetGame);
+  /** 是否启用自更新徽章提醒 */
+  const enableAutoUpdate = computed(() => settings.value.enableAutoUpdate);
 
   /** 设置键盘热键。注意：此处仅修改内存中的值，需另外调用 saveSettings 持久化。 */
   function setHotkeyKeyboard(value: HotkeyKeyboard) {
@@ -123,6 +125,11 @@ export const useSettingsStore = defineStore('settings', () => {
   /** 设置快捷键是否以模拟按键方式触发。 */
   function setKeybindSimulateKeypress(value: boolean) {
     settings.value.keybindSimulateKeypress = value;
+  }
+
+  /** 设置是否启用自更新徽章提醒。 */
+  function setEnableAutoUpdate(value: boolean) {
+    settings.value.enableAutoUpdate = value;
   }
 
   /** 设置分组排序方式。 */
@@ -332,6 +339,9 @@ export const useSettingsStore = defineStore('settings', () => {
       const jsonVal = typeof value === 'string' ? value : JSON.stringify(value);
       const result = await safeInvoke('update_setting', { key, value: jsonVal });
       if (result.ok) {
+        if (settings.value) {
+          settings.value[key] = value;
+        }
         eventManager.emit(EventNames.SETTINGS_UPDATED, undefined);
         return true;
       } else {
@@ -387,6 +397,7 @@ export const useSettingsStore = defineStore('settings', () => {
     keybindSimulateKeypress,
     sortGroupMethod,
     targetGame,
+    enableAutoUpdate,
     setHotkeyKeyboard,
     setHotkeyGamepad,
     setSearchHotkey,
@@ -399,6 +410,7 @@ export const useSettingsStore = defineStore('settings', () => {
     setAutoPinWindow,
     setShowMenuWhenTogglingOutsideGame,
     setKeybindSimulateKeypress,
+    setEnableAutoUpdate,
     setSortGroupMethod,
     setTargetGame,
     setTargetProcess,

@@ -20,7 +20,8 @@ import type {
   CloudData,
   HotkeyKeyboard,
   HotkeyGamepad,
-  HashConflictReport
+  HashConflictReport,
+  VersionInfo
 } from '../types';
 import { TargetGame } from '../types';
 import { CONSTANTS } from './constants';
@@ -716,7 +717,8 @@ export function getDefaultSettings(): AppSettings {
     modsPathGenshin: '',
     modsPathHsr: '',
     modsPathZzz: '',
-    modsPathEndfield: ''
+    modsPathEndfield: '',
+    enableAutoUpdate: true
   };
 }
 
@@ -852,4 +854,28 @@ export async function invokeCreateDesktopIcon(name?: string): Promise<InvokeResu
  */
 export async function invokeCheckHashConflicts(): Promise<InvokeResult<HashConflictReport>> {
   return safeInvoke<HashConflictReport>('check_hash_conflicts');
+}
+
+// =========================================================================
+// 自更新（Updater）相关 invoke 封装 - 基于官方 tauri-plugin-updater
+// =========================================================================
+
+/** 获取当前应用版本信息 */
+export async function invokeGetVersionInfo(): Promise<InvokeResult<VersionInfo>> {
+  return safeInvoke<VersionInfo>('get_version_info');
+}
+
+/** 触发一次更新检查。返回 true=有可用更新；false=无更新；Err=失败 */
+export async function invokeCheckUpdate(): Promise<InvokeResult<boolean>> {
+  return safeInvoke<boolean>('check_update');
+}
+
+/** 触发下载+安装（后台异步执行，通过 tauri://update-status 事件推送进度） */
+export async function invokeDownloadAndInstallUpdate(): Promise<InvokeResult<void>> {
+  return safeInvoke<void>('download_and_install_update');
+}
+
+/** 重启应用（安装完成后调用） */
+export async function invokeRestartApp(): Promise<InvokeResult<void>> {
+  return safeInvoke<void>('restart_app');
 }

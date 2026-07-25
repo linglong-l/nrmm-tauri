@@ -8,7 +8,8 @@ import type {
   Notification,
   WindowPosition,
   CloudData,
-  IniSyntaxError
+  IniSyntaxError,
+  UpdateAvailableInfo
 } from '../types';
 import type { HashConflictReport } from '../types';
 import { createLogger } from './logger';
@@ -64,7 +65,11 @@ export const EventNames = {
   /** 当前目标游戏已切换 */
   GAME_SWITCHED: 'game-switched',
   /** Hash 冲突检测完成（与后端 HASH_CONFLICTS_DETECTED_EVENT 常量保持一致） */
-  HASH_CONFLICTS_DETECTED: 'hash-conflicts-detected'
+  HASH_CONFLICTS_DETECTED: 'hash-conflicts-detected',
+  /** 发现可用更新（前端内部事件，由 updater store 在 checkUpdate 返回 available 时 emit） */
+  UPDATE_AVAILABLE: 'update-available',
+  /** 请求打开更新对话框 */
+  UPDATE_DIALOG_OPEN: 'update-dialog-open'
 } as const;
 
 /** 事件名称类型，取自 EventNames 常量的所有值的联合类型。 */
@@ -123,6 +128,10 @@ export interface EventPayloadMap {
     report: HashConflictReport;
     completedAt: number;
   };
+  /** 发现可用更新 */
+  [EventNames.UPDATE_AVAILABLE]: UpdateAvailableInfo;
+  /** 请求打开更新对话框 */
+  [EventNames.UPDATE_DIALOG_OPEN]: void;
 }
 
 /** 通用事件回调类型，接收一个载荷参数。 */

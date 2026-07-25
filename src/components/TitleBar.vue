@@ -19,10 +19,17 @@
 import { ref, onMounted, computed } from 'vue';
 import { Minus, Close, Crop } from '@element-plus/icons-vue';
 import appIcon from '@/assets/images/app-icon-32.png';
+import { useVersionStore } from '../stores/version';
+import { useUpdaterStore } from '../stores/updater';
+import { useSettingsStore } from '../stores/settings';
+import { EventNames, eventManager } from '../utils/events';
 
 type Platform = 'windows' | 'macos' | 'linux' | 'unknown';
 
 const platform = ref<Platform>('unknown');
+const versionStore = useVersionStore();
+const updaterStore = useUpdaterStore();
+const settingsStore = useSettingsStore();
 
 const isMacOS = computed(() => platform.value === 'macos');
 
@@ -35,7 +42,12 @@ onMounted(async () => {
   } catch {
     platform.value = 'unknown';
   }
+  versionStore.load();
 });
+
+function openUpdateDialog() {
+  eventManager.emitLocal(EventNames.UPDATE_DIALOG_OPEN, undefined);
+}
 
 function detectPlatform(): Platform {
   const userAgent = navigator.userAgent.toLowerCase();
@@ -121,7 +133,9 @@ async function close() {
     <!-- 左侧：应用图标与名称（macOS 下在控制按钮右侧） -->
     <div class="title-bar-left" data-tauri-drag-region>
       <img :src="appIcon" class="app-icon" alt="app icon" />
-      <span class="app-title">XXMI-NRMM</span>
+      <span class="app-title">nrmm-rust</span>
+      <span class="app-version" @click.stop="openUpdateDialog">v{{ versionStore.version }}</span>
+      <el-badge v-if="settingsStore.enableAutoUpdate && updaterStore.status === 'available'" :value="'!'" class="update-badge" @click.stop="openUpdateDialog" />
     </div>
     <!-- 右侧：窗口控制按钮（Windows/Linux 风格） -->
     <div v-if="!isMacOS" class="title-bar-right">
@@ -193,6 +207,33 @@ async function close() {
   font-size: 12px;
   font-weight: 500;
   color: rgba(255, 255, 255, 0.5);
+}
+
+.app-version {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.app-version:hover {
+  color: rgba(255, 255, 255, 0.85);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.update-badge {
+  cursor: pointer;
+}
+
+.update-badge :deep(.el-badge__content) {
+  background-color: #f56c6c;
+  border: none;
+  font-size: 10px;
+  height: 16px;
+  line-height: 16px;
+  padding: 0 4px;
 }
 
 .title-bar-macos .app-title {

@@ -21,6 +21,9 @@ import { Folder, Delete } from '@element-plus/icons-vue';
 import appLogo from '@/assets/images/app-icon-128.png?inline';
 import { useSettingsStore } from '../stores/settings';
 import { useGameStore } from '../stores/game';
+import { useUpdaterStore } from '../stores/updater';
+import { useVersionStore } from '../stores/version';
+import UpdateDialog from '../components/UpdateDialog.vue';
 import {
   invokeUpdateModData, invokeValidateModsPath, invokeOpenModFolder,
   invokeSelectDirectory, invokeLoadMods,
@@ -38,12 +41,19 @@ import { validateHotkeys } from '../utils/hotkeyValidator';
 import { EventNames, eventManager } from '../utils/events';
 import { createLogger } from '../utils/logger';
 import { createDebounce } from '../utils/debounce';
-import { getVersion } from '@tauri-apps/api/app';
 
 const { t } = useI18n();
 const settingsStore = useSettingsStore();
 const gameStore = useGameStore();
+const updaterStore = useUpdaterStore();
+const versionStore = useVersionStore();
 const log = createLogger('SettingsView');
+
+/** 控制 UpdateDialog 显隐 */
+const showUpdateDialog = ref(false);
+
+/** 控制关于对话框显隐 */
+const showAboutDialog = ref(false);
 
 /** 注入全屏遮罩控制函数 */
 const overlayControls = inject<{
@@ -62,8 +72,6 @@ const overlayControls = inject<{
 const activeTab = ref('game');
 // 是否正在打开文件夹选择对话框（防止重复触发）
 const isBrowsingFolder = ref(false);
-// 应用版本号（从 Tauri API 获取）
-const appVersion = ref('');
 // 各游戏的 Mods 路径校验状态映射表；null 表示尚未校验
 const pathValidationStatus = ref<Record<TargetGame, ModsPathStatus | null>>({
   [TargetGame.none]: null,
@@ -154,6 +162,11 @@ const showMenuOutsideGameValue = computed({
 const keybindSimulateKeypressValue = computed({
   get: () => settingsStore.keybindSimulateKeypress,
   set: (val: boolean) => handleKeybindSimulateKeypressChange(val)
+});
+
+const enableAutoUpdateValue = computed({
+  get: () => settingsStore.enableAutoUpdate,
+  set: (val: boolean) => handleEnableAutoUpdateChange(val)
 });
 
 const sortGroupMethodValue = computed({
@@ -463,6 +476,15 @@ async function handleKeybindSimulateKeypressChange(value: boolean) {
   }
 }
 
+/** 自更新徽章提醒开关变更处理 */
+async function handleEnableAutoUpdateChange(value: boolean) {
+  settingsStore.setEnableAutoUpdate(value);
+  const ok = await settingsStore.saveSetting('enableAutoUpdate', value);
+  if (!ok) {
+    ElMessage.error(t('保存失败'));
+  }
+}
+
 /** 分组排序方式变更处理 */
 async function handleSortGroupMethodChange(value: SortGroupMethod) {
   settingsStore.setSortGroupMethod(value);
@@ -470,6 +492,16 @@ async function handleSortGroupMethodChange(value: SortGroupMethod) {
   if (!ok) {
     ElMessage.error(t('保存失败'));
   }
+}
+
+/** 打开自更新对话框 */
+function handleOpenUpdateDialog() {
+  showUpdateDialog.value = true;
+}
+
+/** 打开关于对话框 */
+function handleOpenAboutDialog() {
+  showAboutDialog.value = true;
 }
 
 /**
@@ -776,19 +808,7 @@ function formatTransparencyTooltip(val: number): string {
   return `${Math.round(val * 100)}%`;
 }
 
-/**
- * 获取应用版本号并填充到 appVersion。
- * 异常处理：获取失败时回退到 v0.1.1。
- */
-function getAppVersion() {
-  getVersion().then(version => {
-    appVersion.value = `v${version}`;
-  }).catch(() => {
-    appVersion.value = 'v0.1.1';
-  });
-}
-
-// 组件挂载：若设置未加载，则对每个游戏已配置的路径进行校验；并获取应用版本号
+// 组件挂载：若设置未加载，则对每个游戏已配置的路径进行校验
 onMounted(async () => {
   if (!settingsStore.isLoaded) {
     for (const game of games) {
@@ -798,7 +818,10 @@ onMounted(async () => {
       }
     }
   }
-  getAppVersion();
+
+  eventManager.on(EventNames.UPDATE_DIALOG_OPEN, () => {
+    showUpdateDialog.value = true;
+  });
 });
 
 // 监听设置加载完成，重新校验所有游戏路径
@@ -1183,6 +1206,13 @@ watch(
               </div>
             </el-form-item>
 
+            <el-form-item :label="t('Updater.settingsToggleAutoUpdateLabel')">
+              <div class="switch-row">
+                <el-switch v-model="enableAutoUpdateValue" />
+                <span class="switch-label">{{ t('Updater.settingsToggleAutoUpdateLabel') }}</span>
+              </div>
+            </el-form-item>
+
             <div class="settings-divider" />
 
             <el-form-item :label="t('Sort group by')">
@@ -1195,6 +1225,7 @@ watch(
                 />
               </el-select>
             </el-form-item>
+
           </el-form>
         </div>
       </el-tab-pane>
@@ -1290,12 +1321,34 @@ watch(
             <div class="app-logo">
               <img :src="appLogo" alt="Logo" class="logo-img" />
             </div>
-            <h2 class="app-title">XXMI-NRMM</h2>
-            <p class="app-version">{{ appVersion }}</p>
+            <h2 class="app-title">nrmm-rust</h2>
+            <p class="app-version">v{{ versionStore.version }}</p>
             <p class="app-description">
               {{ t('Mod Manager for Gacha Games') }}
             </p>
+
             <div class="settings-divider" />
+
+            <el-button
+              type="primary"
+              :loading="updaterStore.isChecking"
+              @click="handleOpenUpdateDialog"
+              style="width: 100%"
+            >
+              {{ t('Updater.openUpdateDialog') }}
+            </el-button>
+
+            <div class="settings-divider" />
+
+            <el-button
+              @click="handleOpenAboutDialog"
+              style="width: 100%"
+            >
+              {{ t('Updater.about') }}
+            </el-button>
+
+            <div class="settings-divider" />
+
             <div class="about-links">
               <el-button link type="primary" @click="openGitHubLink">
                 GitHub
@@ -1305,13 +1358,39 @@ watch(
               </el-button>
             </div>
             <p class="copyright">
-              © 2024 XXMI-NRMM. All rights reserved.
+              © 2024 nrmm-rust. All rights reserved.
             </p>
           </div>
         </div>
       </el-tab-pane>
     </el-tabs>
   </div>
+
+  <UpdateDialog v-model="showUpdateDialog" />
+
+  <el-dialog
+    v-model="showAboutDialog"
+    :title="t('Updater.about')"
+    width="420px"
+  >
+    <div class="about-dialog-content">
+      <div class="about-info-item">
+        <span class="about-label">{{ t('Updater.version') }}:</span>
+        <span class="about-value">v{{ versionStore.version }}</span>
+      </div>
+      <div v-if="versionStore.commit" class="about-info-item">
+        <span class="about-label">Commit:</span>
+        <span class="about-value">{{ versionStore.commit.substring(0, 7) }}</span>
+      </div>
+      <div v-if="versionStore.buildDate" class="about-info-item">
+        <span class="about-label">{{ t('Updater.buildDate') }}:</span>
+        <span class="about-value">{{ versionStore.buildDate }}</span>
+      </div>
+    </div>
+    <template #footer>
+      <el-button @click="showAboutDialog = false">{{ t('Common.close') }}</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -1710,6 +1789,28 @@ watch(
   font-size: 12px;
   color: rgba(255, 255, 255, 0.3);
   margin-top: 24px;
+}
+
+.about-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.about-info-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+}
+
+.about-label {
+  color: var(--text-secondary, #909399);
+}
+
+.about-value {
+  color: var(--text-primary, #303133);
+  font-family: monospace;
 }
 
 /* 栅格间距 */

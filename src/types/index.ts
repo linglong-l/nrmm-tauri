@@ -286,6 +286,8 @@ export interface AppSettings {
   modsPathZzz: string;
   /** 明日方舟：终末地的 Mods 目录路径 */
   modsPathEndfield: string;
+  /** 是否启用自更新徽章提醒（TitleBar 小红点） */
+  enableAutoUpdate: boolean;
 }
 
 /**
@@ -742,3 +744,48 @@ export interface HashConflictReport {
   /** 结构化冲突条目列表 */
   conflicts: HashConflictEntry[];
 }
+
+// =========================================================================
+// 自更新（Updater）相关类型 - 基于官方 tauri-plugin-updater
+// =========================================================================
+
+/** 版本信息（来自 get_version_info 命令） */
+export interface VersionInfo {
+  version: string;
+  commit: string | null;
+  buildDate: string | null;
+}
+
+/** 更新可用信息（从 check_update 事件获取） */
+export interface UpdateAvailableInfo {
+  version: string;
+  body: string;
+  date: string;
+}
+
+/** 更新器 8 态状态机 */
+export type UpdaterStatus =
+  | 'idle'        // 初始/未检查
+  | 'checking'    // 正在检查
+  | 'up-to-date'  // 已是最新
+  | 'available'   // 有可用更新（等待用户确认下载）
+  | 'downloading' // 正在下载
+  | 'installing'  // 正在安装
+  | 'done'        // 安装完成（等待重启）
+  | 'error';      // 出错
+
+/** 更新器完整状态 */
+export interface UpdaterState {
+  status: UpdaterStatus;
+  /** 检测到的更新信息（available/downloading/installing/done 状态时有值） */
+  updateInfo: UpdateAvailableInfo | null;
+  /** 已下载字节数（downloading 状态） */
+  downloadedBytes: number;
+  /** 总字节数（downloading 状态，未知为0） */
+  totalBytes: number;
+  /** 下载内容长度（从事件中获取） */
+  contentLength: number | null;
+  /** 错误信息（error 状态） */
+  errorMessage: string;
+}
+

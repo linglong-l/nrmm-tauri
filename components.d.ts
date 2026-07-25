@@ -25,6 +25,7 @@ declare module 'vue' {
     ElInput: typeof import('element-plus/es')['ElInput']
     ElOption: typeof import('element-plus/es')['ElOption']
     ElPopover: typeof import('element-plus/es')['ElPopover']
+    ElProgress: typeof import('element-plus/es')['ElProgress']
     ElSelect: typeof import('element-plus/es')['ElSelect']
     ElSlider: typeof import('element-plus/es')['ElSlider']
     ElSwitch: typeof import('element-plus/es')['ElSwitch']
@@ -38,7 +39,9 @@ declare module 'vue' {
     SideNav: typeof import('./src/components/SideNav.vue')['default']
     StatusBar: typeof import('./src/components/StatusBar.vue')['default']
     TitleBar: typeof import('./src/components/TitleBar.vue')['default']
+    UpdateDialog: typeof import('./src/components/UpdateDialog.vue')['default']
     UpdateModDataOverlay: typeof import('./src/components/UpdateModDataOverlay.vue')['default']
+    UpdateProgress: typeof import('./src/components/UpdateProgress.vue')['default']
   }
   export interface GlobalDirectives {
     vLoading: typeof import('element-plus/es')['ElLoadingDirective']

@@ -54,3 +54,5 @@ src-tauri/WixTools/
 
 /docs/*
 /GitProjects/*
+# CI / signing secrets（防止误提交公钥/私钥/密码）
+/Key/

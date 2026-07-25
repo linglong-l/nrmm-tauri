@@ -22,6 +22,7 @@
     "core:window:allow-toggle-maximize",
     "core:tray:default",
     "dialog:default",
-    "global-shortcut:default"
+    "global-shortcut:default",
+    "updater:default"
   ]
 }

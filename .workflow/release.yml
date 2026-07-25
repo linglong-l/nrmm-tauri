@@ -1,0 +1,184 @@
+name: nrmm-rust-release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  CARGO_PROFILE_RELEASE_LTO: true
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
+  CARGO_PROFILE_RELEASE_STRIP: true
+
+jobs:
+  build-windows:
+    name: Build Windows (NSIS)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Rust dependencies (Windows)
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          npm install -g @tauri-apps/cli@2
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Pre-build verification
+        run: npm run verify:release
+
+      - name: Build Tauri app (Windows)
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc
+
+      - name: Find and upload Windows artifacts
+        run: |
+          $bundleDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
+          $installer = Get-ChildItem -Path "$bundleDir/nsis/*.exe" | Select-Object -First 1
+          if (-not $installer) { Write-Error "NSIS installer not found"; exit 1 }
+          Copy-Item $installer.FullName -Destination "nrmm-rust-setup-x86_64.exe"
+          # Tauri updater generates latest.json in target dir after build
+          $latest = Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle" -Filter "latest.json" -Recurse | Select-Object -First 1
+          if ($latest) { Copy-Item $latest.FullName -Destination "latest-windows.json" }
+        shell: powershell
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            nrmm-rust-setup-x86_64.exe
+            latest-windows.json
+
+  build-linux:
+    name: Build Linux (AppImage/deb/rpm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Install Linux dependencies (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev libayatana-appindicator3-dev
+          rustup target add x86_64-unknown-linux-gnu
+          npm install -g @tauri-apps/cli@2
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Pre-build verification
+        run: npm run verify:release
+
+      - name: Build Tauri app (Linux)
+        run: npm run tauri build -- --target x86_64-unknown-linux-gnu
+
+      - name: Find and upload Linux artifacts
+        run: |
+          set -e
+          BUNDLE_DIR="src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
+          # AppImage
+          APPIMAGE=$(find "$BUNDLE_DIR/appimage" -name "*.AppImage" | head -1)
+          if [ -n "$APPIMAGE" ]; then cp "$APPIMAGE" nrmm-rust-x86_64.AppImage; fi
+          # deb
+          DEB=$(find "$BUNDLE_DIR/deb" -name "*.deb" | head -1)
+          if [ -n "$DEB" ]; then cp "$DEB" nrmm-rust-x86_64.deb; fi
+          # rpm
+          RPM=$(find "$BUNDLE_DIR/rpm" -name "*.rpm" | head -1)
+          if [ -n "$RPM" ]; then cp "$RPM" nrmm-rust-x86_64.rpm; fi
+          # latest.json
+          LATEST=$(find "$BUNDLE_DIR" -name "latest.json" | head -1)
+          if [ -n "$LATEST" ]; then cp "$LATEST" latest-linux.json; fi
+          ls -la *.AppImage *.deb *.rpm latest-linux.json 2>/dev/null || true
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            nrmm-rust-x86_64.AppImage
+            nrmm-rust-x86_64.deb
+            nrmm-rust-x86_64.rpm
+            latest-linux.json
+
+  release:
+    name: Merge manifests & create release
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-linux]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: ls -laR artifacts/
+
+      - name: Merge latest.json manifests
+        run: |
+          set -e
+          WIN_LATEST="artifacts/windows-artifacts/latest-windows.json"
+          LINUX_LATEST="artifacts/linux-artifacts/latest-linux.json"
+          INPUTS=""
+          [ -f "$WIN_LATEST" ] && INPUTS="$INPUTS $WIN_LATEST"
+          [ -f "$LINUX_LATEST" ] && INPUTS="$INPUTS $LINUX_LATEST"
+          node scripts/merge-updater-manifest.mjs $INPUTS -o latest.json
+          cat latest.json
+
+      - name: Post-build verification
+        run: node scripts/verify-tauri-release.mjs post latest.json
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            artifacts/windows-artifacts/nrmm-rust-setup-x86_64.exe
+            artifacts/linux-artifacts/nrmm-rust-x86_64.AppImage
+            artifacts/linux-artifacts/nrmm-rust-x86_64.deb
+            artifacts/linux-artifacts/nrmm-rust-x86_64.rpm
+            latest.json
+          draft: false
+          prerelease: false
+          body: |
+            ## nrmm-rust ${{ github.ref_name }}
+
+            自动构建发布。请下载对应平台的安装包进行安装/更新。
+
+            ### 下载
+            - **Windows**: `nrmm-rust-setup-x86_64.exe`
+            - **Linux (AppImage)**: `nrmm-rust-x86_64.AppImage`
+            - **Linux (deb)**: `nrmm-rust-x86_64.deb`
+            - **Linux (rpm)**: `nrmm-rust-x86_64.rpm`

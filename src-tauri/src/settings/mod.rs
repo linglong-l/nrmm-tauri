@@ -148,6 +148,11 @@ pub struct Settings {
     /// 当前选中的目标游戏。用于决定加载哪个游戏的 Mods 与配置。
     #[serde(default = "default_target_game")]
     pub target_game: TargetGame,
+
+    /// 是否启用自更新徽章提醒（TitleBar 小红点）。
+    /// `true` 时检测到新版本会在标题栏显示提醒徽章。
+    #[serde(default = "default_enable_auto_update")]
+    pub enable_auto_update: bool,
 }
 
 // ===== 各字段默认值函数 =====
@@ -277,6 +282,11 @@ fn default_show_menu_when_toggling_outside_game() -> bool {
 /// 默认关闭按键模拟绑定。
 fn default_keybind_simulate_keypress() -> bool {
     false
+}
+
+/// 默认启用自更新徽章提醒。
+fn default_enable_auto_update() -> bool {
+    true
 }
 
 /// 默认分组排序方法：0。
@@ -487,6 +497,7 @@ impl Default for Settings {
             saved_window_x: None,
             saved_window_y: None,
             target_game: default_target_game(),
+            enable_auto_update: default_enable_auto_update(),
         }
     }
 }

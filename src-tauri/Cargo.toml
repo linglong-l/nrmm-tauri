@@ -1,6 +1,6 @@
 [package]
 name = "nrmm-rust"
-version = "0.2.0"
+version = "0.3.0"
 description = "A Tauri App"
 authors = ["ye"]
 edition = "2021"
@@ -31,6 +31,7 @@ tauri = { version = "2.11", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-global-shortcut = "2.3"
 tauri-plugin-dialog = "2.7"
 tauri-plugin-shell = "2.3"
+tauri-plugin-updater = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 time = { version = "0.3", features = ["formatting", "local-offset", "parsing"] }
@@ -40,8 +41,8 @@ dirs = "6.0"
 anyhow = "1.0"
 thiserror = "2.0"
 notify = "8.2"
-reqwest = { version = "0.13", features = ["json"] }
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 regex = "1.13"
 ini = "1.3"
