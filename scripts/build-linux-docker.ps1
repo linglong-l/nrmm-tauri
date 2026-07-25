@@ -94,6 +94,9 @@ echo '--- 前端构建 ---'
 npm run build
 echo '--- Tauri Linux 构建 ---'
 npx tauri build --target $Target $BundleArgs
+echo '--- 生成便携版 tar.gz ---'
+mkdir -p /workspace/dist-linux
+node scripts/build-portable.mjs --target $Target -o /workspace/dist-linux
 echo '--- 构建完成 ---'
 "@
 
@@ -129,6 +132,10 @@ function Copy-Pattern($Dir, $Pattern, $DestName) {
 Copy-Pattern (Join-Path $BundleDir "appimage") "*.AppImage" "nrmm-rust-x86_64.AppImage"
 Copy-Pattern (Join-Path $BundleDir "deb") "*.deb" "nrmm-rust-x86_64.deb"
 Copy-Pattern (Join-Path $BundleDir "rpm") "*.rpm" "nrmm-rust-x86_64.rpm"
+
+$portableTgz = Join-Path $OutputDir "nrmm-rust-portable-x86_64.tar.gz"
+if (Test-Path $portableTgz) { Write-Ok "便携版 -> nrmm-rust-portable-x86_64.tar.gz" }
+else { Write-Host "  [WARN] 便携版 tar.gz 未生成" -ForegroundColor Yellow }
 
 $latest = Get-ChildItem -Path $BundleDir -Filter "latest.json" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($latest) {

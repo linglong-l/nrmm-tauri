@@ -98,6 +98,8 @@ else
     BUNDLE_ARGS="--bundles deb,rpm,appimage"
 fi
 
+CONTAINER_OUT="/workspace/dist-linux"
+
 $DOCKER_CMD run --rm \
     -v "$PROJECT_ROOT:/workspace" \
     -v nrmm-cargo-registry:/usr/local/cargo/registry \
@@ -118,6 +120,9 @@ echo '--- 前端构建校验 ---'
 npm run build
 echo '--- Tauri Linux 构建 ---'
 npx tauri build --target $TARGET $BUNDLE_ARGS
+echo '--- 生成便携版 tar.gz ---'
+mkdir -p $CONTAINER_OUT
+node scripts/build-portable.mjs --target $TARGET -o $CONTAINER_OUT
 echo '--- 构建完成 ---'
 "
 
@@ -142,6 +147,13 @@ copy_if_exists() {
 copy_if_exists "$BUNDLE_DIR/appimage" "*.AppImage" "nrmm-rust-x86_64.AppImage"
 copy_if_exists "$BUNDLE_DIR/deb" "*.deb" "nrmm-rust-x86_64.deb"
 copy_if_exists "$BUNDLE_DIR/rpm" "*.rpm" "nrmm-rust-x86_64.rpm"
+
+PORTABLE_TGZ="$OUTPUT_DIR/nrmm-rust-portable-x86_64.tar.gz"
+if [ -f "$PORTABLE_TGZ" ]; then
+    echo "[OK] 便携版 -> nrmm-rust-portable-x86_64.tar.gz"
+else
+    echo "[WARN] 便携版 tar.gz 未生成"
+fi
 
 LATEST=$(find "$BUNDLE_DIR" -name "latest.json" 2>/dev/null | head -1)
 if [ -n "$LATEST" ]; then
