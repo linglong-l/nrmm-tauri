@@ -10,7 +10,13 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify:release": "node scripts/verify-tauri-release.mjs pre"
+    "verify:release": "node scripts/verify-tauri-release.mjs pre",
+    "verify:env": "node scripts/verify-build.mjs pre",
+    "verify:build": "node scripts/verify-build.mjs post",
+    "verify:log": "node scripts/verify-build.mjs scan",
+    "verify:commands": "node scripts/verify-build.mjs list-commands",
+    "build:portable-win": "node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o dist-win",
+    "build:portable-linux": "node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o dist-linux"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

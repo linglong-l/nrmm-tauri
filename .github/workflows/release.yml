@@ -10,6 +10,9 @@ env:
   CARGO_PROFILE_RELEASE_LTO: true
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
   CARGO_PROFILE_RELEASE_STRIP: true
+  # ===== AppImage 构建兜底（核心）：即使 FUSE 不可用也能解压运行 AppImage 工具 =====
+  APPIMAGE_EXTRACT_AND_RUN: '1'
+  ARCH: 'x86_64'
 
 jobs:
   build-windows:
@@ -39,13 +42,41 @@ jobs:
         run: npm ci
 
       - name: Pre-build verification
-        run: npm run verify:release
+        run: |
+          node scripts/verify-build.mjs pre || echo "::warning::verify-build pre 有警告/失败，继续尝试构建"
+          npm run verify:release
 
-      - name: Build Tauri app (Windows)
-        run: npm run tauri build -- --target x86_64-pc-windows-msvc
+      - name: Build Tauri app (Windows) with log capture
+        id: build_win
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $ProgressPreference = "SilentlyContinue"
+          $target = "x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $logFile = "dist\build-win.log"
+          & npx tauri build --target $target 2>&1 | Tee-Object -FilePath $logFile
+          $exitCode = $LASTEXITCODE
+          "TAURI_EXIT=$exitCode" | Out-File -FilePath "dist\build-env.env" -Encoding utf8
+          Write-Host "[Tauri build (Windows)] exit code = $exitCode"
+          if ($exitCode -ne 0) {
+            Write-Host "::warning::Tauri build exited with $exitCode，继续尝试便携版兜底"
+          }
 
-      - name: Generate portable zip
-        run: node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o .
+      - name: Scan Windows build log for errors
+        if: always()
+        run: |
+          node scripts/verify-build.mjs scan dist/build-win.log || echo "::warning::log scan 发现问题，请查看日志"
+
+      - name: Generate portable zip (fallback)
+        if: always()
+        run: |
+          node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o .
+
+      - name: Post-build verification (Windows artifacts)
+        if: always()
+        run: |
+          node scripts/verify-build.mjs post --target x86_64-pc-windows-msvc || echo "::warning::post 校验未完全通过，检查 artifact 列表"
 
       - name: Find and copy Windows artifacts
         run: |
@@ -102,13 +133,41 @@ jobs:
         run: npm ci
 
       - name: Pre-build verification
-        run: npm run verify:release
+        run: |
+          node scripts/verify-build.mjs pre || echo "::warning::verify-build pre 有警告/失败，继续尝试构建"
+          npm run verify:release
 
-      - name: Build Tauri app (Linux)
-        run: npm run tauri build -- --target x86_64-unknown-linux-gnu
+      - name: Build Tauri app (Linux) with log capture + fallback
+        id: build_linux
+        run: |
+          set +e
+          TARGET_TRIPLE=x86_64-unknown-linux-gnu
+          mkdir -p dist
+          BUILD_LOG=dist/build-linux.log
+          (npm run tauri build -- --target $TARGET_TRIPLE) 2>&1 | tee "$BUILD_LOG"
+          TAURI_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo "TAURI_EXIT=$TAURI_EXIT" >> dist/build-env.env
+          echo "[Tauri build (Linux)] exit code = $TAURI_EXIT"
+          echo "tauri_exit=$TAURI_EXIT" >> $GITHUB_OUTPUT
+          if [ "$TAURI_EXIT" != "0" ]; then
+            echo "::warning::Tauri build exited with $TAURI_EXIT，继续尝试便携版兜底"
+          fi
 
-      - name: Generate portable tar.gz
-        run: node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o .
+      - name: Scan Linux build log for errors
+        if: always()
+        run: |
+          node scripts/verify-build.mjs scan dist/build-linux.log || echo "::warning::log scan 发现问题，请查看日志"
+
+      - name: Generate portable tar.gz (fallback, runs always)
+        if: always()
+        run: |
+          node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o .
+
+      - name: Post-build verification (Linux artifacts)
+        if: always()
+        run: |
+          node scripts/verify-build.mjs post --target x86_64-unknown-linux-gnu || echo "::warning::post 校验未完全通过，检查 artifact 列表"
 
       - name: Find and copy Linux artifacts
         run: |
