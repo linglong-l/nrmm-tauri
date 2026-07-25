@@ -59,7 +59,7 @@ function Write-Warn2([string]$msg){ Write-Host "  [WARN] $msg" -ForegroundColor 
 function Write-Fail([string]$msg) { Write-Host "  [FAIL] $msg" -ForegroundColor Red }
 
 # ---------- 外部命令执行（避免 PS5 将 stderr 当致命错误） ----------
-# 用法: $code = Invoke-Native { npm run tauri build -- --target x86_64-pc-windows-msvc }
+# 用法: $code = Invoke-Native { npx tauri build --target x86_64-pc-windows-msvc }
 # ScriptBlock 内直接写原生命令，参数传递不受 PowerShell 函数参数解析干扰。
 function Invoke-Native {
     param(
@@ -125,7 +125,7 @@ if (-not $SkipBuild) {
     Write-Ok "校验通过"
 
     Write-Step "Tauri Windows 构建 (x86_64-pc-windows-msvc)"
-    $exitCode = Invoke-Native { npm run tauri build -- --target x86_64-pc-windows-msvc }
+    $exitCode = Invoke-Native { npx tauri build --target x86_64-pc-windows-msvc }
     if ($exitCode -ne 0) { Write-Fail "Tauri 构建失败 (exit code: $exitCode)"; exit 1 }
     Write-Ok "构建完成"
 
