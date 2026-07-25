@@ -6,11 +6,14 @@
  *  - 在窗口底部显示一行状态信息：模组总数、当前游戏名、热键启用状态、应用版本号。
  *  - 数据全部派生自各个 store，本身无独立状态。
  */
-import { computed } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useGameStore } from '../stores/game';
 import { useHotkeyStore } from '../stores/hotkey';
 import { useSettingsStore } from '../stores/settings';
+import { useVersionStore } from '../stores/version';
+import { useUpdaterStore } from '../stores/updater';
+import { EventNames, eventManager } from '../utils/events';
 import { getGameNameKey } from '../utils/constants';
 import { HotkeyGamepad } from '../types';
 
@@ -18,6 +21,8 @@ const { t } = useI18n();
 const gameStore = useGameStore();
 const hotkeyStore = useHotkeyStore();
 const settingsStore = useSettingsStore();
+const versionStore = useVersionStore();
+const updaterStore = useUpdaterStore();
 
 // 模组总数：累加所有分组内的模组数量
 const totalMods = computed(() => {
@@ -41,8 +46,15 @@ const hotkeyStatus = computed(() => {
   return t('Enabled');
 });
 
-// 应用版本号（硬编码，仅状态栏展示用）
-const version = '0.1.1';
+function openUpdateDialog() {
+  eventManager.emitLocal(EventNames.UPDATE_DIALOG_OPEN, undefined);
+}
+
+onMounted(() => {
+  if (!versionStore.isLoaded) {
+    versionStore.load();
+  }
+});
 </script>
 
 <template>
@@ -106,12 +118,16 @@ const version = '0.1.1';
       <span class="status-divider">|</span>
       <!--
         应用版本号显示项
-        数据来源：
-          - version (const) 硬编码版本号 '0.1.1'
-        显示格式：前缀 "v" + 版本号
+        数据来源：versionStore.version（动态，来自 Cargo.toml）
+        交互：点击可打开更新对话框；有可用更新时显示红色 "!" 徽章
       -->
-      <span class="status-item">
-        <span class="status-value">v{{ version }}</span>
+      <span class="status-item status-version" @click.stop="openUpdateDialog">
+        <span class="status-value version-text">v{{ versionStore.version }}</span>
+        <el-badge
+          v-if="settingsStore.enableAutoUpdate && updaterStore.status === 'available'"
+          :value="'!'"
+          class="version-badge"
+        />
       </span>
     </div>
   </div>
@@ -158,5 +174,36 @@ const version = '0.1.1';
 
 .status-divider {
   color: rgba(255, 255, 255, 0.1);
+}
+
+.status-version {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+}
+
+.status-version:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.version-text {
+  transition: color 0.15s;
+}
+
+.status-version:hover .version-text {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.version-badge :deep(.el-badge__content) {
+  background-color: #f56c6c;
+  border: none;
+  font-size: 9px;
+  height: 14px;
+  line-height: 14px;
+  padding: 0 3px;
 }
 </style>
