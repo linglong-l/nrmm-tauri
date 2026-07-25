@@ -416,8 +416,8 @@
   "Hash conflict check in progress...": "Hash 冲突检测中...",
   "Hash conflict check cancelled": "Hash 冲突检测已取消",
   "Hash conflict check failed: {error}": "Hash 冲突检测失败：{error}",
-  "Close": "关闭",
   "Common.close": "关闭",
+  "Common.ok": "确定",
   "Updater.title": "软件更新",
   "Updater.titleChecking": "正在检查更新…",
   "Updater.latestVersion": "最新版本",
@@ -447,5 +447,9 @@
   "Updater.downloadError": "下载更新失败，请检查网络连接后重试。",
   "Updater.settingsToggleAutoUpdateLabel": "启用自更新徽章提醒",
   "Updater.badgeTooltip": "发现新版本 v{version}，点击查看",
-  "Updater.alreadyLatest": "当前已是最新版本"
+  "Updater.alreadyLatest": "当前已是最新版本",
+  "common": {
+    "close": "关闭",
+    "ok": "确定"
+  }
 }
