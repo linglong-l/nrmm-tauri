@@ -52,6 +52,7 @@ components.d.ts
 
 # Tauri build artifacts / local release outputs
 dist-win/
+dist-linux/
 latest.json
 
 # Temporary files
