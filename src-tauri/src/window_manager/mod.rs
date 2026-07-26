@@ -454,24 +454,35 @@ impl WindowManager {
         #[cfg(target_os = "linux")]
         {
             log::debug!("Applying Linux-specific window configuration");
-            // Linux 下检测运行环境（X11/Wayland/WSLg），
-            // 对于无合成器的 X11 环境，透明窗口可能显示为黑色背景。
-            // 这里保留配置，由用户的桌面环境决定是否启用合成。
-            // 若后续发现兼容性问题，可在此处动态调整 decorations/transparent。
+            // Linux 下检测运行环境（X11/Wayland/WSLg）。
+            // Tauri v2 不支持运行时动态修改窗口透明属性（transparent 只能在
+            // tauri.conf.json 创建窗口前静态指定），因此这里仅做环境检测与日志记录，
+            // 实际的样式降级（强制不透明、禁用 blur、移除圆角）由前端
+            // get_platform_info 命令返回的 transparencySupported 字段控制。
             let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();
             let xdg_session = std::env::var("XDG_SESSION_TYPE")
                 .unwrap_or_else(|_| "unknown".to_string());
             let wslg = std::env::var("WSLENV").is_ok()
                 || std::env::var("WSL_DISTRO_NAME").is_ok();
 
+            let is_wayland = wayland || xdg_session.to_lowercase() == "wayland";
+
             log::info!(
-                "Linux window environment: WAYLAND={}, XDG_SESSION_TYPE={}, WSLg={}",
+                "Linux window environment: WAYLAND_DISPLAY={}, XDG_SESSION_TYPE={}, WSLg={}",
                 wayland,
                 xdg_session,
                 wslg
             );
 
-            // WSLg 环境下可能存在渲染问题，记录日志便于排查
+            if is_wayland {
+                log::warn!(
+                    "Detected Wayland session — transparent windows with blur may render incorrectly \
+                     (black corners/flickering/no backdrop-blur depending on compositor). \
+                     Frontend will automatically fall back to opaque background."
+                );
+            }
+
+            // WSLg 环境下透明窗口有渲染问题，记录警告日志
             if wslg {
                 log::warn!("Running under WSLg - transparent window may have rendering issues");
             }

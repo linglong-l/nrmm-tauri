@@ -17,12 +17,13 @@
 import { ref, computed, onMounted, watch, inject } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Folder, Delete } from '@element-plus/icons-vue';
+import { Folder, Delete, InfoFilled } from '@element-plus/icons-vue';
 import appLogo from '@/assets/images/app-icon-128.png?inline';
 import { useSettingsStore } from '../stores/settings';
 import { useGameStore } from '../stores/game';
 import { useUpdaterStore } from '../stores/updater';
 import { useVersionStore } from '../stores/version';
+import { usePlatform } from '../composables';
 import UpdateDialog from '../components/UpdateDialog.vue';
 import {
   invokeUpdateModData, invokeValidateModsPath, invokeOpenModFolder,
@@ -47,7 +48,19 @@ const settingsStore = useSettingsStore();
 const gameStore = useGameStore();
 const updaterStore = useUpdaterStore();
 const versionStore = useVersionStore();
+const { supportsTransparency, isWayland, isWslg, os: platformOs } = usePlatform();
 const log = createLogger('SettingsView');
+
+/** 当前环境是否支持窗口透明（Wayland/WSLg 下为 false） */
+const transparencyDisabled = computed(() => !supportsTransparency.value);
+
+/** Wayland/WSLg 环境下的提示文案 */
+const transparencyHint = computed(() => {
+  if (isWslg.value) return 'WSLg 环境不支持窗口透明效果，已自动禁用';
+  if (isWayland.value) return 'Wayland 桌面环境下窗口透明效果可能渲染异常，已自动禁用';
+  if (platformOs.value === 'linux') return '当前 Linux 环境不支持窗口透明效果，已自动禁用';
+  return '';
+});
 
 /** 控制 UpdateDialog 显隐 */
 const showUpdateDialog = ref(false);
@@ -1103,7 +1116,7 @@ watch(
               提示：formatTransparencyTooltip 格式化显示百分比
             -->
             <el-form-item :label="t('Background Transparency')">
-              <!-- 透明度滑块 -->
+              <!-- 透明度滑块：Wayland/WSLg 等不支持透明的环境下禁用 -->
               <el-slider
                 v-model="transparencyValue"
                 :min="0.1"
@@ -1111,7 +1124,13 @@ watch(
                 :step="0.05"
                 :show-tooltip="true"
                 :format-tooltip="formatTransparencyTooltip"
+                :disabled="transparencyDisabled || settingsStore.isSaving"
               />
+              <!-- 不支持透明环境的提示信息 -->
+              <div v-if="transparencyDisabled" class="transparency-disabled-hint">
+                <el-icon><InfoFilled /></el-icon>
+                <span>{{ transparencyHint }}</span>
+              </div>
             </el-form-item>
 
             <!-- 分隔线 -->
@@ -1998,5 +2017,27 @@ watch(
 
 .restore-zone-actions :deep(.el-button) {
   flex: 1;
+}
+
+/**
+ * 透明度不支持提示样式（Wayland/WSLg 环境）。
+ * 使用橙色警告色调，配合 el-icon，清晰告知用户该功能在当前环境不可用。
+ */
+.transparency-disabled-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #e6a23c;
+  background: rgba(230, 162, 60, 0.1);
+  border-radius: 6px;
+  line-height: 1.4;
+}
+
+.transparency-disabled-hint .el-icon {
+  flex-shrink: 0;
+  font-size: 14px;
 }
 </style>

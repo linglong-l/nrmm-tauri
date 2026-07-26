@@ -789,3 +789,25 @@ export interface UpdaterState {
   errorMessage: string;
 }
 
+/**
+ * 平台与运行环境信息（后端 get_platform_info 命令返回）。
+ *
+ * 用于前端做兼容性降级决策：
+ * - `transparencySupported` 为 false 时（Wayland/WSLg），强制使用不透明背景、
+ *   禁用 backdrop-filter 毛玻璃、移除窗口圆角，避免黑块/黑边/闪烁。
+ */
+export interface PlatformInfo {
+  /** 操作系统类型：`"windows"` / `"linux"` / `"macos"` / `"unknown"` */
+  os: 'windows' | 'linux' | 'macos' | 'unknown';
+  /** Linux 下的桌面会话类型：`"wayland"` / `"x11"` / `"unknown"`，非 Linux 为空字符串 */
+  desktopSession: string;
+  /** 是否运行在 Wayland 会话下 */
+  isWayland: boolean;
+  /** 是否运行在 X11 会话下 */
+  isX11: boolean;
+  /** 是否运行在 WSLg（WSL2 GUI 桥接）环境下 */
+  isWslg: boolean;
+  /** 当前环境是否支持窗口透明 + 毛玻璃效果 */
+  transparencySupported: boolean;
+}
+

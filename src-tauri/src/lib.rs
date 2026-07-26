@@ -367,6 +367,7 @@ pub fn run() {
             commands::get_version_info,
             commands::download_and_install_update,
             commands::restart_app,
+            commands::get_platform_info,
 
         ])
         .run(tauri::generate_context!())

@@ -21,7 +21,8 @@ import type {
   HotkeyKeyboard,
   HotkeyGamepad,
   HashConflictReport,
-  VersionInfo
+  VersionInfo,
+  PlatformInfo,
 } from '../types';
 import { TargetGame } from '../types';
 import { CONSTANTS } from './constants';
@@ -863,6 +864,14 @@ export async function invokeCheckHashConflicts(): Promise<InvokeResult<HashConfl
 /** 获取当前应用版本信息 */
 export async function invokeGetVersionInfo(): Promise<InvokeResult<VersionInfo>> {
   return safeInvoke<VersionInfo>('get_version_info');
+}
+
+/**
+ * 获取当前平台与运行环境信息。
+ * 用于前端兼容性降级决策：Wayland/WSLg 下禁用窗口透明与毛玻璃效果。
+ */
+export async function invokeGetPlatformInfo(): Promise<InvokeResult<PlatformInfo>> {
+  return safeInvoke<PlatformInfo>('get_platform_info');
 }
 
 /** 触发一次更新检查。返回 true=有可用更新；false=无更新；Err=失败 */

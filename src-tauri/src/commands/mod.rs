@@ -2799,3 +2799,113 @@ pub fn restart_app(app: AppHandle) {
     tauri::process::restart(&app.env());
 }
 
+/// 平台与运行环境信息，用于前端做兼容性降级。
+///
+/// # 字段说明
+/// - `os`: 操作系统类型（`"windows"` / `"linux"` / `"macos"` / `"unknown"`）。
+/// - `desktop_session`: Linux 下的桌面会话类型（`"wayland"` / `"x11"` / `"unknown"`），非 Linux 为 `""`。
+/// - `is_wayland`: 是否运行在 Wayland 会话下（透明窗口在 Wayland 下兼容性差）。
+/// - `is_x11`: 是否运行在 X11 会话下。
+/// - `is_wslg`: 是否运行在 WSLg（WSL2 GUI 桥接）环境下。
+/// - `transparency_supported`: 当前环境是否支持窗口透明+毛玻璃效果。
+///   - Windows / macOS：始终为 `true`；
+///   - Linux Wayland / WSLg：`false`（合成器支持不稳定，易出现黑块/闪烁/圆角黑边）；
+///   - Linux X11：取决于是否有合成器，保守返回 `true`（无合成器时用户可自行降级）。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformInfo {
+    pub os: &'static str,
+    pub desktop_session: &'static str,
+    pub is_wayland: bool,
+    pub is_x11: bool,
+    pub is_wslg: bool,
+    pub transparency_supported: bool,
+}
+
+/// 获取当前平台与运行环境信息（供前端做兼容性降级决策）。
+///
+/// 前端在应用启动时调用此命令，根据返回结果决定：
+/// - 是否启用窗口背景透明度（Wayland/WSLg 下强制不透明）；
+/// - 是否启用 backdrop-filter 毛玻璃效果；
+/// - 是否显示圆角（Wayland 下圆角可能出现黑边）。
+#[tauri::command]
+pub fn get_platform_info() -> PlatformInfo {
+    #[cfg(target_os = "windows")]
+    {
+        PlatformInfo {
+            os: "windows",
+            desktop_session: "",
+            is_wayland: false,
+            is_x11: false,
+            is_wslg: false,
+            transparency_supported: true,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        PlatformInfo {
+            os: "macos",
+            desktop_session: "",
+            is_wayland: false,
+            is_x11: false,
+            is_wslg: false,
+            transparency_supported: true,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let wayland_display = std::env::var("WAYLAND_DISPLAY").is_ok();
+        let xdg_session = std::env::var("XDG_SESSION_TYPE")
+            .unwrap_or_else(|_| "unknown".to_string())
+            .to_lowercase();
+        let is_wayland = wayland_display || xdg_session == "wayland";
+        let is_x11 = !is_wayland && (xdg_session == "x11" || std::env::var("DISPLAY").is_ok());
+        let is_wslg = std::env::var("WSLENV").is_ok()
+            || std::env::var("WSL_DISTRO_NAME").is_ok()
+            || std::env::var("WT_SESSION").is_ok();
+
+        let desktop_session = if is_wayland {
+            "wayland"
+        } else if is_x11 {
+            "x11"
+        } else {
+            "unknown"
+        };
+
+        // Wayland 下 WebKitGTK + 合成器的透明窗口支持不稳定：
+        // - GNOME Mutter < 46 完全不支持 ARGB 窗口；
+        // - KDE KWin XWayland 桥接下圆角黑边、blur 不生效；
+        // - WSLg (Weston) 透明区域渲染为黑色块。
+        // 保守起见，Wayland 和 WSLg 下统一禁用透明效果。
+        let transparency_supported = !(is_wayland || is_wslg);
+
+        log::info!(
+            "[platform] Linux environment: os=linux, session={}, wayland={}, x11={}, wslg={}, transparency_supported={}",
+            desktop_session, is_wayland, is_x11, is_wslg, transparency_supported
+        );
+
+        PlatformInfo {
+            os: "linux",
+            desktop_session,
+            is_wayland,
+            is_x11,
+            is_wslg,
+            transparency_supported,
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        PlatformInfo {
+            os: "unknown",
+            desktop_session: "",
+            is_wayland: false,
+            is_x11: false,
+            is_wslg: false,
+            transparency_supported: true,
+        }
+    }
+}
+

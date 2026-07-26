@@ -13,3 +13,4 @@ export { useHotkey } from './useHotkey';
 export { useWindow } from './useWindow';
 export { useCloudData } from './useCloudData';
 export { useHashConflict } from './useHashConflict';
+export { usePlatform, initPlatformInfo } from './usePlatform';

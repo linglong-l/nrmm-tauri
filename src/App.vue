@@ -9,7 +9,7 @@
  *  - 根据设置中的主题与背景透明度，动态切换 dark 类与 CSS 变量。
  *  - 根据当前语言切换 Element Plus 的内置语言包。
  */
-import { onMounted, watch, computed, onUnmounted, provide, reactive, readonly } from 'vue';
+import { onMounted, watch, computed, onUnmounted, provide, reactive, readonly, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import zhCn from 'element-plus/es/locale/lang/zh-cn';
 import zhTw from 'element-plus/es/locale/lang/zh-tw';
@@ -22,7 +22,7 @@ import IndexPage from './pages/index/index.vue';
 import { useSettingsStore } from './stores/settings';
 import { useGameStore } from './stores/game';
 import { EventNames, eventManager } from './utils/events';
-import { useHashConflict } from './composables';
+import { useHashConflict, initPlatformInfo } from './composables';
 import { createLogger } from './utils/logger';
 import { setupGlobalErrorHandlers } from './utils/errorBoundary';
 import type { UpdateModDataResult } from './types';
@@ -111,8 +111,22 @@ const elementPlusLocale = computed(() => {
 // 当前是否为深色主题，用于给根容器附加 dark-theme 类
 const isDark = computed(() => settingsStore.theme === 'dark');
 
-// 背景透明度数值（0~1），通过 CSS 变量 --bg-opacity 透传给样式
-const bgOpacity = computed(() => settingsStore.bgTransparency);
+/**
+ * 平台透明支持状态。
+ * - true（默认）：使用用户设置的背景透明度 + 毛玻璃 + 圆角；
+ * - false（Wayland/WSLg 等不兼容环境）：强制不透明背景、禁用毛玻璃、移除圆角，
+ *   避免出现黑块/黑角/闪烁/无 blur 等渲染问题。
+ */
+const supportsTransparency = ref(true);
+
+/** 是否应用不透明降级样式（no-transparency 类） */
+const isTransparencyDisabled = computed(() => !supportsTransparency.value);
+
+// 背景透明度数值（0~1），通过 CSS 变量 --bg-opacity 透传给样式。
+// 不支持透明的平台上强制为 1（完全不透明）。
+const bgOpacity = computed(() =>
+  supportsTransparency.value ? settingsStore.bgTransparency : 1
+);
 
 // 整体缩放比例，通过 transform: scale 应用到根容器
 const appScale = computed(() => settingsStore.overallScale);
@@ -124,10 +138,22 @@ const appStyle = computed(() => ({
 }));
 
 /**
- * 应用初始化：加载持久化设置并将 i18n 语言同步为设置中的语言。
- * 异常处理：加载失败时静默忽略，避免阻塞渲染。
+ * 应用初始化：加载平台环境信息、持久化设置，同步 i18n 语言。
+ * 异常处理：各步骤失败时静默忽略，避免阻塞渲染。
+ * 顺序说明：
+ *   1. 先 initPlatformInfo()（极快，本地 IPC），拿到透明支持状态后
+ *      后续样式计算才能正确应用降级，避免首帧闪烁。
+ *   2. 再加载 settings（包含主题/语言/透明度等用户偏好）。
  */
 async function initApp() {
+  try {
+    const info = await initPlatformInfo();
+    supportsTransparency.value = info.transparencySupported;
+  } catch {
+    // IPC 失败时保守禁用透明（Linux 回退），Windows/macOS 前端检测会在 fallback 中处理
+    supportsTransparency.value = !navigator.platform?.toLowerCase().includes('linux');
+  }
+
   try {
     await settingsStore.loadSettings();
     locale.value = settingsStore.language;
@@ -214,7 +240,7 @@ onUnmounted(() => {
   <ElConfigProvider :locale="elementPlusLocale">
     <div
       class="app-container"
-      :class="{ 'dark-theme': isDark }"
+      :class="{ 'dark-theme': isDark, 'no-transparency': isTransparencyDisabled }"
       :style="appStyle"
     >
       <TitleBar />
@@ -274,6 +300,32 @@ body,
 
 .app-container.dark-theme {
   background-color: rgba(20, 20, 24, var(--bg-opacity, 0.88));
+}
+
+/**
+ * 透明窗口降级样式（Wayland/WSLg 等不兼容环境）。
+ *
+ * 问题：Wayland 合成器（GNOME Mutter、KWin XWayland、WSLg Weston）对
+ *      ARGB 透明窗口的支持不稳定：
+ *      - 圆角区域出现黑色方块/黑边；
+ *      - backdrop-filter: blur() 完全不生效或渲染为杂色；
+ *      - 透明区域闪烁/不刷新。
+ *
+ * 解决方案：
+ *   1. 强制 --bg-opacity: 1（完全不透明背景，已在 JS computed 中处理）；
+ *   2. 移除 backdrop-filter 毛玻璃效果（避免渲染异常）；
+ *   3. 移除 border-radius 圆角（避免黑角）；
+ *   4. 使用纯色 rgb 背景（不依赖 alpha 通道）。
+ */
+.app-container.no-transparency {
+  background-color: rgb(28, 28, 32) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-radius: 0 !important;
+}
+
+.app-container.no-transparency.dark-theme {
+  background-color: rgb(20, 20, 24) !important;
 }
 
 .main-content {
