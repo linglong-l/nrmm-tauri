@@ -1,0 +1,12 @@
+;revision_4
+namespace = modmanageragl\group_manager
+
+[Constants]
+global $active_group_id = 0
+
+[KeyGroup]
+key = VK_CLEAR VK_SPACE
+run = CommandListGroup
+
+[CommandListGroup]
+$active_group_id = cursor_screen_y

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "nrmm-rust",
-  "version": "0.3.0",
-  "identifier": "com.ye.nrmm-rust",
+  "productName": "NRMM",
+  "version": "0.4.0",
+  "identifier": "com.ye.nrmm",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:5173",
@@ -13,9 +13,9 @@
     "windows": [
       {
         "label": "main",
-        "title": "nrmm-rust",
-        "width": 900,
-        "height": 650,
+        "title": "NRMM",
+        "width": 800,
+        "height": 600,
         "decorations": false,
         "transparent": true,
         "shadow": false,
@@ -55,7 +55,10 @@
     "windows": {
       "nsis": {
         "displayLanguageSelector": true,
-        "languages": ["English", "SimpChinese"],
+        "languages": [
+          "English",
+          "SimpChinese"
+        ],
         "template": "installer/nsis/installer.nsi"
       },
       "wix": {

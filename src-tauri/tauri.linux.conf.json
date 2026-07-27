@@ -1,0 +1,78 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NRMM",
+  "version": "0.4.0",
+  "identifier": "com.ye.nrmm",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NRMM",
+        "width": 800,
+        "height": 600,
+        "decorations": false,
+        "transparent": false,
+        "shadow": false,
+        "center": true,
+        "resizable": true,
+        "minWidth": 750,
+        "minHeight": 500,
+        "windowEffects": {
+          "effects": [
+            "acrylic",
+            "mica"
+          ],
+          "radius": 12
+        }
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "**"
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4ODVCNkZDQzlBQTZEM0QKUldROWJhckovTGFGU0JhTFhHd0xEQUhUVFlzUEg2M2hTdlN6TmQ2bE5WMlZtYkdQYjQwUnozNE0K",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "linux": {
+      "deb": {},
+      "rpm": {},
+      "appimage": {
+        "files": {
+          "/usr/share/README.md": "../README.md",
+          "/usr/assets": "../src/assets/"
+        }
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
