@@ -1,22 +1,33 @@
 pub mod commands;
+pub mod config;
 pub mod core;
+pub mod hotkey;
 pub mod models;
 pub mod platform;
-pub mod config;
-pub mod hotkey;
-pub mod tray;
-pub mod window;
-pub mod updater;
 pub mod resources;
+pub mod tray;
+pub mod updater;
+pub mod window;
 
+use crate::core::file_watcher::FileWatcher;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
-use crate::core::file_watcher::FileWatcher;
 
+/// Tauri 应用主入口函数
+///
+/// 负责初始化和配置 Tauri 应用，包括：
+/// - 初始化设置存储
+/// - 注册各类插件（shell、dialog、notification、updater 等）
+/// - 配置全局快捷键处理
+/// - 设置窗口效果和系统托盘
+/// - 启动后台云数据刷新任务
+/// - 注册 Tauri 命令处理器
+///
+/// 在应用关闭时阻止窗口真正关闭，仅隐藏窗口
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     config::settings_store::init_settings().expect("Failed to initialize settings");
-    
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -31,49 +42,11 @@ pub fn run() {
                         hotkey::handle_hotkey(app, shortcut, &event);
                     }
                 })
-                .build()
+                .build(),
         )
         .setup(|app| {
             if let Some(main_window) = app.get_webview_window("main") {
-                use tauri::window::{Effect, EffectsBuilder};
-
-                #[cfg(target_os = "windows")]
-                {
-                    let effects = EffectsBuilder::new()
-                        .effects([
-                            Effect::MicaDark,
-                            Effect::TabbedDark,
-                            Effect::Acrylic,
-                            Effect::Blur,
-                        ])
-                        .build();
-                    if let Err(e) = main_window.set_effects(effects) {
-                        log::warn!("Failed to set window effects: {}", e);
-                    }
-                }
-
-                #[cfg(target_os = "macos")]
-                {
-                    let effects = EffectsBuilder::new()
-                        .effects([
-                            Effect::HudWindow,
-                            Effect::Sidebar,
-                            Effect::FullScreenUI,
-                            Effect::UnderWindowBackground,
-                        ])
-                        .build();
-                    if let Err(e) = main_window.set_effects(effects) {
-                        log::warn!("Failed to set window effects: {}", e);
-                    }
-                }
-
-                #[cfg(target_os = "linux")]
-                {
-                    match main_window.set_effects(EffectsBuilder::new().effects([Effect::Blur]).build()) {
-                        Ok(_) => log::info!("Window blur effect enabled on Linux"),
-                        Err(e) => log::info!("Window effects not supported on this Linux environment: {} (fallback to opaque)", e),
-                    }
-                }
+                window::apply_window_effects(&main_window);
             }
 
             if let Err(e) = tray::create_tray(app.handle()) {
