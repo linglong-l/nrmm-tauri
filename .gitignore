@@ -64,3 +64,5 @@ latest.json
 # CI / signing secrets（防止误提交公钥/私钥/密码）
 /Key/
 target/
+/resource/*
+/resource/7z/
