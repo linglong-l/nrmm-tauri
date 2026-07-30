@@ -1,92 +1,16 @@
+//! 窗口管理模块
+//!
+//! 提供窗口操作的封装函数和 Tauri 命令：
+//! - show/hide/toggle: 显示/隐藏/切换窗口
+//! - minimize/maximize/center: 最小化/最大化/居中窗口
+//! - set_position: 设置窗口位置
+//! - close: 关闭窗口
+//! - hard_quit: 强制退出（绕过关闭拦截，注销热键后退出）
+//! - 主窗口快捷函数（show_main_window 等）
+
 use anyhow::Result;
 use tauri::{AppHandle, LogicalPosition, Manager, Position, WebviewWindow};
 
-/// 检测当前操作系统是否为 Windows 11
-///
-/// 通过调用 Windows API `GetVersionExW` 获取系统版本信息，
-/// 判断主版本号是否 >= 10 且构建号 >= 22000（Windows 11 起始构建号）
-///
-/// # 返回值
-///
-/// 返回 `true` 表示 Windows 11，否则返回 `false`
-#[cfg(target_os = "windows")]
-fn is_windows_11() -> bool {
-    use windows::Win32::System::SystemInformation::{GetVersionExW, OSVERSIONINFOW};
-
-    let mut info = OSVERSIONINFOW {
-        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
-        ..Default::default()
-    };
-
-    match unsafe { GetVersionExW(&mut info) } {
-        Ok(()) => info.dwMajorVersion >= 10 && info.dwBuildNumber >= 22000,
-        Err(err) => {
-            log::warn!("Failed to detect Windows version: {:?}", err);
-            false
-        }
-    }
-}
-
-/// 为窗口应用平台特定的视觉效果
-///
-/// 根据不同操作系统应用对应的窗口效果：
-/// - Windows: 依次尝试 MicaDark、TabbedDark、Acrylic、Blur 效果
-/// - macOS: 应用 HUD Window、Sidebar、FullScreenUI、UnderWindowBackground 效果
-/// - Linux: 尝试启用模糊效果，不支持时回退到不透明窗口
-///
-/// 仅在 Windows 11 及以上版本启用透明效果
-pub fn apply_window_effects(window: &WebviewWindow) {
-    #[cfg(target_os = "windows")]
-    {
-        if !is_windows_11() {
-            log::info!("Skipping transparent window effects on non-Windows 11 systems");
-            return;
-        }
-
-        let effects = tauri::window::EffectsBuilder::new()
-            .effects([
-                tauri::window::Effect::MicaDark,
-                tauri::window::Effect::TabbedDark,
-                tauri::window::Effect::Acrylic,
-                tauri::window::Effect::Blur,
-            ])
-            .build();
-
-        if let Err(e) = window.set_effects(effects) {
-            log::warn!("Failed to set window effects: {}", e);
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let effects = tauri::window::EffectsBuilder::new()
-            .effects([
-                tauri::window::Effect::HudWindow,
-                tauri::window::Effect::Sidebar,
-                tauri::window::Effect::FullScreenUI,
-                tauri::window::Effect::UnderWindowBackground,
-            ])
-            .build();
-        if let Err(e) = window.set_effects(effects) {
-            log::warn!("Failed to set window effects: {}", e);
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        match window.set_effects(
-            tauri::window::EffectsBuilder::new()
-                .effects([tauri::window::Effect::Blur])
-                .build(),
-        ) {
-            Ok(_) => log::info!("Window blur effect enabled on Linux"),
-            Err(e) => log::info!(
-                "Window effects not supported on this Linux environment: {} (fallback to opaque)",
-                e
-            ),
-        }
-    }
-}
 
 /// 显示指定窗口并获取焦点
 ///
@@ -268,20 +192,6 @@ pub fn show_popup_at_cursor(app: &AppHandle, x: i32, y: i32) -> Result<()> {
     Ok(())
 }
 
-/// 设置窗口为透明无边框模式
-///
-/// 在 Windows 和 macOS 上移除窗口装饰（标题栏、边框等）
-///
-/// # 参数
-///
-/// * `window` - 目标窗口引用
-pub fn set_transparent_window(window: &WebviewWindow) {
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
-    {
-        let _ = window.set_decorations(false);
-    }
-}
-
 /// 获取主窗口引用
 ///
 /// # 参数
@@ -353,4 +263,60 @@ pub fn toggle_main_window(app: &AppHandle) {
             let _ = window.set_focus();
         }
     }
+}
+
+/// 重置窗口位置（居中显示）
+///
+/// # 参数
+///
+/// * `app` - Tauri 应用句柄
+/// * `window_name` - 窗口标识名称
+///
+/// # 返回值
+///
+/// 成功返回 `Ok(())`，失败返回错误信息字符串
+#[tauri::command]
+pub fn reset_window_position(app: AppHandle, window_name: String) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window(&window_name) {
+        w.center().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// 显示主窗口（作为 Command 导出）
+///
+/// # 参数
+///
+/// * `app` - Tauri 应用句柄
+#[tauri::command]
+pub fn show_main_window_cmd(app: AppHandle) {
+    show_main_window(&app);
+}
+
+/// 切换主窗口显示/隐藏（作为 Command 导出）
+///
+/// # 参数
+///
+/// * `app` - Tauri 应用句柄
+#[tauri::command]
+pub fn toggle_main_window_cmd(app: AppHandle) {
+    toggle_main_window(&app);
+}
+
+/// 强制退出应用（绕过窗口关闭拦截）
+///
+/// 先注销所有全局快捷键，然后直接调用 exit 退出进程，
+/// 避免 on_window_event CloseRequested 中的 prevent_close 导致无法退出。
+///
+/// # 参数
+///
+/// * `app` - Tauri 应用句柄
+#[tauri::command]
+pub fn hard_quit_app(app: AppHandle) {
+    use crate::hotkey::HotkeyManager;
+    use std::sync::Arc;
+    if let Some(hotkey_mgr) = app.try_state::<Arc<HotkeyManager>>() {
+        let _ = hotkey_mgr.unregister_all();
+    }
+    app.exit(0);
 }

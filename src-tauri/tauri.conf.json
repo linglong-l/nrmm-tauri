@@ -14,24 +14,25 @@
       {
         "label": "main",
         "title": "NRMM",
-        "width": 800,
-        "height": 600,
+        "width": 960,
+        "height": 640,
+        "minWidth": 750,
+        "minHeight": 500,
         "decorations": false,
-        "transparent": false,
-        "shadow": false,
+        "transparent": true,
+        "shadow": true,
         "center": true,
         "resizable": true,
-        "minWidth": 750,
-        "minHeight": 500
+        "focus": true,
+        "focusable": true,
+        "visible": false
       }
     ],
     "security": {
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**"
-        ]
+        "scope": ["**"]
       }
     }
   },
@@ -45,20 +46,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis",
-      "msi",
-      "deb",
-      "rpm",
-      "appimage"
-    ],
+    "targets": ["nsis", "msi", "deb", "rpm", "appimage"],
     "windows": {
       "nsis": {
         "displayLanguageSelector": true,
-        "languages": [
-          "English",
-          "SimpChinese"
-        ],
+        "languages": ["English", "SimpChinese"],
         "template": "installer/nsis/installer.nsi"
       },
       "wix": {

@@ -1,16 +1,29 @@
+//! Linux 平台实现模块
+//!
+//! 根据 XDG_SESSION_TYPE 自动选择实现方式：
+//! - X11 会话：使用 xdotool 进行按键模拟和前台检测
+//! - Wayland 会话：使用 ydotool 按键，wlrctl 前台检测（需用户安装）
+//!
+//! 如果所需工具未安装，返回不支持错误并提示安装命令。
+
 use anyhow::{Result, anyhow};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+/// Linux 按键模拟器
 pub struct LinuxKeySimulator {
     method: KeyMethod,
 }
 
+/// 按键模拟方法
 #[derive(Debug)]
 enum KeyMethod {
+    /// X11 下使用 xdotool
     XTest,
+    /// Wayland 下使用 ydotool
     Ydotool,
+    /// 不支持，附带错误信息
     Unsupported(String),
 }
 
@@ -107,10 +120,12 @@ impl super::KeySimulator for LinuxKeySimulator {
     }
 }
 
+/// Linux 前台窗口检测器
 pub struct LinuxForegroundDetector {
     method: ForegroundMethod,
 }
 
+/// 前台检测方法
 enum ForegroundMethod {
     X11,
     WlCtrl,
@@ -151,6 +166,7 @@ impl super::ForegroundDetector for LinuxForegroundDetector {
                 let pid: u32 = pid_str.parse().map_err(|_| anyhow!("Invalid PID"))?;
                 let comm_path = format!("/proc/{}/comm", pid);
                 let comm = std::fs::read_to_string(&comm_path)?;
+                // comm 文件内容带换行，需要 trim
                 Ok(comm.trim().to_string())
             }
             ForegroundMethod::WlCtrl | ForegroundMethod::Unsupported => {
@@ -182,17 +198,15 @@ impl super::ForegroundDetector for LinuxForegroundDetector {
     }
 }
 
+/// 获取 Linux 平台信息
 pub fn get_linux_platform_info() -> super::PlatformInfo {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
-    let is_wayland = session == "wayland";
     
     let key_sim = LinuxKeySimulator::new();
     let (key_supported, key_error) = match key_sim.check_support() {
         Ok(()) => (true, None),
         Err(e) => (false, Some(e)),
     };
-    
-    let transparency_supported = !is_wayland;
     
     let fg = LinuxForegroundDetector::new();
     let fg_supported = match fg.method {
@@ -203,7 +217,6 @@ pub fn get_linux_platform_info() -> super::PlatformInfo {
     super::PlatformInfo {
         os: "linux".to_string(),
         session_type: if session.is_empty() { None } else { Some(session) },
-        transparency_supported,
         keypress_supported: key_supported,
         keypress_error: key_error,
         foreground_detection_supported: fg_supported,

@@ -1,5 +1,11 @@
+//! macOS 平台实现模块（占位）
+//!
+//! 目前 macOS 平台的按键模拟和前台检测尚未实现，
+//! 需要辅助功能权限（Assistive Access）才能实现这些功能。
+
 use anyhow::{Result, anyhow};
 
+/// macOS 按键模拟器（未实现）
 pub struct MacOSKeySimulator;
 
 impl super::KeySimulator for MacOSKeySimulator {
@@ -16,6 +22,7 @@ impl super::KeySimulator for MacOSKeySimulator {
     }
 }
 
+/// macOS 前台窗口检测器（未实现）
 pub struct MacOSForegroundDetector;
 
 impl super::ForegroundDetector for MacOSForegroundDetector {

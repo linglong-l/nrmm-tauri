@@ -10,35 +10,11 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "NRMM-Tauri",
-        "width": 800,
-        "height": 600,
-        "decorations": false,
-        "transparent": false,
-        "shadow": false,
-        "center": true,
-        "resizable": true,
-        "minWidth": 750,
-        "minHeight": 500,
-        "windowEffects": {
-          "effects": [
-            "acrylic",
-            "mica"
-          ],
-          "radius": 12
-        }
-      }
-    ],
     "security": {
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**"
-        ]
+        "scope": ["**"]
       }
     }
   },
@@ -52,17 +28,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis",
-      "msi"
-    ],
+    "targets": ["nsis", "msi"],
     "windows": {
+      "webviewInstallMode": { "type": "offlineInstaller" },
       "nsis": {
         "displayLanguageSelector": true,
-        "languages": [
-          "English",
-          "SimpChinese"
-        ],
+        "installMode": "currentUser",
+        "languages": ["English", "SimpChinese"],
         "template": "installer/nsis/installer.nsi"
       },
       "wix": {

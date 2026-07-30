@@ -1,23 +1,27 @@
 <template>
-  <div class="title-bar" :class="{ 'no-transparency': !transparencySupported }">
+  <div class="title-bar">
+    <!-- 拖拽区域：覆盖整个标题栏用于窗口拖动 -->
     <div class="title-bar-drag"></div>
     <div class="title-bar-content">
       <div class="title-bar-left no-drag">
+        <!-- macOS风格窗口控制按钮（红黄绿三色圆点） -->
         <div class="window-controls macos" v-if="isMac">
-          <button class="mac-btn close" @click="handleClose">
-            <svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="#ff5f57"/><path d="M4 4l4 4M8 4l-4 4" stroke="#4d0000" stroke-width="1.2" stroke-linecap="round"/></svg>
+          <button class="mac-btn close" @click="handleClose" :aria-label="t('common.close')">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="#ff5f57"/><path d="M4 4l4 4M8 4l-4 4" stroke="#4d0000" stroke-width="1.2" stroke-linecap="round"/></svg>
           </button>
-          <button class="mac-btn minimize" @click="handleMinimize">
-            <svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="#febc2e"/><path d="M3.5 6h5" stroke="#5a3900" stroke-width="1.2" stroke-linecap="round"/></svg>
+          <button class="mac-btn minimize" @click="handleMinimize" :aria-label="t('common.minimize', 'Minimize')">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="#febc2e"/><path d="M3.5 6h5" stroke="#5a3900" stroke-width="1.2" stroke-linecap="round"/></svg>
           </button>
-          <button class="mac-btn maximize" @click="handleMaximize">
-            <svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="#28c840"/><path d="M4 4v4h4V4H4z" fill="#004400"/></svg>
+          <button class="mac-btn maximize" @click="handleMaximize" :aria-label="t('common.maximize', 'Maximize')">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="#28c840"/><path d="M4 4v4h4V4H4z" fill="#004400"/></svg>
           </button>
         </div>
-        <img src="@/assets/images/app-icon-32.png" class="app-icon" alt="NRMM" v-if="!isMac" />
-        <span class="app-title" v-if="!isMac">NRMM</span>
+        <!-- Windows/Linux下显示应用图标和标题 -->
+        <img src="@/assets/images/app-icon-32.png" class="app-icon" :alt="t('common.appName', 'NRMM')" v-if="!isMac" width="32" height="32" />
+        <span class="app-title" v-if="!isMac">{{ t('common.appName', 'NRMM') }}</span>
       </div>
       <div class="title-bar-center"></div>
+      <!-- Windows风格窗口控制按钮（最小化/最大化/关闭） -->
       <div class="title-bar-right no-drag" v-if="!isMac">
         <WindowControls />
       </div>
@@ -26,24 +30,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+/**
+ * 标题栏组件
+ * 根据操作系统显示不同风格的窗口控制按钮
+ * macOS：左侧红黄绿圆点
+ * Windows/Linux：左侧图标+标题，右侧最小化/最大化/关闭按钮
+ */
+import { ref, computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { minimizeWindow, toggleMaximize, closeWindow } from '@/utils/tauri'
 import { usePlatform } from '@/stores/platform'
 import { logger } from '@/utils/logger'
 import WindowControls from './WindowControls.vue'
 
+const { t } = useI18n()
 const { platformInfo } = usePlatform()
+/** 窗口是否最大化状态 */
 const isMaximized = ref(false)
-const transparencySupported = ref(true)
 
+/** 是否为macOS平台 */
 const isMac = computed(() => platformInfo.value?.os === 'macos')
 
-onMounted(() => {
-  if (platformInfo.value) {
-    transparencySupported.value = platformInfo.value.transparencySupported
+onMounted(async () => {
+  try {
+    isMac.value
+  } catch (e) {
+    logger.warn('TitleBar', 'Platform detection failed, defaulting to Windows')
   }
 })
 
+/** 最小化窗口 */
 async function handleMinimize() {
   try {
     await minimizeWindow('main')
@@ -52,6 +68,7 @@ async function handleMinimize() {
   }
 }
 
+/** 切换最大化/还原窗口 */
 async function handleMaximize() {
   try {
     await toggleMaximize('main')
@@ -61,6 +78,7 @@ async function handleMaximize() {
   }
 }
 
+/** 关闭窗口 */
 async function handleClose() {
   try {
     await closeWindow('main')
@@ -73,16 +91,15 @@ async function handleClose() {
 <style scoped>
 .title-bar {
   height: 40px;
-  background: transparent;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
   display: flex;
   align-items: center;
   position: relative;
   user-select: none;
   flex-shrink: 0;
-}
-
-.title-bar.no-transparency {
-  background: #121212;
+  border-top-left-radius: var(--app-radius);
+  border-top-right-radius: var(--app-radius);
 }
 
 .title-bar-drag {
@@ -103,12 +120,14 @@ async function handleClose() {
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
+  background: transparent;
 }
 
 .title-bar-left {
   display: flex;
   align-items: center;
   gap: 8px;
+  background: transparent;
 }
 
 .app-icon {

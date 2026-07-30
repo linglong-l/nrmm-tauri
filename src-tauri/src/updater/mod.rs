@@ -1,9 +1,22 @@
+//! 应用自更新模块
+//!
+//! 检查 GitHub/Gitee 双源的最新 Release，支持版本比较。
+//! 更新检查策略：优先 Gitee（国内访问快），失败则回退到 GitHub。
+//!
+//! # 功能
+//! - check_for_updates: 异步检查更新，返回最新版本信息
+//! - compare_versions: 版本号比较（语义化版本）
+//! - get_app_version: 获取当前应用版本
+
 use anyhow::Result;
 use serde::{Serialize, Deserialize};
 
+/// Gitee Releases API 地址
 static GITEE_RELEASES_API: &str = "https://gitee.com/api/v5/repos/Yezi26/nrmm-tauri/releases/latest";
+/// GitHub Releases API 地址
 static GITHUB_RELEASES_API: &str = "https://api.github.com/repos/linglong-l/nrmm-tauri/releases/latest";
 
+/// 更新信息结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateInfo {
     pub version: String,
@@ -13,9 +26,13 @@ pub struct UpdateInfo {
     pub source: String,
 }
 
+/// 更新管理器
 pub struct UpdateManager;
 
 impl UpdateManager {
+    /// 异步检查更新
+    ///
+    /// 依次尝试 Gitee 和 GitHub 源，返回第一个可用的更新信息
     pub async fn check_update() -> Result<Option<UpdateInfo>> {
         let client = reqwest::Client::builder()
             .user_agent("nrmm-tauri")
@@ -121,6 +138,11 @@ impl UpdateManager {
         })
     }
 
+    /// 比较版本号，判断是否需要更新
+    ///
+    /// # 算法
+    /// 按点号分割为数字数组，逐位比较：latest 任一位更大则需要更新
+    /// 如果前面都相等，latest 位数更多（如 1.0 vs 1.0.1）也需要更新
     pub fn needs_update(current: &str, latest: &str) -> bool {
         let parse_version = |v: &str| -> Vec<u32> {
             v.trim_start_matches('v')
@@ -141,16 +163,19 @@ impl UpdateManager {
     }
 }
 
+/// 检查更新（Tauri 命令）
 #[tauri::command]
 pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
     UpdateManager::check_update().await.map_err(|e| e.to_string())
 }
 
+/// 比较版本号（Tauri 命令）
 #[tauri::command]
 pub fn compare_versions(current: String, latest: String) -> bool {
     UpdateManager::needs_update(&current, &latest)
 }
 
+/// 获取当前应用版本（Tauri 命令）
 #[tauri::command]
 pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()

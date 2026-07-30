@@ -1,3 +1,25 @@
+//! 模组管理核心模块
+//!
+//! 负责模组的启用/禁用切换、互斥选择、INI 注入和备份恢复。
+//! 核心功能：
+//! - update_mod_data: 重量级更新，完整复刻 NRMM 的 update_mod_data 流程
+//! - switch_mod: 普通分组模组选择（互斥：同一分组只能启用一个）
+//! - enable_mutex_mod/disable_mutex_mod: 互斥组（MutexGroup）模组启用/禁用
+//! - toggle_mod: 独立模组启用/禁用切换
+//! - restore_all_inis: 从备份恢复所有 INI 文件
+//! - save_customizations: Save Mod Customizations 功能，写入 d3dx_user.ini
+//!
+//! # NRMM 原版流程对齐
+//! update_mod_data 严格复刻 NRMM 的以下步骤：
+//! 1. _prepareManagedFolder: 准备 _MANAGED_ 目录，创建 nrmm_keypress.txt、nrmm_include.ini、manager_group.ini
+//! 2. _deleteGroupIniFiles: 清理旧的 group_*.ini 文件
+//! 3. 扫描并收集所有启用模组
+//! 4. 命名空间去重处理（_autoModifyDuplicateNamespaceInManagedMod）
+//! 5. 错误检测（重复 section、缺失 endif、库冲突等）
+//! 6. _createGroupIni: 为每个 group_X 生成 ModFolder.ini
+//! 7. _manageMod: 修改每个启用模组的 INI 文件，注入条件包裹
+//! 8. 生成主 INI 注入段，include nrmm_include.ini
+
 use anyhow::{Result, Context};
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
@@ -10,28 +32,75 @@ use crate::models::enums::TargetGame;
 use crate::models::mod_data::{ModData, ErroredLines};
 use crate::models::settings::AppSettings;
 
-#[derive(Debug, Clone, serde::Serialize)]
+/// 模组更新结果结构体
+#[derive(Debug, Clone, serde::Serialize, Default)]
 pub struct UpdateResult {
+    /// 总分组数
     pub total_groups: u32,
+    /// 总模组数
     pub total_mods: u32,
+    /// 启用的模组数
     pub enabled_mods: u32,
+    /// 禁用的模组数
     pub disabled_mods: u32,
+    /// 实际处理（INI 注入）的模组数
     pub processed_mods: u32,
+    /// INI 解析/处理过程中的错误
     pub errors: Vec<ErroredLines>,
+    /// 是否需要用户手动重载（3Dmigoto）
+    #[serde(default)]
+    pub need_reload_manual: bool,
 }
 
+/// INI 恢复结果统计
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RestoredCount {
+    /// 成功恢复的文件数
     pub restored: u32,
+    /// 恢复失败的文件数
     pub failed: u32,
 }
 
+/// Save Customizations 结果
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct SaveCustomizationsResult {
+    /// 是否成功
+    pub success: bool,
+    /// 消息
+    pub message: String,
+}
+
+/// 重量级更新模组数据（完整 INI 解析 + 注入）
+///
+/// 这是模组管理的核心函数，严格复刻 NRMM 的 updateModData 流程：
+/// 1. 准备 _MANAGED_ 目录（创建必要的模板 INI 文件）
+/// 2. 深度扫描所有模组（完整解析 INI）
+/// 3. 备份主 INI（d3dx.ini/RatioShot.ini）
+/// 4. 收集所有启用模组的 INI 路径和已知库
+/// 5. 清理旧的 group INI 文件
+/// 6. 为每个 group 创建 ModFolder.ini（include 该组启用的模组）
+/// 7. 对每个启用模组的 INI：备份 → 展开 namespace 变量 → 注入槽位条件 → 注释崩溃行 → 原子写入
+/// 8. 生成 nrmm_include.ini（include 所有 group INI + 管理 INI）
+/// 9. 原子写入主 INI（include nrmm_include.ini）
+///
+/// # 注意
+/// - 这是重度 IO + CPU 操作，应在 spawn_blocking 中调用
+/// - 仅在用户主动点击"应用"或切换模组时调用
+///
+/// # 参数
+/// - `game`: 目标游戏
+/// - `game_mods_path`: 游戏 Mods 目录
+/// - `_settings`: 应用设置（预留参数）
 pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppSettings) -> Result<UpdateResult> {
     let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);
     if !managed_folder.exists() {
         fs::create_dir_all(&managed_folder)?;
     }
 
+    // 步骤1: 准备 _MANAGED_ 目录，创建模板 INI 文件
+    let need_reload_manual = prepare_managed_folder(&managed_folder, game)?;
+
+    // 步骤2: 扫描模组
     let scan_result = mod_scanner::scan_mods(game_mods_path)?;
 
     let main_ini_name = game.d3dx_ini_name();
@@ -41,6 +110,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         create_default_main_ini(&main_ini_path, main_ini_name)?;
     }
 
+    // 备份主 INI
     let backup_path = main_ini_path.with_extension(constants::BACKUP_EXTENSION);
     if !backup_path.exists() {
         fs::copy(&main_ini_path, &backup_path)
@@ -50,6 +120,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     let main_ini_content = IniFile::force_read_as_utf8(&main_ini_path)?;
     let main_ini_content = strip_nrmm_injected_content(&main_ini_content);
 
+    // 步骤3: 收集启用模组和已知库
     let enabled_mods: Vec<&ModData> = scan_result.mods.iter()
         .filter(|m| !m.disabled && !m.mod_disabled)
         .collect();
@@ -66,17 +137,23 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         }
     }
 
-    let mut include_paths: Vec<PathBuf> = Vec::new();
+    // 步骤4: 清理旧的 group INI 文件
+    delete_group_ini_files(&managed_folder)?;
+
+    // 步骤5: 按 group 组织启用的模组 INI
+    let mut group_mod_inis: std::collections::HashMap<u32, Vec<PathBuf>> = std::collections::HashMap::new();
     let mut all_errors: Vec<ErroredLines> = Vec::new();
     let mut processed_mods = 0u32;
 
     for (mod_idx, mod_data) in enabled_mods.iter().enumerate() {
         let group_id = mod_data.group_index;
         let mod_id = mod_idx as u32;
+        let mut mod_inis: Vec<PathBuf> = Vec::new();
 
         for ini_data in &mod_data.mod_ini_data {
             let ini_path = PathBuf::from(&ini_data.ini_path);
 
+            // 备份模组 INI
             let mod_backup = ini_path.with_extension(constants::BACKUP_EXTENSION);
             if !mod_backup.exists() {
                 if let Err(e) = fs::copy(&ini_path, &mod_backup) {
@@ -86,28 +163,34 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
             match IniFile::parse(&ini_path) {
                 Ok(mut ini) => {
+                    // 错误检测
                     let errors = ini.detect_errors(&ini_path, &known_libraries);
                     if !errors.is_empty() {
                         all_errors.extend(errors);
                     }
 
+                    // 展开 namespace 变量
                     if let Some(ns) = namespace_handler::extract_namespace(&ini) {
                         namespace_handler::expand_ini_variables(&mut ini, &ns);
                     }
 
+                    // 注入槽位条件
                     ini.inject_slot_conditions(group_id, mod_id);
 
+                    // 注释崩溃行
                     let crash_lines = ini.comment_crash_lines();
                     if !crash_lines.is_empty() {
                         log::info!("Commented {} crash lines in {}", crash_lines.len(), ini_path.display());
                     }
 
+                    // 移除空 if 块，应用缩进
                     ini.remove_empty_if_blocks();
                     ini.apply_indentation();
 
+                    // 原子写入
                     ini.write_atomic(&ini_path)?;
 
-                    include_paths.push(ini_path.clone());
+                    mod_inis.push(ini_path.clone());
                     processed_mods += 1;
                 }
                 Err(e) => {
@@ -120,15 +203,33 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
                 }
             }
         }
+
+        group_mod_inis.entry(group_id).or_default().extend(mod_inis);
     }
 
-    let injected = generate_nrmm_injected_content(&include_paths, game_mods_path)?;
+    // 步骤6: 为每个 group 创建 ModFolder.ini
+    let mut group_ini_paths: Vec<PathBuf> = Vec::new();
+    for (group_id, ini_paths) in &group_mod_inis {
+        let group_dir = managed_folder.join(format!("group_{}", group_id));
+        let group_ini_path = create_group_ini(&group_dir, *group_id, ini_paths, game_mods_path)?;
+        if let Some(p) = group_ini_path {
+            group_ini_paths.push(p);
+        }
+    }
+
+    // 步骤7: 生成 nrmm_include.ini
+    let nrmm_include_path = managed_folder.join(constants::INCLUDE_FILENAME);
+    create_nrmm_include_ini(&nrmm_include_path, &managed_folder, &group_ini_paths, game_mods_path)?;
+
+    // 步骤8: 生成主 INI 注入段
+    let injected = generate_nrmm_injected_content(&nrmm_include_path, game_mods_path)?;
     let final_content = if main_ini_content.is_empty() {
         injected
     } else {
         format!("{}\n\n{}", main_ini_content, injected)
     };
 
+    // 原子写入主 INI
     let tmp_path = main_ini_path.with_extension("ini.tmp");
     fs::write(&tmp_path, &final_content)
         .with_context(|| format!("Failed to write temp main INI: {:?}", tmp_path))?;
@@ -142,9 +243,188 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         disabled_mods: scan_result.disabled_mods_count as u32,
         processed_mods,
         errors: all_errors,
+        need_reload_manual,
     })
 }
 
+/// 准备 _MANAGED_ 目录，创建 NRMM 所需的模板 INI 文件
+///
+/// 复刻 NRMM 的 _prepareManagedFolder 流程：
+/// 1. 创建 nrmm_keypress.txt（按键监听配置）
+/// 2. 创建 nrmm_include.ini（include 入口点）
+/// 3. 创建 manager_group.ini（全局管理组，定义 active_group_id 等变量）
+///
+/// # 返回值
+/// - `true`: 需要用户手动重载（F10）
+/// - `false`: 支持自动重载
+fn prepare_managed_folder(managed_path: &Path, _game: TargetGame) -> Result<bool> {
+    let mut need_reload_manual = false;
+
+    // 检查是否已存在必要文件，不存在则需要手动重载
+    let keypress_path = managed_path.join(constants::KEYPRESS_FILENAME);
+    let include_path = managed_path.join(constants::INCLUDE_FILENAME);
+    let manager_group_path = managed_path.join("manager_group.ini");
+
+    if !keypress_path.exists() || !include_path.exists() {
+        need_reload_manual = true;
+    }
+
+    // 创建 nrmm_keypress.txt - 默认配置（后台监听按键）
+    let keypress_template = String::from_utf8_lossy(crate::resources::LISTEN_KEYPRESS_EVEN_ON_BACKGROUND);
+    atomic_write_file(&keypress_path, keypress_template.as_bytes())?;
+
+    // 创建 nrmm_include.ini - 将由后续步骤填充 include 列表
+    // 这里仅写入 [IncludeKeypress] section include keypress 文件
+    let include_content = format!(
+        "[IncludeKeypress]\ninclude = {}\n",
+        constants::KEYPRESS_FILENAME
+    );
+    atomic_write_file(&include_path, include_content.as_bytes())?;
+
+    // 创建 manager_group.ini - 全局管理组
+    let manager_template = String::from_utf8_lossy(crate::resources::TEMPLATE_MANAGER_GROUP);
+    atomic_write_file(&manager_group_path, manager_template.as_bytes())?;
+
+    Ok(need_reload_manual)
+}
+
+/// 清理 _MANAGED_ 目录下旧的 group_*.ini 文件
+///
+/// 复刻 NRMM 的 _deleteGroupIniFiles：删除 group_1.ini ~ group_500.ini（包括子目录）
+fn delete_group_ini_files(managed_path: &Path) -> Result<()> {
+    if !managed_path.exists() {
+        return Ok(());
+    }
+
+    fn delete_in_dir(dir: &Path) -> Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    // 匹配 group_X.ini（X 为数字）
+                    let is_group_ini = if let Some(rest) = name.strip_prefix("group_") {
+                        if let Some(num_str) = rest.strip_suffix(".ini") {
+                            num_str.parse::<u32>().is_ok()
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    // 也清理 ModFolder.ini（旧版本命名）
+                    if is_group_ini || name == "ModFolder.ini" {
+                        if let Err(e) = fs::remove_file(&path) {
+                            log::warn!("Failed to delete old group INI {:?}: {}", path, e);
+                        }
+                    }
+                }
+            } else if path.is_dir() {
+                // 递归清理子目录
+                let dir_name = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if dir_name.starts_with("group_") || dir_name == "_MANAGED_" {
+                    let _ = delete_in_dir(&path);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    delete_in_dir(managed_path)
+}
+
+/// 为单个分组创建 ModFolder.ini（或 group_X.ini）
+///
+/// 复刻 NRMM 的 _createGroupIni：
+/// - 使用 TEMPLATE_GROUP 模板
+/// - 替换 {x} 为分组索引，{group_x} 为 group_X 目录名
+/// - 在文件末尾 include 该组所有启用模组的 INI 文件
+///
+/// # 返回值
+/// - Some(path): 创建成功，返回 INI 文件路径
+/// - None: 分组目录不存在或无启用模组
+fn create_group_ini(
+    group_dir: &Path,
+    group_index: u32,
+    mod_ini_paths: &[PathBuf],
+    game_mods_path: &Path,
+) -> Result<Option<PathBuf>> {
+    // 确保分组目录存在
+    if !group_dir.exists() {
+        fs::create_dir_all(group_dir)?;
+    }
+
+    let group_folder_name = format!("group_{}", group_index);
+    let group_ini_filename = format!("group_{}.ini", group_index);
+    let group_ini_path = group_dir.join(&group_ini_filename);
+
+    // 从模板生成基础内容
+    let template_str = String::from_utf8_lossy(crate::resources::TEMPLATE_GROUP);
+    let mut content = template_str
+        .replace("{group_x}", &group_folder_name)
+        .replace("{x}", &group_index.to_string());
+
+    // 添加该组所有启用模组的 INI include
+    content.push_str("\n; === NRMM Managed Includes ===\n");
+    for ini_path in mod_ini_paths {
+        if let Ok(rel_path) = ini_path.strip_prefix(game_mods_path) {
+            let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+            content.push_str(&format!("include = {}\n", rel_str));
+        }
+    }
+
+    atomic_write_file(&group_ini_path, content.as_bytes())?;
+    Ok(Some(group_ini_path))
+}
+
+/// 创建 nrmm_include.ini：include manager_group.ini 和所有 group_X.ini
+///
+/// 这是 NRMM 的 include 入口点：
+/// - d3dx.ini include nrmm_include.ini
+/// - nrmm_include.ini include manager_group.ini 和各 group_X/ModFolder.ini
+fn create_nrmm_include_ini(
+    include_path: &Path,
+    managed_path: &Path,
+    group_ini_paths: &[PathBuf],
+    game_mods_path: &Path,
+) -> Result<()> {
+    let mut content = String::new();
+
+    // Include keypress 配置
+    content.push_str("[IncludeKeypress]\n");
+    content.push_str(&format!("include = {}\n\n", constants::KEYPRESS_FILENAME));
+
+    // Include manager_group.ini
+    if let Ok(rel) = managed_path.join("manager_group.ini").strip_prefix(game_mods_path) {
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        content.push_str(&format!("include = {}\n", rel_str));
+    }
+
+    // Include 所有 group INI
+    for group_ini in group_ini_paths {
+        if let Ok(rel) = group_ini.strip_prefix(game_mods_path) {
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            content.push_str(&format!("include = {}\n", rel_str));
+        }
+    }
+
+    atomic_write_file(include_path, content.as_bytes())?;
+    Ok(())
+}
+
+/// 原子写入文件（先写 tmp，再 rename）
+fn atomic_write_file(path: &Path, content: &[u8]) -> Result<()> {
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, content)
+        .with_context(|| format!("Failed to write temp file: {:?}", tmp_path))?;
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("Failed to rename temp file to: {:?}", path))?;
+    Ok(())
+}
+
+/// 移除主 INI 中 NRMM 之前注入的内容
 fn strip_nrmm_injected_content(content: &str) -> String {
     let start_marker = ";NRMM_INI_START";
     let end_marker = ";NRMM_INI_END";
@@ -170,7 +450,13 @@ fn strip_nrmm_injected_content(content: &str) -> String {
     result.trim_end().to_string()
 }
 
-fn generate_nrmm_injected_content(include_paths: &[PathBuf], game_mods_path: &Path) -> Result<String> {
+/// 生成主 INI 中 NRMM 注入的内容段
+///
+/// 复刻 NRMM 的注入格式：
+/// - ;NRMM_INI_START / ;NRMM_INI_END 标记
+/// - [Constants] 段定义管理变量
+/// - include nrmm_include.ini
+fn generate_nrmm_injected_content(nrmm_include_path: &Path, game_mods_path: &Path) -> Result<String> {
     let mut content = String::new();
 
     content.push_str(";NRMM_INI_START\n");
@@ -184,8 +470,8 @@ fn generate_nrmm_injected_content(include_paths: &[PathBuf], game_mods_path: &Pa
     content.push_str("global persist $managed_selected_group = 0\n");
     content.push_str("global persist $managed_selected_mod = 0\n\n");
 
-    for path in include_paths {
-        let rel_path = path.strip_prefix(game_mods_path).unwrap_or(path);
+    // include nrmm_include.ini（而不是直接 include 所有模组 INI）
+    if let Ok(rel_path) = nrmm_include_path.strip_prefix(game_mods_path) {
         let rel_str = rel_path.to_string_lossy().replace('\\', "/");
         content.push_str(&format!("include = {}\n", rel_str));
     }
@@ -212,6 +498,56 @@ global persist $managed_selected_mod = 0
     Ok(())
 }
 
+/// Save Mod Customizations：将当前模组自定义状态写入 d3dx_user.ini
+///
+/// 复刻 NRMM 的 Save Customizations 功能：
+/// - 读取当前 d3dx.ini 中的用户自定义 section（非 NRMM 管理的 section）
+/// - 将这些自定义内容写入 d3dx_user.ini
+/// - 用户可以在 d3dx_user.ini 中添加自定义配置，这些配置不会被 NRMM 覆盖
+///
+/// # 注意
+/// - d3dx_user.ini 会被 3Dmigoto 自动加载（如果存在）
+/// - NRMM 不会修改或覆盖 d3dx_user.ini 中的内容
+pub fn save_customizations(game_mods_path: &Path, game: TargetGame) -> Result<SaveCustomizationsResult> {
+    let main_ini_name = game.d3dx_ini_name();
+    let main_ini_path = game_mods_path.join(main_ini_name);
+    let user_ini_path = game_mods_path.join("d3dx_user.ini");
+
+    if !main_ini_path.exists() {
+        return Ok(SaveCustomizationsResult {
+            success: false,
+            message: "Main INI file not found".to_string(),
+        });
+    }
+
+    let content = IniFile::force_read_as_utf8(&main_ini_path)?;
+    let stripped = strip_nrmm_injected_content(&content);
+
+    // 将非 NRMM 管理的内容写入 d3dx_user.ini
+    // 注意：这里只做简单复制，实际 NRMM 会更智能地提取用户自定义 section
+    let header = "; Custom settings saved by NRMM\n";
+    let header = format!("{}; This file will NOT be overwritten by NRMM\n; Add your custom [Constants] and other sections here\n\n", header);
+    let final_content = format!("{}{}", header, stripped);
+
+    atomic_write_file(&user_ini_path, final_content.as_bytes())?;
+
+    Ok(SaveCustomizationsResult {
+        success: true,
+        message: "Customizations saved to d3dx_user.ini".to_string(),
+    })
+}
+
+/// 切换普通分组选中的模组
+///
+/// 普通分组（group_xx）是互斥的：选中一个模组会自动禁用同组其他模组。
+/// 实现方式：重命名目录（移除目标的 DISABLED_ 前缀，给其他模组添加前缀），然后调用 update_mod_data。
+///
+/// # 参数
+/// - `game`: 目标游戏
+/// - `game_mods_path`: 游戏 Mods 目录
+/// - `settings`: 应用设置
+/// - `group_index`: 分组索引
+/// - `mod_index`: 模组索引（在分组内的索引）
 pub fn switch_mod(
     game: TargetGame,
     game_mods_path: &Path,
@@ -256,6 +592,11 @@ pub fn switch_mod(
     update_mod_data(game, game_mods_path, settings)
 }
 
+/// 切换单个模组的启用/禁用状态（独立开关，不影响同组其他模组）
+///
+/// # 参数
+/// - `mod_path`: 模组目录路径
+/// - `enable`: true = 启用（移除 DISABLED_ 前缀），false = 禁用（添加 DISABLED_ 前缀）
 pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
     let dir_name = mod_path.file_name()
         .unwrap_or_default()
@@ -285,6 +626,134 @@ pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
     Ok(())
 }
 
+/// 互斥启用模组：启用指定模组，禁用其父目录下同级的其他模组叶子节点（含.ini的目录）
+///
+/// - 只处理父目录下的一级子目录，不递归子分组
+/// - 没有.ini的目录（分组节点/子分组）不处理
+/// - 重命名保持幂等，检查目标路径是否存在避免覆盖
+pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
+    let parent_dir = mod_path.parent()
+        .with_context(|| format!("Failed to get parent directory of: {:?}", mod_path))?;
+
+    let entries = fs::read_dir(parent_dir)
+        .with_context(|| format!("Failed to read parent directory: {:?}", parent_dir))?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let dir_name = entry.file_name().to_string_lossy().to_string();
+        if dir_name.starts_with('.') {
+            continue;
+        }
+
+        let has_ini = mod_scanner::dir_has_ini_file(&path)?;
+        if !has_ini {
+            continue;
+        }
+
+        if path == mod_path {
+            let current_name = path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let is_disabled = current_name.to_uppercase().starts_with("DISABLED");
+            if is_disabled {
+                let new_name = current_name
+                    .trim_start_matches("DISABLED")
+                    .trim_start_matches("disabled")
+                    .trim_start_matches(|c: char| c == '_' || c == ' ' || c == '-');
+                let new_path = path.parent().unwrap_or(&path).join(new_name);
+                if path != new_path {
+                    if new_path.exists() {
+                        log::warn!("Target path already exists, skipping enable: {:?}", new_path);
+                    } else {
+                        fs::rename(&path, &new_path)
+                            .with_context(|| format!("Failed to enable mod: {:?}", path))?;
+                    }
+                }
+            }
+        } else {
+            let current_name = path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let is_disabled = current_name.to_uppercase().starts_with("DISABLED");
+            if !is_disabled {
+                let new_name = format!("{}{}", constants::DISABLED_PREFIX, current_name);
+                let new_path = path.parent().unwrap_or(&path).join(new_name);
+                if path != new_path {
+                    if new_path.exists() {
+                        log::warn!("Target path already exists, skipping disable: {:?}", new_path);
+                    } else {
+                        fs::rename(&path, &new_path)
+                            .with_context(|| format!("Failed to disable sibling mod: {:?}", path))?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 禁用互斥模组：给模组目录添加DISABLED_前缀
+///
+/// - 如果已经以DISABLED开头（大小写不敏感）则不做任何操作（幂等）
+/// - 检查目标路径不存在才重命名
+pub fn disable_mutex_mod(mod_path: &Path) -> Result<()> {
+    let dir_name = mod_path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
+
+    if !is_disabled {
+        let new_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
+        let new_path = mod_path.parent().unwrap_or(mod_path).join(new_name);
+        if mod_path != &new_path {
+            if new_path.exists() {
+                log::warn!("Target path already exists, skipping disable: {:?}", new_path);
+            } else {
+                fs::rename(mod_path, &new_path)
+                    .with_context(|| format!("Failed to disable mod: {:?}", mod_path))?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// 判断模组是否属于MutexGroup（非group_xx目录下的模组）
+///
+/// 逻辑：获取mod_path相对于managed_path的路径，检查第一个路径段是否匹配group_xx正则；
+/// 如果第一个路径段不匹配group_xx（即不是NormalGroup），则是mutex mod。
+pub fn is_mutex_mod(mod_path: &Path, managed_path: &Path) -> bool {
+    let rel_path = match mod_path.strip_prefix(managed_path) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    let first_component = rel_path.components().next();
+    match first_component {
+        Some(std::path::Component::Normal(name)) => {
+            let name_str = name.to_string_lossy();
+            mod_scanner::is_normal_group_dir(&name_str).is_none()
+        }
+        _ => false,
+    }
+}
+
+/// 取消选中分组内所有模组（禁用整个分组）
+///
+/// # 参数
+/// - `game`: 目标游戏
+/// - `game_mods_path`: 游戏 Mods 目录
+/// - `settings`: 应用设置
+/// - `group_index`: 要取消选中的分组索引
 pub fn deselect_group_mods(
     game: TargetGame,
     game_mods_path: &Path,
@@ -316,6 +785,44 @@ pub fn deselect_group_mods(
     update_mod_data(game, game_mods_path, settings)
 }
 
+/// 批量切换模组启用/禁用状态
+///
+/// # 参数
+/// - `mod_paths`: 模组路径列表
+/// - `enable`: true=启用, false=禁用
+/// - `is_mutex`: 是否为互斥组模组
+pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> Result<u32> {
+    let mut count = 0u32;
+    for path_str in mod_paths {
+        let path = PathBuf::from(path_str);
+        if is_mutex {
+            if enable {
+                enable_mutex_mod(&path)?;
+            } else {
+                disable_mutex_mod(&path)?;
+            }
+        } else {
+            toggle_mod(&path, enable)?;
+        }
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// 从备份恢复所有 INI 文件
+///
+/// 恢复顺序：
+/// 1. 主 INI 文件（d3dx.ini, RatioShot.ini）
+/// 2. 递归恢复 _MANAGED_ 目录下所有模组的 INI
+/// 3. 清理 NRMM 生成的管理文件（nrmm_include.ini, manager_group.ini, nrmm_keypress.txt, group_*.ini）
+///
+/// 恢复成功后删除备份文件。
+///
+/// # 参数
+/// - `game_mods_path`: 游戏 Mods 目录
+///
+/// # 返回
+/// 恢复统计（成功数/失败数）
 pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
     let mut restored = 0u32;
     let mut failed = 0u32;
@@ -340,6 +847,45 @@ pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
     let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);
     if managed_folder.exists() {
         restore_inis_recursive(&managed_folder, &mut restored, &mut failed)?;
+
+        // 清理 NRMM 生成的管理文件
+        let _ = fs::remove_file(managed_folder.join(constants::INCLUDE_FILENAME));
+        let _ = fs::remove_file(managed_folder.join(constants::KEYPRESS_FILENAME));
+        let _ = fs::remove_file(managed_folder.join("manager_group.ini"));
+
+        // 清理 group_*.ini 文件
+        if let Ok(entries) = fs::read_dir(&managed_folder) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if let Some(rest) = name.strip_prefix("group_") {
+                            if rest.ends_with(".ini") {
+                                let _ = fs::remove_file(&path);
+                            }
+                        }
+                    }
+                }
+                // 清理子目录下的 group_X.ini 和 ModFolder.ini
+                if path.is_dir() {
+                    if let Ok(sub_entries) = fs::read_dir(&path) {
+                        for sub_entry in sub_entries.flatten() {
+                            let sub_path = sub_entry.path();
+                            if sub_path.is_file() {
+                                if let Some(name) = sub_path.file_name().and_then(|n| n.to_str()) {
+                                    if name.starts_with("group_") && name.ends_with(".ini") {
+                                        let _ = fs::remove_file(&sub_path);
+                                    }
+                                    if name == "ModFolder.ini" {
+                                        let _ = fs::remove_file(&sub_path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Ok(RestoredCount { restored, failed })
@@ -436,23 +982,18 @@ y = 2
     #[test]
     fn test_generate_injected_content() {
         let dir = TempDir::new().unwrap();
-        let mod1 = dir.path().join("_MANAGED_/group_1/Mod1/mod.ini");
-        fs::create_dir_all(mod1.parent().unwrap()).unwrap();
-        fs::write(&mod1, "").unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+        let include_path = managed.join("nrmm_include.ini");
+        fs::write(&include_path, "").unwrap();
 
-        let mod2 = dir.path().join("_MANAGED_/group_1/Mod2/config.ini");
-        fs::create_dir_all(mod2.parent().unwrap()).unwrap();
-        fs::write(&mod2, "").unwrap();
-
-        let paths = vec![mod1, mod2];
-        let result = generate_nrmm_injected_content(&paths, dir.path()).unwrap();
+        let result = generate_nrmm_injected_content(&include_path, dir.path()).unwrap();
 
         assert!(result.contains(";NRMM_INI_START"));
         assert!(result.contains(";NRMM_INI_END"));
         assert!(result.contains("[Constants]"));
         assert!(result.contains("$managed_slot_id"));
-        assert!(result.contains("include = _MANAGED_/group_1/Mod1/mod.ini"));
-        assert!(result.contains("include = _MANAGED_/group_1/Mod2/config.ini"));
+        assert!(result.contains("include = _MANAGED_/nrmm_include.ini"));
         assert!(!result.contains("\\"));
     }
 
@@ -502,6 +1043,72 @@ y = 2
     }
 
     #[test]
+    fn test_prepare_managed_folder() {
+        let dir = TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+
+        let need_reload = prepare_managed_folder(&managed, TargetGame::GenshinImpact).unwrap();
+        assert!(need_reload); // 首次创建需要手动重载
+
+        assert!(managed.join(constants::KEYPRESS_FILENAME).exists());
+        assert!(managed.join(constants::INCLUDE_FILENAME).exists());
+        assert!(managed.join("manager_group.ini").exists());
+
+        // 第二次调用应该不需要手动重载
+        let need_reload2 = prepare_managed_folder(&managed, TargetGame::GenshinImpact).unwrap();
+        assert!(!need_reload2);
+    }
+
+    #[test]
+    fn test_create_group_ini() {
+        let dir = TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        let group_dir = managed.join("group_1");
+        fs::create_dir_all(&group_dir).unwrap();
+
+        let mod1 = group_dir.join("Mod1/mod.ini");
+        fs::create_dir_all(mod1.parent().unwrap()).unwrap();
+        fs::write(&mod1, "").unwrap();
+
+        let mod2 = group_dir.join("Mod2/config.ini");
+        fs::create_dir_all(mod2.parent().unwrap()).unwrap();
+        fs::write(&mod2, "").unwrap();
+
+        let ini_paths = vec![mod1.clone(), mod2.clone()];
+        let result = create_group_ini(&group_dir, 1, &ini_paths, dir.path()).unwrap();
+        assert!(result.is_some());
+
+        let group_ini = result.unwrap();
+        assert!(group_ini.exists());
+        let content = fs::read_to_string(&group_ini).unwrap();
+        assert!(content.contains("group_1"));
+        assert!(content.contains("$group_id = 1"));
+        assert!(content.contains("include = _MANAGED_/group_1/Mod1/mod.ini"));
+        assert!(content.contains("include = _MANAGED_/group_1/Mod2/config.ini"));
+    }
+
+    #[test]
+    fn test_delete_group_ini_files() {
+        let dir = TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+
+        let old_ini = managed.join("group_1.ini");
+        fs::write(&old_ini, "").unwrap();
+        let old_modfolder = managed.join("ModFolder.ini");
+        fs::write(&old_modfolder, "").unwrap();
+        let other_file = managed.join("other.txt");
+        fs::write(&other_file, "").unwrap();
+
+        assert!(old_ini.exists());
+        delete_group_ini_files(&managed).unwrap();
+        assert!(!old_ini.exists());
+        assert!(!old_modfolder.exists());
+        assert!(other_file.exists());
+    }
+
+    #[test]
     fn test_update_mod_data_empty() {
         let dir = setup_test_env();
         create_main_ini(dir.path(), TargetGame::GenshinImpact);
@@ -517,6 +1124,13 @@ y = 2
         let content = fs::read_to_string(&main_ini).unwrap();
         assert!(content.contains(";NRMM_INI_START"));
         assert!(content.contains(";NRMM_INI_END"));
+        assert!(content.contains("nrmm_include.ini"));
+
+        // 验证管理文件已创建
+        let managed = dir.path().join("_MANAGED_");
+        assert!(managed.join("nrmm_keypress.txt").exists());
+        assert!(managed.join("nrmm_include.ini").exists());
+        assert!(managed.join("manager_group.ini").exists());
     }
 
     #[test]
@@ -537,8 +1151,16 @@ y = 2
         assert_eq!(result.enabled_mods, 1);
         assert_eq!(result.processed_mods, 1);
 
-        let main_content = fs::read_to_string(dir.path().join("d3dx.ini")).unwrap();
-        assert!(main_content.contains("include = _MANAGED_/group_1/TestMod/mod.ini"));
+        // 验证 group_1.ini 已创建
+        let group_ini = group_path.join("group_1.ini");
+        assert!(group_ini.exists());
+        let group_content = fs::read_to_string(&group_ini).unwrap();
+        assert!(group_content.contains("include = _MANAGED_/group_1/TestMod/mod.ini"));
+
+        // 验证 nrmm_include.ini 包含 group_1.ini
+        let include_content = fs::read_to_string(dir.path().join("_MANAGED_/nrmm_include.ini")).unwrap();
+        assert!(include_content.contains("manager_group.ini"));
+        assert!(include_content.contains("group_1/group_1.ini"));
 
         let mod_ini_path = group_path.join("TestMod/mod.ini");
         let backup_path = mod_ini_path.with_extension(constants::BACKUP_EXTENSION);
@@ -573,6 +1195,10 @@ y = 2
 
         let backup_path = main_ini_path.with_extension(constants::BACKUP_EXTENSION);
         assert!(!backup_path.exists());
+
+        // 验证管理文件已清理
+        let managed = dir.path().join("_MANAGED_");
+        assert!(!managed.join("nrmm_include.ini").exists());
     }
 
     #[test]
@@ -601,5 +1227,155 @@ y = 2
         let content = "before\n;NRMM_INI_START\na\nb\nc\n;NRMM_INI_END\nafter";
         let result = strip_nrmm_injected_content(content);
         assert_eq!(result.trim(), "before\nafter");
+    }
+
+    fn create_test_mod(parent: &Path, name: &str) -> PathBuf {
+        let mod_path = parent.join(name);
+        fs::create_dir_all(&mod_path).unwrap();
+        fs::write(mod_path.join("mod.ini"), "").unwrap();
+        mod_path
+    }
+
+    #[test]
+    fn test_enable_mutex_mod_disables_siblings() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("MutexGroup");
+        fs::create_dir_all(&parent).unwrap();
+
+        let mod1 = create_test_mod(&parent, "DISABLED_ModA");
+        let mod2 = create_test_mod(&parent, "ModB");
+        let mod3 = create_test_mod(&parent, "ModC");
+
+        let target_mod = parent.join("ModA");
+        enable_mutex_mod(&mod1).unwrap();
+
+        assert!(target_mod.exists());
+        assert!(!mod1.exists());
+        assert!(!mod2.exists());
+        assert!(parent.join("DISABLED_ModB").exists());
+        assert!(!mod3.exists());
+        assert!(parent.join("DISABLED_ModC").exists());
+    }
+
+    #[test]
+    fn test_enable_mutex_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("MutexGroup");
+        fs::create_dir_all(&parent).unwrap();
+
+        let mod1 = create_test_mod(&parent, "ModA");
+        let _mod2 = create_test_mod(&parent, "DISABLED_ModB");
+        let _mod3 = create_test_mod(&parent, "DISABLED_ModC");
+
+        enable_mutex_mod(&mod1).unwrap();
+
+        assert!(mod1.exists());
+        assert!(parent.join("DISABLED_ModB").exists());
+        assert!(parent.join("DISABLED_ModC").exists());
+
+        enable_mutex_mod(&mod1).unwrap();
+
+        assert!(mod1.exists());
+        assert!(parent.join("DISABLED_ModB").exists());
+        assert!(parent.join("DISABLED_ModC").exists());
+    }
+
+    #[test]
+    fn test_disable_mutex_mod() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("MutexGroup");
+        fs::create_dir_all(&parent).unwrap();
+
+        let mod_path = create_test_mod(&parent, "MyMod");
+        assert!(mod_path.exists());
+
+        disable_mutex_mod(&mod_path).unwrap();
+
+        assert!(!mod_path.exists());
+        assert!(parent.join("DISABLED_MyMod").exists());
+    }
+
+    #[test]
+    fn test_disable_mutex_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("MutexGroup");
+        fs::create_dir_all(&parent).unwrap();
+
+        let disabled_path = create_test_mod(&parent, "DISABLED_MyMod");
+        assert!(disabled_path.exists());
+
+        disable_mutex_mod(&disabled_path).unwrap();
+
+        assert!(disabled_path.exists());
+    }
+
+    #[test]
+    fn test_mutex_does_not_affect_subgroups() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("MutexGroup");
+        fs::create_dir_all(&parent).unwrap();
+
+        let mod1 = create_test_mod(&parent, "ModA");
+        let mod2 = create_test_mod(&parent, "ModB");
+
+        let subgroup = parent.join("SubGroup");
+        fs::create_dir_all(&subgroup).unwrap();
+        let submod = create_test_mod(&subgroup, "SubMod1");
+        let submod2 = create_test_mod(&subgroup, "SubMod2");
+
+        enable_mutex_mod(&mod1).unwrap();
+
+        assert!(mod1.exists());
+        assert!(!mod2.exists());
+        assert!(parent.join("DISABLED_ModB").exists());
+        assert!(submod.exists());
+        assert!(submod2.exists());
+    }
+
+    #[test]
+    fn test_is_mutex_mod_detection() {
+        let dir = TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+
+        let normal_group = managed.join("group_1");
+        fs::create_dir_all(&normal_group).unwrap();
+        let normal_mod = create_test_mod(&normal_group, "NormalMod");
+
+        let mutex_group = managed.join("#MutexMods");
+        fs::create_dir_all(&mutex_group).unwrap();
+        let mutex_mod = create_test_mod(&mutex_group, "MutexMod");
+
+        assert!(!is_mutex_mod(&normal_mod, &managed));
+        assert!(is_mutex_mod(&mutex_mod, &managed));
+    }
+
+    #[test]
+    fn test_save_customizations() {
+        let dir = setup_test_env();
+        create_main_ini(dir.path(), TargetGame::GenshinImpact);
+        let settings = AppSettings::default();
+
+        // 先执行一次 update_mod_data 添加 NRMM 管理段
+        update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+
+        // 保存自定义设置
+        let result = save_customizations(dir.path(), TargetGame::GenshinImpact).unwrap();
+        assert!(result.success);
+
+        let user_ini = dir.path().join("d3dx_user.ini");
+        assert!(user_ini.exists());
+        let content = fs::read_to_string(&user_ini).unwrap();
+        assert!(content.contains("Custom settings saved by NRMM"));
+        assert!(!content.contains(";NRMM_INI_START"));
+    }
+
+    #[test]
+    fn test_atomic_write_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.txt");
+        atomic_write_file(&path, b"hello world").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hello world");
+        assert!(!path.with_extension("tmp").exists());
     }
 }

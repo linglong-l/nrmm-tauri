@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>NRMM</title>
+    <script>
+      // ===== HTML最早时间点（浏览器/ WebView开始解析HTML时立即执行） =====
+      ;(function() {
+        var t0 = performance.now();
+        var ts = new Date().toISOString().substring(11, 23);
+        console.log('[HTML-BOOT] ===== HTML开始解析 at ' + ts + ' =====');
+        window.__HTML_BOOT_START__ = t0;
+        document.addEventListener('DOMContentLoaded', function() {
+          var ms = performance.now() - t0;
+          console.log('[HTML-BOOT] T+' + Math.round(ms) + 'ms - DOMContentLoaded 事件触发');
+        });
+      })();
+    </script>
   </head>
 
   <body>

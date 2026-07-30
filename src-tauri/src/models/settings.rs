@@ -1,7 +1,12 @@
+//! 应用设置数据模型
+//!
+//! 定义应用设置相关的所有数据结构，使用 serde 序列化/反序列化（camelCase）
+
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use super::enums::*;
 
+/// 键盘快捷键配置
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyKeyboard {
@@ -32,6 +37,7 @@ impl Default for HotkeyKeyboard {
     }
 }
 
+/// 手柄快捷键配置
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HotkeyGamepad {
@@ -62,43 +68,87 @@ impl Default for HotkeyGamepad {
     }
 }
 
+/// 应用全局设置
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    /// 当前目标游戏
     pub target_game: TargetGame,
+    /// 键盘快捷键配置
     pub hotkey: HotkeyKeyboard,
+    /// 手柄快捷键配置
     pub gamepad_hotkey: HotkeyGamepad,
+    /// 窗口切换快捷键（键盘）
+    pub window_hotkey: String,
+    /// 窗口切换快捷键（手柄）
+    pub gamepad_hotkey_toggle: String,
+    /// 搜索快捷键
+    pub search_hotkey: String,
+    /// 各游戏的 Mods 目录路径
     pub game_mods_path: HashMap<TargetGame, String>,
+    /// 各游戏的目标进程名
+    pub target_process_per_game: HashMap<TargetGame, String>,
+    /// 按键配置方案
     pub game_profile: HashMap<String, KeybindProfile>,
+    /// UI 缩放比例
     pub interface_scale: f64,
+    /// 背景透明度
     pub bg_transparency: f64,
+    /// 是否启用动态背景
     pub dynamic_background: bool,
+    /// 模组分组布局模式
     pub mod_grouping_mode: LayoutMode,
+    /// 模组排序方式
     pub mods_sorting_type: SortingType,
+    /// 是否反向排序
     pub reverse_sort: bool,
+    /// 光标类型
     pub cursor_type: CursorType,
+    /// 界面语言
     pub language: String,
+    /// 是否启用暗色模式
     pub dark_mode: bool,
+    /// 是否自动设置文件夹图标
     pub auto_folder_icon: bool,
+    /// 是否自动设置优先级索引
     pub auto_priority_index: bool,
+    /// 是否启动时检查更新
     pub check_update_on_start: bool,
+    /// 是否热键时自动置顶窗口
     pub auto_top_window: bool,
+    /// 窗口是否全屏
     pub is_window_fullscreen: bool,
+    /// 是否在屏幕上显示按键
     pub show_keypress_on_screen: bool,
+    /// 选择模组时是否模拟按键
     pub simulate_key_on_selection: bool,
+    /// 是否使用精确热键
     pub use_precise_hotkey: bool,
+    /// 是否交换取消键绑定
     pub swap_cancel_keybind: bool,
+    /// 热键时是否总是显示菜单
     pub always_show_menu_on_hotkey: bool,
+    /// 是否仅在 3Dmigoto 中响应热键
     pub hotkey_only_in_migoto: bool,
+    /// 文件夹图标黑名单
     pub folder_icon_blacklist: Vec<String>,
+    /// 禁用的键盘输入列表
     pub disabled_kb_inputs: Vec<String>,
+    /// 禁用的手柄输入列表
     pub disabled_gamepad_inputs: Vec<String>,
+    /// 各分组选中的模组索引
     pub selected_mod_index: HashMap<String, u32>,
+    /// 选中的分组索引
     pub selected_group_index: HashMap<String, u32>,
+    /// 是否启用键盘热键
     pub enabled_kb: bool,
+    /// 是否启用手柄热键
     pub enabled_gamepad: bool,
+    /// 是否显示有错误的模组
     pub show_errored_mods: bool,
+    /// 是否仅显示收藏
     pub show_favorites_only: bool,
+    /// 是否检查命名空间冲突
     pub check_namespace_conflict: bool,
 }
 
@@ -108,7 +158,11 @@ impl Default for AppSettings {
             target_game: TargetGame::GenshinImpact,
             hotkey: HotkeyKeyboard::default(),
             gamepad_hotkey: HotkeyGamepad::default(),
+            window_hotkey: "Alt+D".to_string(),
+            gamepad_hotkey_toggle: "LB+RB".to_string(),
+            search_hotkey: "Alt+S".to_string(),
             game_mods_path: HashMap::new(),
+            target_process_per_game: HashMap::new(),
             game_profile: HashMap::new(),
             interface_scale: 1.0,
             bg_transparency: 0.7,

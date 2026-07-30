@@ -384,6 +384,14 @@
     "hotkeyHintSearch": "搜索：窗口内快捷键，Alt+字母聚焦搜索框"
   },
   "keybinds": {
+    "title": "按键绑定",
+    "comingSoon": "即将推出",
+    "navWasd": "在分组和模组间导航",
+    "selectFa": "选择模组",
+    "keybindRx": "按键切换",
+    "tabQeLbrb": "切换标签页",
+    "searchSpace": "搜索",
+    "altS": "聚焦搜索框",
     "emptySelectMod": "请在「模组」标签页选择一个模组以查看快捷键。",
     "noKeybinds": "所选模组没有快捷键配置。",
     "keys": "按键",
@@ -400,7 +408,13 @@
     "saveSuccess": "按键绑定已保存",
     "saveFailed": "保存失败：{error}",
     "toggleFailed": "切换状态失败：{error}",
-    "clickToEdit": "点击编辑按键"
+    "clickToEdit": "点击编辑按键",
+    "keypressAvailable": "支持按键模拟",
+    "keypressUnavailable": "不支持按键模拟",
+    "keypressWorkDesc": "快捷键将在支持的游戏中生效。",
+    "keypressLinuxHint": "请安装 xdotool 或 ydotool 以支持按键模拟。",
+    "keypressMacosHint": "请授予辅助功能权限以支持按键模拟。",
+    "keypressGenericHint": "按键模拟需要额外配置。"
   },
   "Hash conflict detected: {count} group(s)": "检测到 {count} 个分组的hash冲突",
   "No hash conflicts": "无hash冲突",
@@ -457,7 +471,25 @@
     "enable": "启用",
     "favorite": "收藏",
     "confirm": "确认",
-    "cancel": "取消"
+    "cancel": "取消",
+    "appName": "NRMM",
+    "groups": "Groups",
+    "emptySlot": "空槽位",
+    "searchPlaceholder": "搜索模组/分组",
+    "searchPrev": "上一个 (Shift+Enter)",
+    "searchNext": "下一个 (Enter)",
+    "searchClose": "关闭 (Esc)",
+    "minimize": "最小化",
+    "minimizeA11y": "最小化窗口",
+    "maximize": "最大化",
+    "maximizeA11y": "最大化窗口",
+    "restore": "还原",
+    "restoreA11y": "还原窗口",
+    "closeA11y": "关闭窗口",
+    "languageZhCN": "简体中文",
+    "languageEn": "English",
+    "expand": "展开",
+    "collapse": "折叠"
   },
   "app": {
     "title": "NRMM"
@@ -466,11 +498,19 @@
     "title": "模组管理",
     "refresh": "刷新",
     "addGroup": "添加分组",
+    "addSubfolder": "添加子分组",
+    "subfolderName": "子分组名称",
+    "confirmCreateSubfolder": "即将在 \"{groupName}\" 下创建子分组：\"{folderName}\"，是否确认？",
+    "subfolderCreated": "子分组创建成功",
+    "failedToCreateSubfolder": "创建子分组失败",
     "restoreInis": "还原INI",
     "noMods": "暂无模组"
   },
-  "keybinds": {
-    "title": "按键绑定"
+  "notification": {
+    "startupSuccess": {
+      "title": "NRMM 已启动",
+      "body": "使用快捷键或托盘图标打开窗口"
+    }
   },
   "settings": {
     "title": "设置",
@@ -499,6 +539,17 @@
     "supportDeveloper": "支持开发者",
     "contactHelp": "联系帮助",
     "tutorial": "使用教程",
-    "none": "无"
+    "none": "无",
+    "targetProcess": "目标进程",
+    "targetProcessHint": "Windows下建议输入完整exe文件名（如 StarRail.exe）",
+    "targetProcessPlaceholder": "例如：StarRail.exe",
+    "saveModCustomizations": "保存模组自定义设置",
+    "saveCustomizationsDesc": "将当前模组自定义设置（开关/状态）设为默认",
+    "enableDisableMods": "启用/禁用模组",
+    "enableDisableModsDesc": "有助于排查未知问题，并缩短模组重新加载（F10）时间",
+    "restoreZonePlaceholder": "将模组文件夹或「Mods」文件夹拖放到此处，或点击选择文件夹",
+    "restoreZoneDesc": "即可无需模组管理器再次使用模组。模组不会被重置，仅移除模组管理器添加的专属行。",
+    "hotkeyComingSoon": "快捷键功能即将推出",
+    "dontForgetUpdate": "别忘了按「更新模组数据」"
   }
 }

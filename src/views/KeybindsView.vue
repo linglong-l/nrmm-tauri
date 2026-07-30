@@ -1,123 +1,299 @@
 <template>
   <div class="keybinds-view">
-    <div class="keybinds-container">
-      <h2 class="keybinds-title">{{ t('Keybinds') }}</h2>
-
-      <div class="status-card" :class="keypressStatusClass">
-        <el-icon :size="24" class="status-icon">
-          <WarningFilled v-if="!keypressSupported" />
-          <CircleCheckFilled v-else />
-        </el-icon>
-        <div class="status-content">
-          <h3 class="status-title">
-            {{ keypressSupported ? 'Keypress simulation available' : 'Keypress simulation not available' }}
-          </h3>
-          <p class="status-desc">
-            {{ keypressSupported ? 'Hotkeys will work in supported games.' : keypressHint }}
-          </p>
+    <div class="keybinds-scroll hide-scrollbar" ref="scrollRef">
+      <div class="keybinds-container">
+        <!-- 标题行：右侧对齐的页面标题 -->
+        <div class="header-row">
+          <div class="spacer" aria-hidden="true"></div>
+          <h2 class="keybinds-title">{{ t('Keybinds') }}</h2>
         </div>
-      </div>
 
-      <div class="coming-soon-card">
-        <el-icon :size="48" class="coming-soon-icon"><Setting /></el-icon>
-        <h3>热键配置</h3>
-        <p>Coming soon</p>
-        <p class="hint">{{ t('Click keybind to simulate keypress') }}</p>
-      </div>
+        <!-- 按键模拟支持状态卡片 -->
+        <div class="status-card" :class="keypressStatusClass">
+          <el-icon :size="24" class="status-icon" aria-hidden="true">
+            <WarningFilled v-if="!keypressSupported" />
+            <CircleCheckFilled v-else />
+          </el-icon>
+          <div class="status-content">
+            <h3 class="status-title">
+              {{ keypressSupported ? t('keybinds.keypressAvailable', 'Keypress simulation available') : t('keybinds.keypressUnavailable', 'Keypress simulation not available') }}
+            </h3>
+            <p class="status-desc">
+              {{ keypressSupported ? t('keybinds.keypressWorkDesc', 'Hotkeys will work in supported games.') : keypressHint }}
+            </p>
+          </div>
+        </div>
 
-      <div class="keybind-hints">
-        <h3 class="section-title">{{ t('Navigation Hotkeys') }}</h3>
-        <div class="hints-grid">
-          <div class="hint-item">
-            <span class="key">{{ t('Navigation: WASD / D-Pad') }}</span>
-            <span class="desc">在分组和模组间导航</span>
-          </div>
-          <div class="hint-item">
-            <span class="key">{{ t('Select: F / A') }}</span>
-            <span class="desc">选择模组</span>
-          </div>
-          <div class="hint-item">
-            <span class="key">{{ t('Keybind: R / X') }}</span>
-            <span class="desc">按键切换</span>
-          </div>
-          <div class="hint-item">
-            <span class="key">{{ t('Tab: Q-E / LB-RB') }}</span>
-            <span class="desc">切换标签页</span>
-          </div>
-          <div class="hint-item">
-            <span class="key">{{ t('Search: Space') }}</span>
-            <span class="desc">搜索</span>
-          </div>
-          <div class="hint-item">
-            <span class="key">Alt + S</span>
-            <span class="desc">聚焦搜索框</span>
-          </div>
+        <!-- 当前选中模组名称显示 -->
+        <div class="mod-section">
+          <h3 class="mod-name">
+            {{ selectedMod?.modName || t('keybinds.emptySelectMod') }}
+          </h3>
+        </div>
+
+        <!-- 按键模拟开关 -->
+        <div class="simulate-row">
+          <el-switch v-model="simulateEnabled" active-color="#4a9eff" inactive-color="#555" />
+          <span class="simulate-label">{{ t('Click keybind to simulate keypress') }}</span>
+        </div>
+
+        <!-- 按键绑定卡片网格：遍历当前选中模组的所有按键配置 -->
+        <div v-if="selectedMod && keybindList.length > 0" class="keybind-grid" role="list">
+          <button
+            v-for="(kb, idx) in keybindList"
+            :key="idx"
+            type="button"
+            class="keybind-card"
+            role="listitem"
+            :disabled="kb.disabled"
+            :class="{ disabled: kb.disabled }"
+            @click="onKeybindClick(kb)"
+          >
+            <div class="keybind-section">{{ kb.section || t('keybinds.keys') }}</div>
+            <div class="keybind-value">{{ kb.value || '—' }}</div>
+          </button>
+        </div>
+
+        <!-- 无按键绑定时的空状态 -->
+        <div v-else-if="selectedMod && keybindList.length === 0" class="empty-card">
+          <p>{{ t('keybinds.noKeybinds') }}</p>
         </div>
       </div>
     </div>
+
+    <!-- 版本号显示 -->
+    <div class="version-tag-bottom" v-if="appVersion">v{{ appVersion }}</div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+/**
+ * 按键绑定页面
+ * 显示当前选中模组的按键配置列表，支持点击模拟按键
+ * 内置拖拽滚动功能（内联实现，未使用useDragScroll composable）
+ * 检测平台按键模拟支持状态并显示提示
+ */
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { WarningFilled, CircleCheckFilled, Setting } from '@element-plus/icons-vue'
-import { checkKeypressSupport } from '@/utils/tauri'
+import { WarningFilled, CircleCheckFilled } from '@element-plus/icons-vue'
+import { checkKeypressSupport, getAppVersion } from '@/utils/tauri'
 import { usePlatform } from '@/stores/platform'
+import { useModsStore } from '@/stores/mods'
+import { logger } from '@/utils/logger'
+import type { KeybindData } from '@/types'
 
 const { t } = useI18n()
 const { platformInfo } = usePlatform()
+const modsStore = useModsStore()
 
+/** 滚动容器DOM引用 */
+const scrollRef = ref<HTMLElement | null>(null)
+/** 拖拽滚动状态 */
+const dragState = {
+  isDragging: false,
+  startX: 0,
+  startY: 0,
+  startScrollTop: 0,
+  dragStarted: false,
+}
+
+/**
+ * 指针按下事件：开始拖拽滚动
+ * 仅响应鼠标左键，排除按钮/链接/输入框等交互元素
+ */
+function onPointerDown(e: PointerEvent) {
+  if (e.button !== 0) return
+  const target = e.target as HTMLElement
+  if (target.closest('button, a, input, textarea, [role="button"], [role="combobox"], .no-drag-scroll')) return
+  const el = scrollRef.value
+  if (!el) return
+  dragState.isDragging = true
+  dragState.dragStarted = false
+  dragState.startX = e.clientX
+  dragState.startY = e.clientY
+  dragState.startScrollTop = el.scrollTop
+  try { el.setPointerCapture(e.pointerId) } catch (_) {}
+  el.style.cursor = 'grabbing'
+}
+
+/**
+ * 指针移动事件：拖拽时更新滚动位置
+ * 3px阈值：移动超过3像素才认为是拖拽而非点击
+ */
+function onPointerMove(e: PointerEvent) {
+  if (!dragState.isDragging) return
+  const el = scrollRef.value
+  if (!el) return
+  const dX = e.clientX - dragState.startX
+  const dY = e.clientY - dragState.startY
+  if (!dragState.dragStarted && (Math.abs(dX) > 3 || Math.abs(dY) > 3)) {
+    dragState.dragStarted = true
+  }
+  if (dragState.dragStarted) {
+    el.scrollTop = dragState.startScrollTop - dY
+    if (e.cancelable) e.preventDefault()
+  }
+}
+
+/** 点击事件阻断器（用于拖拽后阻止误触发点击） */
+let kbClickBlocker: ((ev: MouseEvent) => void) | null = null
+
+/**
+ * 指针抬起事件：结束拖拽
+ * 若发生了实际拖拽，添加一次性点击阻断器防止误触卡片点击
+ * 120ms后自动清理阻断器
+ */
+function onPointerUp(e: PointerEvent) {
+  if (!dragState.isDragging) return
+  dragState.isDragging = false
+  const el = scrollRef.value
+  if (el) {
+    try { el.releasePointerCapture(e.pointerId) } catch (_) {}
+    el.style.cursor = ''
+  }
+  if (dragState.dragStarted) {
+    kbClickBlocker = (ev: MouseEvent) => {
+      ev.stopPropagation()
+      ev.preventDefault()
+      window.removeEventListener('click', kbClickBlocker!, true)
+      kbClickBlocker = null
+    }
+    window.addEventListener('click', kbClickBlocker, true)
+    setTimeout(() => {
+      if (kbClickBlocker) {
+        window.removeEventListener('click', kbClickBlocker, true)
+        kbClickBlocker = null
+      }
+    }, 120)
+  }
+  dragState.dragStarted = false
+}
+
+/** 挂载拖拽滚动事件监听器 */
+function attachDrag() {
+  const el = scrollRef.value
+  if (!el) return
+  el.addEventListener('pointerdown', onPointerDown)
+  el.addEventListener('pointermove', onPointerMove)
+  el.addEventListener('pointerup', onPointerUp)
+  el.addEventListener('pointercancel', onPointerUp)
+}
+
+/** 卸载拖拽滚动事件监听器 */
+function detachDrag() {
+  const el = scrollRef.value
+  if (!el) return
+  el.removeEventListener('pointerdown', onPointerDown)
+  el.removeEventListener('pointermove', onPointerMove)
+  el.removeEventListener('pointerup', onPointerUp)
+  el.removeEventListener('pointercancel', onPointerUp)
+  try { el.style.cursor = '' } catch (_) {}
+}
+
+onBeforeUnmount(() => {
+  detachDrag()
+})
+
+/** 当前选中的模组 */
+const selectedMod = computed(() => modsStore.selectedMod)
+/** 当前选中模组的按键绑定列表 */
+const keybindList = computed<KeybindData[]>(() => selectedMod.value?.modIni?.keybinds || [])
+
+/** 按键模拟功能是否受支持 */
 const keypressSupported = ref(true)
-const checkingSupport = ref(false)
+/** 是否启用点击模拟按键 */
+const simulateEnabled = ref(true)
+/** 应用版本号 */
+const appVersion = ref('')
 
+/** 状态卡片样式类（成功/错误） */
 const keypressStatusClass = computed(() => ({
   'status-error': !keypressSupported.value,
   'status-success': keypressSupported.value
 }))
 
+/**
+ * 按键不支持时的平台特定提示
+ * Linux: 提示安装xdotool/ydotool
+ * macOS: 提示授予辅助功能权限
+ */
 const keypressHint = computed(() => {
   if (!platformInfo.value) return ''
   const os = platformInfo.value.os
   if (os === 'linux') {
-    return 'Please install xdotool or ydotool for keypress simulation support.'
+    return t('keybinds.keypressLinuxHint', 'Please install xdotool or ydotool for keypress simulation support.')
   }
   if (os === 'macos') {
-    return 'Please grant accessibility permissions for keypress simulation.'
+    return t('keybinds.keypressMacosHint', 'Please grant accessibility permissions for keypress simulation.')
   }
-  return 'Keypress simulation requires additional setup.'
+  return t('keybinds.keypressGenericHint', 'Keypress simulation requires additional setup.')
 })
 
+/**
+ * 按键卡片点击处理
+ * 根据开关决定是否模拟按键（当前仅记录日志，实际模拟由后端热键系统处理）
+ */
+function onKeybindClick(kb: KeybindData) {
+  if (!simulateEnabled.value) return
+  logger.info('KeybindsView', `Simulate keybind: section=${kb.section}, value=${kb.value}`)
+}
+
 onMounted(async () => {
-  checkingSupport.value = true
+  // 检测平台按键模拟支持状态
   try {
     await checkKeypressSupport()
     keypressSupported.value = true
   } catch (e) {
     keypressSupported.value = false
-  } finally {
-    checkingSupport.value = false
   }
+  // 获取应用版本号
+  try {
+    appVersion.value = await getAppVersion()
+  } catch (e) {
+    logger.warn('KeybindsView', 'Failed to get app version', e)
+  }
+  await nextTick()
+  attachDrag()
 })
 </script>
 
 <style scoped>
 .keybinds-view {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+}
+
+.keybinds-scroll {
+  flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 24px 24px 96px;
 }
 
 .keybinds-container {
-  max-width: 600px;
+  max-width: 760px;
   margin: 0 auto;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.spacer {
+  flex: 1;
 }
 
 .keybinds-title {
   font-size: 24px;
   font-weight: 600;
   color: var(--text-primary);
-  margin: 0 0 24px;
+  margin: 0;
+  text-align: right;
 }
 
 .status-card {
@@ -125,19 +301,19 @@ onMounted(async () => {
   align-items: flex-start;
   gap: 16px;
   padding: 20px;
-  border-radius: var(--border-radius);
+  border-radius: var(--border-radius, 12px);
   border: 1px solid;
   margin-bottom: 24px;
 }
 
 .status-card.status-success {
-  background: transparent;
-  border-color: var(--accent-success);
+  background: rgba(40, 200, 64, 0.08);
+  border-color: var(--accent-success, #28c840);
 }
 
 .status-card.status-error {
-  background: transparent;
-  border-color: var(--accent-danger);
+  background: rgba(231, 76, 60, 0.08);
+  border-color: var(--accent-danger, #e74c3c);
 }
 
 .status-icon {
@@ -146,11 +322,11 @@ onMounted(async () => {
 }
 
 .status-success .status-icon {
-  color: var(--accent-success);
+  color: var(--accent-success, #28c840);
 }
 
 .status-error .status-icon {
-  color: var(--accent-danger);
+  color: var(--accent-danger, #e74c3c);
 }
 
 .status-content {
@@ -171,74 +347,99 @@ onMounted(async () => {
   line-height: 1.5;
 }
 
-.coming-soon-card {
-  background-color: transparent;
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius);
-  padding: 48px 24px;
+.mod-section {
+  margin-bottom: 20px;
+}
+
+.mod-name {
   text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 8px 0;
+  line-height: 1.4;
+}
+
+.simulate-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   margin-bottom: 24px;
 }
 
-.coming-soon-icon {
-  color: var(--text-muted);
-  margin-bottom: 16px;
-}
-
-.coming-soon-card h3 {
-  margin: 0 0 8px;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.coming-soon-card p {
-  margin: 0 0 8px;
+.simulate-label {
   color: var(--text-secondary);
   font-size: 14px;
 }
 
-.coming-soon-card .hint {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 16px;
-}
-
-.keybind-hints {
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius);
-  padding: 24px;
-}
-
-.section-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin: 0 0 16px;
-}
-
-.hints-grid {
+.keybind-grid {
   display: grid;
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 14px;
 }
 
-.hint-item {
+.keybind-card {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
   align-items: center;
-  padding: 10px 12px;
-  border-radius: 6px;
+  justify-content: center;
+  padding: 18px 12px;
+  min-height: 96px;
+  background: rgba(10, 10, 12, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: transform 0.08s ease, border-color 0.2s ease, background-color 0.2s ease;
+  font-family: inherit;
 }
 
-.key {
-  font-family: monospace;
-  font-size: 13px;
-  color: var(--accent-primary);
-  font-weight: 500;
+.keybind-card:hover {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: rgba(18, 18, 22, 0.55);
 }
 
-.desc {
-  font-size: 13px;
+.keybind-card:active {
+  transform: scale(0.98);
+  border-color: var(--accent-primary, #4a9eff);
+}
+
+.keybind-card.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.keybind-section {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.keybind-value {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text-muted);
+}
+
+.empty-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+  border-radius: var(--border-radius, 12px);
+  padding: 36px 24px;
+  text-align: center;
   color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.version-tag-bottom {
+  position: absolute;
+  right: 16px;
+  bottom: 64px;
+  font-size: 11px;
+  color: var(--text-muted);
+  z-index: 10;
+  user-select: none;
 }
 </style>

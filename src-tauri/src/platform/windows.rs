@@ -1,3 +1,17 @@
+//! Windows 平台实现模块
+//!
+//! 使用 Win32 API 实现：
+//! - 按键模拟：SendInput 发送键盘事件
+//! - 前台窗口检测：GetForegroundWindow + GetWindowThreadProcessId + QueryFullProcessImageNameW
+//! - 光标位置获取：GetCursorPos
+//!
+//! # unsafe 说明
+//! 所有 Win32 API 调用都在 unsafe 块中，因为它们是 C FFI 调用。
+//! 安全性通过正确传递指针和缓冲区大小保证：
+//! - 缓冲区大小固定为 MAX_PATH (260)，避免溢出
+//! - 句柄使用后调用 CloseHandle 释放
+//! - 检查句柄有效性后再使用
+
 use anyhow::{Result, anyhow, Context};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::Foundation::*;
@@ -7,6 +21,7 @@ use std::time::Duration;
 use windows::Win32::System::Threading::*;
 use windows::core::PWSTR;
 
+/// Windows 按键模拟器
 pub struct WindowsKeySimulator;
 
 impl super::KeySimulator for WindowsKeySimulator {
@@ -29,6 +44,10 @@ impl super::KeySimulator for WindowsKeySimulator {
     }
 }
 
+/// 发送单个按键事件（按下+释放）
+///
+/// 使用 SendInput 发送 KEYUP → KEYDOWN(EXTENDEDKEY) → KEYUP 序列，
+/// 模拟真实按键行为，间隔 50ms 确保游戏能正确接收。
 fn send_key(vk: VIRTUAL_KEY) -> Result<()> {
     unsafe {
         let mut inputs = [
@@ -67,6 +86,7 @@ fn send_key(vk: VIRTUAL_KEY) -> Result<()> {
     Ok(())
 }
 
+/// Windows 前台窗口检测器
 pub struct WindowsForegroundDetector;
 
 impl super::ForegroundDetector for WindowsForegroundDetector {

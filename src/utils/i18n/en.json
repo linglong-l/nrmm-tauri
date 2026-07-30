@@ -384,6 +384,14 @@
     "hotkeyHintSearch": "Search: In-app hotkey, Alt+letter to focus search box"
   },
   "keybinds": {
+    "title": "Keybinds",
+    "comingSoon": "Coming Soon",
+    "navWasd": "Navigate between groups and mods",
+    "selectFa": "Select mod",
+    "keybindRx": "Toggle keybind",
+    "tabQeLbrb": "Switch tabs",
+    "searchSpace": "Search",
+    "altS": "Focus search box",
     "emptySelectMod": "Please select a mod in the Mods tab to view keybinds.",
     "noKeybinds": "No keybinds found for the selected mod.",
     "keys": "Keys",
@@ -400,7 +408,13 @@
     "saveSuccess": "Keybind saved",
     "saveFailed": "Save failed: {error}",
     "toggleFailed": "Toggle failed: {error}",
-    "clickToEdit": "Click to edit key"
+    "clickToEdit": "Click to edit key",
+    "keypressAvailable": "Keypress simulation available",
+    "keypressUnavailable": "Keypress simulation not available",
+    "keypressWorkDesc": "Hotkeys will work in supported games.",
+    "keypressLinuxHint": "Please install xdotool or ydotool for keypress simulation support.",
+    "keypressMacosHint": "Please grant accessibility permissions for keypress simulation.",
+    "keypressGenericHint": "Keypress simulation requires additional setup."
   },
   "Hash conflict detected: {count} group(s)": "Hash conflict detected: {count} group(s)",
   "No hash conflicts": "No hash conflicts",
@@ -456,7 +470,25 @@
     "enable": "Enable",
     "favorite": "Favorite",
     "confirm": "Confirm",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "appName": "NRMM",
+    "groups": "Groups",
+    "emptySlot": "Empty Slot",
+    "searchPlaceholder": "Search mods or groups",
+    "searchPrev": "Previous (Shift+Enter)",
+    "searchNext": "Next (Enter)",
+    "searchClose": "Close (Esc)",
+    "minimize": "Minimize",
+    "minimizeA11y": "Minimize window",
+    "maximize": "Maximize",
+    "maximizeA11y": "Maximize window",
+    "restore": "Restore",
+    "restoreA11y": "Restore window",
+    "closeA11y": "Close window",
+    "languageZhCN": "Simplified Chinese",
+    "languageEn": "English",
+    "expand": "Expand",
+    "collapse": "Collapse"
   },
   "app": {
     "title": "NRMM"
@@ -465,11 +497,19 @@
     "title": "Mod Management",
     "refresh": "Refresh",
     "addGroup": "Add Group",
+    "addSubfolder": "Add Subfolder",
+    "subfolderName": "Subfolder Name",
+    "confirmCreateSubfolder": "Create subfolder \"{folderName}\" under \"{groupName}\"?",
+    "subfolderCreated": "Subfolder created successfully",
+    "failedToCreateSubfolder": "Failed to create subfolder",
     "restoreInis": "Restore INI",
     "noMods": "No mods available"
   },
-  "keybinds": {
-    "title": "Keybinds"
+  "notification": {
+    "startupSuccess": {
+      "title": "NRMM Started",
+      "body": "Use hotkey or tray icon to open window"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -498,6 +538,17 @@
     "supportDeveloper": "Support me",
     "contactHelp": "Contact for help",
     "tutorial": "Tutorial",
-    "none": "None"
+    "none": "None",
+    "targetProcess": "Target Process",
+    "targetProcessHint": "On Windows it is recommended to enter the full .exe name (e.g. StarRail.exe)",
+    "targetProcessPlaceholder": "e.g. StarRail.exe",
+    "saveModCustomizations": "Save Mod Customizations",
+    "saveCustomizationsDesc": "Set current mod customizations (toggles/states) as default",
+    "enableDisableMods": "Enable/Disable Mods",
+    "enableDisableModsDesc": "Helpful for troubleshooting and reducing mod reload (F10) time",
+    "restoreZonePlaceholder": "Drop mod folders or the \"Mods\" folder here, or click to select a folder",
+    "restoreZoneDesc": "Mods can be used again without the mod manager. Mods are not reset, only lines added by the mod manager are removed.",
+    "hotkeyComingSoon": "Hotkey feature coming soon",
+    "dontForgetUpdate": "Don't forget to press \"Update Mod Data\""
   }
 }

@@ -378,6 +378,7 @@
   "Hotkey conflict: {key} is used by window toggle": "快捷键冲突：{key} 已被窗口切换功能占用",
   "Hotkey updated, old hotkey has been unregistered": "快捷键已更新，旧快捷键已注销",
   "settings": {
+    "updateModData": "更新模组数据",
     "searchHotkey": "搜索快捷键",
     "hotkeyActionWindow": "窗口切换",
     "hotkeyHintWindow": "窗口切换：全局快捷键，Alt+字母切换窗口显隐",
