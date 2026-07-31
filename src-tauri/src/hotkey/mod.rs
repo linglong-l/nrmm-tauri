@@ -4,6 +4,7 @@
 //! - Ctrl+Alt+1~0: 选择分组 1~10
 //! - Ctrl+1~0: 选择模组 1~10
 //! - F5: 刷新模组列表
+//! - 用户配置的窗口切换热键（默认 Alt+D）
 //!
 //! # 功能特性
 //! - 支持仅在游戏前台时响应热键
@@ -14,7 +15,7 @@
 //! # 平台适配
 //! 前台检测和按键模拟通过 platform 模块的平台相关实现完成
 
-use tauri::{AppHandle, State, Emitter};
+use tauri::{AppHandle, State, Emitter, Manager};
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, Modifiers, Code};
@@ -28,6 +29,7 @@ use crate::models::enums::TargetGame;
 pub struct HotkeyManager {
     app_handle: AppHandle,
     registered_hotkeys: Mutex<Vec<String>>,
+    window_hotkey: Mutex<Option<String>>,
 }
 
 impl HotkeyManager {
@@ -36,6 +38,7 @@ impl HotkeyManager {
         HotkeyManager {
             app_handle,
             registered_hotkeys: Mutex::new(Vec::new()),
+            window_hotkey: Mutex::new(None),
         }
     }
 
@@ -45,6 +48,7 @@ impl HotkeyManager {
     /// - Ctrl+Alt+1~0 (选择分组 1-10，0 表示第 10 组)
     /// - Ctrl+1~0 (选择模组 1-10，0 表示第 10 个)
     /// - F5 (刷新)
+    /// - windowHotkey (用户配置的窗口切换热键)
     pub fn register_all(&self) -> Result<()> {
         self.unregister_all();
 
@@ -53,49 +57,46 @@ impl HotkeyManager {
         for i in 1..=10 {
             let key = if i == 10 { "0".to_string() } else { i.to_string() };
             let accel = format!("Ctrl+Alt+{}", key);
-            if gsm.is_registered(accel.as_str()) {
-                let _ = gsm.unregister(accel.as_str());
-            }
-            match gsm.register(accel.as_str()) {
-                Ok(_) => {
-                    self.registered_hotkeys.lock().unwrap().push(accel);
-                }
-                Err(e) => {
-                    log::warn!("Failed to register hotkey {}: {}", accel, e);
-                }
-            }
+            self.register_hotkey(&gsm, &accel);
         }
 
         for i in 1..=10 {
             let key = if i == 10 { "0".to_string() } else { i.to_string() };
             let accel = format!("Ctrl+{}", key);
-            if gsm.is_registered(accel.as_str()) {
-                let _ = gsm.unregister(accel.as_str());
-            }
-            match gsm.register(accel.as_str()) {
-                Ok(_) => {
-                    self.registered_hotkeys.lock().unwrap().push(accel);
-                }
-                Err(e) => {
-                    log::warn!("Failed to register hotkey {}: {}", accel, e);
-                }
-            }
+            self.register_hotkey(&gsm, &accel);
         }
 
-        let accel = "F5";
+        self.register_hotkey(&gsm, "F5");
+
+        // 注册用户配置的窗口切换热键
+        let settings = settings_store::get_settings();
+        if !settings.window_hotkey.is_empty() {
+            self.register_hotkey(&gsm, &settings.window_hotkey);
+            *self.window_hotkey.lock().unwrap() = Some(settings.window_hotkey);
+        }
+
+        Ok(())
+    }
+
+    /// 注册单个快捷键（辅助方法）
+    fn register_hotkey(&self, gsm: &tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>, accel: &str) {
         if gsm.is_registered(accel) {
             let _ = gsm.unregister(accel);
         }
         match gsm.register(accel) {
             Ok(_) => {
                 self.registered_hotkeys.lock().unwrap().push(accel.to_string());
+                log::debug!("Registered hotkey: {}", accel);
             }
             Err(e) => {
                 log::warn!("Failed to register hotkey {}: {}", accel, e);
             }
         }
+    }
 
-        Ok(())
+    /// 获取当前注册的窗口热键
+    pub fn get_window_hotkey(&self) -> Option<String> {
+        self.window_hotkey.lock().unwrap().clone()
     }
 
     /// 注销所有已注册的快捷键
@@ -103,14 +104,35 @@ impl HotkeyManager {
         let gsm = self.app_handle.global_shortcut();
         let _ = gsm.unregister_all();
         self.registered_hotkeys.lock().unwrap().clear();
+        *self.window_hotkey.lock().unwrap() = None;
     }
 }
 
 /// 处理快捷键事件（全局快捷键回调）
 pub fn handle_hotkey(app_handle: &AppHandle, shortcut: &Shortcut, _event: &ShortcutEvent) {
+    // 先尝试硬编码的快捷键
     if let Some(action) = shortcut_to_action(shortcut) {
         execute_action(app_handle, action);
+        return;
     }
+
+    // 检查是否是窗口切换热键
+    if let Some(mgr) = app_handle.try_state::<Arc<HotkeyManager>>() {
+        if let Some(win_hk) = mgr.get_window_hotkey() {
+            if let Ok(parsed) = win_hk.parse::<Shortcut>() {
+                if shortcuts_equal(shortcut, &parsed) {
+                    log::debug!("Hotkey triggered: ToggleWindow");
+                    crate::window::toggle_main_window(app_handle);
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// 比较两个 Shortcut 是否相等（比较 key 和 modifiers）
+fn shortcuts_equal(a: &Shortcut, b: &Shortcut) -> bool {
+    a.key == b.key && a.mods == b.mods
 }
 
 /// 快捷键动作类型
@@ -206,6 +228,7 @@ fn execute_action(app_handle: &AppHandle, action: HotkeyAction) {
             }
         }
         HotkeyAction::Refresh => {
+            log::debug!("Hotkey triggered: Refresh");
             let _ = app_handle.emit("hotkey-refresh", ());
         }
     }
@@ -224,7 +247,15 @@ fn show_game_select_menu(app_handle: &AppHandle, action: &HotkeyAction) {
 
 /// 重新注册所有快捷键（Tauri 命令）
 #[tauri::command]
-pub fn reregister_hotkeys(hotkey_mgr: State<'_, Arc<HotkeyManager>>) -> Result<(), String> {
+pub fn reregister_hotkeys(hotkey_mgr: State<'_, Arc<HotkeyManager>>, window_hotkey: Option<String>) -> Result<(), String> {
+    // 如果传入了新的窗口热键，先更新设置中的值（让 register_all 读取到最新值）
+    if let Some(ref hk) = window_hotkey {
+        let mut settings = settings_store::get_settings();
+        settings.window_hotkey = hk.clone();
+        if let Err(e) = settings_store::save_settings(&settings) {
+            log::warn!("Failed to save window hotkey to settings: {}", e);
+        }
+    }
     hotkey_mgr.register_all().map_err(|e| e.to_string())
 }
 

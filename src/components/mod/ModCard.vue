@@ -6,7 +6,8 @@
       'is-active': isActive,
       'is-disabled': !isEmptySlot && props.mod?.modDisabled,
       'is-empty': isEmptySlot,
-      'is-error': hasError
+      'is-error': hasError,
+      'no-scale': contextMenuVisible
     }"
     @click="handleClick"
     @dblclick="handleDoubleClick"
@@ -30,7 +31,7 @@
       </div>
       <!-- 模组预览图：懒加载，失败显示占位符 -->
       <template v-else-if="mod">
-        <el-image :src="iconUrl" fit="cover" class="mod-image" :alt="mod.modName">
+        <el-image v-if="iconUrl" :src="iconUrl" fit="cover" class="mod-image" :alt="mod.modName">
           <template #placeholder>
             <div class="image-placeholder">
               <el-icon :size="48"><Picture /></el-icon>
@@ -42,6 +43,9 @@
             </div>
           </template>
         </el-image>
+        <div v-else class="image-placeholder">
+          <el-icon :size="48"><Picture /></el-icon>
+        </div>
       </template>
     </div>
     <!-- 模组名称 -->
@@ -50,36 +54,38 @@
     </div>
     <div v-else class="card-name empty-name">{{ t('common.emptySlot', '空槽位') }}</div>
 
-    <!-- 右键菜单：启用/禁用、收藏、重命名、打开文件夹、删除 -->
-    <div
-      v-if="contextMenuVisible"
-      class="context-menu"
-      :style="{ top: contextMenuY + 'px', left: contextMenuX + 'px' }"
-      @click.stop
-    >
-      <div v-if="mod" class="menu-item" @click="handleToggleEnabled">
-        <el-icon><Switch /></el-icon>
-        {{ mod.modDisabled ? t('Enable mod') : t('Disable mod completely') }}
+    <!-- 右键菜单：Teleport到body，避免父元素transform导致fixed定位漂移 -->
+    <Teleport to="body">
+      <div
+        v-if="contextMenuVisible"
+        class="context-menu"
+        :style="{ top: contextMenuY + 'px', left: contextMenuX + 'px' }"
+        @click.stop
+      >
+        <div v-if="mod" class="menu-item" @click="handleToggleEnabled">
+          <el-icon><Switch /></el-icon>
+          {{ mod.modDisabled ? t('Enable mod') : t('Disable mod completely') }}
+        </div>
+        <div v-if="mod" class="menu-item" @click="handleToggleFavorite">
+          <el-icon><Star /></el-icon>
+          {{ mod.isFavorite ? t('Unfavorite') : t('Favorite') }}
+        </div>
+        <div class="menu-divider"></div>
+        <div class="menu-item" @click="handleRename">
+          <el-icon><Edit /></el-icon>
+          {{ t('Rename') }}
+        </div>
+        <div class="menu-item" @click="handleOpenFolder">
+          <el-icon><FolderOpened /></el-icon>
+          {{ t('Open in File Explorer') }}
+        </div>
+        <div class="menu-divider"></div>
+        <div class="menu-item danger" @click="handleDelete">
+          <el-icon><Delete /></el-icon>
+          {{ t('Remove mod') }}
+        </div>
       </div>
-      <div v-if="mod" class="menu-item" @click="handleToggleFavorite">
-        <el-icon><Star /></el-icon>
-        {{ mod.isFavorite ? t('Unfavorite') : t('Favorite') }}
-      </div>
-      <div class="menu-divider"></div>
-      <div class="menu-item" @click="handleRename">
-        <el-icon><Edit /></el-icon>
-        {{ t('Rename') }}
-      </div>
-      <div class="menu-item" @click="handleOpenFolder">
-        <el-icon><FolderOpened /></el-icon>
-        {{ t('Open in File Explorer') }}
-      </div>
-      <div class="menu-divider"></div>
-      <div class="menu-item danger" @click="handleDelete">
-        <el-icon><Delete /></el-icon>
-        {{ t('Remove mod') }}
-      </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
@@ -99,6 +105,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModData } from '@/types'
 import { toggleModDisabled, toggleFavorite, renameMod, removeMod, openModFolder } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'
@@ -117,15 +124,30 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  /** 选中模组事件 */
+  /** 选中模组事件（单击，仅UI高亮） */
   (e: 'select', modIndex: number): void
+  /** 启用模组事件（双击，写入INI） */
+  (e: 'activate', modIndex: number): void
 }>()
 
 /** 模组数据计算属性 */
 const mod = computed(() => props.mod)
 
-/** 模组图标URL（预留，当前未实现自动图标） */
-const iconUrl = ref('')
+/**
+ * 模组图标URL：将后端返回的本地文件路径转换为webview可访问的asset:// URL
+ * - 后端在扫描时自动查找 icon.png/preview.png 等图片，填入 previewImagePath
+ * - convertFileSrc 将本地路径转换为 Tauri asset 协议 URL
+ * - 无图标或非Tauri环境时返回空字符串，UI降级显示占位符
+ */
+const iconUrl = computed(() => {
+  const p = mod.value?.previewImagePath
+  if (!p) return ''
+  try {
+    return convertFileSrc(p)
+  } catch {
+    return ''
+  }
+})
 /** 右键菜单是否可见 */
 const contextMenuVisible = ref(false)
 /** 右键菜单位置X */
@@ -171,8 +193,9 @@ const hasError = computed(() => {
 /** 右键菜单 */
 function onContextMenu(e: MouseEvent) {
   if (props.isEmptySlot) return
-  // 标记后续一次左键为右键后残留点击，避免误选中（飘逸问题）
-  ignoreNextClickUntil = performance.now() + 400
+  // 标记后续短暂时间内的左键为右键后残留点击，避免误选中
+  // Teleport后误触概率已大幅降低，缩短时间窗到300ms
+  ignoreNextClickUntil = performance.now() + 300
   // 菜单估算尺寸（min-width:160px，按6项约184x240px 保守计算）
   const MENU_ESTIMATED_W = 200
   const MENU_ESTIMATED_H = 260
@@ -196,8 +219,8 @@ function onContextMenu(e: MouseEvent) {
 /** 关闭右键菜单 */
 function closeContextMenu() {
   contextMenuVisible.value = false
-  // 关闭菜单后再忽略一次左键，避免左键关闭菜单时误点卡片
-  ignoreNextClickUntil = performance.now() + 250
+  // 关闭菜单后短暂忽略左键（teleport后已极短100ms即可）
+  ignoreNextClickUntil = performance.now() + 100
 }
 
 /**
@@ -207,7 +230,7 @@ function closeContextMenu() {
  */
 let ignoreNextClickUntil = 0
 
-/** 单击：选中模组（仅更新选中状态，不写入INI） */
+/** 单击：高亮选中模组（仅更新UI选中状态，不写入INI） */
 function handleClick() {
   if (props.isEmptySlot) return
   const now = performance.now()
@@ -218,10 +241,10 @@ function handleClick() {
   emit('select', props.modIndex)
 }
 
-/** 双击：确认选中模组（调用selectModByIndex写入INI，处理互斥组逻辑） */
+/** 双击：确认启用模组（调用后端写入INI，处理互斥组逻辑） */
 function handleDoubleClick() {
   if (props.isEmptySlot) return
-  modsStore.selectModByIndex(props.modIndex)
+  emit('activate', props.modIndex)
 }
 
 /**
@@ -340,8 +363,13 @@ onUnmounted(() => {
   position: relative;
 }
 
-.mod-card:active {
+.mod-card:active:not(.no-scale) {
   transform: scale(0.96);
+}
+
+/* 右键菜单打开时禁用:active缩放，防止transform导致已teleport的fixed菜单视觉跳动 */
+.mod-card.no-scale:active {
+  transform: none;
 }
 
 .mod-card:focus-visible {
@@ -398,6 +426,8 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  border-radius: 8px;
+  display: block;
 }
 
 .image-placeholder {
@@ -482,7 +512,7 @@ onUnmounted(() => {
   border-radius: 8px;
   padding: 4px 0;
   min-width: 160px;
-  z-index: 9999;
+  z-index: 10000;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 

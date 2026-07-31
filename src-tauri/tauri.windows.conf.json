@@ -11,11 +11,18 @@
   },
   "app": {
     "security": {
-      "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
-      }
+        "scope": [
+          "**/*.png",
+          "**/*.jpg",
+          "**/*.jpeg",
+          "**/*.webp",
+          "**/*.bmp",
+          "**/*.gif"
+        ]
+      },
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:;"
     }
   },
   "plugins": {

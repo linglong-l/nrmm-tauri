@@ -530,25 +530,7 @@ fn trash_delete(path: &Path) -> Result<()> {
 }
 
 fn open_path_in_explorer(path: &Path) -> Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(path)
-            .spawn()?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn()?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(path)
-            .spawn()?;
-    }
-    Ok(())
+    tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 
 /// 校验子文件夹名称合法性

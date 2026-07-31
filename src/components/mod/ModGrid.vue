@@ -1,43 +1,27 @@
 <template>
   <div class="mod-grid-container">
     <!-- 搜索栏：支持模糊搜索、键盘导航 -->
-    <SearchBar
-      v-model:visible="searchVisible"
-      v-model="searchQuery"
-      :total-matches="totalMatches"
-      :current-index="currentMatchIndex"
-      @next="nextMatch"
-      @prev="prevMatch"
-      @close="onSearchClose"
-    />
+    <SearchBar v-model:visible="searchVisible" v-model="searchQuery" :total-matches="totalMatches"
+      :current-index="currentMatchIndex" @next="nextMatch" @prev="prevMatch" @close="onSearchClose" />
 
     <!-- 模组网格内容区：支持拖拽滚动 -->
     <div ref="gridContentRef" class="grid-content" v-loading="loading" :element-loading-text="t('Loading...')">
       <!-- 空状态：无模组时显示提示 -->
       <div v-if="displayMods.length === 0 && !loading" class="empty-state">
-        <el-icon :size="64" class="empty-icon"><FolderOpened /></el-icon>
+        <el-icon :size="64" class="empty-icon">
+          <FolderOpened />
+        </el-icon>
         <p class="empty-text">{{ t('mods.noMods') }}</p>
         <p class="empty-hint">{{ t('Drag & Drop mod folders here to add mods to this group (1 folder = 1 mod).') }}</p>
       </div>
       <!-- 模组卡片网格：每行6个，末尾填充空槽位对齐 -->
       <div v-else class="mod-grid-row">
         <!-- 模组卡片：遍历displayMods渲染 -->
-        <ModCard
-          v-for="(mod, index) in displayMods"
-          :key="mod.modPath || index"
-          :mod="mod"
-          :mod-index="index"
-          :class="{ 'search-highlight': isModHighlighted(mod, index) }"
-          :ref="el => setModRef(el, index)"
-          @select="handleSelectMod"
-        />
-      <!-- 空槽位占位：仅占用网格宽度保持对齐，不渲染、不可点击、不可交互 -->
-      <div
-        v-for="i in emptySlots"
-        :key="'empty-' + i"
-        class="empty-slot-placeholder"
-        aria-hidden="true"
-      ></div>
+        <ModCard v-for="(mod, index) in displayMods" :key="mod.modPath || index" :mod="mod" :mod-index="index"
+          :class="{ 'search-highlight': isModHighlighted(mod, index) }" :ref="el => setModRef(el, index)"
+          @select="handleHighlightMod" @activate="handleActivateMod" />
+        <!-- 空槽位占位：仅占用网格宽度保持对齐，不渲染、不可点击、不可交互 -->
+        <div v-for="i in emptySlots" :key="'empty-' + i" class="empty-slot-placeholder" aria-hidden="true"></div>
       </div>
     </div>
   </div>
@@ -222,12 +206,19 @@ watch(searchQuery, updateMatches)
 watch(displayMods, updateMatches)
 
 /**
- * 选中模组
- * 调用modsStore.selectModByIndex处理互斥组逻辑
+ * 单击高亮模组（仅更新UI选中状态，不写入INI）
  * @param modIndex 模组在当前显示列表中的索引
  */
-function handleSelectMod(modIndex: number) {
-  modsStore.selectModByIndex(modIndex)
+function handleHighlightMod(modIndex: number) {
+  modsStore.highlightMod(modIndex)
+}
+
+/**
+ * 双击启用模组（调用后端写入INI）
+ * @param modIndex 模组在当前显示列表中的索引
+ */
+function handleActivateMod(modIndex: number) {
+  modsStore.activateModByIndex(modIndex)
 }
 
 /**

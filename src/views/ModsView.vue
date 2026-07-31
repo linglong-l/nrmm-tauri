@@ -48,6 +48,8 @@ const settingsStore = useSettingsStore()
 const isDragging = ref(false)
 /** 托管文件夹变化事件取消监听函数 */
 let unlistenManagedFolderChanged: (() => void) | null = null
+/** 全局热键刷新事件取消监听函数 */
+let unlistenHotkeyRefresh: (() => void) | null = null
 
 /**
  * 拖拽进入事件处理
@@ -130,11 +132,22 @@ onMounted(async () => {
   } catch (e) {
     logger.info('ModsView', 'Event listeners not available (dev mode)')
   }
+
+  // 监听全局热键F5刷新事件
+  try {
+    unlistenHotkeyRefresh = await listen('hotkey-refresh', () => {
+      logger.debug('ModsView', 'Hotkey refresh triggered')
+      modsStore.refresh()
+    })
+  } catch (e) {
+    logger.info('ModsView', 'Hotkey refresh listener failed (dev mode)')
+  }
 })
 
 onUnmounted(async () => {
   // 清理事件监听器和文件监视器
   unlistenManagedFolderChanged?.()
+  unlistenHotkeyRefresh?.()
   await modsStore.stopWatching()
   modsStore.clearData()
 })

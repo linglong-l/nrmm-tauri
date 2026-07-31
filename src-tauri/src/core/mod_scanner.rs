@@ -391,11 +391,14 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
 
     // 读取/创建标记文件
     let groupname_path = dir_path.join("groupname");
-    let _group_name = read_or_create_marker_file(&groupname_path, group_name)?;
+    let group_display_name = read_or_create_marker_file(&groupname_path, group_name)?;
 
     let selectedindex_path = dir_path.join(constants::SELECTED_INDEX_FILE);
     let selected_index_str = read_or_create_marker_file(&selectedindex_path, "0")?;
     let selected_index: i32 = selected_index_str.parse().unwrap_or(0);
+
+    // 查找分组图标
+    let group_icon = find_icon_path(dir_path)?;
 
     // 插入 None 空槽位（realIndex=0）
     mods.push(create_empty_slot_mod(group_index));
@@ -507,7 +510,7 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
         .collect();
 
     let group = ModGroupData {
-        name: group_name.to_string(),
+        name: group_display_name,
         group_name: group_name.to_string(),
         group_type: GroupType::NormalGroup,
         full_path: dir_path.to_path_buf(),
@@ -523,6 +526,7 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
         is_favorite: false,
         group_disabled: false,
         is_active: active_mod_index >= 0,
+        preview_image_path: group_icon,
         ..Default::default()
     };
 
@@ -539,11 +543,14 @@ struct DfsStackItem {
 fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<ModData>)> {
     let root_name = root_path.file_name().unwrap().to_string_lossy().to_string();
     let root_disabled = is_disabled_dir(&root_name);
-    let root_display_name = if root_disabled {
+    let base_root_name = if root_disabled {
         DISABLED_PREFIX_RE.replace(&root_name, "").to_string()
     } else {
         root_name.clone()
     };
+    // 优先读取 groupname 文件作为显示名称
+    let groupname_path = root_path.join("groupname");
+    let root_display_name = read_or_create_marker_file(&groupname_path, &base_root_name)?;
 
     // 检查根目录是否本身就是模组（含 ini）
     if dir_has_ini_file(root_path)? {
@@ -632,11 +639,14 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         // 没有 ini，视为分组节点
         let dir_name = current_path.file_name().unwrap().to_string_lossy().to_string();
         let dir_disabled = is_disabled_dir(&dir_name);
-        let dir_display_name = if dir_disabled {
+        let base_dir_name = if dir_disabled {
             DISABLED_PREFIX_RE.replace(&dir_name, "").to_string()
         } else {
             dir_name.clone()
         };
+        // 优先读取 groupname 文件作为显示名称
+        let sub_groupname_path = current_path.join("groupname");
+        let dir_display_name = read_or_create_marker_file(&sub_groupname_path, &base_dir_name)?;
 
         // 查找图标
         let icon_path = find_icon_path(&current_path)?;

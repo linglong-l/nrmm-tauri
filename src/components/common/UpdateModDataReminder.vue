@@ -9,10 +9,6 @@
         <el-button type="primary" class="reminder-btn" @click="handleClick" :loading="loading">
           {{ t('settings.updateModData') }}
         </el-button>
-        <!-- 关闭按钮 -->
-        <button type="button" class="close-btn" @click="handleClose" :title="t('common.close')">
-          <el-icon :size="16"><Close /></el-icon>
-        </button>
       </div>
     </div>
   </Transition>
@@ -28,12 +24,10 @@
  * - 非互斥组（普通group_int分组）模组启用/禁用操作后显示
  * - 按游戏独立维护显示状态
  * - 点击"更新模组数据"成功后自动隐藏
- * - 点击关闭按钮可手动隐藏
  */
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
-import { Close } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { logger } from '@/utils/logger'
@@ -69,14 +63,6 @@ async function handleClick() {
   } finally {
     loading.value = false
   }
-}
-
-/**
- * 点击关闭按钮处理
- * 清除当前游戏的needUpdate状态，隐藏提示条（不刷新模组）
- */
-function handleClose() {
-  modsStore.clearNeedUpdate()
 }
 </script>
 
@@ -114,30 +100,6 @@ function handleClose() {
   padding: 8px 18px;
   font-size: 13px;
   font-weight: 600;
-}
-
-.close-btn {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-.close-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--text-primary);
-}
-
-.close-btn:focus-visible {
-  outline: 2px solid var(--accent-primary, #4a9eff);
-  outline-offset: 1px;
 }
 
 /* 淡入淡出过渡动画 */

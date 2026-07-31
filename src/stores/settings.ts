@@ -11,7 +11,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getSettings, saveSettings } from '../utils/tauri'
+import { getSettings, saveSettings, reregisterHotkeys } from '../utils/tauri'
 import { logger } from '../utils/logger'
 import type { AppSettings, PlatformInfo, TargetGame } from '../types'
 
@@ -81,10 +81,13 @@ export const useSettingsStore = defineStore('settings', () => {
   /**
    * 立即保存设置到后端（不防抖）
    * 调用save_settings命令将当前settings写入配置文件
+   * 保存成功后重新注册全局热键，确保热键配置即时生效
    */
   async function saveNow() {
     try {
       await saveSettings(settings.value)
+      // 保存成功后重新注册热键（如windowHotkey变更），不阻塞UI
+      reregisterHotkeys().catch(e => logger.warn('SettingsStore', 'Failed to reregister hotkeys after save', e))
     } catch (e) {
       logger.error('SettingsStore', 'Failed to save settings', e)
     }

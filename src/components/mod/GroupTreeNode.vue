@@ -26,12 +26,13 @@
 
       <!-- 圆形头像 -->
       <div class="group-avatar" :class="{ 'virtual-avatar': isVirtualRoot }">
-        <span class="avatar-text">{{ initialText }}</span>
+        <img v-if="avatarUrl" :src="avatarUrl" class="avatar-image" :alt="displayName" />
+        <span v-else class="avatar-text">{{ initialText }}</span>
       </div>
     </div>
 
     <!-- 分组名称（悬浮显示） -->
-    <span class="group-name" :class="{ 'virtual-label': isVirtualRoot }" :title="group.groupName">{{ displayName }}</span>
+    <span class="group-name" :class="{ 'virtual-label': isVirtualRoot }" :title="displayName">{{ displayName }}</span>
 
     <!-- 子分组（递归渲染） -->
     <Transition name="tree-expand">
@@ -63,6 +64,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ArrowRight } from '@element-plus/icons-vue'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModGroupData } from '@/types'
 
 const { t } = useI18n()
@@ -111,6 +113,18 @@ const initialText = computed(() => {
     return name.charAt(0).toUpperCase()
   }
   return '?'
+})
+
+/** 分组头像URL：将previewImagePath转换为webview可访问的asset:// URL */
+const avatarUrl = computed(() => {
+  if (isVirtualRoot.value) return ''
+  const p = props.group.previewImagePath
+  if (!p) return ''
+  try {
+    return convertFileSrc(p)
+  } catch {
+    return ''
+  }
 })
 
 /** 切换展开/折叠状态 */
@@ -234,6 +248,14 @@ function onContextMenu(e: MouseEvent) {
   font-size: 16px;
   font-weight: 600;
   color: #ccc;
+}
+
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
 }
 
 .group-item.active .avatar-text {

@@ -54,11 +54,12 @@ export const useModsStore = defineStore('mods', () => {
   }
 
   /**
-   * 递归查找分组所在的顶层根分组索引
+   * 递归查找目标分组所在的顶层根分组索引
+   * 
    * @param groupList 分组列表
    * @param path 目标分组路径
-   * @param topLevelIndex 当前顶层索引
-   * @returns 顶层根分组索引，-1表示未找到
+   * @param topLevelIndex 当前顶层索引（递归时传递，用于定位根分组）
+   * @returns 顶层根分组索引，未找到返回-1
    */
   function findRootGroupIndex(groupList: ModGroupData[], path: string, topLevelIndex: number = -1): number {
     for (let i = 0; i < groupList.length; i++) {
@@ -87,6 +88,7 @@ export const useModsStore = defineStore('mods', () => {
         result = result.concat(collectModsRecursive(child))
       }
     }
+    console.debug(group.groupPath, result)
     return result
   }
 
@@ -255,17 +257,26 @@ export const useModsStore = defineStore('mods', () => {
   }
 
   /**
-   * 选中模组（写入INI，处理互斥组逻辑）
+   * 高亮选中模组（仅UI，不写入INI、不刷新、不弹提示）
+   * 用于单击卡片时的视觉反馈
+   * @param modIdx 模组在当前显示列表中的索引
+   */
+  function highlightMod(modIdx: number) {
+    selectedModIndex.value = modIdx
+  }
+
+  /**
+   * 启用/选中模组（写入INI，处理互斥组逻辑，乐观更新UI）
    *
    * 核心业务逻辑：
-   * - 互斥组(mutexGroup)：选中一个模组时自动禁用同组其他模组（基于路径）
-   * - 并行组：允许多个模组同时启用（基于顶层分组索引）
-   * - 写入selectedindex文件和INI配置
-   * - 操作完成后自动refresh刷新UI状态
+   * - 调用后端select_mod命令写入selectedindex文件和INI配置
+   * - 互斥组(mutexGroup)：选中一个模组时自动禁用同组其他模组
+   * - 乐观更新：不刷新列表，直接在本地更新isActive状态
+   * - 不触发"需要更新模组数据"提示条
    *
-   * @param modIdx 模组在当前分组内的索引
+   * @param modIdx 模组在当前显示列表中的索引
    */
-  async function selectModByIndex(modIdx: number) {
+  async function activateModByIndex(modIdx: number) {
     const s = useSettingsStore()
     if (!s.currentModsPath) return
     const group = currentGroup.value
@@ -273,7 +284,9 @@ export const useModsStore = defineStore('mods', () => {
 
     try {
       const isMutex = group.groupType === 'mutexGroup'
-      const mod = group.mods[modIdx]
+      // 从当前显示的模组列表中获取目标模组（MutexGroup使用递归收集后的列表）
+      const displayedMods = currentGroupMods.value
+      const mod = displayedMods[modIdx]
       const modPath = mod?.modPath || ''
       const groupIdx = selectedGroupRootIndex.value
 
@@ -281,15 +294,28 @@ export const useModsStore = defineStore('mods', () => {
       await selectMod(s.currentGame, s.currentModsPath, groupIdx, modIdx, isMutex, modPath)
       // 更新前端选中状态
       selectedModIndex.value = modIdx
-      // 非互斥组（普通group_int分组）操作后标记需要更新模组数据
-      if (!isMutex) {
-        markNeedUpdate()
+      // 乐观更新：递归更新分组树中所有模组的isActive状态
+      // 互斥组和普通组都是互斥语义：同一时间只有一个模组为active
+      function setActiveRecursive(g: ModGroupData, targetPath: string) {
+        for (const m of g.mods) {
+          m.isActive = m.modPath === targetPath
+        }
+        for (const child of g.children) {
+          setActiveRecursive(child, targetPath)
+        }
       }
-      // 刷新以获取最新状态（互斥组可能改变了其他模组的isActive）
-      await refresh()
+      setActiveRecursive(group, modPath)
     } catch (e) {
-      logger.error('ModsStore', 'Failed to select mod', e)
+      logger.error('ModsStore', 'Failed to activate mod', e)
     }
+  }
+
+  /**
+   * 选中模组（写入INI，处理互斥组逻辑）
+   * @deprecated 请使用 activateModByIndex 代替（双击启用）或 highlightMod（单击高亮）
+   */
+  async function selectModByIndex(modIdx: number) {
+    await activateModByIndex(modIdx)
   }
 
   /**
@@ -381,6 +407,8 @@ export const useModsStore = defineStore('mods', () => {
     loadMods,
     refresh,
     selectModByIndex,
+    highlightMod,
+    activateModByIndex,
     clearData,
     startWatching,
     stopWatching,

@@ -29,36 +29,38 @@
       </button>
     </div>
 
-    <!-- 右键菜单：添加/重命名/打开文件夹/删除分组 -->
-    <div
-      v-if="contextMenuVisible"
-      class="context-menu"
-      :style="{ top: contextMenuY + 'px', left: contextMenuX + 'px' }"
-      @click.stop
-    >
-      <div class="menu-item" @click="handleAddGroup">
-        <el-icon><Plus /></el-icon>
-        {{ t('mods.addGroup') }}
+    <!-- 右键菜单：添加/重命名/打开文件夹/删除分组（Teleport到body避免fixed漂移） -->
+    <Teleport to="body">
+      <div
+        v-if="contextMenuVisible"
+        class="context-menu"
+        :style="{ top: contextMenuY + 'px', left: contextMenuX + 'px' }"
+        @click.stop
+      >
+        <div class="menu-item" @click="handleAddGroup">
+          <el-icon><Plus /></el-icon>
+          {{ t('mods.addGroup') }}
+        </div>
+        <div v-if="contextGroup && isMutexGroup(contextGroup)" class="menu-item" @click="handleAddSubfolder">
+          <el-icon><FolderAdd /></el-icon>
+          {{ t('mods.addSubfolder') }}
+        </div>
+        <div class="menu-divider" v-if="contextGroup"></div>
+        <div v-if="contextGroup" class="menu-item" @click="handleRename">
+          <el-icon><Edit /></el-icon>
+          {{ t('common.rename') }}
+        </div>
+        <div v-if="contextGroup" class="menu-item" @click="handleOpenFolder">
+          <el-icon><FolderOpened /></el-icon>
+          {{ t('Open in File Explorer') }}
+        </div>
+        <div class="menu-divider" v-if="contextGroup"></div>
+        <div v-if="contextGroup" class="menu-item danger" @click="handleDelete">
+          <el-icon><Delete /></el-icon>
+          {{ t('Remove group') }}
+        </div>
       </div>
-      <div v-if="contextGroup && isMutexGroup(contextGroup)" class="menu-item" @click="handleAddSubfolder">
-        <el-icon><FolderAdd /></el-icon>
-        {{ t('mods.addSubfolder') }}
-      </div>
-      <div class="menu-divider" v-if="contextGroup"></div>
-      <div v-if="contextGroup" class="menu-item" @click="handleRename">
-        <el-icon><Edit /></el-icon>
-        {{ t('common.rename') }}
-      </div>
-      <div v-if="contextGroup" class="menu-item" @click="handleOpenFolder">
-        <el-icon><FolderOpened /></el-icon>
-        {{ t('Open in File Explorer') }}
-      </div>
-      <div class="menu-divider" v-if="contextGroup"></div>
-      <div v-if="contextGroup" class="menu-item danger" @click="handleDelete">
-        <el-icon><Delete /></el-icon>
-        {{ t('Remove group') }}
-      </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
@@ -157,12 +159,19 @@ const contextMenuX = ref(0)
 const contextMenuY = ref(0)
 /** 右键菜单关联的分组数据 */
 const contextGroup = ref<ModGroupData | null>(null)
+/**
+ * 右键菜单显示期间及刚关闭后忽略节点点击的时间戳
+ * 防止右键弹出后左键点击菜单外部关闭菜单时，mousedown落在el-tree-node上导致误选中分组
+ */
+let ignoreNodeClickUntil = 0
 
 /**
  * 选中分组
  * @param group 选中的分组对象
  */
 function handleSelectGroup(group: ModGroupData) {
+  // 如果处于误触忽略窗口，跳过选中
+  if (performance.now() < ignoreNodeClickUntil) return
   modsStore.selectGroup(group)
 }
 
@@ -173,9 +182,11 @@ function handleSelectGroup(group: ModGroupData) {
 function handleContextMenu(payload: { event: MouseEvent; group: ModGroupData }) {
   contextGroup.value = payload.group
   const e = payload.event
-  // 溢出检测：菜单估算尺寸 160×192 保守值
-  const MENU_ESTIMATED_W = 180
-  const MENU_ESTIMATED_H = 220
+  // 标记300ms内忽略tree节点点击，防止右键后立即mousedown误选
+  ignoreNodeClickUntil = performance.now() + 300
+  // 溢出检测：菜单估算尺寸 180×220 保守值
+  const MENU_ESTIMATED_W = 200
+  const MENU_ESTIMATED_H = 260
   const vw = window.innerWidth
   const vh = window.innerHeight
   let x = e.clientX
@@ -197,8 +208,9 @@ function handleContextMenu(payload: { event: MouseEvent; group: ModGroupData }) 
  */
 function onContextMenuEmpty(e: MouseEvent) {
   contextGroup.value = null
-  const MENU_ESTIMATED_W = 180
-  const MENU_ESTIMATED_H = 64
+  ignoreNodeClickUntil = performance.now() + 300
+  const MENU_ESTIMATED_W = 200
+  const MENU_ESTIMATED_H = 80
   const vw = window.innerWidth
   const vh = window.innerHeight
   let x = e.clientX
@@ -218,6 +230,8 @@ function onContextMenuEmpty(e: MouseEvent) {
 function closeContextMenu() {
   contextMenuVisible.value = false
   contextGroup.value = null
+  // 关闭后短时间忽略tree节点点击，防左键关闭菜单时误触分组节点
+  ignoreNodeClickUntil = performance.now() + 150
 }
 
 /**
@@ -511,7 +525,7 @@ onUnmounted(() => {
   border-radius: 8px;
   padding: 4px 0;
   min-width: 160px;
-  z-index: 9999;
+  z-index: 10000;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 

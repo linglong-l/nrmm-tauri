@@ -10,7 +10,6 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import { revealItemInDir } from '@tauri-apps/plugin-opener'
 import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount } from '../types'
 
 /**
@@ -191,20 +190,20 @@ export async function isFavorite(modPath: string): Promise<boolean> {
 
 /**
  * 在文件管理器中打开模组文件夹
- * 使用tauri-plugin-opener的revealItemInDir在文件管理器中显示并定位文件夹
+ * 后端命令：open_mod_folder
  * @param modPath 模组文件夹路径
  */
 export async function openModFolder(modPath: string): Promise<void> {
-  return revealItemInDir(modPath)
+  return invoke('open_mod_folder', { modPath })
 }
 
 /**
  * 在文件管理器中打开分组文件夹
- * 使用tauri-plugin-opener的revealItemInDir在文件管理器中显示并定位文件夹
+ * 后端命令：open_group_folder
  * @param groupPath 分组文件夹路径
  */
 export async function openGroupFolder(groupPath: string): Promise<void> {
-  return revealItemInDir(groupPath)
+  return invoke('open_group_folder', { groupPath })
 }
 
 /**
@@ -347,9 +346,10 @@ export async function toggleMaximize(windowName: string): Promise<void> {
  * 后端命令：reregister_hotkeys
  *
  * 修改热键配置后调用，热键会即时生效无需重启
+ * @param windowHotkey 可选的窗口切换热键，不传则从settings读取
  */
-export async function reregisterHotkeys(): Promise<void> {
-  return invoke('reregister_hotkeys')
+export async function reregisterHotkeys(windowHotkey?: string): Promise<void> {
+  return invoke('reregister_hotkeys', { windowHotkey })
 }
 
 /**
