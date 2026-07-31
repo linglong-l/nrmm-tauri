@@ -18,6 +18,7 @@
 use tauri::{AppHandle, State, Emitter, Manager};
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
+use serde::Serialize;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, Modifiers, Code};
 use crate::platform;
 use crate::config::settings_store;
@@ -121,11 +122,77 @@ pub fn handle_hotkey(app_handle: &AppHandle, shortcut: &Shortcut, _event: &Short
         if let Some(win_hk) = mgr.get_window_hotkey() {
             if let Ok(parsed) = win_hk.parse::<Shortcut>() {
                 if shortcuts_equal(shortcut, &parsed) {
-                    log::debug!("Hotkey triggered: ToggleWindow");
-                    crate::window::toggle_main_window(app_handle);
+                    handle_window_hotkey(app_handle);
                     return;
                 }
             }
+        }
+    }
+}
+
+/// 热键触发「显示窗口」时前台进程未匹配到游戏 -> 通知前端弹游戏选择菜单的事件载荷
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NeedPickGamePayload {
+    /// 光标屏幕坐标 X
+    cursor_x: i32,
+    /// 光标屏幕坐标 Y
+    cursor_y: i32,
+    /// 当前前台窗口的进程名，有则展示给用户提示，没有则为 None
+    foreground_process_name: Option<String>,
+}
+
+/// 处理窗口切换热键
+///
+/// 逻辑：
+/// - 如果窗口当前可见 → 隐藏窗口（发出 window-hidden 事件）
+/// - 如果窗口当前隐藏 → 先检测前台进程名是否匹配某个游戏：
+///   * 匹配成功 -> 发出 "window-show-with-game" 事件通知前端切换游戏，随后显示窗口
+///   * 未匹配   -> 发出 "need-pick-game" 事件，携带光标坐标+前台进程名，前端展示选择菜单，随后显示窗口
+fn handle_window_hotkey(app_handle: &AppHandle) {
+    let is_visible = app_handle
+        .get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+
+    // 先收集纯输入（副作用前置），再交给纯函数决策
+    let detector = platform::get_foreground_detector();
+    let fg_proc = detector.get_foreground_process_name().ok();
+    let detected_game = fg_proc
+        .as_deref()
+        .and_then(|s| match_process_name_to_game(s));
+    let cursor_pos = detector.get_cursor_position().unwrap_or((0, 0));
+
+    let decision = handle_window_hotkey_pure(is_visible, detected_game, cursor_pos, fg_proc);
+    match decision {
+        HotkeyDecision::Hide => {
+            log::debug!("Window hotkey: hiding window");
+            crate::window::hide_main_window(app_handle);
+        }
+        HotkeyDecision::ShowWithGame(game) => {
+            log::info!(
+                "Window hotkey: showing window, detected foreground game: {:?}",
+                game
+            );
+            let _ = app_handle.emit("window-show-with-game", game);
+            crate::window::show_main_window(app_handle);
+        }
+        HotkeyDecision::ShowAndPickGame {
+            cursor_x,
+            cursor_y,
+            foreground_process_name,
+        } => {
+            log::debug!(
+                "Window hotkey: showing window, no game matched (fg={:?}, pos=({},{})) -> emitting need-pick-game",
+                foreground_process_name, cursor_x, cursor_y
+            );
+            let payload = NeedPickGamePayload {
+                cursor_x,
+                cursor_y,
+                foreground_process_name,
+            };
+            let _ = app_handle.emit("need-pick-game", payload);
+            crate::window::show_main_window(app_handle);
         }
     }
 }
@@ -315,5 +382,151 @@ fn parse_game(game: &str) -> Result<TargetGame, String> {
         "honkaiimpact3rd" | "hi3" => Ok(TargetGame::HonkaiImpact3rd),
         "arknightsendfield" | "endfield" | "af" | "arknights endfield" => Ok(TargetGame::ArknightsEndfield),
         _ => Err(format!("Unknown game: {}", game)),
+    }
+}
+
+/// 将进程名字符串匹配到目标游戏（大小写不敏感）
+///
+/// 提取为纯函数以便单元测试。
+///
+/// # 参数
+///
+/// * `proc_name` - 前台窗口进程名（大小写任意，大小写不敏感匹配）
+///
+/// # 返回值
+///
+/// 匹配成功返回 `Some(TargetGame)`，未匹配返回 `None`
+fn match_process_name_to_game(proc_name: &str) -> Option<TargetGame> {
+    let lower = proc_name.to_lowercase();
+    for game in TargetGame::all().iter() {
+        for pn in game.process_names().iter() {
+            if pn.to_lowercase() == lower {
+                return Some(*game);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试进程名匹配：已知游戏进程名 -> 正确返回 Some(game)
+    #[test]
+    fn test_match_process_name_matches_known_games_case_insensitive() {
+        assert_eq!(
+            match_process_name_to_game("StarRail.exe"),
+            Some(TargetGame::HonkaiStarRail)
+        );
+        assert_eq!(
+            match_process_name_to_game("starrail.exe"),
+            Some(TargetGame::HonkaiStarRail)
+        );
+        assert_eq!(
+            match_process_name_to_game("YuanShen.exe"),
+            Some(TargetGame::GenshinImpact)
+        );
+        assert_eq!(
+            match_process_name_to_game("ZenlessZoneZero.exe"),
+            Some(TargetGame::ZZZ)
+        );
+    }
+
+    /// 测试进程名匹配：非游戏进程（如记事本）返回 None
+    #[test]
+    fn test_match_process_name_returns_none_for_non_game() {
+        assert_eq!(match_process_name_to_game("notepad.exe"), None);
+        assert_eq!(match_process_name_to_game("explorer.exe"), None);
+        assert_eq!(match_process_name_to_game("chrome.exe"), None);
+        assert_eq!(match_process_name_to_game(""), None);
+    }
+
+    /// 纯函数窗口热键决策：可见=true → Hide
+    #[test]
+    fn test_hotkey_decision_visible_hides() {
+        let r = handle_window_hotkey_pure(true, None, (0, 0), None);
+        assert!(matches!(r, HotkeyDecision::Hide));
+    }
+
+    /// 纯函数窗口热键决策：不可见 + 前台匹配 StarRail.exe → ShowWithGame(HonkaiStarRail)
+    #[test]
+    fn test_hotkey_decision_invisible_with_game_shows_game() {
+        let r = handle_window_hotkey_pure(
+            false,
+            Some(TargetGame::HonkaiStarRail),
+            (500, 500),
+            Some("StarRail.exe".to_string()),
+        );
+        assert!(matches!(r, HotkeyDecision::ShowWithGame(TargetGame::HonkaiStarRail)));
+    }
+
+    /// 纯函数窗口热键决策：不可见 + 前台未匹配（notepad.exe）→ ShowAndPickGame，保留坐标和进程名
+    #[test]
+    fn test_hotkey_decision_invisible_no_game_triggers_pick() {
+        let r = handle_window_hotkey_pure(
+            false,
+            None,
+            (123, 456),
+            Some("notepad.exe".to_string()),
+        );
+        match r {
+            HotkeyDecision::ShowAndPickGame {
+                cursor_x,
+                cursor_y,
+                foreground_process_name,
+            } => {
+                assert_eq!(cursor_x, 123);
+                assert_eq!(cursor_y, 456);
+                assert_eq!(foreground_process_name.as_deref(), Some("notepad.exe"));
+            }
+            other => panic!("Expected ShowAndPickGame, got {:?}", other),
+        }
+    }
+}
+
+/// 纯函数式的窗口热键决策结果枚举，用于 TDD 单元测试
+///
+/// 说明：handle_window_hotkey 内部逻辑（不包括 AppHandle 操作）由纯函数 handle_window_hotkey_pure
+/// 产出决策，真实的 emit/show/hide 操作在外部按此决策执行
+#[derive(Debug, PartialEq)]
+enum HotkeyDecision {
+    Hide,
+    ShowWithGame(TargetGame),
+    ShowAndPickGame {
+        cursor_x: i32,
+        cursor_y: i32,
+        foreground_process_name: Option<String>,
+    },
+}
+
+/// 窗口热键逻辑的纯函数核心（TDD 可测试）
+///
+/// 只做决策判断，不做副作用操作，避免测试时 mock AppHandle
+///
+/// # 参数
+/// * `is_visible` - 窗口当前是否可见
+/// * `detected_game` - 前台进程匹配到的游戏（None = 未匹配到任何游戏）
+/// * `cursor_pos` - 当前光标屏幕坐标 (x, y)
+/// * `foreground_process_name` - 当前前台进程名（有则传递，用于 UI 提示）
+///
+/// # 返回值
+/// 热键下一步动作：`Hide` / `ShowWithGame` / `ShowAndPickGame`
+fn handle_window_hotkey_pure(
+    is_visible: bool,
+    detected_game: Option<TargetGame>,
+    cursor_pos: (i32, i32),
+    foreground_process_name: Option<String>,
+) -> HotkeyDecision {
+    if is_visible {
+        HotkeyDecision::Hide
+    } else if let Some(game) = detected_game {
+        HotkeyDecision::ShowWithGame(game)
+    } else {
+        HotkeyDecision::ShowAndPickGame {
+            cursor_x: cursor_pos.0,
+            cursor_y: cursor_pos.1,
+            foreground_process_name,
+        }
     }
 }

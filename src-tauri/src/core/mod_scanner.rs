@@ -486,23 +486,64 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
     mods.push(none_slot.unwrap_or_else(|| create_empty_slot_mod(group_index)));
     mods.extend(other_mods);
 
-    // 重新分配 mod_index 并更新 is_active
-    let mut active_mod_index: i32 = -1;
+    // 重新分配 mod_index（None 始终在 0，真实模组从 1 开始）
     for (idx, m) in mods.iter_mut().enumerate() {
         m.mod_index = idx as u32;
-        if m.name == "None" {
-            m.is_active = selected_index == 0;
-            if selected_index == 0 {
-                active_mod_index = 0;
-            }
-        } else {
-            let real_idx_in_list = idx as i32;
-            m.is_active = real_idx_in_list == selected_index;
-            if real_idx_in_list == selected_index {
-                active_mod_index = real_idx_in_list;
+    }
+
+    // 基于磁盘状态判定 is_active：
+    // - 统计非 None 且未被禁用（!disabled）的模组数量
+    // - 恰好一个启用 → 该模组为 active
+    // - 零个启用 → None 为 active
+    // - 多个启用（异常状态，如手动操作文件）→ 回退到 selectedindex 文件
+    let enabled_non_none: Vec<usize> = mods.iter()
+        .enumerate()
+        .filter(|(_, m)| m.name != "None" && !m.disabled)
+        .map(|(i, _)| i)
+        .collect();
+
+    let active_mod_index: i32 = if enabled_non_none.len() == 1 {
+        let idx = enabled_non_none[0];
+        mods[idx].is_active = true;
+        // None 槽位设置为不激活
+        if let Some(none) = mods.iter_mut().find(|m| m.name == "None") {
+            none.is_active = false;
+        }
+        idx as i32
+    } else if enabled_non_none.is_empty() {
+        // 没有启用的模组 → None 激活
+        for m in mods.iter_mut() {
+            m.is_active = m.name == "None";
+        }
+        0
+    } else {
+        // 多个模组启用（异常），回退到 selectedindex 文件
+        let mut active_idx: i32 = -1;
+        for (idx, m) in mods.iter_mut().enumerate() {
+            if m.name == "None" {
+                m.is_active = selected_index == 0;
+                if selected_index == 0 {
+                    active_idx = 0;
+                }
+            } else {
+                m.is_active = idx as i32 == selected_index;
+                if idx as i32 == selected_index {
+                    active_idx = idx as i32;
+                }
             }
         }
-    }
+        // 如果 selectedindex 指向的模组是禁用的，则 fallback 到第一个启用的
+        if active_idx < 0 || mods.get(active_idx as usize).map_or(true, |m| m.disabled) {
+            if let Some(&first_enabled) = enabled_non_none.first() {
+                for m in mods.iter_mut() {
+                    m.is_active = false;
+                }
+                mods[first_enabled].is_active = true;
+                active_idx = first_enabled as i32;
+            }
+        }
+        active_idx
+    };
 
     let mod_paths: Vec<PathBuf> = mods.iter()
         .filter(|m| m.name != "None")

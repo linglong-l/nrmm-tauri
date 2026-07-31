@@ -23,6 +23,7 @@
 use crate::core::mod_manager;
 use crate::core::mod_scanner;
 use crate::core::constants;
+use crate::core::mod_cache;
 use crate::models::enums::TargetGame;
 use crate::config::settings_store;
 use anyhow::Result;
@@ -433,11 +434,19 @@ pub fn is_favorite(mod_path: String) -> bool {
     PathBuf::from(mod_path).join(constants::FAV_MARKER).exists()
 }
 
+/// 错误前缀标识：路径不存在，前端捕获后需执行清除缓存+重读模组
+const ERR_PREFIX_PATH_NOT_FOUND: &str = "[PATH_NOT_FOUND]";
+
 #[tauri::command]
 pub fn open_mod_folder(mod_path: String) -> Result<(), String> {
     let path = PathBuf::from(&mod_path);
     if !path.exists() {
-        return Err("Path does not exist".into());
+        // 路径不存在 → 清除后端模组缓存，返回带标识的错误通知前端刷新数据
+        let mut cache = mod_cache::MOD_CACHE.write();
+        cache.invalidate_all();
+        drop(cache);
+        log::warn!("Open mod folder: path not found, invalidated cache and requesting frontend refresh: {:?}", path);
+        return Err(format!("{}{}", ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"));
     }
     open_path_in_explorer(&path).map_err(|e| e.to_string())
 }
@@ -446,7 +455,12 @@ pub fn open_mod_folder(mod_path: String) -> Result<(), String> {
 pub fn open_group_folder(group_path: String) -> Result<(), String> {
     let path = PathBuf::from(&group_path);
     if !path.exists() {
-        return Err("Path does not exist".into());
+        // 路径不存在 → 清除后端模组缓存，返回带标识的错误通知前端刷新数据
+        let mut cache = mod_cache::MOD_CACHE.write();
+        cache.invalidate_all();
+        drop(cache);
+        log::warn!("Open group folder: path not found, invalidated cache and requesting frontend refresh: {:?}", path);
+        return Err(format!("{}{}", ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"));
     }
     open_path_in_explorer(&path).map_err(|e| e.to_string())
 }

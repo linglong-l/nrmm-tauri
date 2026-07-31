@@ -26,7 +26,7 @@ pub mod window;
 use crate::core::file_watcher::FileWatcher;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// 全局应用启动时间点，用于前端报告UI就绪时计算总启动耗时
 static BOOT_START: OnceLock<std::time::Instant> = OnceLock::new();
@@ -177,6 +177,8 @@ pub fn run() {
                     tauri::WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = window.hide();
+                        // 点击关闭按钮隐藏窗口时，通知前端清除模组数据
+                        let _ = window.app_handle().emit("window-hidden", ());
                     }
                     _ => {}
                 }
@@ -243,6 +245,7 @@ pub fn run() {
             window::show_main_window_cmd,
             window::toggle_main_window_cmd,
             window::hard_quit_app,
+            window::get_foreground_process_name,
             platform::get_platform_info,
         ])
         .run(tauri::generate_context!())

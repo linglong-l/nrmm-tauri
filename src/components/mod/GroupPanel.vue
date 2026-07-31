@@ -75,7 +75,7 @@ import { useI18n } from 'vue-i18n'
 import { Plus, Edit, Delete, FolderOpened, FolderAdd } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ModGroupData } from '@/types'
-import { addGroup, renameGroup, removeGroup, openGroupFolder, validateSubfolderName, createSubfolder } from '@/utils/tauri'
+import { addGroup, renameGroup, removeGroup, openGroupFolder, validateSubfolderName, createSubfolder, handlePathNotFoundError } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { useDragScroll } from '@/composables/useDragScroll'
@@ -303,7 +303,11 @@ async function handleOpenFolder() {
   try {
     await openGroupFolder(contextGroup.value.groupPath)
   } catch (e: any) {
-    ElMessage.error(t('Failed to open folder') + ': ' + (e?.message || e))
+    // 路径不存在错误 → 清除缓存+重读模组（自动处理，不弹错误提示）
+    const handled = await handlePathNotFoundError(e)
+    if (!handled) {
+      ElMessage.error(t('Failed to open folder') + ': ' + (e?.message || e))
+    }
   }
 }
 

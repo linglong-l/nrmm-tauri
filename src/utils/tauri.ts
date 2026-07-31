@@ -11,6 +11,47 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount } from '../types'
+import { useModsStore } from '@/stores/mods'
+import { useSettingsStore } from '@/stores/settings'
+import { logger } from './logger'
+
+/**
+ * 后端返回的路径不存在错误前缀标识
+ * 捕获到带此前缀的错误时需执行：清除模组缓存 → 模组重读取
+ */
+export const ERR_PREFIX_PATH_NOT_FOUND = '[PATH_NOT_FOUND]'
+
+/**
+ * 检测错误是否为路径不存在类型，是则清除缓存并重读模组
+ * 调用流程：打开文件资源管理器 → 路径不存在异常 → 清除模组缓存数据 → 模组重读取
+ *
+ * @param error invoke抛出的原始错误对象（含message属性）或字符串
+ * @returns 若为路径不存在错误返回true（已处理完刷新），否则返回false（继续抛出原错误）
+ */
+export async function handlePathNotFoundError(error: unknown): Promise<boolean> {
+  const msg = typeof error === 'string'
+    ? error
+    : (error as any)?.message ?? String(error ?? '')
+
+  if (!msg.includes(ERR_PREFIX_PATH_NOT_FOUND)) {
+    return false
+  }
+  logger.warn('tauri', 'Path not found while opening folder, refreshing mods data', msg)
+  try {
+    const modsStore = useModsStore()
+    const settingsStore = useSettingsStore()
+    await modsStore.stopWatching()
+    modsStore.clearData()
+    // clearData 后 currentGroup 会变成 null，因此需要用 settingsStore.currentModsPath 判断是否能加载
+    if (settingsStore.currentModsPath) {
+      await modsStore.startWatching()
+      await modsStore.loadMods()
+    }
+  } catch (e) {
+    logger.error('tauri', 'Failed to refresh mods after path-not-found error', e)
+  }
+  return true
+}
 
 /**
  * 打开文件夹选择对话框
@@ -520,4 +561,15 @@ export async function validateSubfolderName(parentPath: string, folderName: stri
  */
 export async function createSubfolder(parentPath: string, folderName: string): Promise<void> {
   return invoke('create_subfolder', { parentPath, folderName })
+}
+
+/**
+ * 获取当前前台窗口的进程名
+ * 后端命令：get_foreground_process_name
+ *
+ * 用于窗口热键显示时自动检测前台游戏
+ * @returns 进程名字符串（如 "StarRail.exe"）
+ */
+export async function getForegroundProcessName(): Promise<string> {
+  return invoke('get_foreground_process_name')
 }

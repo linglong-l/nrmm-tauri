@@ -555,10 +555,21 @@ pub fn switch_mod(
     group_index: u32,
     mod_index: u32,
 ) -> Result<UpdateResult> {
-    let scan_result = mod_scanner::scan_mods(game_mods_path)?;
+    // 使用轻量扫描以匹配前端索引（None 在 mod_index=0，真实模组从 1 开始）
+    let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
+
+    // 先找出分组目录路径（用于写入 selectedindex 文件）
+    let group_dir = scan_result.groups.iter()
+        .find(|g| g.group_index == group_index)
+        .map(|g| g.full_path.clone());
 
     for mod_data in &scan_result.mods {
         if mod_data.group_index == group_index {
+            // None 槽位的 full_path 为空，跳过目录操作（由下面的 !is_target 分支禁用其他模组）
+            if mod_data.full_path.as_os_str().is_empty() {
+                continue;
+            }
+
             let mod_dir = &mod_data.full_path;
             let dir_name = mod_dir.file_name()
                 .unwrap_or_default()
@@ -569,6 +580,7 @@ pub fn switch_mod(
             let is_target = mod_data.mod_index == mod_index;
 
             if is_target && target_disabled {
+                // 启用目标模组：移除 DISABLED_ 前缀
                 let new_name = dir_name
                     .trim_start_matches("DISABLED")
                     .trim_start_matches("disabled")
@@ -579,6 +591,7 @@ pub fn switch_mod(
                         .with_context(|| format!("Failed to enable mod: {:?}", mod_dir))?;
                 }
             } else if !is_target && !target_disabled {
+                // 禁用非目标模组：添加 DISABLED_ 前缀
                 let new_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
                 let new_path = mod_dir.parent().unwrap_or(mod_dir).join(new_name);
                 if mod_dir != &new_path {
@@ -586,6 +599,14 @@ pub fn switch_mod(
                         .with_context(|| format!("Failed to disable mod: {:?}", mod_dir))?;
                 }
             }
+        }
+    }
+
+    // 将选中的 mod_index 写入该分组的 selectedindex 文件，使 is_active 状态持久化
+    if let Some(g_dir) = group_dir {
+        let selectedindex_path = g_dir.join(constants::SELECTED_INDEX_FILE);
+        if let Err(e) = fs::write(&selectedindex_path, mod_index.to_string()) {
+            log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
         }
     }
 

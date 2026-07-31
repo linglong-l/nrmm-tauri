@@ -9,7 +9,7 @@
 //! - 主窗口快捷函数（show_main_window 等）
 
 use anyhow::Result;
-use tauri::{AppHandle, LogicalPosition, Manager, Position, WebviewWindow};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, WebviewWindow};
 
 
 /// 显示指定窗口并获取焦点
@@ -221,7 +221,8 @@ pub fn center_window(window: &WebviewWindow) -> Result<()> {
 
 /// 显示主窗口
 ///
-/// 查找并显示 "main" 窗口，同时获取焦点和取消最小化状态
+/// 查找并显示 "main" 窗口，同时获取焦点和取消最小化状态，
+/// 显示后发出 "window-shown" 事件通知前端重新加载数据。
 ///
 /// # 参数
 ///
@@ -232,11 +233,13 @@ pub fn show_main_window(app: &AppHandle) {
         let _ = window.set_focus();
         let _ = window.unminimize();
     }
+    let _ = app.emit("window-shown", ());
 }
 
 /// 隐藏主窗口
 ///
-/// 查找并隐藏 "main" 窗口
+/// 查找并隐藏 "main" 窗口，
+/// 隐藏后发出 "window-hidden" 事件通知前端清除数据。
 ///
 /// # 参数
 ///
@@ -245,11 +248,12 @@ pub fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
+    let _ = app.emit("window-hidden", ());
 }
 
 /// 切换主窗口显示/隐藏状态
 ///
-/// 如果主窗口当前可见则隐藏，否则显示并获取焦点
+/// 如果主窗口当前可见则隐藏（发出 "window-hidden"），否则显示并获取焦点（发出 "window-shown"）。
 ///
 /// # 参数
 ///
@@ -258,9 +262,12 @@ pub fn toggle_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
+            let _ = app.emit("window-hidden", ());
         } else {
             let _ = window.show();
             let _ = window.set_focus();
+            let _ = window.unminimize();
+            let _ = app.emit("window-shown", ());
         }
     }
 }
@@ -319,4 +326,18 @@ pub fn hard_quit_app(app: AppHandle) {
         let _ = hotkey_mgr.unregister_all();
     }
     app.exit(0);
+}
+
+/// 获取当前前台窗口的进程名
+///
+/// 用于热键触发窗口显示时自动检测前台游戏，
+/// 跨平台实现：Windows 使用 Win32 API，Linux 使用 X11/Wayland。
+///
+/// # 返回值
+///
+/// 成功返回进程名字符串（如 "StarRail.exe"），失败返回错误信息
+#[tauri::command]
+pub fn get_foreground_process_name() -> Result<String, String> {
+    let detector = crate::platform::get_foreground_detector();
+    detector.get_foreground_process_name().map_err(|e| e.to_string())
 }
