@@ -102,7 +102,7 @@ impl super::ForegroundDetector for WindowsForegroundDetector {
                 return Err(anyhow!("Failed to get process ID"));
             }
             
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, false, pid)
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
                 .context("Failed to open process")?;
             if handle.is_invalid() {
                 return Err(anyhow!("Failed to open process: invalid handle"));

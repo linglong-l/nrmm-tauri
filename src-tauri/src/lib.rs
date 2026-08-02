@@ -116,6 +116,27 @@ pub fn run() {
             }
             log::info!("[BOOT] T+{:>6}ms - 系统托盘创建完成", boot_start.elapsed().as_millis());
 
+            // 全局原生菜单事件：处理游戏选择菜单的点击（热键未匹配游戏时弹出）
+            let app_handle_clone = app.app_handle().clone();
+            app.on_menu_event(move |app_h, event| {
+                let menu_id = event.id().0.as_str();
+                if let Some(game_str) = menu_id.strip_prefix("game_menu:") {
+                    use crate::hotkey::parse_game;
+
+                    log::info!("[Menu] game_menu clicked: {}", game_str);
+                    match parse_game(game_str) {
+                        Ok(game) => {
+                            let _ = app_h.emit("window-show-with-game", game);
+                            crate::window::show_main_window(&app_handle_clone);
+                        }
+                        Err(e) => {
+                            log::error!("[Menu] parse game failed for {}: {}", game_str, e);
+                            crate::window::show_main_window(&app_handle_clone);
+                        }
+                    }
+                }
+            });
+
             let hotkey_mgr = hotkey::HotkeyManager::new(app.handle().clone());
             if let Err(e) = hotkey_mgr.register_all() {
                 log::warn!("Failed to register hotkeys: {}", e);
@@ -159,10 +180,8 @@ pub fn run() {
                             log::info!("[BOOT] T+{:>6}ms - 窗口首次 Resized（即将可见）", boot_start_for_window.elapsed().as_millis());
                         }
                     }
-                    tauri::WindowEvent::Focused(focused) => {
-                        if *focused && !first_focus_logged.swap(true, Ordering::SeqCst) {
-                            log::info!("[BOOT] T+{:>6}ms - 窗口首次获得焦点（可见）", boot_start_for_window.elapsed().as_millis());
-                        }
+                    tauri::WindowEvent::Focused(focused) if *focused && !first_focus_logged.swap(true, Ordering::SeqCst) => {
+                        log::info!("[BOOT] T+{:>6}ms - 窗口首次获得焦点（可见）", boot_start_for_window.elapsed().as_millis());
                     }
                     _ => {}
                 }
@@ -173,14 +192,11 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if window.label() == "main" {
-                match event {
-                    tauri::WindowEvent::CloseRequested { api, .. } => {
-                        api.prevent_close();
-                        let _ = window.hide();
-                        // 点击关闭按钮隐藏窗口时，通知前端清除模组数据
-                        let _ = window.app_handle().emit("window-hidden", ());
-                    }
-                    _ => {}
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    // 点击关闭按钮隐藏窗口时，通知前端清除模组数据
+                    let _ = window.app_handle().emit("window-hidden", ());
                 }
             }
         })
@@ -196,6 +212,7 @@ pub fn run() {
             commands::mod_commands::check_mods_path_status,
             commands::mod_commands::refresh_mods,
             commands::mod_commands::update_mod_data,
+            commands::mod_commands::update_group_mod_data,
             commands::mod_commands::select_mod,
             commands::mod_commands::deselect_group_mod,
             commands::mod_commands::add_group,
@@ -225,9 +242,13 @@ pub fn run() {
             core::file_watcher::switch_file_watcher,
             core::file_watcher::pause_file_watcher,
             core::file_watcher::resume_file_watcher,
+            core::file_watcher::is_file_watcher_running,
+            core::file_watcher::current_watched_path,
+            core::mod_cache::check_mod_cache_valid,
             core::archive_handler::is_supported_archive_cmd,
             core::archive_handler::import_mod_cmd,
             core::archive_handler::import_mod_auto_cmd,
+            core::archive_handler::import_item_cmd,
             core::cloud_data::refresh_cloud_data,
             core::cloud_data::refresh_all_cloud_data,
             updater::check_for_updates,

@@ -134,6 +134,36 @@ pub async fn update_mod_data(game: String, mods_path: String) -> Result<mod_mana
     Ok(result)
 }
 
+/// 分组增量更新模组数据（仅更新指定分组）
+#[tauri::command]
+pub async fn update_group_mod_data(game: String, mods_path: String, group_index: u32) -> Result<mod_manager::UpdateResult, String> {
+    let game = parse_game(&game)?;
+    let mods_path = PathBuf::from(mods_path);
+    let settings = settings_store::get_settings();
+    let managed_path = mods_path.join(constants::MANAGED_FOLDER);
+
+    log::info!("[update_group_mod_data] Running group incremental update for group_index={}", group_index);
+    let start = std::time::Instant::now();
+
+    let update_path = mods_path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
+        mod_manager::update_group_mod_data(game, &update_path, &settings, group_index).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let elapsed = start.elapsed();
+    log::info!("Group incremental update completed in {}ms, processed {} mods",
+        elapsed.as_millis(), result.processed_mods);
+
+    {
+        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        cache.invalidate_by_prefix(&managed_path);
+    }
+
+    Ok(result)
+}
+
 /// 选择模组（支持互斥组）
 #[tauri::command]
 pub async fn select_mod(
@@ -167,6 +197,10 @@ pub async fn select_mod(
             ..Default::default()
         })
     } else {
+        // 向 3Dmigoto 发送按键模拟（与 NRMM 对齐）
+        let _ = crate::platform::get_key_simulator().simulate_select_group();
+        let _ = crate::platform::get_key_simulator().simulate_select_mod();
+
         let settings = settings_store::get_settings();
         let managed_path = mods_path.join(constants::MANAGED_FOLDER);
 
@@ -253,7 +287,7 @@ pub async fn add_group(game: String, mods_path: String, group_name: Option<Strin
 
         if let Some(custom_name) = group_name {
             let trimmed = custom_name.trim();
-            if !trimmed.is_empty() && trimmed != &dir_name {
+            if !trimmed.is_empty() && trimmed != dir_name {
                 let new_group_path = managed_folder.join(trimmed);
                 if !new_group_path.exists() {
                     fs::rename(&group_path, &new_group_path).map_err(|e| e.to_string())?;
@@ -674,7 +708,7 @@ pub fn create_subfolder(parent_path: String, folder_name: String) -> Result<(), 
                 std::io::ErrorKind::PermissionDenied => "没有权限在此位置创建文件夹，请检查权限设置".to_string(),
                 std::io::ErrorKind::AlreadyExists => "该名称的文件夹已存在，请换一个名称".to_string(),
                 std::io::ErrorKind::InvalidFilename => "文件夹名称包含不允许的字符".to_string(),
-                _ => format!("创建文件夹失败，请检查路径是否可访问"),
+                _ => "创建文件夹失败，请检查路径是否可访问".to_string(),
             };
             log::error!("Failed to create subfolder {:?}: {}", target_path, e);
             Err(err_msg)

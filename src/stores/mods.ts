@@ -10,8 +10,8 @@
  * - 树状导航：groups是顶层列表（NormalGroup + MutexGroup根节点），子分组通过children递归访问
  */
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
-import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData } from '../utils/tauri'
+import { ref, computed, reactive } from 'vue'
+import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, updateGroupModData } from '../utils/tauri'
 import { useSettingsStore } from './settings'
 import type { ModGroupData, ModData, TargetGame } from '../types'
 import { logger } from '../utils/logger'
@@ -27,12 +27,20 @@ export const useModsStore = defineStore('mods', () => {
   const selectedGroupPath = ref<string>('')
   /** 当前选中的模组索引（在分组内） */
   const selectedModIndex = ref<number>(0)
+  /**
+   * 每个分组独立记录的上次选中模组索引（对应 Flutter 版本的 previousSelectedModOnGroup）
+   * key 为 groupPath（目录绝对路径），value 为该分组在 currentGroupMods 中的模组索引
+   * 虚拟节点路径（__all__/__fav__/__groups__）不记录
+   */
+  const selectedModIndicesByGroup: Record<string, number> = reactive({})
   /** 搜索关键词 */
   const searchQuery = ref('')
   /** 是否仅显示收藏模组 */
   const showFavoritesOnly = ref(false)
   /** 按游戏存储是否需要更新模组数据（提示条显示状态） */
   const needUpdatePerGame = ref<Record<TargetGame, boolean>>({} as Record<TargetGame, boolean>)
+  /** 按分组索引存储是否需要更新模组数据（分组级标记，用于增量更新） */
+  const needUpdatePerGroup = ref<Record<number, boolean>>({})
 
   /**
    * 递归在分组树中查找指定路径的分组
@@ -130,30 +138,37 @@ export const useModsStore = defineStore('mods', () => {
 
   /**
    * 标记当前游戏需要更新模组数据
-   * 仅在非互斥组（普通group_int分组）的模组启用/禁用操作后调用
-   * @param game 目标游戏
+   * 仅在非互斥组（普通group_xx分组）的模组操作后调用
+   * @param groupIndex 可选的分组索引，传入时记录分组级标记用于增量更新
    */
-  function markNeedUpdate(game?: TargetGame) {
+  function markNeedUpdate(groupIndex?: number) {
     const s = useSettingsStore()
-    const targetGame = game || s.currentGame
+    // 游戏级标记
     needUpdatePerGame.value = {
       ...needUpdatePerGame.value,
-      [targetGame]: true
+      [s.currentGame]: true
+    }
+    // 分组级标记（用于增量更新）
+    if (groupIndex !== undefined) {
+      needUpdatePerGroup.value = {
+        ...needUpdatePerGroup.value,
+        [groupIndex]: true
+      }
     }
   }
 
   /**
    * 清除当前游戏的需要更新状态
    * 在updateModData成功完成后或用户关闭提示条时调用
-   * @param game 目标游戏
    */
-  function clearNeedUpdate(game?: TargetGame) {
+  function clearNeedUpdate() {
     const s = useSettingsStore()
-    const targetGame = game || s.currentGame
     needUpdatePerGame.value = {
       ...needUpdatePerGame.value,
-      [targetGame]: false
+      [s.currentGame]: false
     }
+    // 清除所有分组级标记
+    needUpdatePerGroup.value = {}
   }
 
   /**
@@ -180,9 +195,26 @@ export const useModsStore = defineStore('mods', () => {
    * @param group 要选中的分组对象
    */
   function selectGroup(group: ModGroupData) {
+    // 切换分组前，先保存当前分组的选中索引（仅对真实分组，不保存虚拟节点）
+    const prevPath = selectedGroupPath.value
+    if (prevPath && !prevPath.startsWith('__') && prevPath !== '__groups__') {
+      selectedModIndicesByGroup[prevPath] = selectedModIndex.value
+    }
+
     selectedGroupPath.value = group.groupPath
-    selectedModIndex.value = 0
     showFavoritesOnly.value = false
+
+    // 恢复目标分组的选中索引：优先使用内存记录，其次使用后端返回的 activeModIndex，最后默认 0
+    const path = group.groupPath
+    if (path.startsWith('__') || path === '__groups__') {
+      selectedModIndex.value = 0
+    } else if (selectedModIndicesByGroup[path] !== undefined) {
+      selectedModIndex.value = selectedModIndicesByGroup[path]
+    } else if (group.activeModIndex >= 0) {
+      selectedModIndex.value = group.activeModIndex
+    } else {
+      selectedModIndex.value = 0
+    }
   }
 
   /**
@@ -196,6 +228,8 @@ export const useModsStore = defineStore('mods', () => {
    * - 仅读取目录结构和modname/selectedindex文件
    * - 不深度解析merged.ini内容
    * - 快速响应，UI立即显示
+   *
+   * @returns Promise<void> 加载完成后，groups 和 mods 状态已更新；加载失败时由内部 catch 记录日志，不抛出异常
    */
   async function loadMods() {
     const s = useSettingsStore()
@@ -205,6 +239,15 @@ export const useModsStore = defineStore('mods', () => {
       const result = await getMods(s.currentGame, s.currentModsPath)
       groups.value = result.groups || []
       mods.value = result.mods || []
+
+      // 清空之前的分组选中记录，用后端返回的 activeModIndex 初始化
+      for (const key of Object.keys(selectedModIndicesByGroup)) {
+        delete selectedModIndicesByGroup[key]
+      }
+      for (const g of groups.value) {
+        initGroupSelectedIndex(g)
+      }
+
       // 默认选中第一个分组
       if (groups.value.length > 0 && !selectedGroupPath.value) {
         selectedGroupPath.value = groups.value[0].groupPath
@@ -215,10 +258,38 @@ export const useModsStore = defineStore('mods', () => {
           selectedGroupPath.value = groups.value[0].groupPath
         }
       }
+
+      // 根据当前选中分组设置 selectedModIndex
+      const curGroup = currentGroup.value
+      if (curGroup) {
+        const path = curGroup.groupPath
+        if (path.startsWith('__') || path === '__groups__') {
+          selectedModIndex.value = 0
+        } else if (selectedModIndicesByGroup[path] !== undefined) {
+          selectedModIndex.value = selectedModIndicesByGroup[path]
+        } else {
+          selectedModIndex.value = 0
+        }
+      }
     } catch (e) {
       logger.error('ModsStore', 'Failed to load mods', e)
     } finally {
       loading.value = false
+    }
+  }
+
+  /**
+   * 递归初始化分组及其子分组的选中索引记录
+   * 仅对 normalGroup 使用 activeModIndex 初始化
+   */
+  function initGroupSelectedIndex(group: ModGroupData) {
+    if (group.groupType === 'normalGroup' && group.activeModIndex >= 0) {
+      selectedModIndicesByGroup[group.groupPath] = group.activeModIndex
+    }
+    if (group.children && group.children.length > 0) {
+      for (const child of group.children) {
+        initGroupSelectedIndex(child)
+      }
     }
   }
 
@@ -231,6 +302,8 @@ export const useModsStore = defineStore('mods', () => {
    * - 增删改模组/分组操作后
    *
    * 相比loadMods更轻量，复用后端缓存
+   *
+   * @returns Promise<void> 刷新完成后，groups 和 mods 状态已增量更新；选中分组路径自动校验，失效时回退到第一个分组
    */
   async function refresh() {
     const s = useSettingsStore()
@@ -240,6 +313,12 @@ export const useModsStore = defineStore('mods', () => {
       const result = await refreshMods(s.currentGame, s.currentModsPath)
       groups.value = result.groups || []
       mods.value = result.mods || []
+
+      // 更新选中索引记录：保留会话内的用户选择，用新的 activeModIndex 补充未记录的分组
+      for (const g of groups.value) {
+        refreshGroupSelectedIndex(g)
+      }
+
       // 刷新后检查选中分组是否存在
       if (selectedGroupPath.value) {
         const found = findGroupByPathInList(groups.value, selectedGroupPath.value)
@@ -249,10 +328,35 @@ export const useModsStore = defineStore('mods', () => {
       } else if (groups.value.length > 0) {
         selectedGroupPath.value = groups.value[0].groupPath
       }
+
+      // 确保当前选中索引在有效范围内（防止模组被删除后越界）
+      const currentMods = currentGroupMods.value
+      if (selectedModIndex.value >= currentMods.length) {
+        selectedModIndex.value = Math.max(0, currentMods.length - 1)
+        const curPath = selectedGroupPath.value
+        if (curPath && !curPath.startsWith('__') && curPath !== '__groups__') {
+          selectedModIndicesByGroup[curPath] = selectedModIndex.value
+        }
+      }
     } catch (e) {
       logger.error('ModsStore', 'Failed to refresh mods', e)
     } finally {
       loading.value = false
+    }
+  }
+
+  /**
+   * 递归刷新分组选中索引记录
+   * 保留已有记录（用户会话内选择优先），仅补充未记录的 normalGroup 初始值
+   */
+  function refreshGroupSelectedIndex(group: ModGroupData) {
+    if (group.groupType === 'normalGroup' && selectedModIndicesByGroup[group.groupPath] === undefined && group.activeModIndex >= 0) {
+      selectedModIndicesByGroup[group.groupPath] = group.activeModIndex
+    }
+    if (group.children && group.children.length > 0) {
+      for (const child of group.children) {
+        refreshGroupSelectedIndex(child)
+      }
     }
   }
 
@@ -263,6 +367,13 @@ export const useModsStore = defineStore('mods', () => {
    */
   function highlightMod(modIdx: number) {
     selectedModIndex.value = modIdx
+    const g = currentGroup.value
+    if (g) {
+      const path = g.groupPath
+      if (!path.startsWith('__') && path !== '__groups__') {
+        selectedModIndicesByGroup[path] = modIdx
+      }
+    }
   }
 
   /**
@@ -292,8 +403,17 @@ export const useModsStore = defineStore('mods', () => {
 
       // 调用后端select_mod命令处理INI写入和互斥逻辑
       await selectMod(s.currentGame, s.currentModsPath, groupIdx, modIdx, isMutex, modPath)
+      // 标记需要更新模组数据（仅NormalGroup操作）
+      if (!isMutex) {
+        markNeedUpdate(groupIdx)
+      }
       // 更新前端选中状态
       selectedModIndex.value = modIdx
+      // 同步记录到分组索引映射（对应 Flutter 的 previousSelectedModOnGroup）
+      const gPath = group.groupPath
+      if (!gPath.startsWith('__') && gPath !== '__groups__') {
+        selectedModIndicesByGroup[gPath] = modIdx
+      }
       // 乐观更新：递归更新分组树中所有模组的isActive状态
       // 互斥组和普通组都是互斥语义：同一时间只有一个模组为active
       function setActiveRecursive(g: ModGroupData, targetPath: string) {
@@ -330,6 +450,10 @@ export const useModsStore = defineStore('mods', () => {
     selectedModIndex.value = 0
     searchQuery.value = ''
     showFavoritesOnly.value = false
+    // 清空分组选中记录
+    for (const key of Object.keys(selectedModIndicesByGroup)) {
+      delete selectedModIndicesByGroup[key]
+    }
   }
 
   /**
@@ -358,27 +482,34 @@ export const useModsStore = defineStore('mods', () => {
   /**
    * 更新模组数据（重量级操作）
    *
-   * 与轻量扫描(loadMods/refresh)的区别：
-   * 1. 深度解析：完整解析所有merged.ini文件内容
-   * 2. 错误修复：自动检测并修复missingEndif、namespace冲突等错误
-   * 3. 互斥组处理：重新计算互斥组内模组的启用/禁用状态
-   * 4. 耗时较长：可能需要数秒，有loading状态提示
-   * 5. 触发时机：用户手动点击"Update Mod Data"按钮
+   * 更新策略：
+   * - 当 needUpdatePerGroup 中存在分组标记时 → 仅更新指定分组（分组增量更新）
+   * - 当 needUpdatePerGroup 为空（无分组标记）→ 执行全量更新（update_mod_data）
+   * - 更新完成后清除所有标记和提醒条
    *
-   * 适用场景：
-   * - 手动在文件管理器中增删改模组后
-   * - 模组出现错误需要修复时
-   * - 首次配置游戏路径后
+   * @returns Promise<void> 更新完成后自动调用 loadMods() 刷新前端数据；失败时抛出异常
    */
   async function updateModData() {
     const s = useSettingsStore()
     if (!s.currentModsPath) return
     loading.value = true
     try {
-      await tauriUpdateModData(s.currentGame, s.currentModsPath)
-      // 重量级更新后需要完整加载以获取最新解析结果
+      const groupIndices = Object.keys(needUpdatePerGroup.value)
+        .filter(k => needUpdatePerGroup.value[Number(k)])
+        .map(Number)
+
+      if (groupIndices.length > 0) {
+        // 有分组标记 → 分组增量更新
+        for (const groupIndex of groupIndices) {
+          await updateGroupModData(s.currentGame, s.currentModsPath, groupIndex)
+        }
+      } else {
+        // 无分组标记 → 全量更新
+        await tauriUpdateModData(s.currentGame, s.currentModsPath)
+      }
+
+      // 更新完成后刷新前端数据并清除所有标记
       await loadMods()
-      // 更新成功后清除当前游戏的needUpdate状态
       clearNeedUpdate()
     } catch (e) {
       logger.error('ModsStore', 'Failed to update mod data', e)
@@ -386,6 +517,19 @@ export const useModsStore = defineStore('mods', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  /**
+   * 判断缓存中是否已有模组数据
+   *
+   * Phase 4 新增：用于页面切换时的 cache 判断
+   * 在 ModsView.onMounted 中优先检查此方法，缓存不为空时跳过 loadMods 调用，避免重复加载
+   * 在 App.vue window-shown 监听中配合 checkModCacheValid 后端命令一起判断缓存有效性
+   *
+   * @returns {boolean} groups 或 mods 数组非空时返回 true
+   */
+  function hasData(): boolean {
+    return groups.value.length > 0 || mods.value.length > 0
   }
 
   return {
@@ -399,6 +543,7 @@ export const useModsStore = defineStore('mods', () => {
     showFavoritesOnly,
     needUpdate,
     needUpdatePerGame,
+    needUpdatePerGroup,
     currentGroup,
     currentGroupMods,
     selectedMod,
@@ -416,5 +561,6 @@ export const useModsStore = defineStore('mods', () => {
     markNeedUpdate,
     clearNeedUpdate,
     findGroupByPathInList,
+    hasData,
   }
 })

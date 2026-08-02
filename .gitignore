@@ -66,3 +66,4 @@ latest.json
 target/
 /resource/*
 /resource/7z/
+src-tauri/binaries/

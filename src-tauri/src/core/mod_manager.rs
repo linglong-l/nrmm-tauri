@@ -247,6 +247,151 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     })
 }
 
+/// 分组增量更新模组数据（仅更新指定分组的 ModFolder.ini）
+///
+/// 与全量 `update_mod_data` 的区别：
+/// - 仅扫描目标分组，不扫描其他分组
+/// - 仅处理该分组内启用的模组 INI
+/// - 仅更新该分组的 ModFolder.ini 文件
+/// - 跳过 nrmm_include.ini 和主 INI 的重生成（include 链保持不变）
+///
+/// # 参数
+/// - `game`: 目标游戏
+/// - `game_mods_path`: 游戏 Mods 目录
+/// - `_settings`: 应用设置
+/// - `group_index`: 目标分组索引
+pub fn update_group_mod_data(
+    game: TargetGame,
+    game_mods_path: &Path,
+    _settings: &AppSettings,
+    group_index: u32,
+) -> Result<UpdateResult> {
+    let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);
+    if !managed_folder.exists() {
+        fs::create_dir_all(&managed_folder)?;
+    }
+
+    // 步骤1: 准备 _MANAGED_ 目录
+    let need_reload_manual = prepare_managed_folder(&managed_folder, game)?;
+
+    // 步骤2: 轻量扫描（仅扫描目标分组）
+    let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
+
+    // 步骤3: 过滤出目标分组的启用模组
+    let enabled_mods: Vec<&ModData> = scan_result.mods.iter()
+        .filter(|m| m.group_index == group_index && !m.disabled && !m.mod_disabled)
+        .collect();
+
+    // 步骤4: 收集已知库
+    let mut known_libraries = HashSet::new();
+    for mod_data in &enabled_mods {
+        for ini_data in &mod_data.mod_ini_data {
+            let ini_path = PathBuf::from(&ini_data.ini_path);
+            if let Ok(ini) = IniFile::parse(&ini_path) {
+                for lib in ini.defined_libraries() {
+                    known_libraries.insert(lib);
+                }
+            }
+        }
+    }
+
+    // 步骤5: 处理目标分组内启用模组的 INI
+    let mut group_mod_inis: Vec<PathBuf> = Vec::new();
+    let mut all_errors: Vec<ErroredLines> = Vec::new();
+    let mut processed_mods = 0u32;
+
+    for (mod_idx, mod_data) in enabled_mods.iter().enumerate() {
+        let mod_id = mod_idx as u32;
+        for ini_data in &mod_data.mod_ini_data {
+            let ini_path = PathBuf::from(&ini_data.ini_path);
+
+            // 备份模组 INI（如果尚未备份）
+            let mod_backup = ini_path.with_extension(constants::BACKUP_EXTENSION);
+            if !mod_backup.exists() {
+                if let Err(e) = fs::copy(&ini_path, &mod_backup) {
+                    log::warn!("Failed to backup mod INI {}: {}", ini_path.display(), e);
+                }
+            }
+
+            match IniFile::parse(&ini_path) {
+                Ok(mut ini) => {
+                    let errors = ini.detect_errors(&ini_path, &known_libraries);
+                    if !errors.is_empty() {
+                        all_errors.extend(errors);
+                    }
+
+                    if let Some(ns) = namespace_handler::extract_namespace(&ini) {
+                        namespace_handler::expand_ini_variables(&mut ini, &ns);
+                    }
+
+                    ini.inject_slot_conditions(group_index, mod_id);
+                    ini.comment_crash_lines();
+                    ini.remove_empty_if_blocks();
+                    ini.apply_indentation();
+
+                    ini.write_atomic(&ini_path)?;
+                    group_mod_inis.push(ini_path.clone());
+                    processed_mods += 1;
+                }
+                Err(e) => {
+                    log::error!("Failed to process mod INI {}: {}", ini_path.display(), e);
+                    all_errors.push(ErroredLines {
+                        error_type: 3,
+                        error_message: format!("Processing error: {}", e),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    // 步骤6: 仅更新该分组的 ModFolder.ini
+    let group_dir = managed_folder.join(format!("group_{}", group_index));
+    let mut group_ini_paths: Vec<PathBuf> = Vec::new();
+    let group_ini = create_group_ini(&group_dir, group_index, &group_mod_inis, game_mods_path)?;
+    if let Some(p) = group_ini {
+        group_ini_paths.push(p);
+    }
+
+    // 步骤7: 更新 nrmm_include.ini（需要包含所有分组，不只是当前分组）
+    // 读取所有现有 group INI 路径，合并当前分组
+    let mut existing_ini_paths: Vec<PathBuf> = Vec::new();
+    // 收集所有已存在的 group INI 路径（除了当前分组的）
+    if let Ok(entries) = fs::read_dir(&managed_folder) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if let Some(group_num_str) = dir_name.strip_prefix("group_") {
+                    if let Ok(group_num) = group_num_str.parse::<u32>() {
+                        if group_num != group_index {
+                            let ini_path = path.join(format!("group_{}.ini", group_num));
+                            if ini_path.exists() {
+                                existing_ini_paths.push(ini_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 合并当前分组的新 INI
+    existing_ini_paths.extend(group_ini_paths.clone());
+
+    let nrmm_include_path = managed_folder.join(constants::INCLUDE_FILENAME);
+    create_nrmm_include_ini(&nrmm_include_path, &managed_folder, &existing_ini_paths, game_mods_path)?;
+
+    Ok(UpdateResult {
+        total_groups: scan_result.groups.len() as u32,
+        total_mods: scan_result.total_mods_count as u32,
+        enabled_mods: enabled_mods.len() as u32,
+        disabled_mods: scan_result.disabled_mods_count as u32,
+        processed_mods,
+        errors: all_errors,
+        need_reload_manual,
+    })
+}
+
 /// 准备 _MANAGED_ 目录，创建 NRMM 所需的模板 INI 文件
 ///
 /// 复刻 NRMM 的 _prepareManagedFolder 流程：
@@ -549,9 +694,9 @@ pub fn save_customizations(game_mods_path: &Path, game: TargetGame) -> Result<Sa
 /// - `group_index`: 分组索引
 /// - `mod_index`: 模组索引（在分组内的索引）
 pub fn switch_mod(
-    game: TargetGame,
+    _game: TargetGame,
     game_mods_path: &Path,
-    settings: &AppSettings,
+    _settings: &AppSettings,
     group_index: u32,
     mod_index: u32,
 ) -> Result<UpdateResult> {
@@ -584,7 +729,7 @@ pub fn switch_mod(
                 let new_name = dir_name
                     .trim_start_matches("DISABLED")
                     .trim_start_matches("disabled")
-                    .trim_start_matches(|c: char| c == '_' || c == ' ' || c == '-');
+                    .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
                 let new_path = mod_dir.parent().unwrap_or(mod_dir).join(new_name);
                 if mod_dir != &new_path {
                     fs::rename(mod_dir, &new_path)
@@ -610,10 +755,15 @@ pub fn switch_mod(
         }
     }
 
-    update_mod_data(game, game_mods_path, settings)
+    Ok(UpdateResult::default())
 }
 
 /// 切换单个模组的启用/禁用状态（独立开关，不影响同组其他模组）
+///
+/// 检查磁盘实际状态，支持幂等操作：
+/// - 传入路径不存在时，检查父目录下是否有对应的启用/禁用版本
+/// - 传入路径存在时，检查是否需要重命名
+/// - 已经是目标状态时，直接返回（幂等）
 ///
 /// # 参数
 /// - `mod_path`: 模组目录路径
@@ -623,24 +773,69 @@ pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
+    let parent = mod_path.parent().unwrap_or(mod_path);
     let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
 
-    if enable && is_disabled {
-        let new_name = dir_name
-            .trim_start_matches("DISABLED")
-            .trim_start_matches("disabled")
-            .trim_start_matches(|c: char| c == '_' || c == ' ' || c == '-');
-        let new_path = mod_path.parent().unwrap_or(mod_path).join(new_name);
-        if mod_path != &new_path {
-            fs::rename(mod_path, &new_path)
-                .with_context(|| format!("Failed to enable mod: {:?}", mod_path))?;
+    if enable {
+        if mod_path.exists() {
+            // 传入路径存在 → 检查是否需要启用
+            if is_disabled {
+                let new_name = dir_name
+                    .trim_start_matches("DISABLED")
+                    .trim_start_matches("disabled")
+                    .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
+                let new_path = parent.join(new_name);
+                if mod_path != new_path {
+                    fs::rename(mod_path, &new_path)
+                        .with_context(|| format!("Failed to enable mod: {:?}", mod_path))?;
+                }
+            }
+            // 已启用 → 幂等，直接返回
+        } else {
+            // 传入路径不存在 → 检查父目录下是否有启用版本
+            if is_disabled {
+                let enabled_name = dir_name
+                    .trim_start_matches("DISABLED")
+                    .trim_start_matches("disabled")
+                    .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
+                let enabled_path = parent.join(enabled_name);
+                if enabled_path.exists() {
+                    // 已启用 → 幂等，直接返回
+                    return Ok(());
+                }
+            }
+            // 路径不存在且无启用版本 → 返回错误
+            return Err(anyhow::anyhow!("Mod path does not exist: {:?}", mod_path));
         }
-    } else if !enable && !is_disabled {
-        let new_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
-        let new_path = mod_path.parent().unwrap_or(mod_path).join(new_name);
-        if mod_path != &new_path {
-            fs::rename(mod_path, &new_path)
-                .with_context(|| format!("Failed to disable mod: {:?}", mod_path))?;
+    } else {
+        // disable
+        if mod_path.exists() {
+            // 传入路径存在 → 检查是否需要禁用
+            if !is_disabled {
+                let new_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
+                let new_path = parent.join(new_name);
+                if mod_path != new_path {
+                    if new_path.exists() {
+                        log::warn!("Target path already exists, skipping disable: {:?}", new_path);
+                    } else {
+                        fs::rename(mod_path, &new_path)
+                            .with_context(|| format!("Failed to disable mod: {:?}", mod_path))?;
+                    }
+                }
+            }
+            // 已禁用 → 幂等，直接返回
+        } else {
+            // 传入路径不存在 → 检查父目录下是否有禁用版本
+            if !is_disabled {
+                let disabled_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
+                let disabled_path = parent.join(disabled_name);
+                if disabled_path.exists() {
+                    // 已禁用 → 幂等，直接返回
+                    return Ok(());
+                }
+            }
+            // 路径不存在且无禁用版本 → 返回错误
+            return Err(anyhow::anyhow!("Mod path does not exist: {:?}", mod_path));
         }
     }
 
@@ -686,7 +881,7 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
                 let new_name = current_name
                     .trim_start_matches("DISABLED")
                     .trim_start_matches("disabled")
-                    .trim_start_matches(|c: char| c == '_' || c == ' ' || c == '-');
+                    .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
                 let new_path = path.parent().unwrap_or(&path).join(new_name);
                 if path != new_path {
                     if new_path.exists() {
@@ -723,6 +918,8 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
 
 /// 禁用互斥模组：给模组目录添加DISABLED_前缀
 ///
+/// - 检查磁盘实际状态，支持幂等操作
+/// - 传入路径不存在时，检查父目录下是否已有禁用版本
 /// - 如果已经以DISABLED开头（大小写不敏感）则不做任何操作（幂等）
 /// - 检查目标路径不存在才重命名
 pub fn disable_mutex_mod(mod_path: &Path) -> Result<()> {
@@ -730,12 +927,27 @@ pub fn disable_mutex_mod(mod_path: &Path) -> Result<()> {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
+    let parent = mod_path.parent().unwrap_or(mod_path);
     let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
 
+    // 传入路径不存在 → 检查磁盘上是否已禁用
+    if !mod_path.exists() {
+        if !is_disabled {
+            let disabled_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
+            let disabled_path = parent.join(disabled_name);
+            if disabled_path.exists() {
+                // 已禁用 → 幂等，直接返回
+                return Ok(());
+            }
+        }
+        return Err(anyhow::anyhow!("Mod path does not exist: {:?}", mod_path));
+    }
+
+    // 传入路径存在 → 检查是否需要禁用
     if !is_disabled {
         let new_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
-        let new_path = mod_path.parent().unwrap_or(mod_path).join(new_name);
-        if mod_path != &new_path {
+        let new_path = parent.join(new_name);
+        if mod_path != new_path {
             if new_path.exists() {
                 log::warn!("Target path already exists, skipping disable: {:?}", new_path);
             } else {
@@ -776,9 +988,9 @@ pub fn is_mutex_mod(mod_path: &Path, managed_path: &Path) -> bool {
 /// - `settings`: 应用设置
 /// - `group_index`: 要取消选中的分组索引
 pub fn deselect_group_mods(
-    game: TargetGame,
+    _game: TargetGame,
     game_mods_path: &Path,
-    settings: &AppSettings,
+    _settings: &AppSettings,
     group_index: u32,
 ) -> Result<UpdateResult> {
     let scan_result = mod_scanner::scan_mods(game_mods_path)?;
@@ -803,10 +1015,12 @@ pub fn deselect_group_mods(
         }
     }
 
-    update_mod_data(game, game_mods_path, settings)
+    Ok(UpdateResult::default())
 }
 
 /// 批量切换模组启用/禁用状态
+///
+/// 只计数实际发生变更的模组数量。
 ///
 /// # 参数
 /// - `mod_paths`: 模组路径列表
@@ -816,6 +1030,44 @@ pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> 
     let mut count = 0u32;
     for path_str in mod_paths {
         let path = PathBuf::from(path_str);
+        
+        // 预检查是否需要操作
+        let dir_name = path.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let parent = path.parent().unwrap_or(&path);
+        let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
+        
+        // 判断是否需要操作
+        let needs_change = if enable {
+            // 启用：路径存在且已禁用，或路径不存在但父目录有禁用版本
+            if path.exists() {
+                is_disabled
+            } else {
+                !is_disabled || {
+                    let enabled_name = dir_name.trim_start_matches("DISABLED")
+                        .trim_start_matches("disabled")
+                        .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
+                    !parent.join(enabled_name).exists()
+                }
+            }
+        } else {
+            // 禁用：路径存在且未禁用，或路径不存在但父目录有启用版本
+            if path.exists() {
+                !is_disabled
+            } else {
+                is_disabled || {
+                    let disabled_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
+                    !parent.join(disabled_name).exists()
+                }
+            }
+        };
+        
+        if !needs_change {
+            continue;
+        }
+        
         if is_mutex {
             if enable {
                 enable_mutex_mod(&path)?;

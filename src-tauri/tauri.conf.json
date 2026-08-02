@@ -42,49 +42,5 @@
         ]
       }
     }
-  },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4ODVCNkZDQzlBQTZEM0QKUldROWJhckovTGFGU0JhTFhHd0xEQUhUVFlzUEg2M2hTdlN6TmQ2bE5WMlZtYkdQYjQwUnozNE0K",
-      "windows": {
-        "installMode": "passive"
-      }
-    }
-  },
-  "bundle": {
-    "active": true,
-    "targets": ["nsis", "msi", "deb", "rpm", "appimage"],
-    "windows": {
-      "nsis": {
-        "displayLanguageSelector": true,
-        "languages": ["English", "SimpChinese"],
-        "template": "installer/nsis/installer.nsi"
-      },
-      "wix": {
-        "language": {
-          "en-US": {},
-          "zh-CN": {
-            "localePath": "installer/wix/zh-CN.wxl"
-          }
-        }
-      }
-    },
-    "linux": {
-      "deb": {},
-      "rpm": {},
-      "appimage": {
-        "files": {
-          "/usr/share/README.md": "../README.md",
-          "/usr/assets": "../src/assets/"
-        }
-      }
-    },
-    "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
-    ]
   }
 }

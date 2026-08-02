@@ -90,11 +90,7 @@ impl UpdateManager {
             let keyword = "macos";
 
             for asset in assets {
-                let name = if source == "gitee" {
-                    asset["name"].as_str().unwrap_or("").to_lowercase()
-                } else {
-                    asset["name"].as_str().unwrap_or("").to_lowercase()
-                };
+                let name = asset["name"].as_str().unwrap_or("").to_lowercase();
 
                 if name.contains(keyword) && (
                     name.ends_with(".msi") ||

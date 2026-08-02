@@ -12,15 +12,6 @@
       <ModsView v-else-if="activeTab === 'mods'" />
       <SettingsView v-else-if="activeTab === 'settings'" />
     </div>
-    <!-- 热键未匹配到游戏时的选择菜单 -->
-    <GamePickerMenu
-      :show="showGamePicker"
-      :screen-x="pickerScreenX"
-      :screen-y="pickerScreenY"
-      :foreground-process-name="pickerForegroundProcessName"
-      @select="onPickerSelectGame"
-      @close="showGamePicker = false"
-    />
   </div>
 </template>
 
@@ -37,12 +28,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
 import TitleBar from '@/components/common/TitleBar.vue'
 import PillTabs from '@/components/nav/PillTabs.vue'
-import GamePickerMenu from '@/components/common/GamePickerMenu.vue'
 import { initPlatform } from '@/stores/platform'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { logger } from '@/utils/logger'
-import { switchTargetGame } from '@/utils/tauri'
+import { switchTargetGame, checkModCacheValid, isFileWatcherRunning, currentWatchedPath } from '@/utils/tauri'
 import type { TargetGame } from '@/types'
 
 /**
@@ -80,35 +70,53 @@ const tabs = [
   { key: 'settings', label: t('Settings') }
 ]
 
-/** 当前激活的标签页，默认为模组页面 */
+/**
+ * 当前激活的标签页，默认为模组页面
+ * 值可以是 'keybinds' | 'mods' | 'settings'，对应三个Tab视图
+ */
 const activeTab = ref("mods")
-/** 游戏切换事件取消监听函数 */
+/**
+ * 游戏切换事件（target-game-switched）的取消监听函数
+ * 用于在组件卸载时移除 Tauri 事件监听，防止内存泄漏
+ */
 let unlistenTargetGame: (() => void) | null = null
-/** 窗口隐藏事件取消监听函数 */
+/**
+ * 窗口隐藏事件（window-hidden）的取消监听函数
+ * 用于在组件卸载时移除 Tauri 事件监听
+ */
 let unlistenWindowHidden: (() => void) | null = null
-/** 窗口显示事件取消监听函数 */
+/**
+ * 窗口显示事件（window-shown）的取消监听函数
+ * 用于在组件卸载时移除 Tauri 事件监听
+ */
 let unlistenWindowShown: (() => void) | null = null
-/** 窗口显示并检测到游戏事件取消监听函数 */
+/**
+ * 窗口显示并检测到前台游戏事件（window-show-with-game）的取消监听函数
+ * 用于在组件卸载时移除 Tauri 事件监听
+ */
 let unlistenWindowShowWithGame: (() => void) | null = null
-/** 需用户选择游戏事件取消监听函数 */
-let unlistenNeedPickGame: (() => void) | null = null
-/** 标记窗口显示时是否已通过游戏检测事件处理了模组加载，避免重复加载 */
+/**
+ * 标记窗口显示时是否已通过游戏检测事件处理了模组加载，避免重复加载
+ *
+ * 流程：window-show-with-game 事件触发 → applyDetectedGameSwitch(game, true) 设置此标记为 true
+ *       → 后续 window-shown 事件检测到此标记为 true 则跳过重复加载
+ * 重置时机：window-shown 事件处理完后重置为 false
+ */
 let gameSwitchPending = false
-
-/* ===== GamePicker 相关状态 ===== */
-/** 热键未匹配游戏时显示的选择菜单是否打开 */
-const showGamePicker = ref(false)
-/** 光标屏幕 X（来自后端事件 payload） */
-const pickerScreenX = ref(0)
-/** 光标屏幕 Y */
-const pickerScreenY = ref(0)
-/** 检测到的前台进程名（传给菜单展示） */
-const pickerForegroundProcessName = ref<string>('')
 
 /**
  * 通用：切换目标游戏并刷新模组（window-show-with-game / 菜单选择 / 托盘都走这里）
- * @param game  目标游戏
- * @param markPending  是否标记 gameSwitchPending（true 时 window-shown 会跳过重复加载）
+ *
+ * 完整流程：
+ * 1. 可选标记 gameSwitchPending，防止后续 window-shown 事件重复加载
+ * 2. 同步更新前端 settingsStore 的 currentGame/currentModsPath（立即生效，不等后端返回）
+ * 3. 异步持久化到后端（switchTargetGame Tauri 命令），不阻塞后续流程
+ * 4. 停止旧文件监听器，清空旧模组数据
+ * 5. 如果当前在模组页：直接重启监听并加载新游戏模组（nextTick 确保 DOM 更新后执行）
+ * 6. 如果不在模组页：仅切换 activeTab 到模组页，ModsView.onMounted 会自动按缓存判断加载
+ *
+ * @param game 目标游戏（如 'GI' / 'HSR' / 'ZZZ' / 'WW'）
+ * @param markPending 是否标记 gameSwitchPending（true 时 window-shown 会跳过重复加载）
  */
 async function applyDetectedGameSwitch(game: TargetGame, markPending = true): Promise<void> {
   if (markPending) gameSwitchPending = true
@@ -128,16 +136,9 @@ async function applyDetectedGameSwitch(game: TargetGame, markPending = true): Pr
     await modsStore.startWatching()
     await modsStore.loadMods()
   } else {
-    // 切换到模组页（ModsView 挂载时会自动 startWatching + loadMods）
+    // 此处仅切换 activeTab 到 mods，不再重复 loadMods（ModsView onMounted 自动按缓存判断）
     activeTab.value = 'mods'
   }
-}
-
-/** GamePicker 菜单选择后的逻辑：关闭菜单 + 切换游戏 */
-async function onPickerSelectGame(game: TargetGame) {
-  showGamePicker.value = false
-  logger.info('App', `Game picker selected: ${game}`)
-  await applyDetectedGameSwitch(game, true)
 }
 
 /** 背景透明度计算属性，带默认值和类型校验 */
@@ -256,29 +257,67 @@ onMounted(async () => {
     logger.warn('App', 'Failed to register target-game-switched listener', e)
   }
 
-  // 监听窗口隐藏事件：清除前端模组数据和文件监听
+  // 监听窗口隐藏事件：保留缓存和监控，不清数据不停止监控
+  // Phase 2 策略：窗口隐藏时保留所有缓存数据和文件监控，避免重新加载开销
   // 触发时机：点击关闭按钮、按热键隐藏窗口
   try {
     unlistenWindowHidden = await listen('window-hidden', async () => {
-      logger.debug('App', 'Window hidden, clearing mods data')
-      await modsStore.stopWatching()
-      modsStore.clearData()
+      logger.info('App', 'window hidden -> keeping cache and watcher alive')
     })
   } catch (e) {
     logger.warn('App', 'Failed to register window-hidden listener', e)
   }
 
-  // 监听窗口显示事件：如果在模组页则重新加载模组
+  // 监听窗口显示事件：检查缓存有效性 + 监控状态，决定是否重扫
+  // 缓存校验流程：
+  //   1. 如果 gameSwitchPending 为 true，说明已通过 window-show-with-game 事件处理，直接跳过
+  //   2. 调用后端 checkModCacheValid 命令检查缓存是否仍有效（未被文件监控标记失效）
+  //   3. 检查文件监控是否正在运行，以及监控路径是否正确
+  //   4. 缓存有效 + 监控正常 → 保留现有数据，无需重新加载
+  //   5. 缓存失效或监控异常 → 重启监控 + 完整 loadMods
   // 触发时机：按热键显示窗口（未检测到游戏时）
   try {
     unlistenWindowShown = await listen('window-shown', async () => {
-      logger.debug('App', 'Window shown')
+      reportBootStage('window-shown')
+      logger.info('App', 'window shown -> checking cache validity')
+
       if (gameSwitchPending) {
-        // window-show-with-game 事件已处理了游戏切换和模组加载，此处跳过
         gameSwitchPending = false
         return
       }
-      if (activeTab.value === 'mods' && settingsStore.currentModsPath) {
+
+      const s = settingsStore
+      if (!s.currentModsPath || !s.currentGame) {
+        logger.warn('App', 'window-shown but no game/path configured, skipping load')
+        return
+      }
+
+      try {
+        const cacheValid = await checkModCacheValid(s.currentGame, s.currentModsPath)
+        const watcherRunning = await isFileWatcherRunning()
+        const watchedPath = await currentWatchedPath()
+
+        logger.info('App', `cacheValid=${cacheValid}, watcherRunning=${watcherRunning}, watched=${watchedPath ?? 'null'}`)
+
+        if (cacheValid) {
+          if (!watcherRunning) {
+            await modsStore.startWatching()
+          } else {
+            const expectedManaged = `${s.currentModsPath.replace(/[\\/]$/, '')}\\${'_MANAGED_'}`.replace(/\//g, '\\')
+            const actualNormalized = watchedPath?.replace(/\//g, '\\') ?? ''
+            if (!actualNormalized.endsWith(expectedManaged.slice(-12))) {
+              await modsStore.startWatching()
+            }
+          }
+          return
+        }
+
+        if (!watcherRunning) {
+          await modsStore.startWatching()
+        }
+        await modsStore.loadMods()
+      } catch (e) {
+        logger.warn('App', 'window-shown cache check failed, fallback to full load', e)
         await modsStore.startWatching()
         await modsStore.loadMods()
       }
@@ -298,33 +337,11 @@ onMounted(async () => {
   } catch (e) {
     logger.warn('App', 'Failed to register window-show-with-game listener', e)
   }
-
-  // 监听「未匹配到游戏，需用户选择」事件：在光标处弹出 GamePicker 菜单
-  // 触发时机：按热键显示窗口，但前台进程不在受支持游戏进程名列表内
-  try {
-    type NeedPickGamePayload = {
-      cursorX: number
-      cursorY: number
-      foregroundProcessName?: string | null
-    }
-    unlistenNeedPickGame = await listen<NeedPickGamePayload>('need-pick-game', (event) => {
-      const p = event.payload ?? { cursorX: 0, cursorY: 0, foregroundProcessName: null }
-      logger.debug(
-        'App',
-        `need-pick-game: fg=${p.foregroundProcessName ?? 'null'} pos=(${p.cursorX},${p.cursorY})`
-      )
-      pickerScreenX.value = Number(p.cursorX) || 0
-      pickerScreenY.value = Number(p.cursorY) || 0
-      pickerForegroundProcessName.value = String(p.foregroundProcessName ?? '')
-      showGamePicker.value = true
-    })
-  } catch (e) {
-    logger.warn('App', 'Failed to register need-pick-game listener', e)
-  }
 })
 
 onBeforeUnmount(() => {
-  // 清理事件监听器防止内存泄漏
+  // 清理所有 Tauri 事件监听器，防止组件卸载后回调仍被执行导致内存泄漏或状态异常
+  // 依次清理：target-game-switched / window-hidden / window-shown / window-show-with-game
   if (unlistenTargetGame) {
     unlistenTargetGame()
     unlistenTargetGame = null
@@ -340,10 +357,6 @@ onBeforeUnmount(() => {
   if (unlistenWindowShowWithGame) {
     unlistenWindowShowWithGame()
     unlistenWindowShowWithGame = null
-  }
-  if (unlistenNeedPickGame) {
-    unlistenNeedPickGame()
-    unlistenNeedPickGame = null
   }
 })
 </script>

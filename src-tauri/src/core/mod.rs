@@ -20,3 +20,5 @@ pub mod namespace_handler;
 pub mod archive_handler;
 pub mod cloud_data;
 pub mod mod_cache;
+pub mod d3dxini_cache;
+pub mod incremental_updater;

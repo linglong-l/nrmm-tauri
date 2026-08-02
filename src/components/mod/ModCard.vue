@@ -273,6 +273,10 @@ async function handleToggleEnabled() {
   closeContextMenu()
   try {
     await toggleModDisabled(mod.value.modPath, mod.value.modDisabled, mod.value.isMutex)
+    // 标记需要更新模组数据（仅NormalGroup操作）
+    if (!mod.value.isMutex) {
+      modsStore.markNeedUpdate(mod.value.groupIndex)
+    }
     await modsStore.refresh()
     ElMessage.success(mod.value.modDisabled ? t('Enabled') : t('Disabled'))
   } catch (e: any) {

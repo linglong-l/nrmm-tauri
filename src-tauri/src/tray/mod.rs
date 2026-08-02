@@ -102,7 +102,7 @@ fn handle_game_switch(app: &AppHandle, game: TargetGame) {
 /// * `app` - Tauri 应用句柄
 fn handle_quit(app: &AppHandle) {
     if let Some(hotkey_mgr) = app.try_state::<Arc<HotkeyManager>>() {
-        let _ = hotkey_mgr.unregister_all();
+        hotkey_mgr.unregister_all();
     }
     app.exit(0);
 }
@@ -187,10 +187,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                     let _ = crate::window::reset_window_position(app.clone(), "main".to_string());
                 }
                 "toggleVisibility" => {
-                    crate::window::toggle_main_window(&app);
+                    crate::window::toggle_main_window(app);
                 }
                 "quit" => {
-                    handle_quit(&app);
+                    handle_quit(app);
                 }
                 _ => {}
             }
@@ -203,7 +203,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             } = event
             {
                 let app = tray.app_handle();
-                crate::window::toggle_main_window(&app);
+                crate::window::toggle_main_window(app);
             }
         })
         .build(app)?;

@@ -48,7 +48,7 @@ pub fn is_non_executable_section(name: &str) -> bool {
 }
 
 fn trim_trailing_whitespace(s: &str) -> &str {
-    s.trim_end_matches(|c| c == '\r' || c == '\n' || c == ' ' || c == '\t')
+    s.trim_end_matches(|c: char| ['\r', '\n', ' ', '\t'].contains(&c))
 }
 
 fn parse_key_value(line: &str) -> Option<(String, String, Option<String>)> {
@@ -62,11 +62,7 @@ fn parse_key_value(line: &str) -> Option<(String, String, Option<String>)> {
         if let Some(close_quote) = trimmed_rest[1..].find('"') {
             let value_part = &rest[..offset + close_quote + 2];
             let after_quote = &rest[offset + close_quote + 2..];
-            let comment = if let Some(semi_pos) = after_quote.find(';') {
-                Some(after_quote[semi_pos + 1..].trim().to_string())
-            } else {
-                None
-            };
+            let comment = after_quote.find(';').map(|semi_pos| after_quote[semi_pos + 1..].trim().to_string());
             (value_part.trim().to_string(), comment)
         } else {
             (rest.trim().to_string(), None)
@@ -89,48 +85,49 @@ fn parse_key_value(line: &str) -> Option<(String, String, Option<String>)> {
     }
 }
 
-impl IniLine {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for IniLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IniLine::Empty => String::new(),
-            IniLine::Comment(text) => text.clone(),
+            IniLine::Empty => Ok(()),
+            IniLine::Comment(text) => write!(f, "{}", text),
             IniLine::DisabledKeyValue { key, value, comment } => {
-                let mut s = format!(";-;{} = {}", key, value);
+                write!(f, ";-;{} = {}", key, value)?;
                 if let Some(c) = comment {
-                    s.push_str(&format!(" ; {}", c));
+                    write!(f, " ; {}", c)?;
                 }
-                s
+                Ok(())
             }
             IniLine::KeyValue { key, value, disabled, comment } => {
-                let mut s = String::new();
                 if *disabled {
-                    s.push_str(";-;");
+                    write!(f, ";-;")?;
                 }
-                s.push_str(&format!("{} = {}", key, value));
+                write!(f, "{} = {}", key, value)?;
                 if let Some(c) = comment {
-                    s.push_str(&format!(" ; {}", c));
+                    write!(f, " ; {}", c)?;
                 }
-                s
+                Ok(())
             }
             IniLine::IfStart { condition, indent } => {
-                format!("{}if {}", " ".repeat(*indent), condition)
+                write!(f, "{}if {}", " ".repeat(*indent), condition)
             }
             IniLine::Elif { condition, indent } => {
-                format!("{}elif {}", " ".repeat(*indent), condition)
+                write!(f, "{}elif {}", " ".repeat(*indent), condition)
             }
             IniLine::Else { indent } => {
-                format!("{}else", " ".repeat(*indent))
+                write!(f, "{}else", " ".repeat(*indent))
             }
             IniLine::EndIf { indent } => {
-                format!("{}endif", " ".repeat(*indent))
+                write!(f, "{}endif", " ".repeat(*indent))
             }
-            IniLine::Command(text) => text.clone(),
-            IniLine::SectionHeader(name) => format!("[{}]", name),
-            IniLine::Include(path) => format!("include = {}", path),
-            IniLine::PreambleLine(text) => text.clone(),
+            IniLine::Command(text) => write!(f, "{}", text),
+            IniLine::SectionHeader(name) => write!(f, "[{}]", name),
+            IniLine::Include(path) => write!(f, "include = {}", path),
+            IniLine::PreambleLine(text) => write!(f, "{}", text),
         }
     }
 }
+
+
 
 impl IniFile {
     pub fn parse(path: &Path) -> Result<Self> {
@@ -151,7 +148,7 @@ impl IniFile {
             }
 
             if line.starts_with(";-;") {
-                let after_prefix = line[3..].trim_start();
+                let after_prefix = line.strip_prefix(";-;").unwrap_or(line).trim_start();
                 match parse_key_value(after_prefix) {
                     Some((key, value, comment)) => {
                         let kv = IniLine::DisabledKeyValue { key, value, comment };
@@ -196,7 +193,7 @@ impl IniFile {
             let indent = line.len() - trimmed.len();
 
             if trimmed.starts_with("if ") {
-                let condition = trimmed[3..].trim().to_string();
+                let condition = trimmed.strip_prefix("if ").unwrap_or(trimmed).trim().to_string();
                 let l = IniLine::IfStart { condition, indent };
                 match current_section {
                     Some(idx) => sections[idx].lines.push(l),
@@ -206,7 +203,7 @@ impl IniFile {
             }
 
             if trimmed.starts_with("elif ") {
-                let condition = trimmed[5..].trim().to_string();
+                let condition = trimmed.strip_prefix("elif ").unwrap_or(trimmed).trim().to_string();
                 let l = IniLine::Elif { condition, indent };
                 match current_section {
                     Some(idx) => sections[idx].lines.push(l),
@@ -215,11 +212,7 @@ impl IniFile {
                 continue;
             }
 
-            let after_else = if trimmed.starts_with("else") {
-                Some(&trimmed[4..])
-            } else {
-                None
-            };
+            let after_else = trimmed.strip_prefix("else");
             if let Some(rest) = after_else {
                 if rest.trim_start().is_empty() || rest.trim_start().starts_with(';') {
                     let l = IniLine::Else { indent };
@@ -301,7 +294,7 @@ impl IniFile {
         let mut writer = BufWriter::new(file);
 
         for line in &self.preamble {
-            writeln!(writer, "{}", line.to_string())?;
+            writeln!(writer, "{}", line)?;
         }
 
         let mut first_section = true;
@@ -313,7 +306,7 @@ impl IniFile {
 
             writeln!(writer, "[{}]", section.name)?;
             for line in &section.lines {
-                writeln!(writer, "{}", line.to_string())?;
+                writeln!(writer, "{}", line)?;
             }
         }
 
@@ -408,9 +401,8 @@ impl IniFile {
                         "ps-t", "vs-t", "ps-", "vs-", "cs-", "o", "u",
                     ];
                     for rp in &resource_prefixes {
-                        if key_str.starts_with(rp) {
-                            let suffix = &key_str[rp.len()..];
-                            if suffix.is_empty() || suffix.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+                        if let Some(suffix) = key_str.strip_prefix(rp) {
+                            if suffix.is_empty() || suffix.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
                                 found_resources.insert(key_str.to_string());
                             }
                         }

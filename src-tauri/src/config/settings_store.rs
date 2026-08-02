@@ -7,8 +7,9 @@
 //! - 支持导入/导出 JSON 格式的设置文件
 //!
 //! # 原子写入流程
-//! 1. 将 JSON 写入 .tmp 临时文件
-//! 2. 使用 fs::rename 原子替换目标文件
+//! - 将 JSON 写入 .tmp 临时文件
+//! - 使用 fs::rename 原子替换目标文件
+//!
 //! 这样即使中途断电/崩溃，也只会留下临时文件，不会损坏原配置
 
 use crate::models::settings::AppSettings;
@@ -77,6 +78,7 @@ fn load_from_file(path: &Path) -> Result<AppSettings> {
 /// 使用临时文件+rename 保证原子性：
 /// - 先写入 .json.tmp
 /// - 再 rename 覆盖目标文件
+///
 /// rename 在同一文件系统上是原子操作
 fn save_to_file(path: &Path, settings: &AppSettings) -> Result<()> {
     let json = serde_json::to_string_pretty(settings)?;
@@ -233,17 +235,19 @@ mod tests {
         let dir = tempdir().unwrap();
         let test_path = dir.path().join("test_settings.json");
         
-        let mut settings = AppSettings::default();
-        settings.language = "zh-CN".to_string();
-        settings.interface_scale = 1.5;
-        settings.dark_mode = false;
+        let settings = AppSettings {
+            language: "zh-CN".to_string(),
+            interface_scale: 1.5,
+            dark_mode: false,
+            ..Default::default()
+        };
         
         save_to_file(&test_path, &settings).unwrap();
         let loaded = load_from_file(&test_path).unwrap();
         
         assert_eq!(loaded.language, "zh-CN");
         assert_eq!(loaded.interface_scale, 1.5);
-        assert_eq!(loaded.dark_mode, false);
+        assert!(!loaded.dark_mode);
     }
 
     #[test]
@@ -252,8 +256,8 @@ mod tests {
         assert_eq!(default.language, "en");
         assert_eq!(default.interface_scale, 1.0);
         assert_eq!(default.bg_transparency, 0.7);
-        assert_eq!(default.dark_mode, true);
-        assert_eq!(default.dynamic_background, true);
+        assert!(default.dark_mode);
+        assert!(default.dynamic_background);
         assert!(default.target_process_per_game.is_empty());
     }
 
@@ -278,10 +282,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let export_path = dir.path().join("export.json");
         
-        let mut settings = AppSettings::default();
-        settings.language = "de".to_string();
-        settings.bg_transparency = 0.5;
-        settings.dynamic_background = false;
+        let settings = AppSettings {
+            language: "de".to_string(),
+            bg_transparency: 0.5,
+            dynamic_background: false,
+            ..Default::default()
+        };
         
         save_to_file(&export_path, &settings).unwrap();
         
@@ -289,7 +295,7 @@ mod tests {
         
         assert_eq!(imported.language, "de");
         assert_eq!(imported.bg_transparency, 0.5);
-        assert_eq!(imported.dynamic_background, false);
+        assert!(!imported.dynamic_background);
     }
 
     #[test]
@@ -349,7 +355,7 @@ mod tests {
             Some(&"CustomProcess.exe".to_string())
         );
         // 其他未设置的游戏仍应获得默认值
-        assert!(settings.target_process_per_game.get(&TargetGame::ZZZ).is_some());
+        assert!(settings.target_process_per_game.contains_key(&TargetGame::ZZZ));
         // 其他设置字段不受影响
         assert_eq!(settings.language, "zh-CN");
     }

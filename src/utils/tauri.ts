@@ -446,6 +446,21 @@ export async function updateModData(game: string, modsPath: string): Promise<Upd
 }
 
 /**
+ * 分组增量更新模组数据
+ * 后端命令：update_group_mod_data
+ *
+ * 仅更新指定分组的ModFolder.ini，不扫描其他分组
+ * 相比全量updateModData更轻量，适合分组级增量更新
+ * @param game 目标游戏类型
+ * @param modsPath 模组文件夹路径
+ * @param groupIndex 要更新的分组索引
+ * @returns 更新结果统计
+ */
+export async function updateGroupModData(game: string, modsPath: string, groupIndex: number): Promise<UpdateResult> {
+  return invoke('update_group_mod_data', { game, modsPath, groupIndex })
+}
+
+/**
  * 检查压缩包格式是否支持
  * 后端命令：is_supported_archive_cmd
  *
@@ -468,6 +483,27 @@ export async function isSupportedArchive(path: string): Promise<boolean> {
  */
 export async function importModAuto(archivePath: string, modsPath: string, password?: string): Promise<any> {
   return invoke('import_mod_auto_cmd', { archivePath, modsPath, password })
+}
+
+/**
+ * 批量导入请求参数
+ */
+export interface ImportItemRequest {
+  items: string[]
+  targetGroupDir: string
+  password?: string
+}
+
+/**
+ * 批量导入模组（支持压缩包 zip/rar/7z 或已解压的目录混合导入）
+ * 后端命令：import_item_cmd
+ *
+ * 导入时会自动暂停文件监控，完成后恢复
+ * @param req 导入请求：items=文件/目录路径列表，targetGroupDir=目标分组目录，password=可选压缩包密码
+ * @returns 每项的导入结果数组
+ */
+export async function importItems(req: ImportItemRequest): Promise<any[]> {
+  return invoke('import_item_cmd', { req })
 }
 
 /**
@@ -572,4 +608,33 @@ export async function createSubfolder(parentPath: string, folderName: string): P
  */
 export async function getForegroundProcessName(): Promise<string> {
   return invoke('get_foreground_process_name')
+}
+
+/**
+ * 检查模组缓存是否有效（未被文件监控标记失效且条目存在）
+ * 后端命令：check_mod_cache_valid
+ * @param game 目标游戏类型
+ * @param modsPath 模组文件夹路径
+ * @returns 缓存是否有效
+ */
+export async function checkModCacheValid(game: string, modsPath: string): Promise<boolean> {
+  return invoke('check_mod_cache_valid', { game, modsPath })
+}
+
+/**
+ * 检查文件监控是否正在运行
+ * 后端命令：is_file_watcher_running
+ * @returns 文件监控是否运行中
+ */
+export async function isFileWatcherRunning(): Promise<boolean> {
+  return invoke('is_file_watcher_running')
+}
+
+/**
+ * 获取当前文件监控的路径
+ * 后端命令：current_watched_path
+ * @returns 当前监控的路径，未运行则返回null
+ */
+export async function currentWatchedPath(): Promise<string | null> {
+  return invoke('current_watched_path')
 }

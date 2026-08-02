@@ -62,8 +62,8 @@ pub fn expand_variable(var_name: &str, namespace: &str) -> String {
     let trimmed = var_name.trim();
     if trimmed.starts_with("$\\") {
         trimmed.to_string()
-    } else if trimmed.starts_with('$') {
-        format!("$\\{}\\{}", namespace, &trimmed[1..])
+    } else if let Some(stripped) = trimmed.strip_prefix('$') {
+        format!("$\\{}\\{}", namespace, stripped)
     } else {
         trimmed.to_string()
     }
@@ -75,37 +75,35 @@ pub fn expand_variables_in_value(value: &str, namespace: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        if c == '$' {
-            if i + 1 < chars.len() {
-                let next = chars[i + 1];
-                if next == '\\' {
-                    result.push(c);
-                    result.push(next);
-                    i += 2;
-                    while i < chars.len() && chars[i] != '\\' {
-                        result.push(chars[i]);
-                        i += 1;
-                    }
-                    if i < chars.len() {
-                        result.push(chars[i]);
-                        i += 1;
-                        while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                            result.push(chars[i]);
-                            i += 1;
-                        }
-                    }
-                    continue;
-                } else if next.is_alphanumeric() || next == '_' {
-                    result.push_str("$\\");
-                    result.push_str(namespace);
-                    result.push('\\');
+        if c == '$' && i + 1 < chars.len() {
+            let next = chars[i + 1];
+            if next == '\\' {
+                result.push(c);
+                result.push(next);
+                i += 2;
+                while i < chars.len() && chars[i] != '\\' {
+                    result.push(chars[i]);
+                    i += 1;
+                }
+                if i < chars.len() {
+                    result.push(chars[i]);
                     i += 1;
                     while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
                         result.push(chars[i]);
                         i += 1;
                     }
-                    continue;
                 }
+                continue;
+            } else if next.is_alphanumeric() || next == '_' {
+                result.push_str("$\\");
+                result.push_str(namespace);
+                result.push('\\');
+                i += 1;
+                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                    result.push(chars[i]);
+                    i += 1;
+                }
+                continue;
             }
         }
         result.push(c);
@@ -164,7 +162,7 @@ pub fn collect_existing_namespaces(mod_dir: &Path) -> Result<HashSet<String>> {
     Ok(namespaces)
 }
 
-fn collect_namespaces_recursive(base: &Path, dir: &Path, namespaces: &mut HashSet<String>) -> Result<()> {
+fn collect_namespaces_recursive(_base: &Path, dir: &Path, namespaces: &mut HashSet<String>) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -173,7 +171,7 @@ fn collect_namespaces_recursive(base: &Path, dir: &Path, namespaces: &mut HashSe
             if name.starts_with('.') || name == "_MANAGED_" {
                 continue;
             }
-            collect_namespaces_recursive(base, &path, namespaces)?;
+            collect_namespaces_recursive(_base, &path, namespaces)?;
         } else if let Some(ext) = path.extension() {
             if ext.eq_ignore_ascii_case("ini") {
                 if let Ok(ini) = IniFile::parse(&path) {

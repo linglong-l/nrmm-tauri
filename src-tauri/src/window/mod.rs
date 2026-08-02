@@ -323,7 +323,7 @@ pub fn hard_quit_app(app: AppHandle) {
     use crate::hotkey::HotkeyManager;
     use std::sync::Arc;
     if let Some(hotkey_mgr) = app.try_state::<Arc<HotkeyManager>>() {
-        let _ = hotkey_mgr.unregister_all();
+        hotkey_mgr.unregister_all();
     }
     app.exit(0);
 }

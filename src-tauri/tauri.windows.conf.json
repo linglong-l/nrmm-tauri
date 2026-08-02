@@ -37,19 +37,16 @@
     "active": true,
     "targets": ["nsis", "msi"],
     "windows": {
-      "webviewInstallMode": { "type": "offlineInstaller" },
+      "webviewInstallMode": { "type": "downloadBootstrapper" },
       "nsis": {
         "displayLanguageSelector": true,
         "installMode": "currentUser",
-        "languages": ["English", "SimpChinese"],
-        "template": "installer/nsis/installer.nsi"
+        "languages": ["English", "SimpChinese"]
       },
       "wix": {
         "language": {
           "en-US": {},
-          "zh-CN": {
-            "localePath": "installer/wix/zh-CN.wxl"
-          }
+          "zh-CN": {}
         }
       }
     },

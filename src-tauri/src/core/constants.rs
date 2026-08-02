@@ -77,6 +77,18 @@ pub const SEVEN_Z_EXECUTABLE: &str = "7zz";
 #[cfg(target_os = "macos")]
 pub const SEVEN_Z_EXECUTABLE: &str = "7zz";
 
+/// Windows 平台内置 7-Zip 相对路径（相对于 exe 或 resources/）
+#[cfg(target_os = "windows")]
+pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-Windows/x64/7za.exe";
+
+/// Linux 平台内置 7-Zip 相对路径（相对于 exe 或 resources/）
+#[cfg(target_os = "linux")]
+pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-linux-x64/7zz";
+
+/// macOS 平台内置 7-Zip 相对路径（相对于 exe 或 resources/）
+#[cfg(target_os = "macos")]
+pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-mac/7zz";
+
 /// 临时解压目录名（在系统临时目录下）
 pub const TEMP_EXTRACT_DIR: &str = "nrmm_extract";
 
@@ -132,7 +144,7 @@ pub const CRASH_LINE_PATTERNS: &[&str] = &[
 pub const MAX_PATH: usize = 260;
 
 /// 文件监控防抖时间（毫秒）：文件变化后等待此时间再触发刷新，避免频繁事件
-pub const FILE_WATCHER_DEBOUNCE_MS: u64 = 500;
+pub const FILE_WATCHER_DEBOUNCE_MS: u64 = 300;
 
 /// 前台窗口轮询间隔（毫秒）：检测游戏是否在前台
 pub const FOREGROUND_POLL_INTERVAL_MS: u64 = 1000;

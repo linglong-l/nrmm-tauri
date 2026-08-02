@@ -6,15 +6,19 @@
 //!
 //! # 分组类型
 //! - **NormalGroup (group_xx)**: 普通分组，一级子目录为模组，不递归。每组同一时间只能启用一个模组（互斥槽位）
-//! - **MutexGroup (非 group_xx 目录)**: 互斥组，支持任意深度嵌套（DFS 遍历），同级目录下的模组互斥
+//! - **MutexGroup (非 group_xx 目录)**: 互斥组，支持任意深度嵌套，同级目录下的模组互斥
 //!
 //! # 关键设计
+//! - **栈式非递归 DFS**: MutexGroup 使用 `Vec<DfsStackItem>` 模拟栈进行非递归深度优先遍历，避免递归调用栈溢出
+//! - **rayon 并行遍历**: NormalGroup 和 MutexGroup 根目录使用 `par_iter()` 并行扫描，充分利用多核 CPU
+//! - **HashSet 规范化路径去重**: 使用 `Path::canonicalize()` 获取绝对路径后存入 `HashSet`，防止符号链接/硬链接导致无限循环或重复扫描
+//! - **`entry.file_type()` 替代 `metadata()`**: 遍历目录时使用 `DirEntry::file_type()` 而非 `fs::metadata()`，减少系统调用次数，提高性能
 //! - 轻量扫描不递归 NormalGroup，避免遍历 vendor 等大目录
-//! - MutexGroup 使用栈式 DFS 非递归遍历，避免栈溢出
 //! - 排序规则：启用优先 > 收藏优先 > 最新收藏 > 自然排序
 //! - 每个 NormalGroup 自动添加 "None" 空槽位（索引 0），表示不选任何模组
 
 use anyhow::Result;
+use rayon::prelude::*;
 use std::cmp::Ordering as CmpOrdering;
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
@@ -30,60 +34,98 @@ use crate::core::namespace_handler;
 use crate::models::enums::{GroupType, TargetGame, ModsPathStatus};
 use crate::models::mod_data::{ModData, ModGroupData, ModIniData, ErroredLines};
 
-/// 图标文件扩展名列表
+/// 支持的图标文件扩展名列表
+///
+/// 用于 `find_icon_path()` 和 `check_directory_for_mod_deep()` 中过滤图片文件。
+/// 涵盖常见 Web 和桌面图片格式：PNG、JPEG、GIF、BMP、WebP、ICO。
+/// 匹配时不区分大小写（统一转小写后比较）。
 static ICON_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico"];
 
-/// group_xx 目录正则：严格匹配 group_1, group_12 等
-/// 规则：^group_ 开头，后面跟 [1-9] 开头的数字（禁止前导零，禁止 group_0）
-/// 设计原因：3Dmigoto 的槽位从 1 开始，group_0 无效，前导零会导致排序和解析混乱
+/// group_xx 目录正则：严格匹配 `group_1`, `group_12` 等
+///
+/// # 匹配规则
+/// - `^group_` 开头，后面跟 `[1-9][0-9]*`（首位非零的数字）
+/// - 禁止前导零（如 `group_01`）
+/// - 禁止 `group_0`（零值）
+///
+/// # 设计原因
+/// 3Dmigoto 的槽位索引从 1 开始，`group_0` 无效。
+/// 前导零（如 `group_01` vs `group_1`）会导致字符串排序与数值排序不一致，引发解析混乱。
+/// 此正则确保了 `group_index` 的解析既严格又安全。
 static GROUP_N_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^group_([1-9][0-9]*)$").unwrap());
 
 /// DISABLED 前缀正则（不区分大小写）
-/// 匹配 DISABLED, disabled, Disabled 等，后面可以跟 _ - 空格或直接连接
-/// 用于检测和移除目录名的禁用前缀
+///
+/// # 匹配规则
+/// - `^(?i:disabled)` 不区分大小写匹配 `disabled` 前缀
+/// - `[_\- ]*` 后面可跟下划线、连字符、空格或直接连接
+///
+/// 匹配示例：`DISABLED_Mod`、`disabled_mod`、`Disabled-Mod`、`DISABLED Mod`、`DISABLEDMod`
+///
+/// # 用途
+/// 用于 `is_disabled_dir()` 检测目录是否被禁用，以及 `DISABLED_PREFIX_RE.replace()` 移除前缀获取显示名称。
+/// 设计为不区分大小写以兼容不同用户命名习惯，同时允许灵活的分隔符以保持可读性。
 static DISABLED_PREFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(?i:disabled)[_\- ]*").unwrap());
 
 /// 扫描结果结构体
 ///
-/// 包含扫描得到的所有分组、模组列表和统计信息
+/// 包含扫描得到的所有分组、模组列表和统计信息，是 `scan_mods_light()` 和 `scan_mods_deep()` 的返回值。
+///
+/// # 字段说明
+/// - `groups`: 分组列表，包含 NormalGroup 和 MutexGroup 根节点，按 `group_index` 排序
+/// - `mods`: 所有模组的扁平列表（不含 None 空槽位），便于前端直接渲染
+/// - `total_mods_count`: 总模组数（不含 None 空槽位），用于统计展示
+/// - `enabled_mods_count`: 启用的模组数，即 `!disabled && !mod_disabled` 的模组数量
+/// - `disabled_mods_count`: 禁用的模组数，即 `disabled || mod_disabled` 的模组数量
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
-    /// 分组列表（NormalGroup + MutexGroup 根节点）
+    /// 分组列表（NormalGroup + MutexGroup 根节点），按 group_index 排序
     pub groups: Vec<ModGroupData>,
-    /// 所有模组的扁平列表
+    /// 所有模组的扁平列表（不含 None 空槽位）
     pub mods: Vec<ModData>,
     /// 总模组数（不含 None 空槽位）
     pub total_mods_count: usize,
-    /// 启用的模组数
+    /// 启用的模组数（!disabled && !mod_disabled）
     pub enabled_mods_count: usize,
-    /// 禁用的模组数
+    /// 禁用的模组数（disabled || mod_disabled）
     pub disabled_mods_count: usize,
 }
 
-/// 获取 _MANAGED_ 文件夹路径
+/// 获取 `_MANAGED_` 文件夹路径
+///
+/// 将 `game_mods_path` 与 `constants::MANAGED_FOLDER` 拼接，返回完整的 Managed 目录路径。
+/// 所有模组文件都存放在此目录下。
 pub fn get_managed_folder(game_mods_path: &Path) -> PathBuf {
     game_mods_path.join(constants::MANAGED_FOLDER)
 }
 
-/// 默认扫描函数：使用深度扫描（保持向后兼容，完整解析INI）
-/// 注意：UI 初始化和需要完整 INI 数据的场景使用此函数
+/// 默认扫描函数：`scan_mods_deep()` 的别名，保持向后兼容
+///
+/// 委托给 `scan_mods_deep()` 执行完整深度扫描（解析所有 INI 文件）。
+///
+/// # 使用场景
+/// - UI 初始化时需要完整 INI 数据的场景
+/// - 旧代码调用 `scan_mods()` 时无需修改
+///
+/// # Errors
+/// 当 `_MANAGED_` 目录无法读取或创建时返回 `Err`
 pub fn scan_mods(game_mods_path: &Path) -> Result<ScanResult> {
     scan_mods_deep(game_mods_path)
 }
 
 /// 检查模组路径状态
 ///
-/// 依次检查：
-/// 1. 路径是否存在
-/// 2. _MANAGED_ 目录是否存在
-/// 3. 主 INI 文件（d3dx.ini/RatioShot.ini）是否存在
+/// 依次检查以下条件，返回第一个失败的状态：
+/// 1. `mods_path` 路径是否存在
+/// 2. `_MANAGED_` 目录是否存在
+/// 3. 主 INI 文件（`d3dx.ini` / `RatioShot.ini`，取决于 `TargetGame`）是否存在
 ///
 /// # 返回
-/// - Valid: 路径有效
-/// - NotFound: mods 路径不存在
-/// - ManagedFolderNotFound: _MANAGED_ 目录不存在
-/// - D3dxIniNotFound: 主 INI 不存在
+/// - `ModsPathStatus::Valid`: 路径有效
+/// - `ModsPathStatus::NotFound`: `mods_path` 不存在
+/// - `ModsPathStatus::ManagedFolderNotFound`: `_MANAGED_` 目录不存在
+/// - `ModsPathStatus::D3dxIniNotFound`: 主 INI 文件不存在
 pub fn check_mods_path(game: TargetGame, mods_path: &Path) -> ModsPathStatus {
     if !mods_path.exists() {
         return ModsPathStatus::NotFound;
@@ -110,6 +152,7 @@ pub fn is_normal_group_dir(dir_name: &str) -> Option<u32> {
 }
 
 /// 检查目录是否包含任何 .ini 文件（仅检查扩展名，不读取内容）
+/// 使用 entry.file_type() 免 metadata() 系统调用
 pub fn dir_has_ini_file(dir_path: &Path) -> Result<bool> {
     let entries = match fs::read_dir(dir_path) {
         Ok(e) => e,
@@ -121,8 +164,12 @@ pub fn dir_has_ini_file(dir_path: &Path) -> Result<bool> {
             Ok(e) => e,
             Err(_) => continue,
         };
-        let path = entry.path();
-        if path.is_file() {
+        let ft = match entry.file_type() {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        if ft.is_file() || ft.is_symlink() {
+            let path = entry.path();
             if let Some(ext) = path.extension() {
                 if ext.to_string_lossy().to_lowercase() == "ini" {
                     return Ok(true);
@@ -139,7 +186,15 @@ pub fn is_disabled_dir(dir_name: &str) -> bool {
 }
 
 /// 读取或创建标记文件，不存在则用默认内容创建
-/// 写文件前暂停文件监控，避免触发循环事件
+///
+/// 写文件前暂停文件监控（`WATCHER_PAUSED`），避免触发循环事件。
+///
+/// # Panics
+/// 如果写入文件失败（如权限不足、磁盘满），`write()` 操作会 panic 前先由 `?` 传播错误。
+/// 但若 `WATCHER_PAUSED` 的 `store` 操作在 panic 后未恢复，后续文件监控可能异常。
+///
+/// # Errors
+/// 当 `path` 存在但无法读取，或 `path` 不存在且无法写入时返回 `Err`
 pub fn read_or_create_marker_file(path: &Path, default_content: &str) -> Result<String> {
     if path.exists() {
         let content = fs::read_to_string(path)?;
@@ -153,21 +208,31 @@ pub fn read_or_create_marker_file(path: &Path, default_content: &str) -> Result<
     }
 }
 
-/// 在目录中查找图标路径：优先 ICON_NAME_PRIORITY，否则取第一张非 DISABLED 前缀图片
+/// 在目录中查找图标路径
+///
+/// 查找策略：
+/// 1. 优先匹配 `constants::ICON_NAME_PRIORITY` 中的优先级文件名（如 `icon.png`）
+/// 2. 否则取第一张非 `DISABLED` 前缀的图片（按字母序）
+///
+/// 使用 `entry.file_type()` 而非 `fs::metadata()` 判断文件类型，减少系统调用次数。
 pub fn find_icon_path(dir_path: &Path) -> Result<Option<PathBuf>> {
     let entries = match fs::read_dir(dir_path) {
         Ok(e) => e,
         Err(_) => return Ok(None),
     };
 
-    let mut files: Vec<PathBuf> = Vec::new();
+    let mut files: Vec<PathBuf> = Vec::with_capacity(4);
     for entry in entries {
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
         };
-        let path = entry.path();
-        if path.is_file() {
+        let ft = match entry.file_type() {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        if ft.is_file() || ft.is_symlink() {
+            let path = entry.path();
             if let Some(ext) = path.extension() {
                 let ext_lower = ext.to_string_lossy().to_lowercase();
                 if ICON_EXTENSIONS.contains(&ext_lower.as_str()) {
@@ -293,19 +358,28 @@ pub fn sort_mods_light(mods: &mut [ModData]) {
     });
 }
 
-/// 轻量扫描：混合目录扫描，不解析 INI，不递归 NormalGroup
+/// 轻量扫描：混合目录扫描，不解析 INI 内容，不递归 NormalGroup
 ///
-/// 扫描策略：
-/// - NormalGroup（group_xx 一级子目录）：仅扫描一层，不递归，避免进入 vendor 等大目录
-/// - MutexGroup（非 group_xx 子目录）：DFS 递归扫描，收集所有包含 INI 的目录
+/// 这是 UI 列表展示的主要入口，速度极快（通常 < 100ms）。
+///
+/// # 扫描流程
+/// 1. 读取 `_MANAGED_` 目录下所有一级子目录
+/// 2. 使用 `is_normal_group_dir()` 区分 NormalGroup 和 MutexGroup
+/// 3. NormalGroup 使用 `par_iter()` 并行调用 `scan_normal_group_light()`，仅扫描一级子目录，不递归
+/// 4. MutexGroup 使用 `par_iter()` 并行调用 `scan_mutex_group_dfs()`，栈式 DFS 递归遍历
+/// 5. 合并结果，按 `group_index` 排序后返回
 ///
 /// # 收集的信息
-/// - 目录路径、名称、显示名称（去掉 DISABLED_ 前缀）
+/// - 目录路径、名称、显示名称（去掉 `DISABLED_` 前缀）
 /// - enabled 状态、fav 收藏状态、fav_timestamp
-/// - 图标路径（自动查找目录下的图片文件）
-/// - ini_file_paths（仅路径，不解析内容）
+/// - 图标路径（通过 `find_icon_path()` 自动查找目录下的图片文件）
+/// - `ini_file_paths`（仅路径，不解析内容）
 ///
-/// 耗时：<100ms（取决于目录数量）
+/// # Panics
+/// 不会主动 panic，但如果 `_MANAGED_` 目录无法创建或读取，会通过 `?` 向上传播错误。
+///
+/// # Errors
+/// 当 `_MANAGED_` 目录不存在且无法创建，或 `fs::read_dir()` 读取失败时返回 `Err`。
 pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     let start = Instant::now();
     let managed_folder = get_managed_folder(game_mods_path);
@@ -320,37 +394,51 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
         });
     }
 
-    let mut groups: Vec<ModGroupData> = Vec::new();
-    let mut all_mods: Vec<ModData> = Vec::new();
+    let mut groups: Vec<ModGroupData> = Vec::with_capacity(32);   // 预分配 32 个分组，覆盖绝大多数场景
+    let mut all_mods: Vec<ModData> = Vec::with_capacity(256);     // 预分配 256 个模组，减少扩容次数
 
     let entries = fs::read_dir(&managed_folder)?;
-    let mut root_dirs: Vec<PathBuf> = Vec::new();
+    let mut root_dirs: Vec<PathBuf> = Vec::with_capacity(32);     // 预分配存储根目录列表
 
     for entry in entries {
         let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() {
+        let ft = entry.file_type()?;
+        if !ft.is_dir() {
             continue;
         }
         let dir_name = entry.file_name().to_string_lossy().to_string();
         if dir_name.starts_with('.') {
             continue;
         }
-        root_dirs.push(path);
+        root_dirs.push(entry.path());
     }
 
-    // 先处理 NormalGroup（group_xx）
-    for dir_path in &root_dirs {
-        let dir_name = dir_path.file_name().unwrap().to_string_lossy().to_string();
-        if let Some(group_index) = is_normal_group_dir(&dir_name) {
-            let (group, mods) = scan_normal_group_light(dir_path, &dir_name, group_index)?;
-            groups.push(group);
-            all_mods.extend(mods);
-        }
+    let root_dirs_vec: Vec<PathBuf> = root_dirs;
+
+    // 先处理 NormalGroup（group_xx）：par_iter 并行扫描
+    let normal_tasks: Vec<(PathBuf, String, u32)> = root_dirs_vec
+        .iter()
+        .filter_map(|dir_path| {
+            let dir_name = dir_path.file_name().unwrap().to_string_lossy().to_string();
+            is_normal_group_dir(&dir_name).map(|gi| (dir_path.clone(), dir_name, gi))
+        })
+        .collect();
+
+    let normal_results: Vec<(ModGroupData, Vec<ModData>)> = normal_tasks
+        .par_iter()
+        .filter_map(|(dir_path, dir_name, group_index)| {
+            scan_normal_group_light(dir_path, dir_name, *group_index).ok()
+        })
+        .collect();
+
+    for (g, ms) in normal_results {
+        groups.push(g);
+        all_mods.extend(ms);
     }
 
-    // 再处理 MutexGroup（非 group_xx 目录），使用 DFS 栈非递归遍历
-    let mutex_roots: Vec<PathBuf> = root_dirs.iter()
+    // 再处理 MutexGroup（非 group_xx 目录）：par_iter 并行扫描
+    let mutex_roots: Vec<PathBuf> = root_dirs_vec
+        .iter()
         .filter(|p| {
             let name = p.file_name().unwrap().to_string_lossy().to_string();
             is_normal_group_dir(&name).is_none()
@@ -358,12 +446,16 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
         .cloned()
         .collect();
 
-    for root_path in mutex_roots {
-        let (group, mods) = scan_mutex_group_dfs(&root_path)?;
-        if let Some(g) = group {
+    let mutex_results: Vec<(Option<ModGroupData>, Vec<ModData>)> = mutex_roots
+        .par_iter()
+        .filter_map(|root_path| scan_mutex_group_dfs(root_path).ok())
+        .collect();
+
+    for (g_opt, ms) in mutex_results {
+        if let Some(g) = g_opt {
             groups.push(g);
-            all_mods.extend(mods);
         }
+        all_mods.extend(ms);
     }
 
     // 按 group_index 排序
@@ -385,9 +477,26 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     })
 }
 
-/// 轻量扫描普通分组（group_xx）：仅一级子目录，不递归
+/// 轻量扫描普通分组（group_xx）：仅扫描一级子目录，不递归
+///
+/// 这是 NormalGroup 的扫描核心逻辑：
+/// 1. 读取/创建 `groupname` 标记文件获取显示名称
+/// 2. 读取/创建 `selectedindex` 标记文件获取当前选中的模组索引
+/// 3. 插入索引为 0 的 None 空槽位（表示不选任何模组）
+/// 4. 仅遍历一级子目录（绝对不递归），跳过隐藏目录和标记文件目录
+/// 5. 为每个子目录查找 `modname` 标记文件、fav 收藏状态、图标路径
+/// 6. 分离 None 槽位，对实际模组排序后重新组装
+/// 7. 基于磁盘状态判定 `is_active`：恰好一个启用→该模组 active；零个启用→None active；多个启用→回退到 selectedindex 文件
+///
+/// 使用 `entry.file_type()` 判断文件类型，避免 `metadata()` 系统调用。
+///
+/// # Panics
+/// 不会主动 panic，但 `read_or_create_marker_file()` 在写入失败时通过 `?` 传播错误。
+///
+/// # Errors
+/// 当目录无法读取、标记文件无法创建时返回 `Err`。
 fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) -> Result<(ModGroupData, Vec<ModData>)> {
-    let mut mods: Vec<ModData> = Vec::new();
+    let mut mods: Vec<ModData> = Vec::with_capacity(32);   // 预分配 32 个模组槽位，覆盖绝大多数 NormalGroup
 
     // 读取/创建标记文件
     let groupname_path = dir_path.join("groupname");
@@ -407,10 +516,14 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
     let entries = fs::read_dir(dir_path)?;
     for entry in entries {
         let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() {
+        let ft = match entry.file_type() {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        if !ft.is_dir() && !ft.is_symlink() {
             continue;
         }
+        let path = entry.path();
         let dir_name = entry.file_name().to_string_lossy().to_string();
         if dir_name.starts_with('.') {
             continue;
@@ -470,7 +583,7 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
 
     // 分离 None 槽位和其他模组
     let mut none_slot: Option<ModData> = None;
-    let mut other_mods: Vec<ModData> = Vec::new();
+    let mut other_mods: Vec<ModData> = Vec::with_capacity(mods.len().saturating_sub(1));  // 预分配（总数-1），排除 None 槽位
     for m in mods.drain(..) {
         if m.name == "None" {
             none_slot = Some(m);
@@ -533,7 +646,7 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
             }
         }
         // 如果 selectedindex 指向的模组是禁用的，则 fallback 到第一个启用的
-        if active_idx < 0 || mods.get(active_idx as usize).map_or(true, |m| m.disabled) {
+        if active_idx < 0 || mods.get(active_idx as usize).map(|m| m.disabled).unwrap_or(true) {
             if let Some(&first_enabled) = enabled_non_none.first() {
                 for m in mods.iter_mut() {
                     m.is_active = false;
@@ -574,13 +687,46 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
     Ok((group, mods))
 }
 
-/// DFS 栈元素：待遍历目录 + 父分组引用（通过索引构建后关联）
+/// DFS 栈元素：待遍历目录及其父分组索引
+///
+/// 用于 `scan_mutex_group_dfs()` 中的栈式非递归 DFS 遍历。
+///
+/// # 字段
+/// - `path`: 待遍历的目录路径
+/// - `parent_group_idx`: 父分组在 `groups` 数组中的索引。`Some(0)` 表示根分组，`None` 表示无父分组（极少情况）
 struct DfsStackItem {
     path: PathBuf,
     parent_group_idx: Option<usize>,
 }
 
-/// 使用 Vec 栈非递归 DFS 遍历 MutexGroup
+/// 使用栈式非递归 DFS 遍历 MutexGroup 目录树
+///
+/// 这是 MutexGroup 的核心扫描逻辑，使用 `Vec<DfsStackItem>` 模拟栈进行深度优先遍历。
+///
+/// # 算法流程
+/// 1. 检查根目录是否本身就是模组（含 INI 文件）→ 直接返回叶子模组，不创建分组
+/// 2. 创建根分组（`groups[0]`），将根目录的一级子目录逆序压入 DFS 栈
+/// 3. 循环弹出栈顶元素：
+///    - 如果当前目录包含 INI 文件 → 视为叶子模组，添加到父分组和 `all_mods` 列表，不再向下遍历
+///    - 如果当前目录不包含 INI 文件 → 视为子分组节点，创建新的 `ModGroupData`，将其子目录逆序压入栈
+/// 4. 对每个分组内的模组执行排序
+/// 5. 调用 `rebuild_tree()` 递归重建树形结构（`child_groups` 层级关系）
+/// 6. 收集所有模组到扁平列表
+///
+/// # 防循环机制
+/// 使用 `HashSet<PathBuf> visited` 存储规范化（`canonicalize()`）后的绝对路径，
+/// 在插入栈前检查是否已访问，防止符号链接/硬链接导致无限循环或重复扫描。
+///
+/// # 性能优化
+/// - 使用 `entry.file_type()` 替代 `metadata()` 减少系统调用
+/// - 预分配 `visited`、`stack`、`groups`、`all_mods` 的容量
+/// - 叶子节点（含 INI）立即返回，不继续向下遍历
+///
+/// # Panics
+/// 不会主动 panic，但 `read_or_create_marker_file()` 的 `?` 操作符可能在写入失败时传播 `Err`。
+///
+/// # Errors
+/// 当目录无法读取、标记文件无法创建时返回 `Err`。
 fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<ModData>)> {
     let root_name = root_path.file_name().unwrap().to_string_lossy().to_string();
     let root_disabled = is_disabled_dir(&root_name);
@@ -593,6 +739,11 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     let groupname_path = root_path.join("groupname");
     let root_display_name = read_or_create_marker_file(&groupname_path, &base_root_name)?;
 
+    // 规范化路径 visited 集合：防止 symlink/hardlink 导致循环或重复
+    let mut visited: HashSet<PathBuf> = HashSet::with_capacity(64);   // 预分配 64 个容量，覆盖大多数嵌套深度
+    let root_canonical = root_path.canonicalize().unwrap_or_else(|_| root_path.to_path_buf());
+    visited.insert(root_canonical);
+
     // 检查根目录是否本身就是模组（含 ini）
     if dir_has_ini_file(root_path)? {
         // 根目录是模组叶子节点，不创建分组
@@ -600,9 +751,9 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         return Ok((None, vec![mod_data]));
     }
 
-    let mut all_mods: Vec<ModData> = Vec::new();
+    let mut all_mods: Vec<ModData> = Vec::with_capacity(256);   // 预分配 256 个模组，覆盖大多数 MutexGroup
     // groups[0] 是根分组，后续是子分组
-    let mut groups: Vec<ModGroupData> = Vec::new();
+    let mut groups: Vec<ModGroupData> = Vec::with_capacity(32);   // 预分配 32 个分组，覆盖大多数嵌套深度
 
     // 创建根分组
     let root_icon = find_icon_path(root_path)?;
@@ -628,22 +779,29 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     };
     groups.push(root_group);
 
-    // DFS 栈初始化
-    let mut stack: Vec<DfsStackItem> = Vec::new();
+    // DFS 栈初始化（LIFO 后进先出）
+    let mut stack: Vec<DfsStackItem> = Vec::with_capacity(64);   // 预分配 64 个栈元素，覆盖大多数嵌套深度
 
-    // 列出根目录的一级子目录，push 到栈
+    // 列出根目录的一级子目录，push 到栈（用 entry.file_type() 避免 metadata 系统调用）
     let root_entries = fs::read_dir(root_path)?;
-    let mut root_subdirs: Vec<PathBuf> = Vec::new();
+    let mut root_subdirs: Vec<PathBuf> = Vec::with_capacity(8);    // 预分配 8 个，大多数 MutexGroup 根目录子目录不多
     for entry in root_entries {
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
         };
-        let p = entry.path();
-        if p.is_dir() {
+        let ft = match entry.file_type() {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        if ft.is_dir() || ft.is_symlink() {
+            let p = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             if !name.starts_with('.') {
-                root_subdirs.push(p);
+                let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
+                if visited.insert(canon) {
+                    root_subdirs.push(p);
+                }
             }
         }
     }
@@ -692,19 +850,26 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         // 查找图标
         let icon_path = find_icon_path(&current_path)?;
 
-        // 检查是否有子目录
+        // 检查是否有子目录（用 entry.file_type() + canonicalize 去重）
         let sub_entries = fs::read_dir(&current_path)?;
-        let mut subdirs: Vec<PathBuf> = Vec::new();
+        let mut subdirs: Vec<PathBuf> = Vec::with_capacity(8);    // 预分配 8 个，大多数分组子目录数量有限
         for entry in sub_entries {
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => continue,
             };
-            let p = entry.path();
-            if p.is_dir() {
+            let ft = match entry.file_type() {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            if ft.is_dir() || ft.is_symlink() {
+                let p = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
                 if !name.starts_with('.') {
-                    subdirs.push(p);
+                    let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
+                    if visited.insert(canon) {
+                        subdirs.push(p);
+                    }
                 }
             }
         }
@@ -737,8 +902,6 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
             ..Default::default()
         };
         groups.push(child_group);
-
-        // 注意：不在此关联 child_groups，后面通过 rebuild_tree 根据路径重建
 
         // 逆序 push 子目录到栈
         for subdir in subdirs.into_iter().rev() {
@@ -793,7 +956,16 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     Ok((Some(groups.remove(0)), all_mods))
 }
 
-/// 构建 MutexGroup 模组的轻量数据（不解析 INI）
+/// 构建 MutexGroup 叶子模组的轻量数据（不解析 INI 内容）
+///
+/// 从目录名推断显示名称（移除 `DISABLED_` 前缀），检查 fav 收藏标记文件、
+/// 各种标记文件（`modforced`、`modsyntaxerrorremoved`、`modunoptimized`、`namespaced`），
+/// 并查找图标路径。
+///
+/// 与 `scan_normal_group_light` 中的模组构建不同，此函数不处理 `selectedindex` 或 `is_active`，
+/// 因为这些状态由 MutexGroup 的运行时逻辑管理。
+///
+/// 使用 `entry.file_type()` 避免 `metadata()` 系统调用。
 fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> Result<ModData> {
     let dir_name = mod_path.file_name().unwrap().to_string_lossy().to_string();
     let disabled = is_disabled_dir(&dir_name);
@@ -840,21 +1012,35 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
 // 以下是深度扫描（原 scan_mods，重命名为 scan_mods_deep），完整解析 INI，仅供 update_mod_data 使用
 // ============================================================================
 
-/// 深度扫描：完整解析 INI，递归扫描所有子目录（原 scan_mods 重命名）
+/// 深度扫描：完整解析 INI，递归扫描所有子目录（原 `scan_mods` 重命名）
 ///
 /// 与轻量扫描的区别：
 /// - 完整解析所有 INI 文件内容，统计各类型段数量（[TextureOverride], [ShaderOverride] 等）
-/// - 提取错误行（crash_causing_lines）、未定义引用、namespace 变量
-/// - 递归扫描所有子目录（包括 NormalGroup 内部）
-/// - 收集已知库（defined_libraries）
+/// - 提取错误行（`crash_causing_lines`）、未定义引用、namespace 变量
+/// - 递归扫描所有子目录（包括 NormalGroup 内部，使用 BFS + visited 去重）
+/// - 收集已知库（`defined_libraries`）
+/// - 仅处理 NormalGroup（group_xx 目录），MutexGroup 的深度扫描不由此函数处理
 ///
 /// # 使用场景
-/// 仅在 update_mod_data（点击"应用"按钮）时调用，用于：
+/// 仅在 `update_mod_data`（点击"应用"按钮）时调用，用于：
 /// - 注入槽位条件到 INI
 /// - 检测语法错误和未定义引用
 /// - 展开 namespace 变量
 ///
-/// 耗时：可能需要几百毫秒到几秒（取决于 INI 数量和大小）
+/// # 扫描流程
+/// 1. 读取 `_MANAGED_` 目录下的所有一级子目录
+/// 2. 仅保留 `is_normal_group_dir()` 匹配的 NormalGroup 目录
+/// 3. 对每个 NormalGroup 调用 `scan_group_directory_deep()`（BFS 递归遍历）
+/// 4. 收集所有模组的 `defined_libraries` 到 `known_libraries`
+/// 5. 按 `group_index` 排序后返回
+///
+/// 耗时：几百毫秒到几秒（取决于 INI 数量和大小）
+///
+/// # Panics
+/// 不会主动 panic，但 `_MANAGED_` 目录无法创建时通过 `?` 传播错误。
+///
+/// # Errors
+/// 当 `_MANAGED_` 目录不存在且无法创建，或 `fs::read_dir()` 读取失败时返回 `Err`。
 pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
     let managed_folder = get_managed_folder(game_mods_path);
     if !managed_folder.exists() {
@@ -868,18 +1054,22 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
         });
     }
 
-    let mut groups: Vec<ModGroupData> = Vec::new();
-    let mut all_mods: Vec<ModData> = Vec::new();
-    let mut known_libraries = HashSet::new();
+    let mut groups: Vec<ModGroupData> = Vec::with_capacity(32);   // 预分配 32 个分组，覆盖绝大多数场景
+    let mut all_mods: Vec<ModData> = Vec::with_capacity(256);     // 预分配 256 个模组，减少扩容次数
+    let mut known_libraries = HashSet::new();                       // 收集所有模组中定义的库
 
     let entries = fs::read_dir(&managed_folder)?;
 
     for entry in entries {
         let entry = entry?;
-        let path = entry.path();
-        if !path.is_dir() {
+        let ft = match entry.file_type() {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        if !ft.is_dir() && !ft.is_symlink() {
             continue;
         }
+        let path = entry.path();
 
         let dir_name = entry.file_name().to_string_lossy().to_string();
 
@@ -917,25 +1107,38 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
     })
 }
 
-/// 深度扫描分组目录：BFS 递归查找模组
+/// 深度扫描分组目录：BFS 递归遍历，查找所有包含 INI 的模组目录
+///
+/// 使用 `VecDeque` 进行广度优先搜索（BFS），配合 `HashSet<PathBuf> visited_dirs` 防止循环。
+/// 与轻量扫描不同，此函数会递归扫描所有子目录（包括 NormalGroup 内部的多层嵌套）。
+///
+/// # 算法细节
+/// - 使用队列进行 BFS 遍历
+/// - 通过 `canonicalize()` 规范化路径后存入 `visited_dirs` 去重
+/// - 遇到包含 INI 文件的目录时，视为模组叶子节点，不再继续向下遍历
+/// - 不包含 INI 但有子目录的节点，视为子分组（`ModGroupData`），继续 BFS
+/// - 最终重建分组的 `mod_index` 和 `group_index` 等字段
+///
+/// # Errors
+/// 当目录无法读取时返回 `Err`。
 fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: GroupType) -> Result<(ModGroupData, Vec<ModData>)> {
     use std::collections::VecDeque;
 
-    let mut mods = Vec::new();
-    let mut subgroups: Vec<ModGroupData> = Vec::new();
-    let mut subgroup_paths: HashSet<PathBuf> = HashSet::new();
+    let mut mods = Vec::with_capacity(256);                 // 预分配 256 个模组
+    let mut subgroups: Vec<ModGroupData> = Vec::with_capacity(32); // 预分配 32 个子分组
+    let mut subgroup_paths: HashSet<PathBuf> = HashSet::with_capacity(32);
 
     let mut queue = VecDeque::new();
     queue.push_back(dir_path.to_path_buf());
 
-    let mut visited_dirs = HashSet::new();
+    let mut visited_dirs = HashSet::with_capacity(64);      // 规范化路径 visited 集合，防止 symlink 循环
     visited_dirs.insert(dir_path.to_path_buf());
 
     while let Some(current_path) = queue.pop_front() {
         let (has_ini, has_icon, icon_path, ini_files) = check_directory_for_mod_deep(&current_path)?;
 
         if has_ini || has_icon {
-            let parent_groups: Vec<String> = Vec::new();
+            let parent_groups: Vec<String> = Vec::with_capacity(4);
             let mod_data = build_mod_data_deep(&current_path, group_name, &parent_groups, ini_files, icon_path)?;
             mods.push(mod_data);
         } else {
@@ -950,37 +1153,40 @@ fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: Grou
                     Ok(e) => e,
                     Err(_) => continue,
                 };
-                let sub_path = sub_entry.path();
-                if sub_path.is_dir() {
+                let ft = match sub_entry.file_type() {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                if ft.is_dir() || ft.is_symlink() {
+                    let sub_path = sub_entry.path();
                     let sub_name = sub_entry.file_name().to_string_lossy().to_string();
                     if sub_name.starts_with('.') {
                         continue;
                     }
                     has_subdirs = true;
-                    if !visited_dirs.contains(&sub_path) {
-                        visited_dirs.insert(sub_path.clone());
+                    let canon = sub_path.canonicalize().unwrap_or_else(|_| sub_path.clone());
+                    if !visited_dirs.contains(&canon) {
+                        visited_dirs.insert(canon);
                         queue.push_back(sub_path);
                     }
                 }
             }
 
-            if current_path != dir_path && has_subdirs {
-                if !subgroup_paths.contains(&current_path) {
-                    subgroup_paths.insert(current_path.clone());
-                    let subgroup_name = current_path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    let subgroup = ModGroupData {
-                        name: subgroup_name.clone(),
-                        group_name: subgroup_name,
-                        group_type,
-                        full_path: current_path.clone(),
-                        group_path: current_path.to_string_lossy().to_string(),
-                        ..Default::default()
-                    };
-                    subgroups.push(subgroup);
-                }
+            if current_path != dir_path && has_subdirs && !subgroup_paths.contains(&current_path) {
+                subgroup_paths.insert(current_path.clone());
+                let subgroup_name = current_path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let subgroup = ModGroupData {
+                    name: subgroup_name.clone(),
+                    group_name: subgroup_name,
+                    group_type,
+                    full_path: current_path.clone(),
+                    group_path: current_path.to_string_lossy().to_string(),
+                    ..Default::default()
+                };
+                subgroups.push(subgroup);
             }
         }
     }
@@ -1027,12 +1233,20 @@ fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: Grou
     Ok((group, mods))
 }
 
-/// 深度扫描：检查目录是否为模组目录
+/// 深度扫描：检查目录是否包含 INI 文件和图标
+///
+/// 使用 `entry.file_type()` 判断文件类型，避免 `metadata()` 系统调用。
+/// 返回四元组：`(has_ini, has_icon, icon_path, ini_files)`。
+///
+/// - `has_ini`: 是否至少有一个 `.ini` 文件
+/// - `has_icon`: 是否至少有一个图片文件
+/// - `icon_path`: 优先返回 `icon.*` 命名的图片，否则返回第一张非 `DISABLED` 前缀的图片
+/// - `ini_files`: 所有 `.ini` 文件的路径列表（已排序）
 fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBuf>, Vec<PathBuf>)> {
     let mut has_ini = false;
     let mut has_icon = false;
     let mut icon_path: Option<PathBuf> = None;
-    let mut ini_files: Vec<PathBuf> = Vec::new();
+    let mut ini_files: Vec<PathBuf> = Vec::with_capacity(8);
     let mut first_image: Option<PathBuf> = None;
 
     let entries = match fs::read_dir(dir) {
@@ -1045,8 +1259,12 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
             Ok(e) => e,
             Err(_) => continue,
         };
-        let path = entry.path();
-        if path.is_file() {
+        let ft = match entry.file_type() {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        if ft.is_file() || ft.is_symlink() {
+            let path = entry.path();
             if let Some(ext) = path.extension() {
                 let ext_lower = ext.to_string_lossy().to_lowercase();
                 if ext_lower == "ini" {
@@ -1079,7 +1297,16 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
     Ok((has_ini, has_icon, icon_path, ini_files))
 }
 
-/// 深度扫描：构建完整 ModData（解析 INI）
+/// 深度扫描：构建完整 ModData（解析所有 INI 文件）
+///
+/// 此函数是深度扫描的核心，对每个 `.ini` 文件执行：
+/// - 调用 `IniFile::parse()` 解析 INI 内容
+/// - 统计各类型段数量（KeyPress、TextureOverride、ShaderOverride、CommandList、Resource）
+/// - 提取 namespace 变量
+/// - 收集 `defined_libraries`
+/// - 检测错误行（`detect_errors()`）
+///
+/// 所有统计信息累加到最终 `ModData` 中，供前端展示和 apply 注入使用。
 fn build_mod_data_deep(
     dir: &Path,
     _group_name: &str,
@@ -1100,8 +1327,8 @@ fn build_mod_data_deep(
         dir_name.clone()
     };
 
-    let mut mod_ini_data: Vec<ModIniData> = Vec::new();
-    let mut all_errored_lines: Vec<ErroredLines> = Vec::new();
+    let mut mod_ini_data: Vec<ModIniData> = Vec::with_capacity(8);           // 预分配 8 个 INI 数据，大多数模组只有少量 INI
+    let mut all_errored_lines: Vec<ErroredLines> = Vec::with_capacity(8);  // 预分配 8 个错误行
     let mut total_sections = 0;
     let mut total_key_sections = 0;
     let mut total_texture_sections = 0;
@@ -1109,7 +1336,7 @@ fn build_mod_data_deep(
     let mut total_command_lists = 0;
     let mut total_resources = 0;
     let mut mod_namespace: Option<String> = None;
-    let mut defined_libraries = HashSet::new();
+    let mut defined_libraries = HashSet::with_capacity(32);                 // 预分配 32 个库，覆盖大多数模组
 
     for ini_path in &ini_files {
         match IniFile::parse(ini_path) {
@@ -1215,6 +1442,61 @@ fn build_mod_data_deep(
     })
 }
 
+/// 对单个收敛后路径执行局部扫描，返回该路径下的 `ScanResult` 子树
+///
+/// 增量更新专用：先调用 `scan_mods_light()` 获取全量扫描结果，然后按 `target_subpath` 过滤。
+///
+/// # 过滤逻辑
+/// - 分组过滤（`filtered_groups`）：保留所有分组路径以 `target_subpath` 开头，或 `target_subpath` 以分组路径开头的分组。
+///   即分组与目标路径存在包含关系（互为祖先或后代）。
+/// - 模组过滤（`filtered_mods`）：仅保留模组路径以 `target_subpath` 开头的模组。
+///
+/// 路径比较前通过 `normalize_subpath()` 统一为 `/` 分隔符，去除末尾 `/`。
+///
+/// # Errors
+/// 当 `scan_mods_light()` 失败时传播错误。
+pub fn scan_partial_path(mods_path: &Path, target_subpath: &Path) -> Result<ScanResult> {
+    let full = scan_mods_light(mods_path)?;
+    let target_norm = normalize_subpath(target_subpath, mods_path);
+
+    let filtered_groups: Vec<ModGroupData> = full
+        .groups
+        .into_iter()
+        .filter(|g| {
+            let gp = normalize_subpath(Path::new(&g.group_path), mods_path);
+            gp.starts_with(&target_norm) || target_norm.starts_with(&gp)
+        })
+        .collect();
+
+    let filtered_mods: Vec<ModData> = full
+        .mods
+        .into_iter()
+        .filter(|m| {
+            let mp = normalize_subpath(Path::new(&m.mod_path), mods_path);
+            mp.starts_with(&target_norm)
+        })
+        .collect();
+
+    Ok(ScanResult {
+        total_mods_count: filtered_mods.len(),
+        enabled_mods_count: filtered_mods.iter().filter(|m| m.is_active).count(),
+        disabled_mods_count: filtered_mods.iter().filter(|m| !m.is_active).count(),
+        groups: filtered_groups,
+        mods: filtered_mods,
+    })
+}
+
+/// 规范化子路径：统一为 `/` 分隔符，去除末尾 `/`
+///
+/// 用于 `scan_partial_path()` 中的路径比较，确保跨平台路径一致性。
+/// Windows 上的 `\\` 和 Unix 上的 `/` 统一为 `/`，避免路径比较时因分隔符不同而失败。
+fn normalize_subpath(p: &Path, _mods_path: &Path) -> String {
+    p.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_string()
+}
+
 // ============================================================================
 // 单元测试
 // ============================================================================
@@ -1225,19 +1507,22 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// 测试辅助：创建临时目录，在根目录下创建 `.tmp/_MANAGED_` 子目录
     fn setup_test_dir() -> TempDir {
         let dir = TempDir::new().unwrap();
-        let managed = dir.path().join("_MANAGED_");
+        let managed = dir.path().join(".tmp").join("_MANAGED_");
         fs::create_dir_all(&managed).unwrap();
         dir
     }
 
+    /// 测试辅助：在 `_MANAGED_` 下创建分组目录
     fn create_group_dir(base: &Path, group_name: &str) -> PathBuf {
-        let group_path = base.join("_MANAGED_").join(group_name);
+        let group_path = base.join("path").join("_MANAGED_").join(group_name);
         fs::create_dir_all(&group_path).unwrap();
         group_path
     }
 
+    /// 测试辅助：在分组目录下创建带 INI 文件的模组目录
     fn create_mod_with_ini(group_path: &Path, mod_name: &str, ini_content: &str) -> PathBuf {
         let mod_path = group_path.join(mod_name);
         fs::create_dir_all(&mod_path).unwrap();
@@ -1246,12 +1531,14 @@ mod tests {
         mod_path
     }
 
+    /// 测试辅助：在根目录下创建主 INI 文件（d3dx.ini）
     fn create_d3dx_ini(base: &Path) {
         fs::write(base.join("d3dx.ini"), "; test").unwrap();
     }
 
     // ========== 深度扫描测试（原 scan_mods 改名为 scan_mods_deep） ==========
 
+    /// 测试：空 `_MANAGED_` 目录的深度扫描应返回空结果
     #[test]
     fn test_scan_empty_managed_folder() {
         let dir = setup_test_dir();
@@ -1261,6 +1548,7 @@ mod tests {
         assert_eq!(result.total_mods_count, 0);
     }
 
+    /// 测试：深度扫描单个 NormalGroup 中的单个模组
     #[test]
     fn test_scan_single_mod() {
         let dir = setup_test_dir();
@@ -1276,6 +1564,7 @@ mod tests {
         assert!(!result.mods[0].disabled);
     }
 
+    /// 测试：深度扫描 `DISABLED_` 前缀模组应被正确标记为禁用状态
     #[test]
     fn test_scan_disabled_mod() {
         let dir = setup_test_dir();
@@ -1292,16 +1581,17 @@ mod tests {
         assert_eq!(result.enabled_mods_count, 0);
     }
 
+    /// 测试：深度扫描忽略非 `group_xx` 目录（MutexGroup 和无关目录）
     #[test]
     fn test_scan_ignores_non_group_dirs() {
         let dir = setup_test_dir();
         create_d3dx_ini(dir.path());
 
-        let mutex_path = dir.path().join("_MANAGED_").join("#MutexMods");
+        let mutex_path = dir.path().join(".tmp").join("_MANAGED_").join("#MutexMods");
         fs::create_dir_all(&mutex_path).unwrap();
         create_mod_with_ini(&mutex_path, "MutexMod", "[TextureOverrideTest]\nhash = 0x789\n");
 
-        let other_path = dir.path().join("_MANAGED_").join("OtherFolder");
+        let other_path = dir.path().join(".tmp").join("_MANAGED_").join("OtherFolder");
         fs::create_dir_all(&other_path).unwrap();
         create_mod_with_ini(&other_path, "OtherMod", "[TextureOverrideTest]\nhash = 0xABC\n");
 
@@ -1314,6 +1604,7 @@ mod tests {
         assert_eq!(result.mods[0].name, "ValidMod");
     }
 
+    /// 测试：深度扫描能递归找到嵌套子目录中的模组（BFS 遍历）
     #[test]
     fn test_scan_nested_mods_deep() {
         // 深度扫描下应该能找到 NestedMod
@@ -1332,6 +1623,7 @@ mod tests {
         assert_eq!(result.mods[0].name, "NestedMod");
     }
 
+    /// 测试：深度扫描模组包含图标文件时可正确识别
     #[test]
     fn test_scan_mod_with_icon() {
         let dir = setup_test_dir();
@@ -1349,6 +1641,7 @@ mod tests {
         assert!(result.mods[0].preview_image_path.as_ref().unwrap().ends_with("icon.png"));
     }
 
+    /// 测试：`check_mods_path` 对有效路径返回 `Valid`
     #[test]
     fn test_check_mods_path_valid() {
         let dir = setup_test_dir();
@@ -1357,6 +1650,7 @@ mod tests {
         assert_eq!(status, ModsPathStatus::Valid);
     }
 
+    /// 测试：`check_mods_path` 对缺少 `_MANAGED_` 目录的路径返回 `ManagedFolderNotFound`
     #[test]
     fn test_check_mods_path_missing_managed() {
         let dir = TempDir::new().unwrap();
@@ -1365,6 +1659,7 @@ mod tests {
         assert_eq!(status, ModsPathStatus::ManagedFolderNotFound);
     }
 
+    /// 测试：`check_mods_path` 对不存在的路径返回 `NotFound`
     #[test]
     fn test_check_mods_path_not_found() {
         let dir = TempDir::new().unwrap();
@@ -1373,6 +1668,7 @@ mod tests {
         assert_eq!(status, ModsPathStatus::NotFound);
     }
 
+    /// 测试：`check_mods_path` 对缺少主 INI 文件的路径返回 `D3dxIniNotFound`
     #[test]
     fn test_check_mods_path_missing_d3dx() {
         let dir = setup_test_dir();
@@ -1380,6 +1676,7 @@ mod tests {
         assert_eq!(status, ModsPathStatus::D3dxIniNotFound);
     }
 
+    /// 测试：BFS 遇到模组目录（含 INI）后停止向下遍历，不扫描子目录
     #[test]
     fn test_bfs_stops_at_mod_directory() {
         let dir = setup_test_dir();
@@ -1399,6 +1696,7 @@ mod tests {
         assert_eq!(result.mods[0].name, "StoppingMod");
     }
 
+    /// 测试：深度扫描多个 NormalGroup 并按 `group_index` 排序
     #[test]
     fn test_multiple_groups() {
         let dir = setup_test_dir();
@@ -1421,6 +1719,7 @@ mod tests {
         assert_eq!(result.groups[2].group_name, "group_10");
     }
 
+    /// 测试：深度扫描正确统计 INI 中各类型段的数量
     #[test]
     fn test_ini_section_counting() {
         let dir = setup_test_dir();
@@ -1464,6 +1763,7 @@ filename = test.dds
         assert_eq!(m.total_section_count, 8);
     }
 
+    /// 测试：深度扫描正确检测 INI 中的 `include` 指令
     #[test]
     fn test_has_include_detection() {
         let dir = setup_test_dir();
@@ -1478,6 +1778,7 @@ filename = test.dds
         assert!(ini_data.has_include);
     }
 
+    /// 测试：深度扫描正确提取 INI 中的 `namespace` 变量
     #[test]
     fn test_namespace_extraction() {
         let dir = setup_test_dir();
@@ -1494,6 +1795,9 @@ filename = test.dds
 
     // ========== 轻量扫描测试（scan_mods_light） ==========
 
+    /// 测试：`is_normal_group_dir` 对 group_xx 的匹配和拒绝规则
+    ///
+    /// 验证：正确匹配 `group_1`、`group_12` 等；拒绝 `group_0`、`group_01`（前导零）、非数字后缀
     #[test]
     fn test_is_normal_group_dir() {
         // 正确匹配
@@ -1516,6 +1820,9 @@ filename = test.dds
         assert_eq!(is_normal_group_dir("OtherFolder"), None);
     }
 
+    /// 测试：`natural_compare` 的自然排序功能
+    ///
+    /// 验证：`mod2` < `mod10`（数字段按数值比较而非字典序）；不区分大小写；相同字符串返回 Equal
     #[test]
     fn test_natural_compare() {
         assert_eq!(natural_compare("mod2", "mod10"), CmpOrdering::Less);
@@ -1528,6 +1835,9 @@ filename = test.dds
         assert_eq!(natural_compare("abc", "def"), CmpOrdering::Less);
     }
 
+    /// 测试：`is_disabled_dir` 对 DISABLED 前缀的检测
+    ///
+    /// 验证：`DISABLED_`、`disabled_`、`Disabled-`、`DISABLED ` 均被识别；`NormalMod` 和 `mod_disabled`（后缀）不被识别
     #[test]
     fn test_is_disabled_dir() {
         assert!(is_disabled_dir("DISABLED_Mod"));
@@ -1538,6 +1848,9 @@ filename = test.dds
         assert!(!is_disabled_dir("mod_disabled"));
     }
 
+    /// 测试：`dir_has_ini_file` 检测目录中是否存在 .ini 文件
+    ///
+    /// 验证：空目录返回 false；写入 .ini 后返回 true；其他扩展名文件不影响结果
     #[test]
     fn test_dir_has_ini_file() {
         let dir = TempDir::new().unwrap();
@@ -1552,6 +1865,9 @@ filename = test.dds
         assert!(dir_has_ini_file(dir.path()).unwrap());
     }
 
+    /// 测试：轻量扫描 NormalGroup 会自动创建 None 空槽位
+    ///
+    /// 验证：每个 NormalGroup 的第一个模组始终是索引为 0 的 None 槽位
     #[test]
     fn test_light_scan_none_slot() {
         let dir = setup_test_dir();
@@ -1567,6 +1883,9 @@ filename = test.dds
         assert!(group.mods.iter().any(|m| m.name == "TestMod"));
     }
 
+    /// 测试：轻量扫描 NormalGroup 不递归子目录
+    ///
+    /// 验证：`SubDir` 是一级子目录被扫描为模组，但 `SubDir/NestedMod` 是二级子目录不被扫描
     #[test]
     fn test_light_scan_no_recursion_normal_group() {
         // 轻量扫描下 NormalGroup 绝对不递归：SubDir 是一级子目录会被扫描为模组，
@@ -1590,6 +1909,7 @@ filename = test.dds
         assert_eq!(group.mods.len(), 2); // None + SubDir
     }
 
+    /// 测试：轻量扫描会自动创建缺失的标记文件（groupname、selectedindex、modname）
     #[test]
     fn test_light_scan_creates_marker_files() {
         let dir = setup_test_dir();
@@ -1611,6 +1931,9 @@ filename = test.dds
         assert!(mod_path.join("modname").exists());
     }
 
+    /// 测试：轻量扫描 MutexGroup 不会创建标记文件（与 NormalGroup 不同）
+    ///
+    /// 验证：MutexGroup 目录下不会出现 groupname、selectedindex、modname 等标记文件
     #[test]
     fn test_light_scan_mutex_group_no_markers() {
         let dir = setup_test_dir();
@@ -1630,6 +1953,9 @@ filename = test.dds
         assert!(!mod_path.join("modname").exists());
     }
 
+    /// 测试：轻量扫描 MutexGroup 的栈式 DFS 能正确遍历嵌套目录
+    ///
+    /// 验证：嵌套结构 `#MutexRoot/Category1/ModA`、`#MutexRoot/Category1/SubCategory/ModB`、`#MutexRoot/ModC` 全部被扫描到
     #[test]
     fn test_light_scan_mutex_group_dfs() {
         let dir = setup_test_dir();
@@ -1680,6 +2006,9 @@ filename = test.dds
         }
     }
 
+    /// 测试：轻量扫描 DFS 遇到含 INI 的目录后停止向下遍历
+    ///
+    /// 验证：`ModWithIni` 目录下有 INI，其子目录 `SubModUnder` 不被扫描
     #[test]
     fn test_light_scan_stops_at_ini_dir() {
         // 有 .ini 的目录不遍历其子目录
@@ -1704,6 +2033,7 @@ filename = test.dds
         assert!(!mod_names.contains(&"SubModUnder"), "Should not recurse into mod dir with ini");
     }
 
+    /// 测试：轻量扫描正确识别 NormalGroup 和 MutexGroup 中的禁用模组
     #[test]
     fn test_light_scan_disabled_both_types() {
         let dir = setup_test_dir();
@@ -1737,6 +2067,7 @@ filename = test.dds
         }
     }
 
+    /// 测试：轻量扫描正确识别 NormalGroup 和 MutexGroup 中的收藏模组
     #[test]
     fn test_light_scan_fav_both_types() {
         let dir = setup_test_dir();
@@ -1772,6 +2103,9 @@ filename = test.dds
         }
     }
 
+    /// 测试：轻量扫描图标查找的优先级顺序
+    ///
+    /// 验证：`icon.png` 优先于 `preview.png` 和 `other.png`
     #[test]
     fn test_light_scan_icon_priority() {
         let dir = setup_test_dir();
@@ -1791,6 +2125,7 @@ filename = test.dds
         assert!(m.preview_image_path.as_ref().unwrap().ends_with("icon.png"));
     }
 
+    /// 测试：轻量扫描混合 NormalGroup 和 MutexGroup 并存
     #[test]
     fn test_light_scan_mixed_groups() {
         let dir = setup_test_dir();
@@ -1813,6 +2148,9 @@ filename = test.dds
         assert_eq!(result.groups.len(), 2);
     }
 
+    /// 测试：轻量扫描严格拒绝 `group_0` 和 `group_01` 作为 NormalGroup
+    ///
+    /// 验证：`group_0`（零值）和 `group_01`（前导零）被作为 MutexGroup 处理，`group_1` 作为 NormalGroup
     #[test]
     fn test_light_scan_group_regex_strict() {
         let dir = setup_test_dir();
@@ -1848,6 +2186,9 @@ filename = test.dds
         assert!(mutex_names.contains(&"group_01"), "group_01 should be MutexGroup");
     }
 
+    /// 测试：轻量扫描排序规则（启用优先 > 收藏优先 > 自然排序）
+    ///
+    /// 验证：None 固定第一，然后是 fav_mod（收藏），mod2 < mod10（自然排序），禁用模组最后
     #[test]
     fn test_light_scan_sorting() {
         let dir = setup_test_dir();
