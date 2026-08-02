@@ -152,7 +152,10 @@ const groupedTree = computed<ModGroupData[]>(() => {
 const expandedMap = ref<Map<string, boolean>>(new Map([['__VIRTUAL_GROUPS__', true]]))
 /** 获取分组展开状态，虚拟根默认展开；搜索命中的祖先路径强制展开 */
 function isGroupExpanded(groupPath: string): boolean {
-  const autoExpanded = modsStore.searchQuery?.trim() && modsStore.autoExpandGroupPaths?.has(groupPath)
+  const hasQuery = !!modsStore.searchQuery?.trim()
+  // 搜索时虚拟Groups根始终展开（因为其下的角色分组可能命中需要可见）
+  if (hasQuery && groupPath === '__VIRTUAL_GROUPS__') return true
+  const autoExpanded = hasQuery && !!modsStore.autoExpandGroupPaths?.has(groupPath)
   if (autoExpanded) return true
   if (!expandedMap.value.has(groupPath)) {
     expandedMap.value.set(groupPath, groupPath === '__VIRTUAL_GROUPS__')

@@ -135,8 +135,48 @@ export const useModsStore = defineStore('mods', () => {
   }
 
   /**
+   * 递归遍历分组树，收集命中搜索词的分组路径及需要自动展开的祖先路径
+   */
+  function collectGroupMatchesRecursive(
+    groupList: ModGroupData[],
+    q: string,
+    matchedPaths: Set<string>,
+    expandPaths: Set<string>,
+    ancestors: string[] = []
+  ): void {
+    for (const g of groupList) {
+      const name = g.name || g.groupName || ''
+      const { matched } = fuzzyMatchWithSpansSimple(name, q)
+      if (matched) {
+        matchedPaths.add(g.groupPath)
+        // 命中分组 → 所有祖先都需要自动展开
+        for (const anc of ancestors) expandPaths.add(anc)
+      }
+      if (g.children && g.children.length > 0) {
+        collectGroupMatchesRecursive(
+          g.children,
+          q,
+          matchedPaths,
+          expandPaths,
+          [...ancestors, g.groupPath]
+        )
+        // 如果子树中有命中 → 当前节点也需要展开并保留
+        const subtreeHasMatch = g.children.some(
+          (c) => matchedPaths.has(c.groupPath) || expandPaths.has(c.groupPath)
+        )
+        if (subtreeHasMatch) {
+          for (const anc of ancestors) expandPaths.add(anc)
+          expandPaths.add(g.groupPath)
+        }
+      }
+    }
+  }
+
+  /**
    * 全局重新计算搜索命中
-   * 仅搜索当前选中分组内的模组，不搜索未点击分组下的模组
+   * - 分组：递归匹配所有层级分组名
+   * - 模组：仅搜索当前选中分组内的模组（未选中分组的模组不搜索）
+   * - 自动展开：命中分组及其所有祖先分组
    */
   function updateSearchMatches() {
     const q = searchQuery.value.trim()
@@ -148,21 +188,33 @@ export const useModsStore = defineStore('mods', () => {
       return
     }
 
-    // 仅搜索当前选中分组内的模组
+    // Step 1: 分组搜索（递归遍历所有分组树）
+    const matchedGroupSet = new Set<string>()
+    const expandSet = new Set<string>()
+    collectGroupMatchesRecursive(groups.value, q, matchedGroupSet, expandSet)
+    groupMatchPaths.value = Array.from(matchedGroupSet)
+    autoExpandGroupPaths.value = expandSet
+
+    // Step 2: 模组搜索（仅在当前选中分组内搜索，结果保存为 mods 扁平列表全局索引）
+    const flatMods = mods.value
+    const modPathToFlatIdx = new Map<string, number>()
+    flatMods.forEach((m, i) => {
+      if (m.modPath) modPathToFlatIdx.set(m.modPath, i)
+    })
     const currentMods = currentGroupMods.value
-    const hitMods: number[] = []
-    currentMods.forEach((m, idx) => {
+    const hitFlatIndices: number[] = []
+    for (const m of currentMods) {
       const name = m.modName || m.name || ''
       const { matched } = fuzzyMatchWithSpansSimple(name, q)
-      if (matched) hitMods.push(idx)
-    })
-    modMatchIndices.value = hitMods
+      if (matched && m.modPath) {
+        const flatIdx = modPathToFlatIdx.get(m.modPath)
+        if (flatIdx !== undefined) hitFlatIndices.push(flatIdx)
+      }
+    }
+    modMatchIndices.value = hitFlatIndices
 
-    // 分组搜索不再需要，只搜索当前分组内的模组
-    groupMatchPaths.value = []
-    autoExpandGroupPaths.value = new Set()
-
-    currentGlobalMatchIndex.value = hitMods.length > 0 ? 0 : -1
+    currentGlobalMatchIndex.value =
+      groupMatchPaths.value.length + hitFlatIndices.length > 0 ? 0 : -1
   }
 
   /** 显示/隐藏搜索栏 */

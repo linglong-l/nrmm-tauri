@@ -108,6 +108,25 @@ const hasChildren = computed(() => props.group.hasChild && props.group.children 
 /** 是否展开子分组：虚拟根默认展开，否则默认收起 */
 const expanded = ref(props.defaultExpanded ?? isVirtualRoot.value)
 
+/**
+ * 监听搜索词及 defaultExpanded（autoExpandGroupPaths 变化会触发父组件重算 defaultExpanded）
+ * 当搜索命中需要展开该分组（或其后代命中）时，自动确保 expanded=true
+ * 用户手动折叠后再次输入新搜索词也能重新展开命中分支
+ */
+watch(
+  () => [props.searchQuery, props.defaultExpanded, props.group.groupPath, isVirtualRoot.value] as const,
+  ([, newDefaultExpanded, , vRoot], [oldQuery] ,) => {
+    const queryToggled = !!props.searchQuery?.trim() !== !!oldQuery?.trim()
+    // 搜索激活或defaultExpanded变为true → 强制展开
+    if (newDefaultExpanded === true && !expanded.value) {
+      expanded.value = true
+    } else if (queryToggled && !props.searchQuery?.trim() && vRoot) {
+      // 搜索退出且是虚拟根，保持默认展开
+      expanded.value = true
+    }
+  }
+)
+
 /** 当前分组是否被选中 */
 const isSelected = computed(() => !isVirtualRoot.value && props.selectedGroupPath === props.group.groupPath)
 
