@@ -433,6 +433,8 @@ export interface UpdateResult {
   errors: ErroredLines[];
   /** 是否需要用户手动重载 */
   needReloadManual: boolean;
+  /** switch_mod成功时返回写入的选中索引（NormalGroup）；其他操作无此字段（undefined） */
+  selectedModIndex?: number;
 }
 
 /**

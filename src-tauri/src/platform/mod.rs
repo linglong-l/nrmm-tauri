@@ -54,6 +54,27 @@ pub trait KeySimulator: Send + Sync {
     fn simulate_select_mod_at(&self, _x: i32, _y: i32) -> Result<()> {
         self.simulate_select_mod()
     }
+    /// 模拟一次完整的 NRMM 风格选择操作（与 NRMM simulateKeySelectMod 对齐）
+    ///
+    /// 时序：VK_CLEAR(down, hold)
+    ///         → [SPACE + 光标绑定(group_idx,mod_idx)]
+    ///         → [RETURN + 光标绑定(group_idx,mod_idx)]
+    ///       VK_CLEAR(up)
+    ///
+    /// # 参数
+    /// - `group_idx`: 分组真实索引（NRMM 的 realGroupIndex，用于 SetCursorPos Y 坐标和 ClipCursor）
+    /// - `mod_idx`: 模组真实索引（NRMM 的 realModIndex，用于 SetCursorPos X 坐标和 ClipCursor）
+    ///
+    /// # 返回
+    /// 成功时 Ok(())，平台不支持或失败时返回 Err
+    fn simulate_select_full(&self, group_idx: u32, mod_idx: u32) -> Result<()> {
+        // 默认保守实现（老方式，不保证 VK_CLEAR 长按语义），各平台 override
+        let _ = group_idx;
+        let _ = mod_idx;
+        self.simulate_select_group()?;
+        self.simulate_select_mod()?;
+        Ok(())
+    }
     /// 检查平台是否支持按键模拟
     fn check_support(&self) -> Result<(), String>;
 }

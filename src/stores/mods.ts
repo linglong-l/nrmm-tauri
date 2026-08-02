@@ -665,18 +665,22 @@ export const useModsStore = defineStore('mods', () => {
     if (!s.currentModsPath) return
     const group = currentGroup.value
     if (!group) return
+    // 入参边界检查：索引必须在当前显示列表范围内，负数越界直接返回
+    const displayedMods = currentGroupMods.value
+    if (!Number.isSafeInteger(modIdx) || modIdx < 0 || modIdx >= displayedMods.length) {
+      logger.warn('ModsStore', 'activateModByIndex out of range', { modIdx, len: displayedMods.length })
+      return
+    }
 
     isActivating.value = true
     try {
       const isMutex = group.groupType === 'mutexGroup'
-      // 从当前显示的模组列表中获取目标模组（MutexGroup使用递归收集后的列表）
-      const displayedMods = currentGroupMods.value
       const mod = displayedMods[modIdx]
       const modPath = mod?.modPath || ''
       const groupIdx = selectedGroupRootIndex.value
 
-      // 调用后端select_mod命令处理INI写入和互斥逻辑
-      await selectMod(
+      // 调用后端select_mod命令处理INI写入和互斥逻辑，取得写入磁盘后的最终索引
+      const result = await selectMod(
         s.currentGame,
         s.currentModsPath,
         groupIdx,
@@ -688,12 +692,37 @@ export const useModsStore = defineStore('mods', () => {
       )
       // 注意：模组选择不触发 markNeedUpdate，因为选择不涉及模组数据修改
       // 仅在启用/禁用模组时才需要提醒用户更新模组数据
+
+      // 选择写入磁盘的最终索引：优先使用后端返回值，否则回退到前端传入值
+      const retSelIdx: number =
+        result && typeof result.selectedModIndex === 'number' ? result.selectedModIndex : modIdx
       // 更新前端选中状态
-      selectedModIndex.value = modIdx
+      selectedModIndex.value = retSelIdx
       // 同步记录到分组索引映射（对应 Flutter 的 previousSelectedModOnGroup）
       const gPath = group.groupPath
       if (!gPath.startsWith('__') && gPath !== '__groups__') {
-        selectedModIndicesByGroup[gPath] = modIdx
+        selectedModIndicesByGroup[gPath] = retSelIdx
+      }
+      // 关键同步：在 groups.value 整棵树上定位该分组，更新其 activeModIndex
+      // 保证下一次点击该分组时，UI 依然显示为后端写入的选中索引
+      if (group.groupType === 'normalGroup') {
+        const groupPathMatch = group.groupPath
+        const found = (function syncRec(list: ModGroupData[]): boolean {
+          for (const g of list) {
+            if (g.groupPath === groupPathMatch) {
+              g.activeModIndex = retSelIdx
+              return true
+            }
+            if (g.children && g.children.length > 0 && syncRec(g.children)) return true
+          }
+          return false
+        })(groups.value)
+        if (!found) {
+          logger.warn('ModsStore', 'activeModIndex sync failed: group not found in tree', {
+            groupPath: groupPathMatch,
+            retSelIdx,
+          })
+        }
       }
       // 乐观更新：递归更新分组树中所有模组的isActive状态
       // 互斥组和普通组都是互斥语义：同一时间只有一个模组为active
@@ -708,6 +737,8 @@ export const useModsStore = defineStore('mods', () => {
       setActiveRecursive(group, modPath)
     } catch (e) {
       logger.error('ModsStore', 'Failed to activate mod', e)
+      // 向调用方冒泡异常，保证调用方能感知到失败
+      throw e
     } finally {
       isActivating.value = false
     }
@@ -814,6 +845,16 @@ export const useModsStore = defineStore('mods', () => {
    *
    * @returns {boolean} groups 或 mods 数组非空时返回 true
    */
+  /**
+   * Global no search hit. When true, group tree stays fully visible
+   * instead of being cleared to empty.
+   */
+  const globalNoHit = computed(() => {
+    const q = searchQuery.value.trim()
+    if (!q) return false
+    return groupMatchPaths.value.length === 0 && modMatchIndices.value.length === 0
+  })
+
   function hasData(): boolean {
     return groups.value.length > 0 || mods.value.length > 0
   }
@@ -849,6 +890,7 @@ export const useModsStore = defineStore('mods', () => {
     clearNeedUpdate,
     findGroupByPathInList,
     hasData,
+    globalNoHit,
     // ========== 搜索导出 ==========
     searchVisible,
     modMatchIndices,

@@ -205,12 +205,29 @@ pub async fn select_mod(
 
         if simulate_enabled {
             let simulator = crate::platform::get_key_simulator();
-            if let (Some(x), Some(y)) = (cursor_x, cursor_y) {
-                let _ = simulator.simulate_select_group_at(x, y);
-                let _ = simulator.simulate_select_mod_at(x, y);
-            } else {
-                let _ = simulator.simulate_select_group();
-                let _ = simulator.simulate_select_mod();
+            // 参数语义对齐NRMM：优先使用调用方传入的屏幕坐标（cursor_x/cursor_y 为实际像素时），
+            // 否则 fallback 到 (mod_index, group_index) 作为虚拟坐标（3Dmigoto/xxmi 据此识别）。
+            // 注意：NRMM 将 x=realModIndex y=realGroupIndex 直接传入 SetCursorPos，
+            // 因此当未传像素坐标时，索引值本身即作为坐标输入。
+            let result: Result<(), String> = match (cursor_x, cursor_y) {
+                (Some(px), Some(py)) => {
+                    let g = u32::try_from(py.max(0)).unwrap_or(group_index);
+                    let m = u32::try_from(px.max(0)).unwrap_or(mod_index);
+                    simulator
+                        .simulate_select_full(g, m)
+                        .map_err(|e| e.to_string())
+                }
+                _ => simulator
+                    .simulate_select_full(group_index, mod_index)
+                    .map_err(|e| e.to_string()),
+            };
+            if let Err(e) = result {
+                log::warn!(
+                    "select_mod: simulate_select_full failed (g={}, m={}): {}",
+                    group_index,
+                    mod_index,
+                    e
+                );
             }
         }
 

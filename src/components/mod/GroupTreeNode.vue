@@ -200,8 +200,10 @@ const avatarUrl = computed(() => {
 const shouldShow = computed(() => {
   const q = props.searchQuery?.trim()
   if (!q) return true
-  // 虚拟根节点始终显示
+  // 虚拟根节点始终显示（否则整个树连根都没了）
   if (isVirtualRoot.value) return true
+  // 关键修复：全局无任何命中 → 保持分组可见，避免导航栏视觉清空
+  if (modsStore.globalNoHit) return true
   // 当前分组匹配搜索词
   if (props.isGroupHit) return true
   // 当前分组的子分组中有匹配的

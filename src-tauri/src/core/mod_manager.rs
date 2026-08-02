@@ -50,6 +50,12 @@ pub struct UpdateResult {
     /// 是否需要用户手动重载（3Dmigoto）
     #[serde(default)]
     pub need_reload_manual: bool,
+    /// 选择操作（switch_mod）成功写入磁盘 selectedindex 文件的最终值。
+    /// - NormalGroup：范围为 [0, g.mods.len()-1]，0 代表 None 槽位
+    /// - update_mod_data / update_group_mod_data（非选择类操作）：默认返回 None（null）
+    /// - MutexGroup：不使用 switch_mod 路径，始终 None
+    #[serde(default)]
+    pub selected_mod_index: Option<i32>,
 }
 
 /// INI 恢复结果统计
@@ -244,6 +250,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         processed_mods,
         errors: all_errors,
         need_reload_manual,
+        ..Default::default()
     })
 }
 
@@ -389,6 +396,7 @@ pub fn update_group_mod_data(
         processed_mods,
         errors: all_errors,
         need_reload_manual,
+        ..Default::default()
     })
 }
 
@@ -748,6 +756,7 @@ pub fn switch_mod(
     }
 
     // 将选中的 mod_index 写入该分组的 selectedindex 文件，使 is_active 状态持久化
+    let sel_idx_i32 = mod_index as i32;
     if let Some(g_dir) = group_dir {
         let selectedindex_path = g_dir.join(constants::SELECTED_INDEX_FILE);
         if let Err(e) = fs::write(&selectedindex_path, mod_index.to_string()) {
@@ -755,7 +764,10 @@ pub fn switch_mod(
         }
     }
 
-    Ok(UpdateResult::default())
+    Ok(UpdateResult {
+        selected_mod_index: Some(sel_idx_i32),
+        ..Default::default()
+    })
 }
 
 /// 切换单个模组的启用/禁用状态（独立开关，不影响同组其他模组）

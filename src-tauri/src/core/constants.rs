@@ -102,7 +102,7 @@ pub const ICON_NAME_PRIORITY: &[&str] = &[
     "preview.png", "preview.jpg", "preview.jpeg", ".jasm_cover.png", "cover.png", "cover.jpg"
 ];
 
-/// 3Dmigoto INI 条件段前缀列表（这些段需要注入槽位条件）
+/// 3Dmigoto 条件段前缀列表（这些段需要注入槽位条件）
 /// Key: 按键触发段
 /// KeyPress: 按键按下段
 /// TextureOverride: 纹理覆盖段
@@ -110,15 +110,6 @@ pub const ICON_NAME_PRIORITY: &[&str] = &[
 /// CommandList: 命令列表段
 pub const CONDITIONAL_SECTION_PREFIXES: &[&str] = &[
     "Key", "KeyPress", "TextureOverride", "ShaderOverride", "CommandList"
-];
-
-/// 非条件段列表（这些段不需要注入槽位条件）
-/// Present: 呈现段
-/// CustomShader: 自定义着色器
-/// String: 字符串常量
-/// Constants: 数值常量
-pub const NON_CONDITIONAL_SECTIONS: &[&str] = &[
-    "Present", "CustomShader", "String", "Constants"
 ];
 
 /// 3Dmigoto 覆盖资源键名列表（用于检测可能的崩溃行）
@@ -148,3 +139,196 @@ pub const FILE_WATCHER_DEBOUNCE_MS: u64 = 300;
 
 /// 前台窗口轮询间隔（毫秒）：检测游戏是否在前台
 pub const FOREGROUND_POLL_INTERVAL_MS: u64 = 1000;
+
+// ==========================================================================
+// NRMM 对齐：INI 安全过滤
+// 严格参考 NRMM（No-Reload-Mod-Manager）实现，保持最小排除集合逻辑
+// ==========================================================================
+
+/// Windows 桌面配置文件（由系统自动创建），NRMM 在扫描 INI 时显式排除。
+pub const DESKTOP_INI_NAME: &str = "desktop.ini";
+
+/// INI 段名白名单：完全匹配项（大小写不敏感）
+/// 对齐 NRMM SectionConfig.InjectableSections 精确列表
+pub const INJECTABLE_SECTION_EXACT: &[&str] = &[
+    "present",
+    "clearrendertargetview",
+    "scissorrect",
+    "viewport",
+    "draw",
+    "drawindexed",
+    "drawinstanced",
+    "drawindexedinstanced",
+    "copyresource",
+    "copytextureregion",
+    "dispatch",
+    "blendfactor",
+    "predication",
+    "stencilref",
+];
+
+/// INI 段名白名单：前缀匹配项（大小写不敏感）
+/// 对齐 NRMM SectionConfig.InjectableSections 前缀列表
+pub const INJECTABLE_SECTION_PREFIXES: &[&str] = &[
+    "builtincustomshader",
+    "customshader",
+    "textureoverride",
+    "shaderoverride",
+    "commandlist",
+    "resource",
+    "inputlayout",
+];
+
+/// 判断路径文件名是否为 desktop.ini（大小写不敏感）
+#[inline]
+pub fn is_desktop_ini(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.eq_ignore_ascii_case(DESKTOP_INI_NAME))
+        .unwrap_or(false)
+}
+
+/// 判断 path 是否位于 base 下的某个 DISABLED* 目录中（路径段匹配，不区分大小写）
+/// 如果 base 为空或无法归一化，则回退为在 path 的完整路径段上查找（保守过滤）
+#[inline]
+pub fn contains_disabled_segment<P, B>(path: P, base: B) -> bool
+where
+    P: AsRef<std::path::Path>,
+    B: AsRef<std::path::Path>,
+{
+    use std::path::Component;
+    let path = path.as_ref();
+    let base = base.as_ref();
+
+    let iter = match path.strip_prefix(base) {
+        Ok(rel) => rel.components(),
+        Err(_) => path.components(),
+    };
+    for comp in iter {
+        if let Component::Normal(os) = comp {
+            if let Some(s) = os.to_str() {
+                if s.to_uppercase().starts_with(DISABLED_PREFIX) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// 判断段名是否命中 NRMM 可注入段白名单（大小写不敏感）
+/// 命中时，_manageMod 才会在该段包裹 VariableGroup 条件。
+#[inline]
+pub fn is_injectable_section(section_name: &str) -> bool {
+    let lower = section_name.to_lowercase();
+    if INJECTABLE_SECTION_EXACT.iter().any(|s| *s == lower.as_str()) {
+        return true;
+    }
+    INJECTABLE_SECTION_PREFIXES
+        .iter()
+        .any(|p| lower.starts_with(p))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    // ========== is_desktop_ini ==========
+    #[test]
+    fn is_desktop_ini_lowercase() {
+        assert!(is_desktop_ini(&PathBuf::from("/mods/group_1/desktop.ini")));
+    }
+
+    #[test]
+    fn is_desktop_ini_mixed_case() {
+        // Windows 下文件名大小写不敏感，NRMM 也用不敏感比较
+        assert!(is_desktop_ini(&PathBuf::from("C:/mods/group_2/Desktop.INI")));
+        assert!(is_desktop_ini(&PathBuf::from("DESKTOP.INI")));
+    }
+
+    #[test]
+    fn is_desktop_ini_not_a_match() {
+        assert!(!is_desktop_ini(&PathBuf::from("/mods/group_1/d3dx.ini")));
+        assert!(!is_desktop_ini(&PathBuf::from("/mods/group_1/group_1.ini")));
+        // 文件名前缀相同但不是 desktop.ini 本身
+        assert!(!is_desktop_ini(&PathBuf::from("/mods/desktop_ini_backup.ini")));
+        // 没有文件名的路径
+        assert!(!is_desktop_ini(&PathBuf::from("/")));
+    }
+
+    // ========== contains_disabled_segment ==========
+    #[test]
+    fn contains_disabled_segment_inside_group_1() {
+        let base = PathBuf::from("D:/GenshinMods/Mods");
+        let mod_path = base.join("group_1").join("DISABLED_MyMod").join("mod.ini");
+        assert!(contains_disabled_segment(&mod_path, &base));
+    }
+
+    #[test]
+    fn contains_disabled_segment_case_insensitive() {
+        let base = PathBuf::from("D:/GenshinMods/Mods");
+        // "disabled" 小写仍需命中（NRMM 前缀不区分大小写）
+        let mod_path = base.join("group_1").join("disabled_lower").join("x.ini");
+        assert!(contains_disabled_segment(&mod_path, &base));
+    }
+
+    #[test]
+    fn contains_disabled_segment_not_disabled() {
+        let base = PathBuf::from("D:/GenshinMods/Mods");
+        let mod_path = base.join("group_1").join("EnabledMod").join("x.ini");
+        assert!(!contains_disabled_segment(&mod_path, &base));
+    }
+
+    #[test]
+    fn contains_disabled_segment_base_mismatch_fallback() {
+        // base 不匹配时回退到原始路径段检测（保守过滤）
+        let base = PathBuf::from("X:/wrong");
+        let mod_path = PathBuf::from("D:/Mods/group_1/DISABLED_X/m.ini");
+        assert!(contains_disabled_segment(&mod_path, &base));
+    }
+
+    #[test]
+    fn contains_disabled_segment_prefix_only_within_segment() {
+        // "DISABLED" 作为文件夹名的前缀才算，嵌入中间不算（Component Normal 分割是按目录段）
+        let base = PathBuf::from("D:/Mods");
+        let mod_path = base.join("MyDISABLEDMod").join("m.ini"); // 整个段名 MyDISABLEDMod 以 DISABLED 开头？
+        // 注意：段名完整字符串 "MyDISABLEDMod" 以 "DISABLED" 开头 → NO → false
+        assert!(!contains_disabled_segment(&mod_path, &base));
+    }
+
+    // ========== is_injectable_section ==========
+    #[test]
+    fn is_injectable_section_exact_names() {
+        // 大小写不敏感的精确匹配
+        for name in INJECTABLE_SECTION_EXACT {
+            assert!(is_injectable_section(name), "missing exact: {}", name);
+            let upper = name.to_uppercase();
+            assert!(is_injectable_section(&upper), "missing exact case: {}", upper);
+        }
+        assert!(is_injectable_section("Present"));
+        assert!(is_injectable_section("DrawIndexed"));
+    }
+
+    #[test]
+    fn is_injectable_section_prefixes() {
+        for p in INJECTABLE_SECTION_PREFIXES {
+            let sample = format!("{}ExampleSuffix", p);
+            assert!(is_injectable_section(&sample), "missing prefix sample: {}", sample);
+        }
+        assert!(is_injectable_section("TextureOverride_Ningguang_Dress"));
+        assert!(is_injectable_section("CustomShaderTest01"));
+        assert!(is_injectable_section("resource_something"));
+        assert!(is_injectable_section("InputLayout_skin"));
+    }
+
+    #[test]
+    fn is_injectable_section_not_injectable() {
+        // Constants 段、String 段、按键段不属于 injectable 白名单
+        assert!(!is_injectable_section("Constants"));
+        assert!(!is_injectable_section("String"));
+        assert!(!is_injectable_section("KeyPress"));
+        assert!(!is_injectable_section("Key1"));
+        assert!(!is_injectable_section(""));
+    }
+}

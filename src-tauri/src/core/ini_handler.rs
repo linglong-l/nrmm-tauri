@@ -3,6 +3,7 @@ use std::io::{Write, BufWriter};
 use anyhow::{Result, Context, bail};
 use std::fs;
 
+use crate::core::constants;
 use crate::models::mod_data::ErroredLines;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,16 +36,14 @@ pub struct IniFile {
     pub sections: Vec<IniSection>,
 }
 
+/// 判断段名是否属于"按键触发类条件段"（大小写不敏感前缀匹配）
+///
+/// 严格映射 constants::CONDITIONAL_SECTION_PREFIXES 常量列表，避免与常量定义重复。
 pub fn is_conditional_section(name: &str) -> bool {
     let lower = name.to_lowercase();
-    lower.starts_with("key") || lower.starts_with("keypress")
-        || lower.starts_with("textureoverride") || lower.starts_with("shaderoverride")
-        || lower.starts_with("commandlist")
-}
-
-pub fn is_non_executable_section(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    lower == "present" || lower.starts_with("customshader") || lower == "string"
+    constants::CONDITIONAL_SECTION_PREFIXES
+        .iter()
+        .any(|p| lower.starts_with(&p.to_lowercase()))
 }
 
 fn trim_trailing_whitespace(s: &str) -> &str {
@@ -430,11 +429,13 @@ impl IniFile {
         for section in &mut self.sections {
             let section_name_lower = section.name.to_lowercase();
 
-            if is_non_executable_section(&section.name) {
-                continue;
-            }
+            // NRMM 对齐：仅对按键触发段（历史逻辑）+ 注入白名单段（Present/CustomShader/
+            // TextureOverride/ShaderOverride/CommandList/Resource/InputLayout/Draw*/Dispatch 等）
+            // 包裹 VariableGroup 条件；其余段（如 String 等）不做处理。
+            let should_wrap = is_conditional_section(&section.name)
+                || constants::is_injectable_section(&section.name);
 
-            if is_conditional_section(&section.name) {
+            if should_wrap {
                 let has_existing_condition = section.lines.iter().any(|line| {
                     matches!(line, IniLine::IfStart { condition, .. } if condition.contains("managed_slot_id"))
                 });
@@ -1004,5 +1005,47 @@ key = value
         let f = write_temp_ini(ini_content);
         let ini = IniFile::parse(f.path()).unwrap();
         assert!(ini.has_include());
+    }
+
+    // ========== is_conditional_section（由 constants::CONDITIONAL_SECTION_PREFIXES 驱动） ==========
+    #[test]
+    fn test_is_conditional_section_aligned_with_constants_prefixes() {
+        use crate::core::constants::CONDITIONAL_SECTION_PREFIXES;
+
+        // 每个前缀的原样/大写/驼峰形式都应匹配（大小写不敏感）
+        for prefix in CONDITIONAL_SECTION_PREFIXES {
+            let sample = format!("{}Example", prefix);
+            assert!(
+                is_conditional_section(&sample),
+                "prefix sample {} should be conditional",
+                sample
+            );
+            let sample_upper = format!("{}EXAMPLE", prefix.to_uppercase());
+            assert!(
+                is_conditional_section(&sample_upper),
+                "uppercase prefix sample {} should be conditional",
+                sample_upper
+            );
+        }
+
+        // 已知真实 INI 段名：按键触发类 / 覆盖类 / 命令列表
+        assert!(is_conditional_section("Key1"));
+        assert!(is_conditional_section("keypress"));
+        assert!(is_conditional_section("TextureOverride_Ningguang_Dress"));
+        assert!(is_conditional_section("shaderoverride_vs"));
+        assert!(is_conditional_section("CommandList_Post"));
+    }
+
+    #[test]
+    fn test_is_conditional_section_rejects_non_conditional() {
+        // Present / CustomShader 现在属于 INJECTABLE（由 is_injectable_section 驱动），
+        // 但不是 CONDITIONAL_SECTION_PREFIXES 列表，故 is_conditional_section 返回 false
+        assert!(!is_conditional_section("Present"));
+        assert!(!is_conditional_section("CustomShader01"));
+        // Constants / String 段：二者均非条件段
+        assert!(!is_conditional_section("Constants"));
+        assert!(!is_conditional_section("String"));
+        // 空字符串
+        assert!(!is_conditional_section(""));
     }
 }

@@ -73,6 +73,94 @@ impl LinuxKeySimulator {
         }
         Ok(())
     }
+
+    /// X11 (xdotool): 模拟 VK_CLEAR(KP_Begin) 长按期间依次发送 SPACE 和 RETURN
+    ///
+    /// xdotool keydown/keyup 手动控制 CLEAR 修饰键的保持语义。
+    /// 先 mousemove 到 (mod_idx, group_idx) 绑定光标位置，对齐 NRMM 的 SetCursorPos 行为。
+    fn send_select_full_xtest(group_idx: u32, mod_idx: u32) -> Result<()> {
+        // xdotool mousemove x y（光标绑定：mod_idx→X, group_idx→Y）
+        let _ = Command::new("xdotool")
+            .args(["mousemove", &mod_idx.to_string(), &group_idx.to_string()])
+            .output();
+
+        // CLEAR down
+        Self::xtest_keydown("KP_Begin")?;
+        thread::sleep(Duration::from_millis(10));
+
+        // SPACE (完整按+释放)
+        Self::send_key_xtest("space")?;
+        thread::sleep(Duration::from_millis(30));
+
+        // RETURN (完整按+释放)
+        Self::send_key_xtest("Return")?;
+        thread::sleep(Duration::from_millis(10));
+
+        // CLEAR up
+        Self::xtest_keyup("KP_Begin")?;
+        Ok(())
+    }
+
+    fn xtest_keydown(key: &str) -> Result<()> {
+        let o = Command::new("xdotool").args(["keydown", key]).output()?;
+        if !o.status.success() {
+            anyhow::bail!(
+                "xdotool keydown {} failed: {}",
+                key,
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    fn xtest_keyup(key: &str) -> Result<()> {
+        let o = Command::new("xdotool").args(["keyup", key]).output()?;
+        if !o.status.success() {
+            anyhow::bail!(
+                "xdotool keyup {} failed: {}",
+                key,
+                String::from_utf8_lossy(&o.stderr)
+            );
+        }
+        Ok(())
+    }
+
+    /// Wayland (ydotool): CLEAR=72 SPACE=57 RETURN=28
+    ///
+    /// ydotool key 支持 `code:1`(down) / `code:0`(up) 语义，用于控制 CLEAR 的长按。
+    /// 光标移动在 Wayland 下依赖 compositor，保守尝试失败则忽略（与 NRMM 行为一致）。
+    fn send_select_full_ydotool(group_idx: u32, mod_idx: u32) -> Result<()> {
+        let _g = group_idx;
+        let _m = mod_idx;
+
+        // CLEAR down (72:1 = 按下)
+        let o1 = Command::new("ydotool").args(["key", "72:1"]).output()?;
+        if !o1.status.success() {
+            anyhow::bail!(
+                "ydotool CLEAR down failed: {}",
+                String::from_utf8_lossy(&o1.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
+
+        // SPACE (57 完整按+释放)
+        Self::send_key_ydotool(57)?;
+        thread::sleep(Duration::from_millis(30));
+
+        // RETURN (28 完整按+释放)
+        Self::send_key_ydotool(28)?;
+        thread::sleep(Duration::from_millis(10));
+
+        // CLEAR up (72:0 = 释放)
+        let o2 = Command::new("ydotool").args(["key", "72:0"]).output()?;
+        if !o2.status.success() {
+            anyhow::bail!(
+                "ydotool CLEAR up failed: {}",
+                String::from_utf8_lossy(&o2.stderr)
+            );
+        }
+        Ok(())
+    }
 }
 
 impl super::KeySimulator for LinuxKeySimulator {
@@ -132,6 +220,14 @@ impl super::KeySimulator for LinuxKeySimulator {
             KeyMethod::Unsupported(msg) => {
                 Err(anyhow!("F10 keypress not supported: {}", msg))
             }
+        }
+    }
+
+    fn simulate_select_full(&self, group_idx: u32, mod_idx: u32) -> Result<()> {
+        match &self.method {
+            KeyMethod::XTest => Self::send_select_full_xtest(group_idx, mod_idx),
+            KeyMethod::Ydotool => Self::send_select_full_ydotool(group_idx, mod_idx),
+            KeyMethod::Unsupported(r) => Err(anyhow!(r.clone())),
         }
     }
 

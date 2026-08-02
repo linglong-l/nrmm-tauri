@@ -164,6 +164,8 @@ pub fn is_group_xx_dir(dir_name: &str) -> bool {
 
 /// 检查目录是否包含任何 .ini 文件（仅检查扩展名，不读取内容）
 /// 使用 entry.file_type() 免 metadata() 系统调用
+///
+/// NRMM 对齐：显式跳过 desktop.ini，避免将系统配置文件被视为模组 INI
 pub fn dir_has_ini_file(dir_path: &Path) -> Result<bool> {
     let entries = match fs::read_dir(dir_path) {
         Ok(e) => e,
@@ -181,6 +183,10 @@ pub fn dir_has_ini_file(dir_path: &Path) -> Result<bool> {
         };
         if ft.is_file() || ft.is_symlink() {
             let path = entry.path();
+            // 显式排除系统 desktop.ini（NRMM 对齐）
+            if constants::is_desktop_ini(&path) {
+                continue;
+            }
             if let Some(ext) = path.extension() {
                 if ext.to_string_lossy().to_lowercase() == "ini" {
                     return Ok(true);
@@ -1287,6 +1293,10 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
             if let Some(ext) = path.extension() {
                 let ext_lower = ext.to_string_lossy().to_lowercase();
                 if ext_lower == "ini" {
+                    // NRMM 对齐：显式跳过桌面配置文件（系统 INI，不参与模组 INI 注入/统计）
+                    if constants::is_desktop_ini(&path) {
+                        continue;
+                    }
                     has_ini = true;
                     ini_files.push(path);
                 } else if ICON_EXTENSIONS.contains(&ext_lower.as_str()) {

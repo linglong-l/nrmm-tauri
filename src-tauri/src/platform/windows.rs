@@ -44,6 +44,33 @@ impl super::KeySimulator for WindowsKeySimulator {
         Ok(())
     }
 
+    fn simulate_select_full(&self, group_idx: u32, mod_idx: u32) -> Result<()> {
+        // ========== 差异1修复：VK_CLEAR 保持按住 ==========
+        send_key_down_only(VK_CLEAR)?;
+        thread::sleep(Duration::from_millis(10));
+
+        let x = mod_idx as i32;
+        let y = group_idx as i32;
+
+        // ========== 差异3修复(1/2)：SPACE 绑定光标 ==========
+        let r1 = simulate_key_with_cursor(VK_SPACE, x, y);
+        if let Err(e) = &r1 {
+            log::warn!("simulate_select_full SPACE phase failed: {}", e);
+        }
+        thread::sleep(Duration::from_millis(30));
+
+        // ========== 差异3修复(2/2)：RETURN 绑定光标 ==========
+        let r2 = simulate_key_with_cursor(VK_RETURN, x, y);
+        if let Err(e) = &r2 {
+            log::warn!("simulate_select_full RETURN phase failed: {}", e);
+        }
+
+        // ========== 最后才释放 VK_CLEAR ==========
+        send_key_up_only(VK_CLEAR)?;
+
+        r1.and(r2)
+    }
+
     fn simulate_select_group_at(&self, x: i32, y: i32) -> Result<()> {
         simulate_key_with_cursor(VK_SPACE, x, y)
     }
@@ -91,10 +118,56 @@ fn send_key(vk: VIRTUAL_KEY) -> Result<()> {
         ];
         SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
         thread::sleep(Duration::from_millis(50));
-        
+
         inputs[1].Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
         SendInput(&inputs[1..], std::mem::size_of::<INPUT>() as i32);
         thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+/// 仅发送按键按下事件（不发送释放）
+///
+/// 用于 VK_CLEAR 需要长按保持的场景，与 send_key_up_only 配对使用。
+fn send_key_down_only(vk: VIRTUAL_KEY) -> Result<()> {
+    unsafe {
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_EXTENDEDKEY,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+
+/// 仅发送按键释放事件（不发送按下）
+///
+/// 与 send_key_down_only 配对使用，实现 VK_CLEAR 等修饰键的长按语义。
+fn send_key_up_only(vk: VIRTUAL_KEY) -> Result<()> {
+    unsafe {
+        let input = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        thread::sleep(Duration::from_millis(5));
     }
     Ok(())
 }
