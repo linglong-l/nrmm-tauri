@@ -1,5 +1,5 @@
 <template>
-  <div class="group-tree-node">
+  <div v-if="shouldShow" class="group-tree-node">
     <!-- 分组项 -->
     <div
       class="group-item"
@@ -8,6 +8,7 @@
         disabled: group.groupDisabled,
         'has-children': hasChildren,
         'virtual-root': isVirtualRoot,
+        'search-hit-item': !!props.isGroupHit,
       }"
       @click="handleClick"
       @contextmenu.prevent="onContextMenu"
@@ -32,7 +33,7 @@
     </div>
 
     <!-- 分组名称（悬浮显示） -->
-    <span class="group-name" :class="{ 'virtual-label': isVirtualRoot }" :title="displayName">{{ displayName }}</span>
+    <span class="group-name" :class="{ 'virtual-label': isVirtualRoot }" :title="displayName" v-html="highlightedName"></span>
 
     <!-- 子分组（递归渲染） -->
     <Transition name="tree-expand">
@@ -43,6 +44,8 @@
           :group="child"
           :depth="depth + 1"
           :selected-group-path="selectedGroupPath"
+          :search-query="props.searchQuery"
+          :is-group-hit="modsStore.isGroupMatch(child.groupPath)"
           @select="$emit('select', $event)"
           @context-menu="$emit('context-menu', $event)"
         />
@@ -61,13 +64,15 @@
  * - 右键菜单
  * - 不同层级缩进
  */
-import { ref, computed } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModGroupData } from '@/types'
+import { useModsStore } from '@/stores/mods'
 
 const { t } = useI18n()
+const modsStore = useModsStore()
 
 const props = defineProps<{
   /** 当前分组数据 */
@@ -78,6 +83,10 @@ const props = defineProps<{
   selectedGroupPath: string
   /** 默认展开状态（虚拟根节点需要默认展开） */
   defaultExpanded?: boolean
+  /** 搜索关键词（空则不高亮） */
+  searchQuery?: string
+  /** 当前分组是否为搜索命中项 */
+  isGroupHit?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -102,8 +111,45 @@ const expanded = ref(props.defaultExpanded ?? isVirtualRoot.value)
 /** 当前分组是否被选中 */
 const isSelected = computed(() => !isVirtualRoot.value && props.selectedGroupPath === props.group.groupPath)
 
+/**
+ * 监听选中状态变化，确保选中分组在可视区域内
+ * 退出搜索后布局恢复时，自动滚动到选中的分组节点
+ */
+watch(isSelected, (selected) => {
+  if (selected) {
+    nextTick(() => {
+      const el = document.querySelector(`.group-item.active`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      }
+    })
+  }
+})
+
 /** 分组显示名称（优先使用name字段，去掉DISABLED_前缀后的名称） */
 const displayName = computed(() => props.group.name || props.group.groupName)
+
+const highlightedName = computed(() => {
+  const name = displayName.value || ''
+  const q = props.searchQuery?.trim()
+  if (!q || !name) return escapeHtml(name)
+  const { matched, spans } = modsStore.fuzzyMatchWithSpansSimple(name, q)
+  if (!matched || !spans.length) return escapeHtml(name)
+  let html = ''
+  let cursor = 0
+  for (const [start, end] of spans) {
+    if (start > cursor) html += escapeHtml(name.slice(cursor, start))
+    html += `<mark class="search-mark">${escapeHtml(name.slice(start, end))}</mark>`
+    cursor = end
+  }
+  if (cursor < name.length) html += escapeHtml(name.slice(cursor))
+  return html
+})
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c] as string))
+}
 
 /** 头像显示文字：虚拟根使用"G"标识，其他使用首字母大写 */
 const initialText = computed(() => {
@@ -127,18 +173,76 @@ const avatarUrl = computed(() => {
   }
 })
 
+/**
+ * 搜索时是否显示当前分组
+ * - 无搜索词：显示所有分组
+ * - 有搜索词：显示匹配的分组、包含匹配模组的分组、虚拟根节点
+ */
+const shouldShow = computed(() => {
+  const q = props.searchQuery?.trim()
+  if (!q) return true
+  // 虚拟根节点始终显示
+  if (isVirtualRoot.value) return true
+  // 当前分组匹配搜索词
+  if (props.isGroupHit) return true
+  // 当前分组的子分组中有匹配的
+  if (hasChildren.value) {
+    return hasMatchingDescendant(props.group)
+  }
+  return false
+})
+
+/**
+ * 递归检查分组是否有匹配搜索词的后代
+ */
+function hasMatchingDescendant(group: ModGroupData): boolean {
+  const q = props.searchQuery?.trim()
+  if (!q) return false
+  if (!group.children || group.children.length === 0) return false
+  for (const child of group.children) {
+    if (modsStore.isGroupMatch(child.groupPath)) return true
+    if (hasMatchingDescendant(child)) return true
+  }
+  return false
+}
+
 /** 切换展开/折叠状态 */
 function toggleExpand() {
   expanded.value = !expanded.value
 }
 
-/** 点击分组项：虚拟根只切换展开/折叠，不选择；其他正常emit select */
-function handleClick() {
+/**
+ * 点击分组项
+ * - 虚拟根：只切换展开/折叠，不选择
+ * - 有直接模组：触发选择（emit select）+ 关闭搜索框（如果打开）
+ * - 无直接模组（仅有子分组或空）：仅触发展开/收起，不选择
+ */
+function handleClick(e: MouseEvent) {
+  // 阻止事件冒泡到 GroupPanel，避免 handlePanelClick 干扰
+  e.stopPropagation()
+
   if (isVirtualRoot.value) {
     toggleExpand()
     return
   }
+
+  // 无直接模组（仅子分组或空）：仅展开/收起，不触发选择
+  if (!props.group.mods || props.group.mods.length === 0) {
+    toggleExpand()
+    return
+  }
+
+  // 有直接模组：先触发展开+分组选择
+  if (!expanded.value) {
+    toggleExpand()
+  }
   emit('select', props.group)
+
+  // 关闭搜索框（如可见）
+  if (modsStore.searchVisible) {
+    modsStore.setSearchVisible(false)
+    modsStore.clearSearch()
+  }
 }
 
 /** 右键菜单：虚拟根屏蔽，避免误操作（因为不是真实目录） */
@@ -341,5 +445,23 @@ function onContextMenu(e: MouseEvent) {
   font-weight: 700;
   letter-spacing: 0.5px;
   font-size: 10px;
+}
+
+/* 搜索命中字符高亮：金黄色底色 + 加粗 */
+:deep(.search-mark) {
+  background: rgba(245, 195, 90, 0.35);
+  color: #ffe7a3;
+  font-weight: 700;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+/* 搜索命中的分组节点（发光光环 + 放大） */
+.search-hit-item {
+  background: rgba(245, 195, 90, 0.12) !important;
+  box-shadow: 0 0 10px rgba(245, 195, 90, 0.35);
+  transition: all 0.2s ease;
+}
+.search-hit-item .group-avatar {
+  border-color: rgba(245, 195, 90, 0.8) !important;
 }
 </style>

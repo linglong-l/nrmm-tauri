@@ -173,6 +173,8 @@ pub async fn select_mod(
     mod_index: u32,
     is_mutex: bool,
     mod_path: String,
+    cursor_x: Option<i32>,
+    cursor_y: Option<i32>,
 ) -> Result<mod_manager::UpdateResult, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
@@ -197,11 +199,21 @@ pub async fn select_mod(
             ..Default::default()
         })
     } else {
-        // 向 3Dmigoto 发送按键模拟（与 NRMM 对齐）
-        let _ = crate::platform::get_key_simulator().simulate_select_group();
-        let _ = crate::platform::get_key_simulator().simulate_select_mod();
-
+        // 检查设置是否允许按键模拟
         let settings = settings_store::get_settings();
+        let simulate_enabled = settings.simulate_key_on_selection;
+
+        if simulate_enabled {
+            let simulator = crate::platform::get_key_simulator();
+            if let (Some(x), Some(y)) = (cursor_x, cursor_y) {
+                let _ = simulator.simulate_select_group_at(x, y);
+                let _ = simulator.simulate_select_mod_at(x, y);
+            } else {
+                let _ = simulator.simulate_select_group();
+                let _ = simulator.simulate_select_mod();
+            }
+        }
+
         let managed_path = mods_path.join(constants::MANAGED_FOLDER);
 
         let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
@@ -386,18 +398,35 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
 }
 
 /// 重命名分组
+///
+/// 根据分组类型采用不同策略：
+/// - group_xx（is_group_xx=true）：修改 groupname 文件内容（无则创建）
+/// - 非group（is_group_xx=false）：重命名目录
+///
+/// 路径不存在时返回异常
 #[tauri::command]
-pub async fn rename_group(group_path: String, new_name: String) -> Result<PathBuf, String> {
+pub async fn rename_group(group_path: String, new_name: String, is_group_xx: bool) -> Result<PathBuf, String> {
     let path = PathBuf::from(&group_path);
 
     let new_path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf, String> {
         if !path.exists() {
             return Err("Group path does not exist".to_string());
         }
-        let parent = path.parent().ok_or_else(|| "Invalid group path".to_string())?;
-        let new_path = parent.join(new_name);
-        fs::rename(&path, &new_path).map_err(|e| e.to_string())?;
-        Ok(new_path)
+
+        if is_group_xx {
+            let groupname_path = path.join("groupname");
+            fs::write(&groupname_path, &new_name)
+                .map_err(|e| format!("Failed to write groupname file: {}", e))?;
+            Ok(groupname_path)
+        } else {
+            let parent = path.parent().ok_or_else(|| "Invalid group path".to_string())?;
+            let target = parent.join(&new_name);
+            if target.exists() {
+                return Err(format!("Target directory already exists: {}", target.display()));
+            }
+            fs::rename(&path, &target).map_err(|e| e.to_string())?;
+            Ok(target)
+        }
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -548,6 +577,17 @@ pub async fn batch_toggle_mods(mod_paths: Vec<String>, enable: bool, is_mutex: b
     }
 
     Ok(count)
+}
+
+/// 模拟 F10 按键（3Dmigoto 重载快捷键）
+///
+/// 与 NRMM 的 simulateKeyF10() 对齐，用于 update_mod_data 完成后
+/// 需要手动重载 3Dmigoto 时向游戏发送 F10 按键。
+#[tauri::command]
+pub async fn simulate_f10() -> Result<(), String> {
+    crate::platform::get_key_simulator()
+        .simulate_f10()
+        .map_err(|e| e.to_string())
 }
 
 fn parse_game(game: &str) -> Result<TargetGame, String> {
@@ -714,4 +754,64 @@ pub fn create_subfolder(parent_path: String, folder_name: String) -> Result<(), 
             Err(err_msg)
         }
     }
+}
+
+/// 禁用指定分组下所有一级模组（不含 .ini 的子分组目录不处理）
+#[tauri::command]
+pub async fn disable_all_mods_in_group(group_path: String) -> Result<u32, String> {
+    let path = PathBuf::from(group_path);
+
+    let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
+        crate::core::mod_manager::disable_all_mods_in_group(&path)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    {
+        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        cache.invalidate_all();
+    }
+
+    Ok(count)
+}
+
+/// 启用指定分组下所有一级禁用模组（不含 .ini 的子分组目录不处理）
+#[tauri::command]
+pub async fn enable_all_mods_in_group(group_path: String) -> Result<u32, String> {
+    let path = PathBuf::from(group_path);
+
+    let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
+        crate::core::mod_manager::enable_all_mods_in_group(&path)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    {
+        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        cache.invalidate_all();
+    }
+
+    Ok(count)
+}
+
+/// 移除分组（NRMM 对齐：移至 _MANAGED_REMOVED_；非group先移子分组到父级再移除）
+#[tauri::command]
+pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<(), String> {
+    let path = PathBuf::from(group_path);
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        crate::core::mod_manager::remove_group_ex(&path, is_group_xx)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    {
+        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        cache.invalidate_all();
+    }
+
+    Ok(())
 }

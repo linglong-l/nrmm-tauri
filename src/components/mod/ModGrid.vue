@@ -1,5 +1,5 @@
 <template>
-  <div class="mod-grid-container">
+  <div class="mod-grid-container" @click="handleContainerClick">
     <!-- 搜索栏：支持模糊搜索、键盘导航 -->
     <SearchBar v-model:visible="searchVisible" v-model="searchQuery" :total-matches="totalMatches"
       :current-index="currentMatchIndex" @next="nextMatch" @prev="prevMatch" @close="onSearchClose" />
@@ -14,11 +14,40 @@
         <p class="empty-text">{{ t('mods.noMods') }}</p>
         <p class="empty-hint">{{ t('Drag & Drop mod folders here to add mods to this group (1 folder = 1 mod).') }}</p>
       </div>
-      <!-- 模组卡片网格：每行6个，末尾填充空槽位对齐 -->
+
+      <!-- 虚拟行渲染模式（模组数 > 阈值） -->
+      <template v-else-if="virtualEnabled">
+        <!-- 上方占位：维持滚动条高度 -->
+        <div :style="{ height: spacerTop + 'px' }" aria-hidden="true"></div>
+        <!-- 可见行：每行渲染 columnCount 个卡片 -->
+        <div
+          v-for="rowIdx in visibleRowCount"
+          :key="'row-' + (virtualStartRow + rowIdx - 1)"
+          class="mod-grid-row virtual-row"
+        >
+          <ModCard
+            v-for="colIdx in columnCount"
+            :key="'card-' + ((virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1)"
+            :mod="getModAtRowCol(virtualStartRow + rowIdx - 1, colIdx - 1)"
+            :mod-index="(virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1"
+            :class="{
+              'search-highlight': isModHighlightedByIndex((virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1) === 'active',
+              'search-hit': isModHighlightedByIndex((virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1) === 'hit'
+            }"
+            :ref="el => setModRef(el, (virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1)"
+            @select="handleHighlightMod"
+            @activate="handleActivateMod"
+          />
+        </div>
+        <!-- 下方占位：维持滚动条高度 -->
+        <div :style="{ height: spacerBottom + 'px' }" aria-hidden="true"></div>
+      </template>
+
+      <!-- 全量渲染模式（模组数 ≤ 阈值） -->
       <div v-else class="mod-grid-row">
         <!-- 模组卡片：遍历displayMods渲染 -->
         <ModCard v-for="(mod, index) in displayMods" :key="mod.modPath || index" :mod="mod" :mod-index="index"
-          :class="{ 'search-highlight': isModHighlighted(mod, index) }" :ref="el => setModRef(el, index)"
+          :class="{ 'search-highlight': isModHighlighted(mod, index) === 'active', 'search-hit': isModHighlighted(mod, index) === 'hit' }" :ref="el => setModRef(el, index)"
           @select="handleHighlightMod" @activate="handleActivateMod" />
         <!-- 空槽位占位：仅占用网格宽度保持对齐，不渲染、不可点击、不可交互 -->
         <div v-for="i in emptySlots" :key="'empty-' + i" class="empty-slot-placeholder" aria-hidden="true"></div>
@@ -38,13 +67,14 @@
  * - 拖拽滚动
  * - 收藏过滤
  */
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FolderOpened } from '@element-plus/icons-vue'
 import ModCard from './ModCard.vue'
 import SearchBar from '@/components/common/SearchBar.vue'
 import { useModsStore } from '@/stores/mods'
 import { useDragScroll } from '@/composables/useDragScroll'
+import { useVirtualGrid } from '@/composables/useVirtualGrid'
 import type { ModData } from '@/types'
 
 const { t } = useI18n()
@@ -52,18 +82,55 @@ const modsStore = useModsStore()
 
 /** 网格内容区DOM引用，用于拖拽滚动 */
 const gridContentRef = ref<HTMLElement | null>(null)
+/** 容器尺寸变化观察器，用于自动调整列数 */
+let resizeObserver: ResizeObserver | null = null
 useDragScroll(gridContentRef)
 
-/** 搜索栏是否可见 */
-const searchVisible = ref(false)
-/** 搜索关键词 */
-const searchQuery = ref('')
-/** 当前匹配项索引 */
-const currentMatchIndex = ref(0)
+/**
+ * 根据容器宽度计算每行可容纳的卡片数
+ * 卡片宽度 160px，间距 12px
+ * 公式：cols = floor((width + gap) / (cardWidth + gap))
+ */
+const columnCount = ref(5)
+
+function updateColumnCount() {
+  if (!gridContentRef.value) return
+  const width = gridContentRef.value.clientWidth
+  const cardWidth = 160
+  const gap = 12
+  const cols = Math.floor((width + gap) / (cardWidth + gap))
+  columnCount.value = Math.max(1, Math.min(6, cols))
+}
+
+/** 虚拟行渲染 */
+const totalCount = computed(() => displayMods.value.length)
+const {
+  startIndex: virtualStartIndex,
+  endIndex: virtualEndIndex,
+  spacerTop,
+  spacerBottom,
+  enabled: virtualEnabled
+} = useVirtualGrid(totalCount, gridContentRef, { columnCount })
+
+/** 虚拟行起始行号 */
+const virtualStartRow = computed(() => Math.floor(virtualStartIndex.value / columnCount.value))
+/** 可见行数 */
+const visibleRowCount = computed(() => {
+  const endRow = Math.ceil(virtualEndIndex.value / columnCount.value)
+  return Math.max(0, endRow - virtualStartRow.value)
+})
+
+/** 从 store 读取全局搜索状态 */
+const searchVisible = computed(() => modsStore.searchVisible)
+const searchQuery = computed({
+  get: () => modsStore.searchQuery,
+  set: (v: string) => { modsStore.searchQuery = v }
+})
+const totalMatches = computed(() => modsStore.groupMatchPaths.length + modsStore.modMatchIndices.length)
+const currentMatchIndex = computed(() => modsStore.currentGlobalMatchIndex)
+
 /** 模组卡片DOM引用数组，用于滚动到匹配项 */
 const modRefs = ref<(HTMLElement | null)[]>([])
-/** 搜索匹配的模组索引列表 */
-const matchIndices = ref<number[]>([])
 
 /** 加载状态 */
 const loading = computed(() => modsStore.loading)
@@ -84,126 +151,128 @@ const displayMods = computed<ModData[]>(() => {
 
 /**
  * 空槽位数量计算
- * 每行6个卡片，计算末尾需要填充多少空槽位保持对齐
+ * 根据动态列数计算末尾需要填充多少空槽位保持对齐
  */
 const emptySlots = computed(() => {
   const count = displayMods.value.length
-  const slotsPerRow = 6
+  const slotsPerRow = columnCount.value
   const remainder = count % slotsPerRow
   if (remainder === 0) return 0
   return slotsPerRow - remainder
 })
 
-/** 总匹配数 */
-const totalMatches = computed(() => matchIndices.value.length)
-
 /**
- * 子序列模糊匹配算法
- * 判断query中的字符是否按顺序出现在text中（不要求连续）
- * 例如："abc" 匹配 "aabbcc"、"axbxc"，但不匹配 "acb"
- * @param text 待匹配文本（模组名）
- * @param query 搜索关键词
- * @returns 是否匹配
+ * 获取指定行列的模组数据
+ * @param row 行号（0-based）
+ * @param col 列号（0-based）
+ * @returns 模组数据，越界返回 undefined
  */
-function fuzzyMatch(text: string, query: string): boolean {
-  if (!query) return false
-  const lowerText = text.toLowerCase()
-  const lowerQuery = query.toLowerCase()
-  let queryIdx = 0
-  for (let i = 0; i < lowerText.length && queryIdx < lowerQuery.length; i++) {
-    if (lowerText[i] === lowerQuery[queryIdx]) {
-      queryIdx++
-    }
-  }
-  return queryIdx === lowerQuery.length
+function getModAtRowCol(row: number, col: number): ModData | undefined {
+  const idx = row * columnCount.value + col
+  return displayMods.value[idx]
 }
 
 /**
- * 更新搜索匹配结果
- * 遍历displayMods，用fuzzyMatch找出所有匹配项的索引
+ * 通过 displayMods 索引判断模组卡片是否为搜索命中项
+ * 用于虚拟行渲染模式（直接使用索引避免遍历）
+ * 两种情况命中高亮：
+ *   1. 当前全局聚焦索引正好指向该模组（强高亮发光边框）
+ *   2. 该模组在命中列表中但非当前项（淡色标记边框）
  */
-function updateMatches() {
-  if (!searchQuery.value.trim()) {
-    matchIndices.value = []
-    currentMatchIndex.value = 0
-    return
+function isModHighlightedByIndex(displayIdx: number): 'active' | 'hit' | false {
+  const q = searchQuery.value?.trim()
+  if (!q) return false
+  const mod = displayMods.value[displayIdx]
+  if (!mod || !mod.modPath) return false
+  const hit = modsStore.modMatchIndices.some(i => modsStore.mods[i]?.modPath === mod.modPath)
+  if (!hit) return false
+  const info = modsStore.getCurrentMatchInfo()
+  if (!info.isGroup && info.modFlatIdx !== undefined) {
+    const focusedMod = modsStore.mods[info.modFlatIdx]
+    if (focusedMod?.modPath === mod.modPath) return 'active'
   }
-  const query = searchQuery.value.toLowerCase()
-  const matches: number[] = []
-
-  displayMods.value.forEach((mod, idx) => {
-    if (fuzzyMatch(mod.modName || '', query)) {
-      matches.push(idx)
-    }
-  })
-
-  // 预留：分组名称匹配逻辑
-  modsStore.groups.forEach((group) => {
-    if (fuzzyMatch(group.groupName || '', query)) {
-    }
-  })
-
-  matchIndices.value = matches
-  if (currentMatchIndex.value >= matches.length) {
-    currentMatchIndex.value = 0
-  }
+  return 'hit'
 }
 
 /**
- * 判断模组是否为当前高亮的搜索匹配项
- * @param _mod 模组数据
- * @param index 模组在displayMods中的索引
- * @returns 是否高亮
+ * 当前模组卡片是否为搜索命中项
+ * 两种情况命中高亮：
+ *   1. 当前全局聚焦索引正好指向该模组（强高亮发光边框）
+ *   2. 该模组在命中列表中但非当前项（淡色标记边框）
  */
-function isModHighlighted(_mod: ModData, index: number): boolean {
-  if (!searchQuery.value.trim() || matchIndices.value.length === 0) return false
-  return matchIndices.value[currentMatchIndex.value] === index
+function isModHighlighted(_mod: ModData, index: number): 'active' | 'hit' | false {
+  const q = searchQuery.value?.trim()
+  if (!q) return false
+
+  const mod = displayMods.value[index]
+  if (!mod || !mod.modPath) return false
+
+  const hit = modsStore.modMatchIndices.some(i => modsStore.mods[i]?.modPath === mod.modPath)
+  if (!hit) return false
+
+  const info = modsStore.getCurrentMatchInfo()
+  if (!info.isGroup && info.modFlatIdx !== undefined) {
+    const focusedMod = modsStore.mods[info.modFlatIdx]
+    if (focusedMod?.modPath === mod.modPath) return 'active'
+  }
+  return 'hit'
 }
 
 /**
  * 设置模组卡片DOM引用
+ * 虚拟行渲染模式下 ref 可能稀疏，故使用 el.$el 安全获取 DOM 元素
  * @param el 组件实例
  * @param index 索引
  */
 function setModRef(el: any, index: number) {
   if (el) {
-    modRefs.value[index] = el.$el
+    modRefs.value[index] = el.$el || el
   }
 }
 
-/** 滚动到当前匹配的模组卡片 */
 function scrollToMatch() {
-  if (matchIndices.value.length === 0) return
-  const idx = matchIndices.value[currentMatchIndex.value]
-  const el = modRefs.value[idx]
+  const info = modsStore.getCurrentMatchInfo()
+  if (info.isGroup) {
+    modsStore.selectGroupByPath(info.groupPath!)
+    if (gridContentRef.value) gridContentRef.value.scrollTop = 0
+    return
+  }
+  if (info.modFlatIdx !== undefined) {
+    const focusedMod = modsStore.mods[info.modFlatIdx]
+    if (!focusedMod) return
+    const displayIdx = displayMods.value.findIndex(m => m.modPath === focusedMod.modPath)
+    if (displayIdx < 0) {
+      modsStore.selectGroupContainingMod(focusedMod.modPath)
+      nextTick(() => {
+        const idx2 = displayMods.value.findIndex(m => m.modPath === focusedMod.modPath)
+        if (idx2 >= 0) scrollDisplayIndex(idx2)
+      })
+      return
+    }
+    scrollDisplayIndex(displayIdx)
+  }
+}
+function scrollDisplayIndex(displayIdx: number) {
+  const el = modRefs.value[displayIdx]
   if (el && gridContentRef.value) {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 }
 
-/** 切换到下一个匹配项（循环） */
-function nextMatch() {
-  if (matchIndices.value.length === 0) return
-  currentMatchIndex.value = (currentMatchIndex.value + 1) % matchIndices.value.length
-  nextTick(scrollToMatch)
-}
+function nextMatch() { modsStore.nextSearchMatch(); nextTick(scrollToMatch) }
+function prevMatch() { modsStore.prevSearchMatch(); nextTick(scrollToMatch) }
+function onSearchClose() { modsStore.setSearchVisible(false); modsStore.clearSearch() }
 
-/** 切换到上一个匹配项（循环） */
-function prevMatch() {
-  if (matchIndices.value.length === 0) return
-  currentMatchIndex.value = (currentMatchIndex.value - 1 + matchIndices.value.length) % matchIndices.value.length
-  nextTick(scrollToMatch)
+/**
+ * 点击容器区域（非搜索框）时关闭搜索框
+ * 搜索框自身点击通过 stopPropagation 阻止冒泡，不触发关闭
+ */
+function handleContainerClick() {
+  if (modsStore.searchVisible) {
+    modsStore.setSearchVisible(false)
+    modsStore.clearSearch()
+  }
 }
-
-/** 关闭搜索栏并清空搜索词 */
-function onSearchClose() {
-  searchQuery.value = ''
-  matchIndices.value = []
-}
-
-/** 监听搜索词和模组列表变化，更新匹配结果 */
-watch(searchQuery, updateMatches)
-watch(displayMods, updateMatches)
 
 /**
  * 单击高亮模组（仅更新UI选中状态，不写入INI）
@@ -228,18 +297,100 @@ function handleActivateMod(modIndex: number) {
 function handleKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
     e.preventDefault()
-    searchVisible.value = true
+    modsStore.setSearchVisible(true)
+  }
+}
+
+/**
+ * 确保当前选中的模组卡片可见（滚动到视口内）
+ * 边界条件：
+ * - 无模组 / 无选中索引 → 忽略
+ * - 选中索引越界 → 忽略
+ * - 卡片已在可见区域 → 不滚动（避免抖动）
+ */
+function ensureSelectedCardVisible() {
+  if (!gridContentRef.value) return
+  const count = displayMods.value.length
+  if (count === 0) return
+  const idx = modsStore.selectedModIndex
+  if (idx < 0 || idx >= count) return
+
+  const cardEl = modRefs.value[idx] as HTMLElement | undefined
+  if (!cardEl) {
+    // DOM 尚未渲染（常见于刚切换分组或刚加载完），稍后重试一次
+    nextTick(() => {
+      const el = modRefs.value[idx] as HTMLElement | undefined
+      if (el && gridContentRef.value) {
+        scrollIntoViewIfNeeded(el, gridContentRef.value)
+      }
+    })
+    return
+  }
+  scrollIntoViewIfNeeded(cardEl, gridContentRef.value)
+}
+
+/**
+ * 仅当目标元素不在可见区域内时才滚动
+ * @param target 目标DOM元素
+ * @param container 滚动容器DOM元素
+ */
+function scrollIntoViewIfNeeded(target: HTMLElement, container: HTMLElement) {
+  const containerRect = container.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  const isAbove = targetRect.top < containerRect.top
+  const isBelow = targetRect.bottom > containerRect.bottom
+  if (isAbove || isBelow) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 }
 
 onMounted(() => {
   // 监听全局Ctrl+F快捷键
   window.addEventListener('keydown', handleKeydown)
+  // 计算初始列数
+  updateColumnCount()
+  // 监听容器尺寸变化，自动调整列数
+  if (gridContentRef.value) {
+    resizeObserver = new ResizeObserver(() => {
+      updateColumnCount()
+    })
+    resizeObserver.observe(gridContentRef.value)
+  }
+  // 首次挂载：确保选中卡片可见
+  nextTick(ensureSelectedCardVisible)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  // 清理 ResizeObserver
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
 })
+
+/**
+ * 数据加载完成后 → 确保选中卡片可见
+ * 监听 loading 从 true → false 的切换（loadMods / refresh 完成）
+ */
+watch(loading, (newVal, oldVal) => {
+  if (oldVal === true && newVal === false) {
+    nextTick(ensureSelectedCardVisible)
+  }
+})
+
+/**
+ * 显示模组列表或选中分组变化后 → 确保选中卡片可见
+ * 触发场景：分组切换（displayMods 重建）、收藏模式切换、模组数量变化
+ */
+watch(
+  () => [displayMods.value.length, modsStore.selectedGroupPath, modsStore.showFavoritesOnly],
+  () => {
+    if (!loading.value) {
+      nextTick(ensureSelectedCardVisible)
+    }
+  }
+)
 </script>
 
 <style scoped>
@@ -270,6 +421,12 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: 12px;
   padding-top: 8px;
+}
+
+/* 虚拟行模式：每行固定 6 个卡片，不换行，无顶部 padding（spacerTop 已包含偏移） */
+.mod-grid-row.virtual-row {
+  flex-wrap: nowrap;
+  padding-top: 0;
 }
 
 .empty-state {
@@ -303,16 +460,24 @@ onUnmounted(() => {
 }
 
 .search-highlight {
+  border: 2px solid #f5c35a !important;
+  box-shadow: 0 0 14px rgba(245, 195, 90, 0.6);
   border-radius: 8px;
+  transition: all 0.2s ease;
+}
+.search-hit {
+  border: 2px dashed rgba(245, 195, 90, 0.45);
+  border-radius: 8px;
+  transition: all 0.2s ease;
 }
 
 /*
  * 空槽位占位：保持网格对齐但不渲染可见元素、不响应任何点击/选中。
- * 宽度与 ModCard (120px) 一致，margin-top 与真实卡片首行 padding-top 对齐保持行高。
+ * 宽度与 ModCard (160px) 一致，不可见元素仅用于对齐布局。
  */
 .empty-slot-placeholder {
   flex: 0 0 auto;
-  width: 120px;
+  width: 160px;
   height: 0;
   min-height: 0;
   pointer-events: none;

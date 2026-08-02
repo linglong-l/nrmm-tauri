@@ -132,8 +132,26 @@ export async function refreshMods(game: string, modsPath: string): Promise<ScanR
  * @param isMutex 是否为互斥组
  * @param modPath 模组文件夹路径
  */
-export async function selectMod(game: string, modsPath: string, groupIndex: number, modIndex: number, isMutex: boolean, modPath: string): Promise<any> {
-  return invoke('select_mod', { game, modsPath, groupIndex, modIndex, isMutex, modPath })
+export async function selectMod(
+  game: string,
+  modsPath: string,
+  groupIndex: number,
+  modIndex: number,
+  isMutex: boolean,
+  modPath: string,
+  cursorX?: number,
+  cursorY?: number
+): Promise<UpdateResult> {
+  return invoke('select_mod', {
+    game,
+    modsPath,
+    groupIndex,
+    modIndex,
+    isMutex,
+    modPath,
+    cursorX: cursorX ?? null,
+    cursorY: cursorY ?? null,
+  })
 }
 
 /**
@@ -192,10 +210,11 @@ export async function renameMod(modPath: string, newName: string): Promise<strin
  * 后端命令：rename_group
  * @param groupPath 分组文件夹路径
  * @param newName 新名称
+ * @param isGroupXx 是否为 group_xx 格式的普通分组
  * @returns 重命名后的分组名称
  */
-export async function renameGroup(groupPath: string, newName: string): Promise<string> {
-  return invoke('rename_group', { groupPath, newName })
+export async function renameGroup(groupPath: string, newName: string, isGroupXx: boolean): Promise<string> {
+  return invoke('rename_group', { groupPath, newName, isGroupXx })
 }
 
 /**
@@ -335,6 +354,14 @@ export async function simulateSelectGroup(): Promise<void> {
  */
 export async function simulateSelectMod(): Promise<void> {
   return invoke('simulate_select_mod')
+}
+
+/**
+ * 模拟 F10 按键（3Dmigoto 重载快捷键）
+ * 与 NRMM 的 simulateKeyF10() 对齐
+ */
+export async function simulateF10(): Promise<void> {
+  return invoke('simulate_f10')
 }
 
 /**
@@ -637,4 +664,38 @@ export async function isFileWatcherRunning(): Promise<boolean> {
  */
 export async function currentWatchedPath(): Promise<string | null> {
   return invoke('current_watched_path')
+}
+
+/**
+ * 禁用指定分组下所有一级模组（叶子节点，含 .ini 的目录）
+ * 子分组目录不受影响
+ * 后端命令：disable_all_mods_in_group
+ * @param groupPath 分组目录路径（绝对路径）
+ * @returns 成功禁用的模组数量
+ */
+export async function disableAllModsInGroup(groupPath: string): Promise<number> {
+  return invoke('disable_all_mods_in_group', { groupPath })
+}
+
+/**
+ * 启用指定分组下所有一级禁用模组
+ * 子分组目录不受影响
+ * 后端命令：enable_all_mods_in_group
+ * @param groupPath 分组目录路径（绝对路径）
+ * @returns 成功启用的模组数量
+ */
+export async function enableAllModsInGroup(groupPath: string): Promise<number> {
+  return invoke('enable_all_mods_in_group', { groupPath })
+}
+
+/**
+ * 移除分组（NRMM 对齐：移至 Mods/_MANAGED_REMOVED_/ 目录）
+ * - group_xx：直接移至 _MANAGED_REMOVED_
+ * - 非group：先将一级子分组移至父级目录，再移自身至 _MANAGED_REMOVED_
+ * 后端命令：remove_group_ex
+ * @param groupPath 分组目录路径（绝对路径）
+ * @param isGroupXx 是否为 group_xx 格式的普通分组
+ */
+export async function removeGroupEx(groupPath: string, isGroupXx: boolean): Promise<void> {
+  return invoke('remove_group_ex', { groupPath, isGroupXx })
 }

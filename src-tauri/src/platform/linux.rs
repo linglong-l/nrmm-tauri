@@ -112,6 +112,29 @@ impl super::KeySimulator for LinuxKeySimulator {
         }
     }
     
+    fn simulate_f10(&self) -> Result<()> {
+        match &self.method {
+            KeyMethod::XTest => {
+                Command::new("xdotool")
+                    .args(["key", "F10"])
+                    .output()
+                    .map_err(|e| anyhow!("xdotool key F10 failed: {}", e))?;
+                Ok(())
+            }
+            KeyMethod::Ydotool => {
+                // F10 scan code: 121
+                Command::new("ydotool")
+                    .args(["key", "121:1", "121:0"])
+                    .output()
+                    .map_err(|e| anyhow!("ydotool key F10 failed: {}", e))?;
+                Ok(())
+            }
+            KeyMethod::Unsupported(msg) => {
+                Err(anyhow!("F10 keypress not supported: {}", msg))
+            }
+        }
+    }
+
     fn check_support(&self) -> Result<(), String> {
         match &self.method {
             KeyMethod::Unsupported(reason) => Err(reason.clone()),

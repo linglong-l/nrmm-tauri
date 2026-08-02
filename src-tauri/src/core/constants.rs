@@ -18,7 +18,7 @@ pub const KEYPRESS_FILENAME: &str = "nrmm_keypress.txt";
 pub const INCLUDE_FILENAME: &str = "nrmm_include.ini";
 
 /// 禁用模组的目录名前缀（重命名目录实现启用/禁用）
-pub const DISABLED_PREFIX: &str = "DISABLED_";
+pub const DISABLED_PREFIX: &str = "DISABLED";
 
 /// 收藏标记文件名：存在此空文件表示模组被收藏
 pub const FAV_MARKER: &str = "fav";

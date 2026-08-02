@@ -550,6 +550,10 @@
     "restoreZonePlaceholder": "Drop mod folders or the \"Mods\" folder here, or click to select a folder",
     "restoreZoneDesc": "Mods can be used again without the mod manager. Mods are not reset, only lines added by the mod manager are removed.",
     "hotkeyComingSoon": "Hotkey feature coming soon",
-    "dontForgetUpdate": "Don't forget to press \"Update Mod Data\""
+    "dontForgetUpdate": "Don't forget to press \"Update Mod Data\"",
+    "closeAndReload": "Close & Reload (F10)",
+    "close": "Close",
+    "simulateKeyOnSelection": "Simulate keys on selection",
+    "simulateKeyOnSelectionDesc": "Send key simulation to 3Dmigoto when selecting mods"
   }
 }

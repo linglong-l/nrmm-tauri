@@ -10,10 +10,10 @@
  * - 树状导航：groups是顶层列表（NormalGroup + MutexGroup根节点），子分组通过children递归访问
  */
 import { defineStore } from 'pinia'
-import { ref, computed, reactive } from 'vue'
+import { ref, computed, reactive, watch } from 'vue'
 import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, updateGroupModData } from '../utils/tauri'
 import { useSettingsStore } from './settings'
-import type { ModGroupData, ModData, TargetGame } from '../types'
+import type { ModGroupData, ModData, TargetGame, UpdateResult } from '../types'
 import { logger } from '../utils/logger'
 
 export const useModsStore = defineStore('mods', () => {
@@ -41,6 +41,244 @@ export const useModsStore = defineStore('mods', () => {
   const needUpdatePerGame = ref<Record<TargetGame, boolean>>({} as Record<TargetGame, boolean>)
   /** 按分组索引存储是否需要更新模组数据（分组级标记，用于增量更新） */
   const needUpdatePerGroup = ref<Record<number, boolean>>({})
+  /** 是否需要用户手动重载（updateModData 结果中返回的 need_reload_manual 标记） */
+  const needReloadManual = ref(false)
+  /** 是否正在执行模组激活操作（双击防抖） */
+  const isActivating = ref(false)
+
+  // ========== 全局搜索状态（Ctrl+F） ==========
+  /** 搜索栏是否可见 */
+  const searchVisible = ref(false)
+  /** 命中的模组索引（在 mods.value 扁平列表中的下标） */
+  const modMatchIndices = ref<number[]>([])
+  /** 命中的分组 groupPath 列表 */
+  const groupMatchPaths = ref<string[]>([])
+  /** 当前聚焦命中项的全局索引（用于 Enter/Shift+Enter 导航），-1 表示无选中 */
+  const currentGlobalMatchIndex = ref(-1)
+  /** 需要自动展开的分组路径集合（命中分组的所有祖先路径） */
+  const autoExpandGroupPaths = ref<Set<string>>(new Set())
+
+  /**
+   * 文本归一化：Unicode NFKC + 大小写 + 空白统一
+   */
+  function normalizeText(str: string): string {
+    if (!str) return ''
+    return str
+      .normalize('NFKC')
+      .replace(/\s|\u00A0|\u202F/g, '')
+      .toLowerCase()
+  }
+
+  /**
+   * 简化正确版本：找到 query 每个字符在 text 中按顺序出现的原始下标
+   * 将连续命中的下标合并为 [start, end) 区间
+   */
+  function fuzzyMatchWithSpansSimple(text: string, query: string): { matched: boolean; spans: [number, number][] } {
+    if (!query) return { matched: false, spans: [] }
+    const normText = normalizeText(text)
+    const normQuery = normalizeText(query)
+    if (!normText || !normQuery) return { matched: false, spans: [] }
+
+    // Step 1: 构造 textIdxToNormIdx 映射
+    const textIdxToNormIdx: number[] = []
+    let normPos = 0
+    for (let i = 0; i < text.length; i++) {
+      const origChar = text[i]
+      const normChar = normalizeText(origChar)
+      if (normChar) {
+        textIdxToNormIdx.push(normPos)
+        normPos += normChar.length
+      } else {
+        textIdxToNormIdx.push(-1)
+      }
+    }
+
+    // Step 2: 在 normText 上双指针，记录命中的 normText 下标数组
+    const hitNormIndices: number[] = []
+    let q = 0
+    for (let n = 0; n < normText.length && q < normQuery.length; n++) {
+      if (normText[n] === normQuery[q]) {
+        hitNormIndices.push(n)
+        q++
+      }
+    }
+    if (q < normQuery.length) return { matched: false, spans: [] }
+
+    // Step 3: 将命中的 normText 下标映射回原 text 下标
+    const hitTextIndices: number[] = []
+    for (const hitNorm of hitNormIndices) {
+      for (let ti = 0; ti < textIdxToNormIdx.length; ti++) {
+        if (textIdxToNormIdx[ti] !== -1 && textIdxToNormIdx[ti] <= hitNorm && hitNorm < textIdxToNormIdx[ti] + 1) {
+          hitTextIndices.push(ti)
+          break
+        }
+      }
+    }
+
+    // Step 4: 合并连续下标为 [start, end) 区间
+    const spans: [number, number][] = []
+    if (hitTextIndices.length === 0) return { matched: true, spans: [] }
+    let runStart = hitTextIndices[0]
+    let prev = runStart
+    for (let i = 1; i < hitTextIndices.length; i++) {
+      const cur = hitTextIndices[i]
+      if (cur === prev + 1) {
+        prev = cur
+      } else {
+        spans.push([runStart, prev + 1])
+        runStart = cur
+        prev = cur
+      }
+    }
+    spans.push([runStart, prev + 1])
+    return { matched: true, spans }
+  }
+
+  /**
+   * 全局重新计算搜索命中
+   * 仅搜索当前选中分组内的模组，不搜索未点击分组下的模组
+   */
+  function updateSearchMatches() {
+    const q = searchQuery.value.trim()
+    if (!q) {
+      groupMatchPaths.value = []
+      modMatchIndices.value = []
+      autoExpandGroupPaths.value = new Set()
+      currentGlobalMatchIndex.value = -1
+      return
+    }
+
+    // 仅搜索当前选中分组内的模组
+    const currentMods = currentGroupMods.value
+    const hitMods: number[] = []
+    currentMods.forEach((m, idx) => {
+      const name = m.modName || m.name || ''
+      const { matched } = fuzzyMatchWithSpansSimple(name, q)
+      if (matched) hitMods.push(idx)
+    })
+    modMatchIndices.value = hitMods
+
+    // 分组搜索不再需要，只搜索当前分组内的模组
+    groupMatchPaths.value = []
+    autoExpandGroupPaths.value = new Set()
+
+    currentGlobalMatchIndex.value = hitMods.length > 0 ? 0 : -1
+  }
+
+  /** 显示/隐藏搜索栏 */
+  function setSearchVisible(v: boolean) {
+    searchVisible.value = v
+    if (v) {
+      updateSearchMatches()
+    } else {
+      modMatchIndices.value = []
+      groupMatchPaths.value = []
+      autoExpandGroupPaths.value = new Set()
+      currentGlobalMatchIndex.value = -1
+    }
+  }
+
+  /** 清空搜索词 */
+  function clearSearch() {
+    searchQuery.value = ''
+    updateSearchMatches()
+  }
+
+  /** 下一个命中项 */
+  function nextSearchMatch() {
+    const total = groupMatchPaths.value.length + modMatchIndices.value.length
+    if (total === 0) return
+    if (currentGlobalMatchIndex.value < 0) currentGlobalMatchIndex.value = 0
+    else currentGlobalMatchIndex.value = (currentGlobalMatchIndex.value + 1) % total
+  }
+
+  /** 上一个命中项 */
+  function prevSearchMatch() {
+    const total = groupMatchPaths.value.length + modMatchIndices.value.length
+    if (total === 0) return
+    if (currentGlobalMatchIndex.value < 0) currentGlobalMatchIndex.value = total - 1
+    else currentGlobalMatchIndex.value = (currentGlobalMatchIndex.value - 1 + total) % total
+  }
+
+  /**
+   * 判断当前命中项是否为分组
+   */
+  function getCurrentMatchInfo(): { isGroup: boolean; groupPath?: string; modFlatIdx?: number } {
+    const i = currentGlobalMatchIndex.value
+    if (i < 0) return { isGroup: false }
+    const gCount = groupMatchPaths.value.length
+    if (i < gCount) {
+      return { isGroup: true, groupPath: groupMatchPaths.value[i] }
+    }
+    return { isGroup: false, modFlatIdx: modMatchIndices.value[i - gCount] }
+  }
+
+  /**
+   * 判断某分组是否在搜索命中分组列表中
+   */
+  function isGroupMatch(groupPath: string): boolean {
+    if (!searchQuery.value.trim()) return false
+    return groupMatchPaths.value.includes(groupPath)
+  }
+
+  /**
+   * 工具：判断某分组是否命中模组
+   */
+  function getGroupModDisplayHitIndices(groupMods: ModData[], currentMods?: ModData[]): number[] {
+    if (!searchQuery.value.trim()) return []
+    const displayList = currentMods || groupMods
+    const flatHitPaths = new Set(
+      modMatchIndices.value.map(i => mods.value[i]?.modPath).filter(Boolean)
+    )
+    const result: number[] = []
+    displayList.forEach((m, idx) => {
+      if (m.modPath && flatHitPaths.has(m.modPath)) result.push(idx)
+    })
+    return result
+  }
+
+  /**
+   * 按路径选中分组
+   */
+  function selectGroupByPath(path: string) {
+    const g = findGroupByPathInList(groups.value, path)
+    if (g) selectGroup(g)
+  }
+
+  /**
+   * 递归在分组树中查找包含指定模组的分组
+   */
+  function findGroupContainingModInList(groupList: ModGroupData[], modPath: string): ModGroupData | null {
+    for (const g of groupList) {
+      for (const m of g.mods) {
+        if (m.modPath === modPath) return g
+      }
+      if (g.children && g.children.length > 0) {
+        const found = findGroupContainingModInList(g.children, modPath)
+        if (found) return found
+      }
+    }
+    return null
+  }
+
+  /**
+   * 选中包含指定模组的分组
+   */
+  function selectGroupContainingMod(modPath: string) {
+    const g = findGroupContainingModInList(groups.value, modPath)
+    if (g) selectGroup(g)
+  }
+
+  // 搜索词变化 → 重算命中
+  watch(searchQuery, () => {
+    updateSearchMatches()
+  })
+  // 分组/模组数据变化 → 重算命中
+  watch([groups, mods], () => {
+    if (searchVisible.value && searchQuery.value.trim()) {
+      updateSearchMatches()
+    }
+  })
 
   /**
    * 递归在分组树中查找指定路径的分组
@@ -84,22 +322,6 @@ export const useModsStore = defineStore('mods', () => {
     return -1
   }
 
-  /**
-   * 递归获取分组及其所有子分组的模组列表（用于MutexGroup显示）
-   * @param group 分组
-   * @returns 该分组及其所有子分组的模组
-   */
-  function collectModsRecursive(group: ModGroupData): ModData[] {
-    let result = [...group.mods]
-    if (group.children && group.children.length > 0) {
-      for (const child of group.children) {
-        result = result.concat(collectModsRecursive(child))
-      }
-    }
-    console.debug(group.groupPath, result)
-    return result
-  }
-
   /** 当前选中的分组对象（通过路径递归查找） */
   const currentGroup = computed<ModGroupData | null>(() => {
     if (!selectedGroupPath.value) return groups.value[0] || null
@@ -119,14 +341,11 @@ export const useModsStore = defineStore('mods', () => {
     return g.mods[selectedModIndex.value] || null
   })
 
-  /** 当前分组显示的模组列表（MutexGroup包含子分组模组，NormalGroup仅直接子模组） */
+  /** 当前分组显示的模组列表（所有分组类型均仅返回自身直接模组，不递归子分组） */
   const currentGroupMods = computed<ModData[]>(() => {
     const g = currentGroup.value
     if (!g) return []
-    // MutexGroup递归收集所有子分组模组；NormalGroup（groupType=customParallel/exclusiveSlot）仅直接子模组
-    if (g.groupType === 'mutexGroup') {
-      return collectModsRecursive(g)
-    }
+    // 所有分组类型统一仅返回自身直接模组列表，子分组模组需点击子分组才显示
     return g.mods
   })
 
@@ -169,6 +388,7 @@ export const useModsStore = defineStore('mods', () => {
     }
     // 清除所有分组级标记
     needUpdatePerGroup.value = {}
+    needReloadManual.value = false
   }
 
   /**
@@ -388,11 +608,13 @@ export const useModsStore = defineStore('mods', () => {
    * @param modIdx 模组在当前显示列表中的索引
    */
   async function activateModByIndex(modIdx: number) {
+    if (isActivating.value) return
     const s = useSettingsStore()
     if (!s.currentModsPath) return
     const group = currentGroup.value
     if (!group) return
 
+    isActivating.value = true
     try {
       const isMutex = group.groupType === 'mutexGroup'
       // 从当前显示的模组列表中获取目标模组（MutexGroup使用递归收集后的列表）
@@ -402,11 +624,18 @@ export const useModsStore = defineStore('mods', () => {
       const groupIdx = selectedGroupRootIndex.value
 
       // 调用后端select_mod命令处理INI写入和互斥逻辑
-      await selectMod(s.currentGame, s.currentModsPath, groupIdx, modIdx, isMutex, modPath)
-      // 标记需要更新模组数据（仅NormalGroup操作）
-      if (!isMutex) {
-        markNeedUpdate(groupIdx)
-      }
+      await selectMod(
+        s.currentGame,
+        s.currentModsPath,
+        groupIdx,
+        modIdx,
+        isMutex,
+        modPath,
+        undefined, // cursorX - pass undefined for now (no coordinate calculation yet)
+        undefined, // cursorY - pass undefined for now (no coordinate calculation yet)
+      )
+      // 注意：模组选择不触发 markNeedUpdate，因为选择不涉及模组数据修改
+      // 仅在启用/禁用模组时才需要提醒用户更新模组数据
       // 更新前端选中状态
       selectedModIndex.value = modIdx
       // 同步记录到分组索引映射（对应 Flutter 的 previousSelectedModOnGroup）
@@ -427,6 +656,8 @@ export const useModsStore = defineStore('mods', () => {
       setActiveRecursive(group, modPath)
     } catch (e) {
       logger.error('ModsStore', 'Failed to activate mod', e)
+    } finally {
+      isActivating.value = false
     }
   }
 
@@ -500,12 +731,15 @@ export const useModsStore = defineStore('mods', () => {
 
       if (groupIndices.length > 0) {
         // 有分组标记 → 分组增量更新
+        let lastResult: UpdateResult | null = null
         for (const groupIndex of groupIndices) {
-          await updateGroupModData(s.currentGame, s.currentModsPath, groupIndex)
+          lastResult = await updateGroupModData(s.currentGame, s.currentModsPath, groupIndex)
         }
+        needReloadManual.value = lastResult?.needReloadManual ?? false
       } else {
         // 无分组标记 → 全量更新
-        await tauriUpdateModData(s.currentGame, s.currentModsPath)
+        const result = await tauriUpdateModData(s.currentGame, s.currentModsPath)
+        needReloadManual.value = result.needReloadManual
       }
 
       // 更新完成后刷新前端数据并清除所有标记
@@ -544,6 +778,7 @@ export const useModsStore = defineStore('mods', () => {
     needUpdate,
     needUpdatePerGame,
     needUpdatePerGroup,
+    needReloadManual,
     currentGroup,
     currentGroupMods,
     selectedMod,
@@ -562,5 +797,23 @@ export const useModsStore = defineStore('mods', () => {
     clearNeedUpdate,
     findGroupByPathInList,
     hasData,
+    // ========== 搜索导出 ==========
+    searchVisible,
+    modMatchIndices,
+    groupMatchPaths,
+    currentGlobalMatchIndex,
+    autoExpandGroupPaths,
+    updateSearchMatches,
+    setSearchVisible,
+    clearSearch,
+    nextSearchMatch,
+    prevSearchMatch,
+    getCurrentMatchInfo,
+    isGroupMatch,
+    getGroupModDisplayHitIndices,
+    fuzzyMatchWithSpansSimple,
+    normalizeText,
+    selectGroupByPath,
+    selectGroupContainingMod,
   }
 })

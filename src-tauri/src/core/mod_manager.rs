@@ -685,7 +685,7 @@ pub fn save_customizations(game_mods_path: &Path, game: TargetGame) -> Result<Sa
 /// 切换普通分组选中的模组
 ///
 /// 普通分组（group_xx）是互斥的：选中一个模组会自动禁用同组其他模组。
-/// 实现方式：重命名目录（移除目标的 DISABLED_ 前缀，给其他模组添加前缀），然后调用 update_mod_data。
+/// 实现方式：重命名目录（移除目标的 DISABLED 前缀，给其他模组添加前缀），然后调用 update_mod_data。
 ///
 /// # 参数
 /// - `game`: 目标游戏
@@ -725,7 +725,7 @@ pub fn switch_mod(
             let is_target = mod_data.mod_index == mod_index;
 
             if is_target && target_disabled {
-                // 启用目标模组：移除 DISABLED_ 前缀
+                // 启用目标模组：移除 DISABLED 前缀
                 let new_name = dir_name
                     .trim_start_matches("DISABLED")
                     .trim_start_matches("disabled")
@@ -736,7 +736,7 @@ pub fn switch_mod(
                         .with_context(|| format!("Failed to enable mod: {:?}", mod_dir))?;
                 }
             } else if !is_target && !target_disabled {
-                // 禁用非目标模组：添加 DISABLED_ 前缀
+                // 禁用非目标模组：添加 DISABLED 前缀
                 let new_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
                 let new_path = mod_dir.parent().unwrap_or(mod_dir).join(new_name);
                 if mod_dir != &new_path {
@@ -767,7 +767,7 @@ pub fn switch_mod(
 ///
 /// # 参数
 /// - `mod_path`: 模组目录路径
-/// - `enable`: true = 启用（移除 DISABLED_ 前缀），false = 禁用（添加 DISABLED_ 前缀）
+/// - `enable`: true = 启用（移除 DISABLED 前缀），false = 禁用（添加 DISABLED 前缀）
 pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
     let dir_name = mod_path.file_name()
         .unwrap_or_default()
@@ -916,7 +916,7 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 禁用互斥模组：给模组目录添加DISABLED_前缀
+/// 禁用互斥模组：给模组目录添加DISABLED前缀
 ///
 /// - 检查磁盘实际状态，支持幂等操作
 /// - 传入路径不存在时，检查父目录下是否已有禁用版本
@@ -958,6 +958,85 @@ pub fn disable_mutex_mod(mod_path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// 禁用指定分组下的所有一级模组（叶子节点，含 .ini 文件的目录）
+///
+/// 遍历分组目录下的所有直接子目录，对每个未禁用的模组添加 DISABLED 前缀。
+/// 跳过：
+/// - 非目录
+/// - 已禁用的模组目录（名称以 DISABLED 开头）
+/// - 不含 .ini 文件的目录（分组节点/子分组目录）
+///
+/// 不递归处理子分组目录，仅处理一级子目录。
+///
+/// # 参数
+/// - `group_path`: 分组目录路径
+///
+/// # 返回
+/// 成功禁用的模组数量（已禁用的跳过不计入）
+///
+/// # 错误
+/// - 读取目录失败时返回错误
+/// - 重命名失败时返回错误
+pub fn disable_all_mods_in_group(group_path: &Path) -> Result<u32> {
+    if !group_path.exists() {
+        return Ok(0);
+    }
+    if !group_path.is_dir() {
+        return Ok(0);
+    }
+
+    let entries = fs::read_dir(group_path)
+        .with_context(|| format!("Failed to read group directory: {:?}", group_path))?;
+
+    let mut disabled_count: u32 = 0;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let dir_name = entry.file_name().to_string_lossy().to_string();
+        if dir_name.starts_with('.') {
+            continue;
+        }
+
+        // 仅处理含 .ini 的叶子模组节点（不含 .ini 的是分组节点/子分组，跳过）
+        let has_ini = match mod_scanner::dir_has_ini_file(&path) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if !has_ini {
+            continue;
+        }
+
+        // 检查是否已禁用（名称以 DISABLED 开头，大小写不敏感）
+        let is_disabled = dir_name.to_uppercase().starts_with(constants::DISABLED_PREFIX);
+        if is_disabled {
+            continue;
+        }
+
+        // 构建新目录名：DISABLED + 原名称
+        let new_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
+        let new_path = group_path.join(&new_name);
+
+        // 检查目标路径是否已存在（避免覆盖）
+        if new_path.exists() {
+            log::warn!("Target path already exists, skipping disable: {:?}", new_path);
+            continue;
+        }
+
+        // 重命名添加前缀
+        fs::rename(&path, &new_path)
+            .with_context(|| format!("Failed to disable mod: {:?}", path))?;
+
+        disabled_count += 1;
+    }
+
+    Ok(disabled_count)
 }
 
 /// 判断模组是否属于MutexGroup（非group_xx目录下的模组）
@@ -1082,6 +1161,104 @@ pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> 
     Ok(count)
 }
 
+/// 启用指定分组下的所有一级模组（叶子节点，含 .ini 文件的目录）
+///
+/// 遍历分组目录下的所有直接子目录，对每个已禁用的模组移除 DISABLED 前缀。
+/// 跳过：
+/// - 非目录
+/// - 已启用的模组目录（名称不以 DISABLED 开头）
+/// - 不含 .ini 文件的目录（分组节点/子分组目录）
+///
+/// 不递归处理子分组目录，仅处理一级子目录。
+///
+/// # 参数
+/// - `group_path`: 分组目录路径
+///
+/// # 返回
+/// 成功启用的模组数量（已启用的跳过不计入）
+///
+/// # 错误
+/// - 读取目录失败时返回错误
+/// - 重命名失败时返回错误
+pub fn enable_all_mods_in_group(group_path: &Path) -> Result<u32> {
+    if !group_path.exists() {
+        return Ok(0);
+    }
+    if !group_path.is_dir() {
+        return Ok(0);
+    }
+
+    let entries = fs::read_dir(group_path)
+        .with_context(|| format!("Failed to read group directory: {:?}", group_path))?;
+
+    let mut enabled_count: u32 = 0;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let dir_name = entry.file_name().to_string_lossy().to_string();
+        if dir_name.starts_with('.') {
+            continue;
+        }
+
+        // 仅处理含 .ini 的叶子模组节点
+        let has_ini = match mod_scanner::dir_has_ini_file(&path) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if !has_ini {
+            continue;
+        }
+
+        // 检查是否已禁用（名称以 DISABLED 开头，大小写不敏感）
+        let is_disabled = dir_name.to_uppercase().starts_with(constants::DISABLED_PREFIX);
+        if !is_disabled {
+            continue;
+        }
+
+        // 去除 DISABLED 前缀，再去除前导分隔符 _ 空格 - 等
+        let prefix = constants::DISABLED_PREFIX;
+        let stripped_upper = dir_name.to_uppercase();
+        let after_prefix = if stripped_upper.starts_with(prefix) {
+            &dir_name[prefix.len()..]
+        } else {
+            // 大小写混合情况，按字节长度截取
+            let len = std::cmp::min(prefix.len(), dir_name.len());
+            &dir_name[len..]
+        };
+        let new_name = after_prefix.trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
+        let new_name = if new_name.is_empty() {
+            // 极端情况：整个目录名就是前缀，跳过
+            continue;
+        } else {
+            new_name.to_string()
+        };
+
+        let new_path = group_path.join(&new_name);
+
+        if new_path.exists() {
+            log::warn!("Target path already exists, skipping enable: {:?}", new_path);
+            continue;
+        }
+
+        // 源路径和目标路径相同则跳过
+        if path == new_path {
+            continue;
+        }
+
+        fs::rename(&path, &new_path)
+            .with_context(|| format!("Failed to enable mod: {:?}", path))?;
+
+        enabled_count += 1;
+    }
+
+    Ok(enabled_count)
+}
+
 /// 从备份恢复所有 INI 文件
 ///
 /// 恢复顺序：
@@ -1191,6 +1368,135 @@ fn restore_inis_recursive(dir: &Path, restored: &mut u32, failed: &mut u32) -> R
     Ok(())
 }
 
+/// 移除分组（NRMM 对齐：移至 _MANAGED_REMOVED_ 目录，非group先移子分组再移除）
+///
+/// # 参数
+/// - `group_path`: 要移除的分组目录路径
+/// - `is_group_xx`: true = group_1/group_2 等普通分组，false = mutexGroup 非group目录
+///
+/// # 对于 group_xx：
+/// 1. 定位 mods_path（group_path 的父目录，即 _MANAGED_ 的父目录）
+/// 2. 确保 `Mods/_MANAGED_REMOVED_` 目录存在
+/// 3. 将整个分组目录移至 `_MANAGED_REMOVED_/原名`，名称冲突追加 `_`
+///
+/// # 对于非group：
+/// 1. 先将分组下的**一级子目录且不含 .ini 的目录**（即子分组目录）移至父级目录
+///    - 子分组目录重名时追加 `_` 后缀
+/// 2. 然后将被清空的分组目录按 group_xx 规则移至 `_MANAGED_REMOVED_/`
+///
+/// 然后尝试 `trash` crate 移至回收站（失败静默，不中断流程）。
+/// 实际逻辑：先移至 _MANAGED_REMOVED_ 作为主要的移除方式，保留历史。
+///
+/// # 错误
+/// 路径不存在或目录移动失败时返回错误
+pub fn remove_group_ex(group_path: &Path, is_group_xx: bool) -> Result<()> {
+    if !group_path.exists() {
+        return Err(anyhow::anyhow!("Group path does not exist: {:?}", group_path));
+    }
+    if !group_path.is_dir() {
+        return Err(anyhow::anyhow!("Group path is not a directory: {:?}", group_path));
+    }
+
+    let group_name = group_path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let parent_dir = group_path.parent()
+        .with_context(|| format!("Invalid group path (no parent): {:?}", group_path))?;
+
+    // ========== 非group：先将一级子分组（无 .ini 的子目录）移至父级 ==========
+    if !is_group_xx {
+        // 收集所有一级子分组（子目录且含子目录结构/不含 .ini 的目录）
+        let entries = match fs::read_dir(group_path) {
+            Ok(e) => e,
+            Err(_) => return Err(anyhow::anyhow!("Failed to read group directory: {:?}", group_path)),
+        };
+
+        // 先收集再处理（避免在迭代期间修改目录）
+        let mut to_move: Vec<(PathBuf, String)> = Vec::new();
+        for entry in entries.flatten() {
+            let child_path = entry.path();
+            if !child_path.is_dir() {
+                continue;
+            }
+            let child_name = entry.file_name().to_string_lossy().to_string();
+            if child_name.starts_with('.') {
+                continue;
+            }
+            // 含 .ini → 叶子模组节点，不是子分组，跳过（会随父目录一起被移除）
+            let has_ini = match mod_scanner::dir_has_ini_file(&child_path) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if has_ini {
+                continue;
+            }
+            // 不含 .ini 的目录 → 子分组目录，需移至父级
+            to_move.push((child_path, child_name));
+        }
+
+        for (src, child_name) in to_move {
+            let target = parent_dir.join(&child_name);
+            if target.exists() {
+                // 重名处理：追加 _ 直到不存在
+                let mut i = 1u32;
+                let base = child_name.clone();
+                let mut resolved = parent_dir.join(format!("{}_{}", base, i));
+                while resolved.exists() {
+                    i += 1;
+                    resolved = parent_dir.join(format!("{}_{}", base, i));
+                }
+                fs::rename(&src, &resolved)
+                    .with_context(|| format!("Failed to move subgroup {:?} to parent", src))?;
+            } else {
+                fs::rename(&src, &target)
+                    .with_context(|| format!("Failed to move subgroup {:?} to parent", src))?;
+            }
+        }
+    }
+
+    // ========== 定位 _MANAGED_REMOVED_ 目录 ==========
+    // 规则：_MANAGED_REMOVED_ 位于 Mods 根目录（与 _MANAGED_ 同级）
+    // 如果 group_path 是 _MANAGED_/group_1，则 mods_root = parent(_MANAGED_)
+    // 如果 group_path 是 Mods/#NonGroup，则 mods_root = parent(#NonGroup)（即 Mods）
+    let mut mods_root = parent_dir;
+    let parent_name = mods_root.file_name().map(|n| n.to_string_lossy().to_string());
+    if parent_name.as_deref() == Some(constants::MANAGED_FOLDER) {
+        // group 目录在 _MANAGED_ 下，_MANAGED_REMOVED_ 应在其上级目录（Mods）
+        if let Some(grand_parent) = mods_root.parent() {
+            mods_root = grand_parent;
+        }
+    }
+
+    let removed_folder = mods_root.join("_MANAGED_REMOVED_");
+    if !removed_folder.exists() {
+        fs::create_dir_all(&removed_folder)
+            .with_context(|| format!("Failed to create _MANAGED_REMOVED_: {:?}", removed_folder))?;
+    }
+
+    // 构造目标路径，冲突追加 _
+    let mut target = removed_folder.join(&group_name);
+    if target.exists() {
+        let mut i = 1u32;
+        let base = group_name.clone();
+        loop {
+            let resolved = removed_folder.join(format!("{}_{}", base, i));
+            if !resolved.exists() {
+                target = resolved;
+                break;
+            }
+            i += 1;
+        }
+    }
+
+    // 移动分组至 _MANAGED_REMOVED_
+    fs::rename(group_path, &target)
+        .with_context(|| format!("Failed to move group {:?} to {:?}", group_path, target))?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1291,7 +1597,7 @@ y = 2
 
         toggle_mod(&enabled_path, false).unwrap();
         let disabled_name = enabled_path.file_name().unwrap().to_str().unwrap().to_string();
-        let new_path = dir.path().join(format!("DISABLED_{}", disabled_name));
+        let new_path = dir.path().join(format!("DISABLED{}", disabled_name));
         assert!(new_path.exists());
         assert!(!enabled_path.exists());
 
@@ -1309,7 +1615,7 @@ y = 2
         toggle_mod(&enabled_path, true).unwrap();
         assert!(enabled_path.exists());
 
-        let disabled_path = dir.path().join("DISABLED_DisabledMod");
+        let disabled_path = dir.path().join("DISABLEDDisabledMod");
         fs::create_dir_all(&disabled_path).unwrap();
         toggle_mod(&disabled_path, false).unwrap();
         assert!(disabled_path.exists());
@@ -1515,7 +1821,7 @@ y = 2
         let parent = dir.path().join("MutexGroup");
         fs::create_dir_all(&parent).unwrap();
 
-        let mod1 = create_test_mod(&parent, "DISABLED_ModA");
+        let mod1 = create_test_mod(&parent, "DISABLEDModA");
         let mod2 = create_test_mod(&parent, "ModB");
         let mod3 = create_test_mod(&parent, "ModC");
 
@@ -1525,9 +1831,9 @@ y = 2
         assert!(target_mod.exists());
         assert!(!mod1.exists());
         assert!(!mod2.exists());
-        assert!(parent.join("DISABLED_ModB").exists());
+        assert!(parent.join("DISABLEDModB").exists());
         assert!(!mod3.exists());
-        assert!(parent.join("DISABLED_ModC").exists());
+        assert!(parent.join("DISABLEDModC").exists());
     }
 
     #[test]
@@ -1537,20 +1843,20 @@ y = 2
         fs::create_dir_all(&parent).unwrap();
 
         let mod1 = create_test_mod(&parent, "ModA");
-        let _mod2 = create_test_mod(&parent, "DISABLED_ModB");
-        let _mod3 = create_test_mod(&parent, "DISABLED_ModC");
+        let _mod2 = create_test_mod(&parent, "DISABLEDModB");
+        let _mod3 = create_test_mod(&parent, "DISABLEDModC");
 
         enable_mutex_mod(&mod1).unwrap();
 
         assert!(mod1.exists());
-        assert!(parent.join("DISABLED_ModB").exists());
-        assert!(parent.join("DISABLED_ModC").exists());
+        assert!(parent.join("DISABLEDModB").exists());
+        assert!(parent.join("DISABLEDModC").exists());
 
         enable_mutex_mod(&mod1).unwrap();
 
         assert!(mod1.exists());
-        assert!(parent.join("DISABLED_ModB").exists());
-        assert!(parent.join("DISABLED_ModC").exists());
+        assert!(parent.join("DISABLEDModB").exists());
+        assert!(parent.join("DISABLEDModC").exists());
     }
 
     #[test]
@@ -1565,7 +1871,7 @@ y = 2
         disable_mutex_mod(&mod_path).unwrap();
 
         assert!(!mod_path.exists());
-        assert!(parent.join("DISABLED_MyMod").exists());
+        assert!(parent.join("DISABLEDMyMod").exists());
     }
 
     #[test]
@@ -1574,7 +1880,7 @@ y = 2
         let parent = dir.path().join("MutexGroup");
         fs::create_dir_all(&parent).unwrap();
 
-        let disabled_path = create_test_mod(&parent, "DISABLED_MyMod");
+        let disabled_path = create_test_mod(&parent, "DISABLEDMyMod");
         assert!(disabled_path.exists());
 
         disable_mutex_mod(&disabled_path).unwrap();
@@ -1600,7 +1906,7 @@ y = 2
 
         assert!(mod1.exists());
         assert!(!mod2.exists());
-        assert!(parent.join("DISABLED_ModB").exists());
+        assert!(parent.join("DISABLEDModB").exists());
         assert!(submod.exists());
         assert!(submod2.exists());
     }
@@ -1650,5 +1956,241 @@ y = 2
         atomic_write_file(&path, b"hello world").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "hello world");
         assert!(!path.with_extension("tmp").exists());
+    }
+}
+
+#[cfg(test)]
+mod tests_disable_all {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// 创建测试辅助：在指定目录下创建含 .ini 的模组目录
+    fn create_mod_dir(parent: &Path, name: &str) -> PathBuf {
+        let dir = parent.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        // 创建一个 .ini 文件使该目录被识别为叶子模组节点
+        fs::write(dir.join(format!("{}.ini", name)), "[ShaderOverride]").unwrap();
+        dir
+    }
+
+    /// 正常场景：禁用3个启用模组，跳过1个已禁用模组，跳过无子分组目录
+    #[test]
+    fn test_disable_all_basic() {
+        let tmp = TempDir::new().unwrap();
+        let group = tmp.path().join("group_1");
+        fs::create_dir_all(&group).unwrap();
+
+        let _mod_a = create_mod_dir(&group, "ModA");       // 启用
+        let _mod_b = create_mod_dir(&group, "DISABLEDModB"); // 已禁用
+        let _mod_c = create_mod_dir(&group, "ModC");       // 启用
+        // 子分组目录（无 .ini），应跳过
+        let subgroup = group.join("SubGroup");
+        fs::create_dir_all(&subgroup).unwrap();
+        let _mod_d = create_mod_dir(&group, "ModD");       // 启用
+
+        let count = disable_all_mods_in_group(&group).unwrap();
+        assert_eq!(count, 3); // ModA, ModC, ModD
+
+        // 验证目录状态
+        let entries: Vec<String> = fs::read_dir(&group).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(entries.iter().any(|n| n == "DISABLEDModA"), "ModA 应被禁用");
+        assert!(entries.iter().any(|n| n == "DISABLEDModB"), "DisabledModB 应保持不变");
+        assert!(entries.iter().any(|n| n == "DISABLEDModC"), "ModC 应被禁用");
+        assert!(entries.iter().any(|n| n == "DISABLEDModD"), "ModD 应被禁用");
+        assert!(entries.iter().any(|n| n == "SubGroup"), "子分组目录应保持不变");
+        assert_eq!(entries.len(), 5, "目录数量不变（重命名不改变数量）");
+    }
+
+    /// 幂等性：对已全部禁用的目录不产生任何变化
+    #[test]
+    fn test_disable_all_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let group = tmp.path().join("group_1");
+        fs::create_dir_all(&group).unwrap();
+
+        create_mod_dir(&group, "DISABLEDModA");
+        create_mod_dir(&group, "DISABLEDModB");
+
+        let count = disable_all_mods_in_group(&group).unwrap();
+        assert_eq!(count, 0, "全部已禁用时计数为0");
+    }
+
+    /// 无模组场景：仅有子分组或空目录
+    #[test]
+    fn test_disable_all_no_mods() {
+        let tmp = TempDir::new().unwrap();
+        let group = tmp.path().join("group_1");
+        fs::create_dir_all(&group).unwrap();
+
+        let subgroup = group.join("SubGroup");
+        fs::create_dir_all(&subgroup).unwrap();
+
+        let count = disable_all_mods_in_group(&group).unwrap();
+        assert_eq!(count, 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_remove_group_ex {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_mod_dir(parent: &Path, name: &str) -> PathBuf {
+        let dir = parent.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{}.ini", name.trim_start_matches("DISABLED"))), "[ShaderOverride]").unwrap();
+        dir
+    }
+
+    /// group_xx 场景：移至 _MANAGED_REMOVED_ 目录
+    #[test]
+    fn test_remove_group_xx() {
+        let tmp = TempDir::new().unwrap();
+        let mods_root = tmp.path();
+        let managed = mods_root.join("_MANAGED_");
+        let group = managed.join("group_1");
+        fs::create_dir_all(&group).unwrap();
+        create_mod_dir(&group, "ModA");
+
+        remove_group_ex(&group, true).unwrap();
+
+        // 原分组应不存在
+        assert!(!group.exists(), "原 group_1 应被移除");
+        // _MANAGED_REMOVED_ 下应有 group_1
+        let removed_root = mods_root.join("_MANAGED_REMOVED_");
+        assert!(removed_root.exists());
+        let removed_group = removed_root.join("group_1");
+        assert!(removed_group.exists(), "_MANAGED_REMOVED_ 下应存在 group_1");
+        assert!(removed_group.join("ModA").exists(), "模组应随之移动");
+    }
+
+    /// 非group场景：先移子分组到父级，再移至 _MANAGED_REMOVED_
+    #[test]
+    fn test_remove_group_non_group_with_subgroups() {
+        let tmp = TempDir::new().unwrap();
+        let mods_root = tmp.path();
+        let non_group = mods_root.join("#MyMutexGroup");
+        fs::create_dir_all(&non_group).unwrap();
+        // 叶子模组（随父目录移除）
+        create_mod_dir(&non_group, "ModA");
+        // 子分组（无 .ini，应移至父级 mods_root）
+        let subgroup1 = non_group.join("SubGroup1");
+        fs::create_dir_all(&subgroup1).unwrap();
+        create_mod_dir(&subgroup1, "SubMod1");
+        let subgroup2 = non_group.join("SubGroup2");
+        fs::create_dir_all(&subgroup2).unwrap();
+
+        remove_group_ex(&non_group, false).unwrap();
+
+        // 原分组应不存在
+        assert!(!non_group.exists());
+        // 子分组应在 mods_root 下
+        assert!(mods_root.join("SubGroup1").exists(), "SubGroup1 应移至 Mods 根目录");
+        assert!(mods_root.join("SubGroup1").join("SubMod1").exists(), "SubGroup1 下的模组应保留");
+        assert!(mods_root.join("SubGroup2").exists(), "SubGroup2 应移至 Mods 根目录");
+        // 被移除目录在 _MANAGED_REMOVED_ 下
+        let removed = mods_root.join("_MANAGED_REMOVED_").join("#MyMutexGroup");
+        assert!(removed.exists());
+        assert!(removed.join("ModA").exists(), "ModA 随原分组被移除");
+        assert!(!removed.join("SubGroup1").exists(), "SubGroup1 不应随原分组被移除");
+    }
+
+    /// 名称冲突场景：_MANAGED_REMOVED_/group_1 已存在应追加 _1
+    #[test]
+    fn test_remove_group_conflict() {
+        let tmp = TempDir::new().unwrap();
+        let mods_root = tmp.path();
+        let managed = mods_root.join("_MANAGED_");
+        let group = managed.join("group_1");
+        let removed_root = mods_root.join("_MANAGED_REMOVED_");
+        fs::create_dir_all(&group).unwrap();
+        // 已存在的已删除组
+        fs::create_dir_all(removed_root.join("group_1")).unwrap();
+
+        remove_group_ex(&group, true).unwrap();
+
+        assert!(!group.exists());
+        assert!(removed_root.join("group_1").exists(), "原冲突项保留");
+        assert!(removed_root.join("group_1_1").exists(), "新移除项追加 _1 后缀");
+    }
+}
+
+#[cfg(test)]
+mod tests_enable_all {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_mod_dir(parent: &Path, name: &str) -> PathBuf {
+        let dir = parent.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{}.ini", name.trim_start_matches("DISABLED"))), "[ShaderOverride]").unwrap();
+        dir
+    }
+
+    /// 正常场景：启用3个禁用模组，跳过1个启用模组，跳过子分组
+    #[test]
+    fn test_enable_all_basic() {
+        let tmp = TempDir::new().unwrap();
+        let group = tmp.path().join("group_1");
+        fs::create_dir_all(&group).unwrap();
+
+        create_mod_dir(&group, "DISABLEDModA");   // 需启用
+        create_mod_dir(&group, "ModB");            // 已启用，跳过
+        create_mod_dir(&group, "DISABLEDModC");   // 需启用
+        // 子分组目录（无 .ini），跳过
+        let subgroup = group.join("SubGroup");
+        fs::create_dir_all(&subgroup).unwrap();
+        create_mod_dir(&group, "DISABLEDModD");   // 需启用
+
+        let count = enable_all_mods_in_group(&group).unwrap();
+        assert_eq!(count, 3); // ModA, ModC, ModD
+
+        let entries: Vec<String> = fs::read_dir(&group).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(entries.iter().any(|n| n == "ModA"), "ModA 应被启用");
+        assert!(entries.iter().any(|n| n == "ModB"), "ModB 保持已启用");
+        assert!(entries.iter().any(|n| n == "ModC"), "ModC 应被启用");
+        assert!(entries.iter().any(|n| n == "ModD"), "ModD 应被启用");
+        assert!(entries.iter().any(|n| n == "SubGroup"), "子分组不变");
+    }
+
+    /// 幂等性：全部已启用计数为0
+    #[test]
+    fn test_enable_all_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let group = tmp.path().join("group_1");
+        fs::create_dir_all(&group).unwrap();
+        create_mod_dir(&group, "ModA");
+        create_mod_dir(&group, "ModB");
+
+        let count = enable_all_mods_in_group(&group).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    /// 前缀后跟分隔符场景：DISABLED_MyMod 应为 MyMod
+    #[test]
+    fn test_enable_all_prefix_with_separator() {
+        let tmp = TempDir::new().unwrap();
+        let group = tmp.path().join("group_1");
+        fs::create_dir_all(&group).unwrap();
+        create_mod_dir(&group, "DISABLED_MyMod");   // 下划线分隔
+        create_mod_dir(&group, "DISABLED-OtherMod"); // 横杠分隔
+        create_mod_dir(&group, "DISABLED Third");    // 空格分隔
+
+        let count = enable_all_mods_in_group(&group).unwrap();
+        assert_eq!(count, 3);
+
+        let entries: Vec<String> = fs::read_dir(&group).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(entries.iter().any(|n| n == "MyMod"));
+        assert!(entries.iter().any(|n| n == "OtherMod"));
+        assert!(entries.iter().any(|n| n == "Third"));
     }
 }

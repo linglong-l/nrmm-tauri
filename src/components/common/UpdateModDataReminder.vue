@@ -9,6 +9,14 @@
         <el-button type="primary" class="reminder-btn" @click="handleClick" :loading="loading">
           {{ t('settings.updateModData') }}
         </el-button>
+        <!-- 关闭并重载按钮：仅在需要手动重载时显示 -->
+        <el-button v-if="modsStore.needReloadManual" class="reminder-btn" @click="handleCloseAndReload">
+          {{ t('settings.closeAndReload') }}
+        </el-button>
+        <!-- 关闭按钮 -->
+        <el-button class="reminder-btn" @click="handleClose">
+          {{ t('settings.close') }}
+        </el-button>
       </div>
     </div>
   </Transition>
@@ -30,6 +38,7 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
+import { simulateF10 } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
 
 const { t } = useI18n()
@@ -63,6 +72,27 @@ async function handleClick() {
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 关闭并重载按钮处理
+ * 调用 simulateF10() 模拟 F10 按键（3Dmigoto 重载），然后清除提醒状态
+ */
+async function handleCloseAndReload() {
+  try {
+    await simulateF10()
+  } catch (e: any) {
+    logger.error('UpdateModDataReminder', 'Failed to simulate F10', e)
+  }
+  modsStore.clearNeedUpdate()
+}
+
+/**
+ * 关闭按钮处理
+ * 清除提醒状态，隐藏提示条
+ */
+function handleClose() {
+  modsStore.clearNeedUpdate()
 }
 </script>
 

@@ -551,6 +551,10 @@
     "restoreZonePlaceholder": "将模组文件夹或「Mods」文件夹拖放到此处，或点击选择文件夹",
     "restoreZoneDesc": "即可无需模组管理器再次使用模组。模组不会被重置，仅移除模组管理器添加的专属行。",
     "hotkeyComingSoon": "快捷键功能即将推出",
-    "dontForgetUpdate": "别忘了按「更新模组数据」"
+    "dontForgetUpdate": "别忘了按「更新模组数据」",
+    "closeAndReload": "关闭并重载 (F10)",
+    "close": "关闭",
+    "simulateKeyOnSelection": "模组选择时模拟按键",
+    "simulateKeyOnSelectionDesc": "选择模组时向 3Dmigoto 发送按键模拟"
   }
 }

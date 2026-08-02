@@ -151,6 +151,17 @@ pub fn is_normal_group_dir(dir_name: &str) -> Option<u32> {
     index_str.parse::<u32>().ok()
 }
 
+/// 判断目录名是否表示 group_xx（普通分组）目录（如 group_1, group_23）
+///
+/// 匹配规则：以 "group_" 前缀开头，后续为一个或多个数字字符
+pub fn is_group_xx_dir(dir_name: &str) -> bool {
+    if let Some(rest) = dir_name.strip_prefix(constants::MOD_GROUP_FILE_PREFIX) {
+        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    } else {
+        false
+    }
+}
+
 /// 检查目录是否包含任何 .ini 文件（仅检查扩展名，不读取内容）
 /// 使用 entry.file_type() 免 metadata() 系统调用
 pub fn dir_has_ini_file(dir_path: &Path) -> Result<bool> {
@@ -370,7 +381,7 @@ pub fn sort_mods_light(mods: &mut [ModData]) {
 /// 5. 合并结果，按 `group_index` 排序后返回
 ///
 /// # 收集的信息
-/// - 目录路径、名称、显示名称（去掉 `DISABLED_` 前缀）
+/// - 目录路径、名称、显示名称（去掉 `DISABLED` 前缀）
 /// - enabled 状态、fav 收藏状态、fav_timestamp
 /// - 图标路径（通过 `find_icon_path()` 自动查找目录下的图片文件）
 /// - `ini_file_paths`（仅路径，不解析内容）
@@ -735,9 +746,13 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     } else {
         root_name.clone()
     };
-    // 优先读取 groupname 文件作为显示名称
-    let groupname_path = root_path.join("groupname");
-    let root_display_name = read_or_create_marker_file(&groupname_path, &base_root_name)?;
+    // 仅 group_xx 目录才读/写 groupname 标记文件，非group目录直接使用目录名
+    let root_display_name = if is_group_xx_dir(&root_name) {
+        let groupname_path = root_path.join("groupname");
+        read_or_create_marker_file(&groupname_path, &base_root_name)?
+    } else {
+        base_root_name.clone()
+    };
 
     // 规范化路径 visited 集合：防止 symlink/hardlink 导致循环或重复
     let mut visited: HashSet<PathBuf> = HashSet::with_capacity(64);   // 预分配 64 个容量，覆盖大多数嵌套深度
@@ -843,9 +858,13 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         } else {
             dir_name.clone()
         };
-        // 优先读取 groupname 文件作为显示名称
-        let sub_groupname_path = current_path.join("groupname");
-        let dir_display_name = read_or_create_marker_file(&sub_groupname_path, &base_dir_name)?;
+        // 仅 group_xx 目录才读/写 groupname 标记文件，非group目录直接使用目录名
+        let dir_display_name = if is_group_xx_dir(&dir_name) {
+            let sub_groupname_path = current_path.join("groupname");
+            read_or_create_marker_file(&sub_groupname_path, &base_dir_name)?
+        } else {
+            base_dir_name.clone()
+        };
 
         // 查找图标
         let icon_path = find_icon_path(&current_path)?;
@@ -958,7 +977,7 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
 
 /// 构建 MutexGroup 叶子模组的轻量数据（不解析 INI 内容）
 ///
-/// 从目录名推断显示名称（移除 `DISABLED_` 前缀），检查 fav 收藏标记文件、
+/// 从目录名推断显示名称（移除 `DISABLED` 前缀），检查 fav 收藏标记文件、
 /// 各种标记文件（`modforced`、`modsyntaxerrorremoved`、`modunoptimized`、`namespaced`），
 /// 并查找图标路径。
 ///
@@ -1507,17 +1526,17 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    /// 测试辅助：创建临时目录，在根目录下创建 `.tmp/_MANAGED_` 子目录
+    /// 测试辅助：创建临时目录，在根目录下创建 `_MANAGED_` 子目录
     fn setup_test_dir() -> TempDir {
         let dir = TempDir::new().unwrap();
-        let managed = dir.path().join(".tmp").join("_MANAGED_");
+        let managed = dir.path().join("_MANAGED_");
         fs::create_dir_all(&managed).unwrap();
         dir
     }
 
     /// 测试辅助：在 `_MANAGED_` 下创建分组目录
     fn create_group_dir(base: &Path, group_name: &str) -> PathBuf {
-        let group_path = base.join("path").join("_MANAGED_").join(group_name);
+        let group_path = base.join("_MANAGED_").join(group_name);
         fs::create_dir_all(&group_path).unwrap();
         group_path
     }
@@ -1564,13 +1583,13 @@ mod tests {
         assert!(!result.mods[0].disabled);
     }
 
-    /// 测试：深度扫描 `DISABLED_` 前缀模组应被正确标记为禁用状态
+    /// 测试：深度扫描 `DISABLED` 前缀模组应被正确标记为禁用状态
     #[test]
     fn test_scan_disabled_mod() {
         let dir = setup_test_dir();
         create_d3dx_ini(dir.path());
         let group_path = create_group_dir(dir.path(), "group_1");
-        create_mod_with_ini(&group_path, "DISABLED_MyMod", "[TextureOverrideTest]\nhash = 0x456\n");
+        create_mod_with_ini(&group_path, "DISABLEDMyMod", "[TextureOverrideTest]\nhash = 0x456\n");
 
         let result = scan_mods_deep(dir.path()).unwrap();
         assert_eq!(result.mods.len(), 1);
@@ -1587,11 +1606,11 @@ mod tests {
         let dir = setup_test_dir();
         create_d3dx_ini(dir.path());
 
-        let mutex_path = dir.path().join(".tmp").join("_MANAGED_").join("#MutexMods");
+        let mutex_path = dir.path().join("_MANAGED_").join("#MutexMods");
         fs::create_dir_all(&mutex_path).unwrap();
         create_mod_with_ini(&mutex_path, "MutexMod", "[TextureOverrideTest]\nhash = 0x789\n");
 
-        let other_path = dir.path().join(".tmp").join("_MANAGED_").join("OtherFolder");
+        let other_path = dir.path().join("_MANAGED_").join("OtherFolder");
         fs::create_dir_all(&other_path).unwrap();
         create_mod_with_ini(&other_path, "OtherMod", "[TextureOverrideTest]\nhash = 0xABC\n");
 
@@ -1837,13 +1856,14 @@ filename = test.dds
 
     /// 测试：`is_disabled_dir` 对 DISABLED 前缀的检测
     ///
-    /// 验证：`DISABLED_`、`disabled_`、`Disabled-`、`DISABLED ` 均被识别；`NormalMod` 和 `mod_disabled`（后缀）不被识别
+    /// 验证：`DISABLED_`、`disabled_`、`Disabled-`、`DISABLED `、`DISABLEDMod` 均被识别；`NormalMod` 和 `mod_disabled`（后缀）不被识别
     #[test]
     fn test_is_disabled_dir() {
         assert!(is_disabled_dir("DISABLED_Mod"));
         assert!(is_disabled_dir("disabled_mod"));
         assert!(is_disabled_dir("Disabled-Mod"));
         assert!(is_disabled_dir("DISABLED Mod"));
+        assert!(is_disabled_dir("DISABLEDMod"));
         assert!(!is_disabled_dir("NormalMod"));
         assert!(!is_disabled_dir("mod_disabled"));
     }
@@ -2043,7 +2063,7 @@ filename = test.dds
         let group_path = create_group_dir(dir.path(), "group_1");
         let mod_enabled = group_path.join("EnabledMod");
         fs::create_dir_all(&mod_enabled).unwrap();
-        let mod_disabled = group_path.join("DISABLED_DisabledMod");
+        let mod_disabled = group_path.join("DISABLEDDisabledMod");
         fs::create_dir_all(&mod_disabled).unwrap();
 
         // MutexGroup 禁用模组
@@ -2200,7 +2220,7 @@ filename = test.dds
         fs::create_dir_all(&m10).unwrap();
         let m2 = group_path.join("mod2");
         fs::create_dir_all(&m2).unwrap();
-        let m_disabled = group_path.join("DISABLED_bad");
+        let m_disabled = group_path.join("DISABLEDbad");
         fs::create_dir_all(&m_disabled).unwrap();
         let m_fav = group_path.join("fav_mod");
         fs::create_dir_all(&m_fav).unwrap();
@@ -2216,8 +2236,72 @@ filename = test.dds
         // 然后是 mod2（自然排序 mod2 < mod10）
         assert_eq!(group.mods[2].name, "mod2");
         assert_eq!(group.mods[3].name, "mod10");
-        // 禁用的在最后（bad 是 DISABLED_bad 去掉前缀后的名字）
+        // 禁用的在最后（bad 是 DISABLEDbad 去掉前缀后的名字）
         assert_eq!(group.mods[4].name, "bad");
         assert_eq!(group.mods.len(), 5);
+    }
+}
+
+#[cfg(test)]
+mod tests_non_group_no_markers {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// is_group_xx_dir 正确性测试
+    #[test]
+    fn test_is_group_xx_dir() {
+        assert!(is_group_xx_dir("group_1"));
+        assert!(is_group_xx_dir("group_123"));
+        assert!(!is_group_xx_dir("group_"));        // 无数字
+        assert!(!is_group_xx_dir("group_abc"));     // 非数字
+        assert!(!is_group_xx_dir("Group_1"));       // 大小写敏感
+        assert!(!is_group_xx_dir("#MyGroup"));      // mutexGroup
+        assert!(!is_group_xx_dir("SubGroup"));      // 自定义子分组
+        assert!(!is_group_xx_dir("DISABLEDgroup_1")); // 禁用前缀
+    }
+
+    /// 扫描 mutexGroup（非group）不产生 groupname/modname 文件
+    #[test]
+    fn test_scan_mutex_no_markers_created() {
+        let tmp = TempDir::new().unwrap();
+        let mods_root = tmp.path();
+        // 非group目录
+        let non_group = mods_root.join("_MANAGED_").join("#CustomGroup");
+        fs::create_dir_all(&non_group).unwrap();
+        let mod_dir = non_group.join("ModA");
+        fs::create_dir_all(&mod_dir).unwrap();
+        fs::write(mod_dir.join("ModA.ini"), "[ShaderOverride]\n").unwrap();
+
+        // 执行扫描（使用轻量扫描，只有它会扫描 MutexGroup 并创建标记文件）
+        let result = scan_mods_light(mods_root).expect("scan should succeed");
+
+        // 检查不应存在的标记文件
+        assert!(!non_group.join("groupname").exists(), "非group不应创建 groupname 文件");
+        assert!(!mod_dir.join("modname").exists(), "非group下模组不应创建 modname 文件");
+
+        // 但模组仍应被正确识别
+        let mod_names: Vec<&str> = result.mods.iter().map(|m| m.name.as_str()).collect();
+        assert!(mod_names.contains(&"ModA"), "ModA 应被扫描到，名称为 ModA");
+    }
+
+    /// 扫描 group_1 仍正常创建标记文件
+    #[test]
+    fn test_scan_group_xx_still_creates_markers() {
+        let tmp = TempDir::new().unwrap();
+        let mods_root = tmp.path();
+        let managed = mods_root.join(constants::MANAGED_FOLDER);
+        let group1 = managed.join("group_1");
+        fs::create_dir_all(&group1).unwrap();
+        let mod_dir = group1.join("ModA");
+        fs::create_dir_all(&mod_dir).unwrap();
+        fs::write(mod_dir.join("ModA.ini"), "[ShaderOverride]\n").unwrap();
+
+        // 使用轻量扫描，只有它会创建 groupname / modname 标记文件
+        let _result = scan_mods_light(mods_root).expect("scan should succeed");
+
+        // group_xx 目录应创建标记文件
+        assert!(group1.join("groupname").exists(), "group_xx 应创建 groupname 文件");
+        assert!(mod_dir.join("modname").exists(), "group_xx 下模组应创建 modname 文件");
     }
 }

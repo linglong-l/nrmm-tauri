@@ -6,6 +6,8 @@ use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use super::enums::*;
 
+fn default_true() -> bool { true }
+
 /// 键盘快捷键配置
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -120,7 +122,8 @@ pub struct AppSettings {
     pub is_window_fullscreen: bool,
     /// 是否在屏幕上显示按键
     pub show_keypress_on_screen: bool,
-    /// 选择模组时是否模拟按键
+    /// 是否在模组选择时模拟按键（与 NRMM 的 simulate_key_on_selection 对齐）
+    #[serde(default = "default_true")]
     pub simulate_key_on_selection: bool,
     /// 是否使用精确热键
     pub use_precise_hotkey: bool,

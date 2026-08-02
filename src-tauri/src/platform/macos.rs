@@ -17,6 +17,10 @@ impl super::KeySimulator for MacOSKeySimulator {
         Err(anyhow!("macOS keypress simulation not yet implemented"))
     }
     
+    fn simulate_f10(&self) -> Result<()> {
+        Err(anyhow!("macOS keypress simulation not supported"))
+    }
+
     fn check_support(&self) -> Result<(), String> {
         Err("macOS keypress simulation requires assistive access permission, not yet implemented".to_string())
     }

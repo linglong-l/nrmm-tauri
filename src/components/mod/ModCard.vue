@@ -31,27 +31,49 @@
       </div>
       <!-- 模组预览图：懒加载，失败显示占位符 -->
       <template v-else-if="mod">
-        <el-image v-if="iconUrl" :src="iconUrl" fit="cover" class="mod-image" :alt="mod.modName">
-          <template #placeholder>
-            <div class="image-placeholder">
+        <!-- 图片懒加载容器 -->
+        <div ref="imageContainerRef" class="mod-image-wrapper">
+          <!-- 无图片URL：直接显示占位符 -->
+          <div v-if="!iconUrl" class="image-placeholder">
+            <el-icon :size="48"><Picture /></el-icon>
+          </div>
+          <!-- 有图片URL：根据加载状态显示不同UI -->
+          <template v-else>
+            <!-- 加载中/未加载：骨架屏脉冲动画 -->
+            <div v-if="imageState === 'idle' || imageState === 'loading'" class="image-placeholder skeleton-pulse">
+              <el-icon :size="48"><Picture /></el-icon>
+            </div>
+            <!-- 隐式加载图片：visibility hidden 保持布局并触发浏览器加载 -->
+            <img
+              v-if="imageState === 'loading'"
+              :src="iconUrl"
+              class="mod-image mod-image-hidden"
+              loading="eager"
+              decoding="async"
+              draggable="false"
+              @load="onImageLoaded"
+              @error="onImageError"
+            />
+            <!-- 加载成功：淡入显示 -->
+            <img
+              v-else-if="imageState === 'loaded'"
+              :src="iconUrl"
+              :alt="mod.modName"
+              class="mod-image mod-image-fade-in"
+              loading="lazy"
+              decoding="async"
+              draggable="false"
+            />
+            <!-- 加载失败：占位符 -->
+            <div v-else class="image-placeholder">
               <el-icon :size="48"><Picture /></el-icon>
             </div>
           </template>
-          <template #error>
-            <div class="image-placeholder">
-              <el-icon :size="48"><Picture /></el-icon>
-            </div>
-          </template>
-        </el-image>
-        <div v-else class="image-placeholder">
-          <el-icon :size="48"><Picture /></el-icon>
         </div>
       </template>
     </div>
     <!-- 模组名称 -->
-    <div v-if="!isNoneSlot && mod" class="card-name" :title="mod.modName">
-      {{ mod.modName }}
-    </div>
+    <div v-if="!isNoneSlot && mod" class="card-name" :title="mod.modName" v-html="highlightedModName"></div>
     <div v-else class="card-name empty-name">{{ t('common.emptySlot', '空槽位') }}</div>
 
     <!-- 右键菜单：Teleport到body，避免父元素transform导致fixed定位漂移 -->
@@ -109,6 +131,8 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModData } from '@/types'
 import { toggleModDisabled, toggleFavorite, renameMod, removeMod, openModFolder, handlePathNotFoundError } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'
+import { useImageLazyLoad } from '@/composables/useImageLazyLoad'
+import type { ImageLoadState } from '@/composables/useImageLazyLoad'
 import { logger } from '@/utils/logger'
 
 const { t } = useI18n()
@@ -132,6 +156,28 @@ const emit = defineEmits<{
 
 /** 模组数据计算属性 */
 const mod = computed(() => props.mod)
+
+const highlightedModName = computed<string>(() => {
+  const name = mod.value?.modName || ''
+  const q = modsStore.searchQuery?.trim()
+  if (!q || !name) return escapeHtml(name)
+  const { matched, spans } = modsStore.fuzzyMatchWithSpansSimple(name, q)
+  if (!matched || !spans.length) return escapeHtml(name)
+  let html = ''
+  let cursor = 0
+  for (const [start, end] of spans) {
+    if (start > cursor) html += escapeHtml(name.slice(cursor, start))
+    html += `<mark class="card-search-mark">${escapeHtml(name.slice(start, end))}</mark>`
+    cursor = end
+  }
+  if (cursor < name.length) html += escapeHtml(name.slice(cursor))
+  return html
+})
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c] as string))
+}
 
 /**
  * 是否为 None 空槽位
@@ -158,6 +204,31 @@ const iconUrl = computed(() => {
     return ''
   }
 })
+
+/** 图片容器 DOM 引用 */
+const imageContainerRef = ref<HTMLElement | null>(null)
+
+/** 图片懒加载 composable */
+const imageLazyLoad = useImageLazyLoad({
+  rootMargin: '200px 0px 200px 0px',
+  staggerDelay: 50
+})
+
+/** 当前图片加载状态 */
+const imageState = computed<ImageLoadState>(() => {
+  return imageLazyLoad.states.value.get(props.modIndex) || 'idle'
+})
+
+/** 图片加载成功回调 */
+function onImageLoaded() {
+  imageLazyLoad.markLoaded(props.modIndex)
+}
+
+/** 图片加载失败回调 */
+function onImageError() {
+  imageLazyLoad.markError(props.modIndex)
+}
+
 /** 右键菜单是否可见 */
 const contextMenuVisible = ref(false)
 /** 右键菜单位置X */
@@ -260,6 +331,18 @@ function handleClick() {
 /** 双击：确认启用模组（调用后端写入INI，自动同步选中状态） */
 function handleDoubleClick() {
   if (isNoneSlot.value) return
+  // 同步切换左侧导航栏对应分组为选中状态
+  if (mod.value) {
+    const modPath = mod.value.modPath
+    // 从模组路径中提取分组路径（向上查找 _MANAGED_ 目录）
+    const managedIndex = modPath.indexOf('_MANAGED_')
+    if (managedIndex !== -1) {
+      // 分组路径 = _MANAGED_ 目录 + 后续路径
+      const groupPath = modPath.substring(managedIndex)
+      // 查找并选中对应分组
+      modsStore.selectGroupByPath(groupPath)
+    }
+  }
   // 双击直接触发启用（activate）= 右键菜单中的「启用」效果
   emit('activate', props.modIndex)
 }
@@ -369,10 +452,18 @@ function handleClickOutside() {
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  // 挂载时观察图片容器，触发懒加载
+  if (imageContainerRef.value && iconUrl.value) {
+    imageLazyLoad.observeElement(props.modIndex, imageContainerRef.value)
+  }
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  // 卸载时取消观察图片容器
+  if (imageContainerRef.value) {
+    imageLazyLoad.unobserveElement(imageContainerRef.value)
+  }
 })
 </script>
 
@@ -483,6 +574,45 @@ onUnmounted(() => {
   object-fit: cover;
   border-radius: 8px;
   display: block;
+}
+
+/* 图片懒加载容器：需要 relative 定位以容纳绝对定位的隐藏图片 */
+.mod-image-wrapper {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* 骨架屏脉冲动画 */
+.skeleton-pulse {
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+
+/* 图片淡入动画 */
+.mod-image-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 加载中隐藏图片：visibility hidden 保持布局并触发浏览器加载 */
+.mod-image-hidden {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .image-placeholder {
@@ -598,5 +728,13 @@ onUnmounted(() => {
   height: 1px;
   background: rgba(255, 255, 255, 0.08);
   margin: 4px 0;
+}
+
+:deep(.card-search-mark) {
+  background: rgba(245, 195, 90, 0.35);
+  color: #ffe7a3;
+  font-weight: 700;
+  border-radius: 2px;
+  padding: 0 1px;
 }
 </style>

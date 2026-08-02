@@ -38,7 +38,20 @@ impl super::KeySimulator for WindowsKeySimulator {
         send_key(VK_RETURN)?;
         Ok(())
     }
-    
+
+    fn simulate_f10(&self) -> Result<()> {
+        send_key(VK_F10)?;
+        Ok(())
+    }
+
+    fn simulate_select_group_at(&self, x: i32, y: i32) -> Result<()> {
+        simulate_key_with_cursor(VK_SPACE, x, y)
+    }
+
+    fn simulate_select_mod_at(&self, x: i32, y: i32) -> Result<()> {
+        simulate_key_with_cursor(VK_RETURN, x, y)
+    }
+
     fn check_support(&self) -> Result<(), String> {
         Ok(())
     }
@@ -84,6 +97,55 @@ fn send_key(vk: VIRTUAL_KEY) -> Result<()> {
         thread::sleep(Duration::from_millis(50));
     }
     Ok(())
+}
+
+/// 发送按键并锁定光标在目标位置（与 NRMM 的 _simulateSelectGroupMod 对齐）
+///
+/// 执行流程：
+/// 1. 获取当前光标位置保存
+/// 2. 移动光标到目标坐标
+/// 3. 锁定光标到 1x1 像素区域
+/// 4. 发送按键
+/// 5. 解锁光标
+/// 6. 恢复光标到初始位置
+///
+/// 光标绑定失败时降级为无绑定模式
+fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
+    unsafe {
+        // 保存初始光标位置
+        let mut initial_pos = POINT { x: 0, y: 0 };
+        let has_initial = GetCursorPos(&mut initial_pos).is_ok();
+
+        // 移动光标到目标位置
+        if SetCursorPos(x, y).is_err() {
+            log::warn!("SetCursorPos failed, falling back to cursor-free key simulation");
+            return send_key(vk);
+        }
+
+        thread::sleep(Duration::from_millis(10));
+
+        // 锁定光标到 1x1 像素区域
+        let rect = RECT {
+            left: x,
+            top: y,
+            right: x + 1,
+            bottom: y + 1,
+        };
+        let _ = ClipCursor(Some(&rect));
+
+        // 发送按键
+        let result = send_key(vk);
+
+        // 解锁光标
+        let _ = ClipCursor(None);
+
+        // 恢复光标位置
+        if has_initial {
+            let _ = SetCursorPos(initial_pos.x, initial_pos.y);
+        }
+
+        result
+    }
 }
 
 /// Windows 前台窗口检测器

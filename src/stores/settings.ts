@@ -34,6 +34,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const currentGame = ref<TargetGame>('GenshinImpact')
   /** 设置是否已加载完成 */
   const loaded = ref(false)
+  /** 选择模组时是否模拟按键 */
+  const simulateKeyOnSelection = ref(true)
   /** 防抖保存定时器 */
   let saveTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -71,6 +73,7 @@ export const useSettingsStore = defineStore('settings', () => {
       if (loadedSettings.targetGame) {
         currentGame.value = loadedSettings.targetGame
       }
+      simulateKeyOnSelection.value = loadedSettings.simulateKeyOnSelection ?? true
       loaded.value = true
       logger.info('SettingsStore', 'Settings loaded successfully')
     } catch (e) {
@@ -85,6 +88,7 @@ export const useSettingsStore = defineStore('settings', () => {
    */
   async function saveNow() {
     try {
+      settings.value.simulateKeyOnSelection = simulateKeyOnSelection.value
       await saveSettings(settings.value)
       // 保存成功后重新注册热键（如windowHotkey变更），不阻塞UI
       reregisterHotkeys().catch(e => logger.warn('SettingsStore', 'Failed to reregister hotkeys after save', e))
@@ -148,6 +152,7 @@ export const useSettingsStore = defineStore('settings', () => {
     currentModsPath,
     currentTargetProcess,
     loaded,
+    simulateKeyOnSelection,
     load,
     save,
     saveNow,

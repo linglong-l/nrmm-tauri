@@ -67,3 +67,6 @@ target/
 /resource/*
 /resource/7z/
 src-tauri/binaries/
+AGENTS.md
+clippy_output.txt
+SESSION_CONTEXT.md

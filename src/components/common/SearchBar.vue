@@ -1,5 +1,5 @@
 <template>
-  <div v-if="visible" class="search-bar no-drag" ref="searchBarEl">
+  <div v-if="visible" class="search-bar no-drag" ref="searchBarEl" @click.stop>
     <!-- 搜索图标 -->
     <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <circle cx="11" cy="11" r="8"/>

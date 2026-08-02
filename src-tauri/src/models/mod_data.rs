@@ -148,7 +148,7 @@ pub struct ModData {
     /// 是否有命名空间错误
     #[serde(default)]
     pub namespace_error: bool,
-    /// 模组是否被禁用（DISABLED_ 前缀）
+    /// 模组是否被禁用（DISABLED 前缀）
     pub mod_disabled: bool,
     /// 是否禁用（兼容字段）
     #[serde(default)]
@@ -179,7 +179,7 @@ pub struct ModData {
     /// 总段数（汇总）
     #[serde(default)]
     pub total_section_count: u32,
-    /// 显示名称（去掉 DISABLED_ 前缀）
+    /// 显示名称（去掉 DISABLED 前缀）
     #[serde(default)]
     pub name: String,
     /// 是否为互斥组模组

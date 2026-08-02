@@ -161,6 +161,11 @@
             <span class="row-label">{{ t('settings.showTrayMenu') }}</span>
             <el-switch v-model="settingsStore.settings.alwaysShowMenuOnHotkey" active-color="#4a9eff" inactive-color="#555" @change="onSettingChange" />
           </div>
+          <div class="block-row">
+            <span class="row-label">{{ t('settings.simulateKeyOnSelection') }}</span>
+            <el-switch v-model="settingsStore.simulateKeyOnSelection" active-color="#4a9eff" inactive-color="#555" @change="onSettingChange" />
+          </div>
+          <div class="setting-desc">{{ t('settings.simulateKeyOnSelectionDesc') }}</div>
         </div>
 
         <!-- 语言选择 -->
@@ -875,6 +880,14 @@ onMounted(async () => {
   /* 所有行标签文字居中 */
   text-align: center;
   line-height: 1.4;
+}
+
+.setting-desc {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  text-align: center;
 }
 
 .slider-value {

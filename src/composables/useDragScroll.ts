@@ -49,7 +49,8 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
   /**
    * 指针按下事件处理
    * 仅响应鼠标左键，排除可交互元素
-   * 捕获指针并记录起始位置和滚动状态
+   * 记录起始位置，不捕获指针（避免干扰原生点击事件）
+   * 采用"放开鼠标选择"策略：移动超过阈值才启动拖拽，未移动则放行点击
    */
   function onPointerDown(e: PointerEvent) {
     // 仅响应鼠标左键（button === 0）
@@ -57,8 +58,8 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
     const target = e.target as HTMLElement
 
     // 排除所有可交互元素和Element Plus组件
-    // 关键点：.group-item / .expand-btn / .group-avatar 是左侧导航栏树节点的核心容器，
-    // 这里的点击必须触发选中/展开，不能被拖拽滚动拦截
+    // 注意：不排除 .group-item / .group-avatar / .group-name
+    // 这些元素覆盖左侧导航栏全部区域，采用"放开鼠标选择"策略区分点击和拖拽
     if (target.closest(
       'button, a, input, textarea, select, option, label, ' +
       '[role="button"], [role="combobox"], [role="listbox"], [role="option"], ' +
@@ -66,8 +67,7 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
       '.el-select, .el-select__wrapper, .el-select-dropdown, .el-cascader, .el-date-editor, ' +
       '.el-checkbox, .el-radio, .el-switch, .el-slider, .el-input, .el-input__wrapper, .el-textarea, ' +
       '.el-button, .el-popper, .el-picker-panel, .el-dialog, .el-message-box, .el-dropdown, ' +
-      '.group-item, .expand-btn, .group-avatar, .group-tree-node, ' +
-      '.mod-card, .allow-context-menu, .allow-text-select, .no-drag-scroll'
+      '.allow-context-menu, .allow-text-select, .no-drag-scroll'
     )) return
 
     currentEl = el.value
@@ -79,18 +79,15 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
     startY = e.clientY
     startScrollLeft = currentEl.scrollLeft
     startScrollTop = currentEl.scrollTop
-    // 捕获指针，确保指针移出元素外仍能接收事件
-    try { currentEl.setPointerCapture(e.pointerId) } catch (_) {}
-    // 更改光标样式为抓取中
-    currentEl.style.cursor = 'grabbing'
-    e.preventDefault()
+    // 不捕获指针，避免干扰点击事件
+    // 使用 document 级监听器确保指针移出元素仍能接收事件
+    document.addEventListener('pointermove', onDocPointerMove)
+    document.addEventListener('pointerup', onDocPointerUp)
+    document.addEventListener('pointercancel', onDocPointerUp)
   }
 
-  /**
-   * 指针移动事件处理
-   * 更新滚动位置，3px阈值判定
-   */
-  function onPointerMove(e: PointerEvent) {
+  /** 文档级指针移动事件处理 */
+  function onDocPointerMove(e: PointerEvent) {
     if (!isDragging.value || !currentEl) return
 
     const deltaX = e.clientX - startX
@@ -99,6 +96,8 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
     // 3px阈值：移动超过3像素才认为是有效拖拽，避免点击时微小抖动被误判
     if (!dragStarted && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
       dragStarted = true
+      // 超过阈值时立即更改光标
+      currentEl.style.cursor = 'grabbing'
     }
 
     // 有效拖拽时更新滚动位置（反向滚动：鼠标向下拖，内容向上滚）
@@ -110,23 +109,26 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
   }
 
   /**
-   * 指针抬起/取消事件处理
-   * 结束拖拽状态，释放指针捕获
-   * 若发生了有效拖拽，仅阻断滚动容器内部元素的一次click事件，防止误触
-   * 关键点：不对teleport弹层/外部组件做任何拦截（否则Element Plus下拉/对话框等点击失效）
+   * 文档级指针抬起/取消事件处理
+   * 结束拖拽状态，清理文档级监听器
+   * 若发生了有效拖拽，阻断滚动容器内部的一次click事件
+   * 若未发生拖拽（纯点击），放行click事件，让分组选择等逻辑正常执行
    */
-  function onPointerUp(e: PointerEvent) {
+  function onDocPointerUp(_e: PointerEvent) {
+    // 清理文档级监听器
+    document.removeEventListener('pointermove', onDocPointerMove)
+    document.removeEventListener('pointerup', onDocPointerUp)
+    document.removeEventListener('pointercancel', onDocPointerUp)
+
     if (!isDragging.value) return
     isDragging.value = false
     const container = currentEl
     if (container) {
-      // 释放指针捕获
-      try { container.releasePointerCapture(e.pointerId) } catch (_) {}
       // 恢复默认光标
       container.style.cursor = ''
     }
     // 若发生了有效拖拽，阻断"容器内部"接下来的一次click事件
-    // 这是因为拖拽结束时的mouseup会触发click，导致误点卡片/按钮
+    // 未拖拽（纯点击）时放行，让分组选择等逻辑正常执行
     if (dragStarted && container) {
       const containerRef = container
       /**
@@ -159,10 +161,7 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
    */
   function attach(target: HTMLElement) {
     target.addEventListener('pointerdown', onPointerDown)
-    target.addEventListener('pointermove', onPointerMove)
-    target.addEventListener('pointerup', onPointerUp)
-    // pointercancel处理触摸中断等异常情况
-    target.addEventListener('pointercancel', onPointerUp)
+    // pointermove/pointerup/pointercancel 使用 document 级监听器
   }
 
   /**
@@ -171,9 +170,10 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
    */
   function detach(target: HTMLElement) {
     target.removeEventListener('pointerdown', onPointerDown)
-    target.removeEventListener('pointermove', onPointerMove)
-    target.removeEventListener('pointerup', onPointerUp)
-    target.removeEventListener('pointercancel', onPointerUp)
+    // 清理可能残留的文档级监听器
+    document.removeEventListener('pointermove', onDocPointerMove)
+    document.removeEventListener('pointerup', onDocPointerUp)
+    document.removeEventListener('pointercancel', onDocPointerUp)
   }
 
   /** 记录已绑定事件的元素，用于watch和unmount时清理 */

@@ -40,6 +40,20 @@ pub trait KeySimulator: Send + Sync {
     fn simulate_select_group(&self) -> Result<()>;
     /// 模拟选择模组的按键序列
     fn simulate_select_mod(&self) -> Result<()>;
+    /// 模拟 F10 按键（3Dmigoto 重载快捷键）
+    fn simulate_f10(&self) -> Result<()>;
+    /// 模拟选择分组（带光标坐标绑定）
+    /// x, y 为目标光标位置（屏幕坐标），用于将光标移动到 3Dmigoto 内置菜单对应位置
+    /// 默认实现 fallback 到无坐标版本
+    fn simulate_select_group_at(&self, _x: i32, _y: i32) -> Result<()> {
+        self.simulate_select_group()
+    }
+    /// 模拟选择模组（带光标坐标绑定）
+    /// x, y 为目标光标位置（屏幕坐标），用于将光标移动到 3Dmigoto 内置菜单对应位置
+    /// 默认实现 fallback 到无坐标版本
+    fn simulate_select_mod_at(&self, _x: i32, _y: i32) -> Result<()> {
+        self.simulate_select_mod()
+    }
     /// 检查平台是否支持按键模拟
     fn check_support(&self) -> Result<(), String>;
 }

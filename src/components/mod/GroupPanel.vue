@@ -1,9 +1,5 @@
 <template>
-  <div class="group-panel">
-    <!-- 分组标题：竖排"Groups"文字 -->
-    <div class="groups-header">
-      <span class="groups-title">{{ t('common.groups', 'Groups') }}</span>
-    </div>
+  <div class="group-panel" @click="handlePanelClick">
     <!-- 分组列表：可拖拽滚动 -->
     <div ref="groupListRef" class="group-list" @contextmenu.prevent="onContextMenuEmpty">
       <!-- 递归树节点：遍历顶层分组（已将NormalGroup收拢到虚拟"Groups"节点下） -->
@@ -14,6 +10,8 @@
         :depth="0"
         :selected-group-path="selectedGroupPath"
         :default-expanded="isGroupExpanded(group.groupPath)"
+        :search-query="modsStore.searchQuery"
+        :is-group-hit="modsStore.isGroupMatch(group.groupPath)"
         @select="handleSelectGroup"
         @context-menu="handleContextMenu"
       />
@@ -55,6 +53,15 @@
           {{ t('Open in File Explorer') }}
         </div>
         <div class="menu-divider" v-if="contextGroup"></div>
+        <div v-if="contextGroup" class="menu-item" @click="handleDisableAllMods">
+          <el-icon><VideoPause /></el-icon>
+          {{ t('Disable all mods') }}
+        </div>
+        <div v-if="contextGroup" class="menu-item" @click="handleEnableAllMods">
+          <el-icon><VideoPlay /></el-icon>
+          {{ t('Enable all mods') }}
+        </div>
+        <div class="menu-divider" v-if="contextGroup"></div>
         <div v-if="contextGroup" class="menu-item danger" @click="handleDelete">
           <el-icon><Delete /></el-icon>
           {{ t('Remove group') }}
@@ -72,10 +79,10 @@
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Edit, Delete, FolderOpened, FolderAdd } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, FolderOpened, FolderAdd, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ModGroupData } from '@/types'
-import { addGroup, renameGroup, removeGroup, openGroupFolder, validateSubfolderName, createSubfolder, handlePathNotFoundError } from '@/utils/tauri'
+import { addGroup, renameGroup, removeGroupEx, openGroupFolder, validateSubfolderName, createSubfolder, handlePathNotFoundError, disableAllModsInGroup, enableAllModsInGroup } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { useDragScroll } from '@/composables/useDragScroll'
@@ -143,8 +150,10 @@ const groupedTree = computed<ModGroupData[]>(() => {
  * 虚拟根默认展开，避免角色分组默认被折叠不可见。
  */
 const expandedMap = ref<Map<string, boolean>>(new Map([['__VIRTUAL_GROUPS__', true]]))
-/** 获取分组展开状态，虚拟根默认展开 */
+/** 获取分组展开状态，虚拟根默认展开；搜索命中的祖先路径强制展开 */
 function isGroupExpanded(groupPath: string): boolean {
+  const autoExpanded = modsStore.searchQuery?.trim() && modsStore.autoExpandGroupPaths?.has(groupPath)
+  if (autoExpanded) return true
   if (!expandedMap.value.has(groupPath)) {
     expandedMap.value.set(groupPath, groupPath === '__VIRTUAL_GROUPS__')
   }
@@ -186,7 +195,7 @@ function handleContextMenu(payload: { event: MouseEvent; group: ModGroupData }) 
   ignoreNodeClickUntil = performance.now() + 300
   // 溢出检测：菜单估算尺寸 180×220 保守值
   const MENU_ESTIMATED_W = 200
-  const MENU_ESTIMATED_H = 260
+  const MENU_ESTIMATED_H = 380
   const vw = window.innerWidth
   const vh = window.innerHeight
   let x = e.clientX
@@ -234,17 +243,98 @@ function closeContextMenu() {
   ignoreNodeClickUntil = performance.now() + 150
 }
 
-/**
- * 添加新分组
- * 弹出输入框让用户输入分组名，调用后端addGroup命令
- */
+/** 添加分组 / 添加子分组（非group下创建子分组默认名为"未命名_int{自增}"） */
 async function handleAddGroup() {
   closeContextMenu()
+  // 当右键选中了非group互斥组 → 执行添加子分组逻辑（默认名自动生成）
+  if (contextGroup.value && isMutexGroup(contextGroup.value)) {
+    // 从当前非group分组的一级子目录中收集已有名称，生成默认 未命名_int{自增}
+    const parentPath = contextGroup.value.groupPath
+    const parentName = contextGroup.value.name || contextGroup.value.groupName
+    // 收集该分组直接子分组名（children）以便去重
+    const existingNames = new Set<string>()
+    for (const child of (contextGroup.value.children || [])) {
+      existingNames.add(child.name || child.groupName || '')
+    }
+    // 也遍历 mods 防止模组目录同名冲突
+    for (const mod of (contextGroup.value.mods || [])) {
+      existingNames.add(mod.name || '')
+    }
+    let defaultName = ''
+    let i = 1
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const candidate = `未命名_int${i}`
+      if (!existingNames.has(candidate)) {
+        defaultName = candidate
+        break
+      }
+      i++
+    }
+
+    const illegalCharsRegex = /[\\/:*?"<>|\x00-\x1F]/g
+    try {
+      const { value } = await ElMessageBox.prompt(
+        t('mods.subfolderName'),
+        t('mods.addSubfolder'),
+        {
+          confirmButtonText: t('common.confirm'),
+          cancelButtonText: t('common.cancel'),
+          inputPlaceholder: t('mods.subfolderName'),
+          inputValue: defaultName,
+          showClose: true,
+          inputValidator: (val) => {
+            if (!val || !val.trim()) {
+              return t('Group name cannot be empty')
+            }
+            const trimmed = val.trim()
+            if (trimmed === '.' || trimmed === '..') {
+              return '文件夹名称不能为 "." 或 ".."'
+            }
+            const matches = trimmed.match(illegalCharsRegex)
+            if (matches) {
+              const uniqueChars = [...new Set(matches)].join(' ')
+              return `目录名包含非法字符: ${uniqueChars}`
+            }
+            if (trimmed.endsWith('.') || trimmed.endsWith(' ')) {
+              return '文件夹名称末尾不能是点或空格'
+            }
+            return true
+          }
+        }
+      )
+      const trimmed = value?.trim()
+      if (!trimmed) return
+      const [sanitizedName, isValid, errorMsg] = await validateSubfolderName(parentPath, trimmed)
+      if (!isValid) {
+        ElMessage.error(errorMsg)
+        return
+      }
+      await ElMessageBox.confirm(
+        `确定在「${parentName}」下创建子分组「${sanitizedName}」吗？`,
+        t('mods.addSubfolder'),
+        {
+          confirmButtonText: t('common.confirm'),
+          cancelButtonText: t('common.cancel'),
+          type: 'info'
+        }
+      )
+      await createSubfolder(parentPath, sanitizedName)
+      await modsStore.refresh()
+      ElMessage.success(`已在「${parentName}」下创建子分组「${sanitizedName}」`)
+    } catch (e: any) {
+      if (e !== 'cancel' && e !== 'close') {
+        ElMessage.error('创建子分组失败: ' + (e?.message || e))
+      }
+    }
+    return
+  }
+
+  // group_xx 或空白区域 → 原有逻辑（创建新的 group_int）
   if (!settingsStore.currentModsPath) {
     ElMessage.warning(t('Please select a group first'))
     return
   }
-
   try {
     const { value } = await ElMessageBox.prompt(
       t('Group Name'),
@@ -288,7 +378,8 @@ async function handleRename() {
       }
     )
     if (value && contextGroup.value.groupPath) {
-      await renameGroup(contextGroup.value.groupPath, value.trim())
+      const isGroupXx = contextGroup.value.groupType !== 'mutexGroup'
+      await renameGroup(contextGroup.value.groupPath, value.trim(), isGroupXx)
       await modsStore.refresh()
       ElMessage.success(t('Group renamed successfully'))
     }
@@ -311,12 +402,52 @@ async function handleOpenFolder() {
   }
 }
 
-/**
- * 删除分组
- * 弹出确认对话框，确认后调用后端removeGroup命令
- */
+/** 禁用分组下所有一级模组（已禁用的跳过） */
+async function handleDisableAllMods() {
+  if (!contextGroup.value || !contextGroup.value.groupPath) return
+  const gp = contextGroup.value.groupPath
+  const displayName = contextGroup.value.name || contextGroup.value.groupName
+  closeContextMenu()
+  try {
+    const count = await disableAllModsInGroup(gp)
+    await modsStore.refresh()
+    if (count > 0) {
+      ElMessage.success(`已禁用 ${displayName} 下的 ${count} 个模组`)
+    } else {
+      ElMessage.info(`${displayName} 下没有需要禁用的模组`)
+    }
+  } catch (e: any) {
+    ElMessage.error('禁用所有模组失败: ' + (e?.message || e))
+  }
+}
+
+/** 启用分组下所有一级禁用模组（已启用的跳过） */
+async function handleEnableAllMods() {
+  if (!contextGroup.value || !contextGroup.value.groupPath) return
+  const gp = contextGroup.value.groupPath
+  const displayName = contextGroup.value.name || contextGroup.value.groupName
+  closeContextMenu()
+  try {
+    const count = await enableAllModsInGroup(gp)
+    await modsStore.refresh()
+    if (count > 0) {
+      ElMessage.success(`已启用 ${displayName} 下的 ${count} 个模组`)
+    } else {
+      ElMessage.info(`${displayName} 下没有需要启用的模组`)
+    }
+  } catch (e: any) {
+    ElMessage.error('启用所有模组失败: ' + (e?.message || e))
+  }
+}
+
+/** 判断分组是否为 group_xx 普通分组（非 mutexGroup） */
+function isGroupXx(group: ModGroupData): boolean {
+  return group.groupType !== 'mutexGroup'
+}
+
+/** 删除分组（NRMM对齐：移至 _MANAGED_REMOVED_ 目录） */
 async function handleDelete() {
-  if (!contextGroup.value) return
+  if (!contextGroup.value || !contextGroup.value.groupPath) return
   closeContextMenu()
   try {
     await ElMessageBox.confirm(
@@ -329,11 +460,15 @@ async function handleDelete() {
       }
     )
     if (contextGroup.value.groupPath) {
-      await removeGroup(contextGroup.value.groupPath)
+      const isGx = isGroupXx(contextGroup.value)
+      await removeGroupEx(contextGroup.value.groupPath, isGx)
       await modsStore.refresh()
       ElMessage.success(t('Group removed successfully'))
     }
-  } catch (e) {
+  } catch (e: any) {
+    if (e !== 'cancel' && e !== 'close') {
+      ElMessage.error('移除分组失败: ' + (e?.message || e))
+    }
   }
 }
 
@@ -432,6 +567,17 @@ async function handleAddSubfolder() {
 /** 点击外部区域关闭右键菜单 */
 function handleClickOutside() {
   closeContextMenu()
+}
+
+/**
+ * 点击左侧导航栏容器时关闭搜索框
+ * 分组节点点击通过 stopPropagation 阻止冒泡，不触发关闭
+ */
+function handlePanelClick() {
+  if (modsStore.searchVisible) {
+    modsStore.setSearchVisible(false)
+    modsStore.clearSearch()
+  }
 }
 
 onMounted(() => {
