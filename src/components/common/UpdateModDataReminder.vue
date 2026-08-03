@@ -80,7 +80,7 @@ async function handleClick() {
  */
 async function handleCloseAndReload() {
   try {
-    await simulateF10()
+    await simulateF10(settingsStore.currentGame ?? undefined)
   } catch (e: any) {
     logger.error('UpdateModDataReminder', 'Failed to simulate F10', e)
   }

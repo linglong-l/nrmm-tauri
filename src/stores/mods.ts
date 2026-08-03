@@ -45,6 +45,14 @@ export const useModsStore = defineStore('mods', () => {
   const needReloadManual = ref(false)
   /** 是否正在执行模组激活操作（双击防抖） */
   const isActivating = ref(false)
+  /** 是否正在执行重量级更新模组数据（全局状态锁，true时阻止其他操作） */
+  const isUpdatingModData = ref(false)
+  /** 更新模组数据结果（保存最近一次的 UpdateResult） */
+  const updateResult = ref<UpdateResult | null>(null)
+  /** 分组级选择操作防抖：key=groupPath，value=Date.now() 时间戳（ms） */
+  const lastSelectionTime = reactive<Record<string, number>>({})
+  /** 防抖阈值：3000ms（3秒内同一分组不重复选择） */
+  const SELECTION_DEBOUNCE_MS = 3000
 
   // ========== 全局搜索状态（Ctrl+F） ==========
   /** 搜索栏是否可见 */
@@ -660,17 +668,27 @@ export const useModsStore = defineStore('mods', () => {
    * @param modIdx 模组在当前显示列表中的索引
    */
   async function activateModByIndex(modIdx: number) {
+    logger.debug('ModsStore', 'activateModByIndex', { modIdx })
+    if (isUpdatingModData.value) return
     if (isActivating.value) return
     const s = useSettingsStore()
     if (!s.currentModsPath) return
     const group = currentGroup.value
     if (!group) return
-    // 入参边界检查：索引必须在当前显示列表范围内，负数越界直接返回
     const displayedMods = currentGroupMods.value
     if (!Number.isSafeInteger(modIdx) || modIdx < 0 || modIdx >= displayedMods.length) {
       logger.warn('ModsStore', 'activateModByIndex out of range', { modIdx, len: displayedMods.length })
       return
     }
+
+    const groupPath = group.groupPath
+    const now = Date.now()
+    const lastTs = lastSelectionTime[groupPath] ?? 0
+    if (now - lastTs < SELECTION_DEBOUNCE_MS) {
+      logger.debug('mods', `[activateModByIndex] debounced: groupPath=${groupPath}, elapsed=${now - lastTs}ms`)
+      return
+    }
+    lastSelectionTime[groupPath] = now
 
     isActivating.value = true
     try {
@@ -686,6 +704,7 @@ export const useModsStore = defineStore('mods', () => {
         groupIdx,
         modIdx,
         isMutex,
+        group.groupPath,
         modPath,
         undefined, // cursorX - pass undefined for now (no coordinate calculation yet)
         undefined, // cursorY - pass undefined for now (no coordinate calculation yet)
@@ -804,35 +823,39 @@ export const useModsStore = defineStore('mods', () => {
    * @returns Promise<void> 更新完成后自动调用 loadMods() 刷新前端数据；失败时抛出异常
    */
   async function updateModData() {
+    logger.debug('ModsStore', 'updateModData started')
     const s = useSettingsStore()
-    if (!s.currentModsPath) return
+    if (!s.currentModsPath) return null
+    isUpdatingModData.value = true
     loading.value = true
     try {
       const groupIndices = Object.keys(needUpdatePerGroup.value)
         .filter(k => needUpdatePerGroup.value[Number(k)])
         .map(Number)
 
+      let lastResult: UpdateResult | null = null
       if (groupIndices.length > 0) {
-        // 有分组标记 → 分组增量更新
-        let lastResult: UpdateResult | null = null
         for (const groupIndex of groupIndices) {
           lastResult = await updateGroupModData(s.currentGame, s.currentModsPath, groupIndex)
         }
         needReloadManual.value = lastResult?.needReloadManual ?? false
       } else {
-        // 无分组标记 → 全量更新
-        const result = await tauriUpdateModData(s.currentGame, s.currentModsPath)
-        needReloadManual.value = result.needReloadManual
+        lastResult = await tauriUpdateModData(s.currentGame, s.currentModsPath)
+        needReloadManual.value = lastResult.needReloadManual
       }
 
-      // 更新完成后刷新前端数据并清除所有标记
+      updateResult.value = lastResult
+
       await loadMods()
       clearNeedUpdate()
+      logger.debug('ModsStore', 'updateModData completed', { result: lastResult })
+      return lastResult
     } catch (e) {
       logger.error('ModsStore', 'Failed to update mod data', e)
       throw e
     } finally {
       loading.value = false
+      isUpdatingModData.value = false
     }
   }
 
@@ -872,6 +895,8 @@ export const useModsStore = defineStore('mods', () => {
     needUpdatePerGame,
     needUpdatePerGroup,
     needReloadManual,
+    isUpdatingModData,
+    updateResult,
     currentGroup,
     currentGroupMods,
     selectedMod,

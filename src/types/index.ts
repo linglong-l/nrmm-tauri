@@ -435,6 +435,8 @@ export interface UpdateResult {
   needReloadManual: boolean;
   /** switch_mod成功时返回写入的选中索引（NormalGroup）；其他操作无此字段（undefined） */
   selectedModIndex?: number;
+  /** 是否检测到标准 XXMI/3DMigoto 环境（仅 updateModData 结果中有效） */
+  isStandardXxmi?: boolean;
 }
 
 /**

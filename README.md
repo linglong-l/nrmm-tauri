@@ -103,7 +103,7 @@ npm run tauri build
 
 ## 多语言
 
-界面支持以下语言（`src/assets/translations/`）：
+界面支持以下语言（`src/utils/i18n/`）：
 
 | 语言 | 代码 | 文件 |
 |------|------|------|
@@ -252,8 +252,8 @@ xxmi-nrmm/
 │   │   ├── fonts/                # 自定义字体
 │   │   ├── images/               # 应用图标
 │   │   ├── keys_icon/            # 热键图标
-│   │   ├── template_txt/         # 模板文件
-│   │   └── translations/         # 翻译文件
+│   │   └── template_txt/         # 模板文件
+│   ├── utils/i18n/               # 翻译文件（i18n 实际加载目录）
 │   ├── App.vue                   # 应用根组件
 │   └── main.ts                   # 应用入口文件
 │

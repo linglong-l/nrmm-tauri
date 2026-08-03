@@ -398,6 +398,8 @@ pub fn sort_mods_light(mods: &mut [ModData]) {
 /// # Errors
 /// 当 `_MANAGED_` 目录不存在且无法创建，或 `fs::read_dir()` 读取失败时返回 `Err`。
 pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
+    log::debug!("[core::mod_scanner] [scan_mods_light] Starting light scan | path={:?}", game_mods_path);
+    let _s = std::time::Instant::now();
     let start = Instant::now();
     let managed_folder = get_managed_folder(game_mods_path);
     if !managed_folder.exists() {
@@ -484,6 +486,7 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
 
     let elapsed = start.elapsed().as_millis();
     log::info!("Light scan completed in {}ms, {} mods, {} groups", elapsed, total, groups.len());
+    log::debug!("[core::mod_scanner] [scan_mods_light] done | elapsed={:?}ms | mods={} groups={}", _s.elapsed().as_millis(), total, groups.len());
 
     Ok(ScanResult {
         groups,
@@ -557,9 +560,12 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
             dir_name.clone()
         };
 
-        // 读取/创建 modname 标记文件
+        // 读取/创建 modname 标记文件（NRMM 逻辑：优先使用 modname 文件中的名称作为展示名，不存在则创建并写入文件夹名）
         let modname_path = path.join("modname");
-        let _mod_name = read_or_create_marker_file(&modname_path, &display_name)?;
+        let mod_name = {
+            let n = read_or_create_marker_file(&modname_path, &display_name)?;
+            if n.trim().is_empty() { display_name.clone() } else { n }
+        };
 
         // 检查 fav 文件
         let fav_path = path.join(constants::FAV_MARKER);
@@ -579,8 +585,8 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
 
         let mod_data = ModData {
             mod_path: path.to_string_lossy().to_string(),
-            mod_name: display_name.clone(),
-            name: display_name,
+            mod_name: mod_name.clone(),
+            name: mod_name,
             full_path: path.clone(),
             parent_folder: dir_path.to_path_buf(),
             preview_image_path: icon_path,
@@ -1000,6 +1006,18 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
         dir_name.clone()
     };
 
+    // NRMM 逻辑：互斥组下不创建 modname 文件，但若已存在则优先使用其内容作为展示名
+    let modname_path = mod_path.join("modname");
+    let mod_name = if modname_path.exists() {
+        fs::read_to_string(&modname_path)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(display_name.clone())
+    } else {
+        display_name.clone()
+    };
+
     // 检查 fav 文件
     let fav_path = mod_path.join(constants::FAV_MARKER);
     let is_favorite = fav_path.exists();
@@ -1015,8 +1033,8 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
 
     Ok(ModData {
         mod_path: mod_path.to_string_lossy().to_string(),
-        mod_name: display_name.clone(),
-        name: display_name,
+        mod_name: mod_name.clone(),
+        name: mod_name,
         full_path: mod_path.to_path_buf(),
         parent_folder: mod_path.parent().unwrap_or(mod_path).to_path_buf(),
         preview_image_path: icon_path,
@@ -1350,10 +1368,21 @@ fn build_mod_data_deep(
 
     let disabled = dir_name.to_uppercase().starts_with("DISABLED");
 
-    let mod_name = if disabled {
+    // NRMM 逻辑：优先使用 modname 文件内容作为展示名；不存在则回退文件夹名（深度扫描不创建，由轻量扫描负责创建）
+    let display_name = if disabled {
         DISABLED_PREFIX_RE.replace(&dir_name, "").to_string()
     } else {
         dir_name.clone()
+    };
+    let modname_path = dir.join("modname");
+    let mod_name = if modname_path.exists() {
+        fs::read_to_string(&modname_path)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(display_name.clone())
+    } else {
+        display_name.clone()
     };
 
     let mut mod_ini_data: Vec<ModIniData> = Vec::with_capacity(8);           // 预分配 8 个 INI 数据，大多数模组只有少量 INI

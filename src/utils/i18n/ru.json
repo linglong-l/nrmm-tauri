@@ -420,5 +420,16 @@
   "Updater.downloadError": "Failed to download update. Please check your network connection and try again.",
   "Updater.settingsToggleAutoUpdateLabel": "Enable update badge notification",
   "Updater.badgeTooltip": "New version v{version} available, click to view",
-  "Updater.alreadyLatest": "You are already on the latest version"
+  "Updater.alreadyLatest": "You are already on the latest version",
+  "updateModData": {
+    "title": "Управление модами",
+    "updating": "Изменение модов",
+    "success": "Моды успешно обновлены!",
+    "loadTime": "Время загрузки",
+    "optimizationTip": "Чтобы ускорить загрузку модов, отключите неиспользуемые моды. Это на вкладке «Настройки», чуть ниже.",
+    "xxmiDetected": "Обнаружен стандартный XXMI/3DMigoto.",
+    "xxmiBackground": "Переключение модов/клавиш работает, даже когда окно игры не в фокусе.",
+    "closeAndReload": "Закрыть и перезагрузить",
+    "close": "Закрыть"
+  }
 }

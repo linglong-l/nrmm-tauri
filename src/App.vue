@@ -12,6 +12,7 @@
       <ModsView v-else-if="activeTab === 'mods'" />
       <SettingsView v-else-if="activeTab === 'settings'" />
     </div>
+    <UpdateModDataOverlay ref="overlayRef" />
   </div>
 </template>
 
@@ -21,13 +22,14 @@
  * 负责应用初始化、全局样式应用、生命周期管理、平台事件监听
  * 管理背景透明度和界面缩放设置
  */
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent, provide } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
 import TitleBar from '@/components/common/TitleBar.vue'
 import PillTabs from '@/components/nav/PillTabs.vue'
+import UpdateModDataOverlay from '@/components/UpdateModDataOverlay.vue'
 import { initPlatform } from '@/stores/platform'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
@@ -61,6 +63,11 @@ function reportBootStage(stage: string) {
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
 const modsStore = useModsStore()
+const overlayRef = ref<InstanceType<typeof UpdateModDataOverlay> | null>(null)
+provide('updateOverlay', {
+  show: (s: any, data?: any) => overlayRef.value?.show(s, data),
+  hide: () => overlayRef.value?.hide(),
+})
 reportBootStage('script-setup-begin')
 
 /** 导航标签页配置 */

@@ -420,5 +420,16 @@
   "Updater.downloadError": "下載更新失敗，請檢查網路連線後重試。",
   "Updater.settingsToggleAutoUpdateLabel": "啟用自更新徽章提醒",
   "Updater.badgeTooltip": "發現新版本 v{version}，點擊查看",
-  "Updater.alreadyLatest": "目前已是最新版本"
+  "Updater.alreadyLatest": "目前已是最新版本",
+  "updateModData": {
+    "title": "管理模組",
+    "updating": "正在修改模組",
+    "success": "模組管理成功！",
+    "loadTime": "載入耗時",
+    "optimizationTip": "如需加快模組載入速度，可以考慮停用不常用的模組。位於「設定」索引標籤中，向下捲動一點即可。",
+    "xxmiDetected": "偵測到標準 XXMI/3DMigoto。",
+    "xxmiBackground": "即使遊戲視窗未處於焦點狀態，模組開關/按鍵切換仍可正常使用。",
+    "closeAndReload": "關閉並重新載入",
+    "close": "關閉"
+  }
 }

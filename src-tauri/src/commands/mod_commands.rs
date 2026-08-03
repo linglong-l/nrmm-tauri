@@ -29,6 +29,11 @@ use crate::config::settings_store;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::fs;
+use std::sync::{Mutex, LazyLock};
+use std::collections::HashMap;
+use std::time::{Instant, Duration};
+
+static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 获取模组列表（轻量扫描+缓存）
 ///
@@ -36,6 +41,7 @@ use std::fs;
 /// 这是 UI 初始化和列表展示的主要入口。
 #[tauri::command]
 pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::ScanResult, String> {
+    log::debug!("[commands::mod_commands] [get_mods] game={} mods_path={}", game, mods_path);
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
@@ -107,6 +113,7 @@ pub async fn refresh_mods(game: String, mods_path: String) -> Result<mod_scanner
 /// 重量级更新模组数据（仅用户按钮触发）
 #[tauri::command]
 pub async fn update_mod_data(game: String, mods_path: String) -> Result<mod_manager::UpdateResult, String> {
+    log::debug!("[commands::mod_commands] [update_mod_data] game={} mods_path={}", game, mods_path);
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
     let settings = settings_store::get_settings();
@@ -172,11 +179,13 @@ pub async fn select_mod(
     group_index: u32,
     mod_index: u32,
     is_mutex: bool,
+    group_path: String,
     mod_path: String,
     cursor_x: Option<i32>,
     cursor_y: Option<i32>,
 ) -> Result<mod_manager::UpdateResult, String> {
-    let game = parse_game(&game)?;
+    log::debug!("[commands::mod_commands] [select_mod] game={} group={} mod={} mutex={}", game, group_index, mod_index, is_mutex);
+    let game_enum = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
     if is_mutex {
@@ -199,12 +208,25 @@ pub async fn select_mod(
             ..Default::default()
         })
     } else {
+        {
+            let mut debounce_map = SELECTION_DEBOUNCE.lock().map_err(|_| "debounce lock poisoned")?;
+            if let Some(last_time) = debounce_map.get(&group_path) {
+                if Instant::now() - *last_time < Duration::from_secs(3) {
+                    return Err("debounced".to_string());
+                }
+            }
+            debounce_map.insert(group_path.clone(), Instant::now());
+        }
         // 检查设置是否允许按键模拟
         let settings = settings_store::get_settings();
         let simulate_enabled = settings.simulate_key_on_selection;
 
         if simulate_enabled {
-            let simulator = crate::platform::get_key_simulator();
+            let mut simulator = crate::platform::get_key_simulator();
+            let process_names = game_enum.process_names();
+            if let Some(first_pn) = process_names.first() {
+                let _ = simulator.set_target_process(first_pn);
+            }
             // 参数语义对齐NRMM：优先使用调用方传入的屏幕坐标（cursor_x/cursor_y 为实际像素时），
             // 否则 fallback 到 (mod_index, group_index) 作为虚拟坐标（3Dmigoto/xxmi 据此识别）。
             // 注意：NRMM 将 x=realModIndex y=realGroupIndex 直接传入 SetCursorPos，
@@ -234,7 +256,7 @@ pub async fn select_mod(
         let managed_path = mods_path.join(constants::MANAGED_FOLDER);
 
         let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
-            mod_manager::switch_mod(game, &mods_path, &settings, group_index, mod_index).map_err(|e| e.to_string())
+            mod_manager::switch_mod(game_enum, &mods_path, &settings, group_index, mod_index).map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -392,6 +414,17 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
             return Err("Mod path does not exist".to_string());
         }
         let parent = path.parent().ok_or_else(|| "Invalid mod path".to_string())?;
+        let parent_name = parent.file_name().unwrap().to_string_lossy().to_string();
+
+        // NRMM 逻辑：group_xx 普通分组下的模组，重命名仅修改 modname 标记文件（展示名），文件夹名保持不变
+        if mod_scanner::is_group_xx_dir(&parent_name) {
+            let modname_path = path.join("modname");
+            fs::write(&modname_path, &new_name)
+                .map_err(|e| format!("Failed to write modname file: {}", e))?;
+            return Ok(path);
+        }
+
+        // 其余情况（互斥组等）：重命名文件夹
         let dir_name = path.file_name().unwrap().to_string_lossy().to_string();
         let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
         let final_name = if is_disabled {
@@ -600,9 +633,19 @@ pub async fn batch_toggle_mods(mod_paths: Vec<String>, enable: bool, is_mutex: b
 ///
 /// 与 NRMM 的 simulateKeyF10() 对齐，用于 update_mod_data 完成后
 /// 需要手动重载 3Dmigoto 时向游戏发送 F10 按键。
+/// 若传入 game 参数则尝试定向发送到目标游戏窗口，否则全局发送。
 #[tauri::command]
-pub async fn simulate_f10() -> Result<(), String> {
-    crate::platform::get_key_simulator()
+pub async fn simulate_f10(game: Option<String>) -> Result<(), String> {
+    let mut simulator = crate::platform::get_key_simulator();
+    if let Some(game_str) = game {
+        if let Ok(game_enum) = parse_game(&game_str) {
+            let process_names = game_enum.process_names();
+            if let Some(first_pn) = process_names.first() {
+                let _ = simulator.set_target_process(first_pn);
+            }
+        }
+    }
+    simulator
         .simulate_f10()
         .map_err(|e| e.to_string())
 }

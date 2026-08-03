@@ -556,5 +556,16 @@
     "close": "关闭",
     "simulateKeyOnSelection": "模组选择时模拟按键",
     "simulateKeyOnSelectionDesc": "选择模组时向 3Dmigoto 发送按键模拟"
+  },
+  "updateModData": {
+    "title": "管理模组",
+    "updating": "正在修改模组",
+    "success": "模组管理成功！",
+    "loadTime": "加载耗时",
+    "optimizationTip": "如需加快模组加载速度，可以考虑禁用不常用的模组。位于「设置」选项卡中，向下滚动一点即可。",
+    "xxmiDetected": "检测到标准 XXMI/3DMigoto。",
+    "xxmiBackground": "即使游戏窗口未处于焦点状态，模组开关/按键切换仍可正常使用。",
+    "closeAndReload": "关闭并重新加载",
+    "close": "关闭"
   }
 }

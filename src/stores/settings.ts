@@ -67,6 +67,7 @@ export const useSettingsStore = defineStore('settings', () => {
    * 同时初始化currentGame
    */
   async function load() {
+    logger.debug('SettingsStore', 'loadSettings started')
     try {
       const loadedSettings = await getSettings() as AppSettings
       settings.value = loadedSettings
@@ -75,6 +76,7 @@ export const useSettingsStore = defineStore('settings', () => {
       }
       simulateKeyOnSelection.value = loadedSettings.simulateKeyOnSelection ?? true
       loaded.value = true
+      logger.debug('SettingsStore', 'loadSettings completed')
       logger.info('SettingsStore', 'Settings loaded successfully')
     } catch (e) {
       logger.error('SettingsStore', 'Failed to load settings', e)
@@ -87,11 +89,13 @@ export const useSettingsStore = defineStore('settings', () => {
    * 保存成功后重新注册全局热键，确保热键配置即时生效
    */
   async function saveNow() {
+    logger.debug('SettingsStore', 'saveSettings started')
     try {
       settings.value.simulateKeyOnSelection = simulateKeyOnSelection.value
       await saveSettings(settings.value)
       // 保存成功后重新注册热键（如windowHotkey变更），不阻塞UI
       reregisterHotkeys().catch(e => logger.warn('SettingsStore', 'Failed to reregister hotkeys after save', e))
+      logger.debug('SettingsStore', 'saveSettings completed')
     } catch (e) {
       logger.error('SettingsStore', 'Failed to save settings', e)
     }

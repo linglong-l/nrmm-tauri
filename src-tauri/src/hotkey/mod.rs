@@ -335,6 +335,7 @@ fn shortcut_to_action(shortcut: &Shortcut) -> Option<HotkeyAction> {
 /// # Emits
 /// - `hotkey-refresh`（Payload: `()`）：F5 刷新快捷键触发时 emit
 fn execute_action(app_handle: &AppHandle, action: HotkeyAction) {
+    log::debug!("[hotkey] [execute_action] action={:?}", action);
     let detector = platform::get_foreground_detector();
     let settings = settings_store::get_settings();
 
@@ -350,16 +351,22 @@ fn execute_action(app_handle: &AppHandle, action: HotkeyAction) {
         return;
     }
 
-    let simulator = platform::get_key_simulator();
+    let mut simulator = platform::get_key_simulator();
+    if only_in_game {
+        let process_names = game.process_names();
+        if let Some(first_pn) = process_names.first() {
+            let _ = simulator.set_target_process(first_pn);
+        }
+    }
     match action {
-        HotkeyAction::SelectGroup(gid) => {
-            log::debug!("Hotkey triggered: SelectGroup {}", gid);
+        HotkeyAction::SelectGroup(_gid) => {
+            log::debug!("Hotkey triggered: SelectGroup");
             if let Err(e) = simulator.simulate_select_group() {
                 log::error!("Failed to simulate select group: {}", e);
             }
         }
-        HotkeyAction::SelectMod(midx) => {
-            log::debug!("Hotkey triggered: SelectMod {}", midx);
+        HotkeyAction::SelectMod(_midx) => {
+            log::debug!("Hotkey triggered: SelectMod");
             if let Err(e) = simulator.simulate_select_mod() {
                 log::error!("Failed to simulate select mod: {}", e);
             }
@@ -473,7 +480,7 @@ pub fn unregister_hotkeys(hotkey_mgr: State<'_, Arc<HotkeyManager>>) -> Result<(
 /// - 按键模拟失败（平台相关，如权限不足）
 #[tauri::command]
 pub fn simulate_select_group() -> Result<(), String> {
-    let simulator = platform::get_key_simulator();
+    let mut simulator = platform::get_key_simulator();
     simulator.simulate_select_group().map_err(|e| e.to_string())
 }
 
@@ -486,7 +493,7 @@ pub fn simulate_select_group() -> Result<(), String> {
 /// - 按键模拟失败（平台相关，如权限不足）
 #[tauri::command]
 pub fn simulate_select_mod() -> Result<(), String> {
-    let simulator = platform::get_key_simulator();
+    let mut simulator = platform::get_key_simulator();
     simulator.simulate_select_mod().map_err(|e| e.to_string())
 }
 
@@ -585,9 +592,9 @@ pub(crate) fn parse_game(game: &str) -> Result<TargetGame, String> {
 /// 不会 panic
 ///
 /// # Examples
-/// ```
-/// # use crate::hotkey::match_process_name_to_game;
-/// # use crate::models::enums::TargetGame;
+/// ```ignore
+/// // 内部辅助函数，使用 TargetGame::from_process_name(process_name) 作为公开 API
+/// // 本函数仅为模块内部单元测试用例，无需 Doc-Test 执行
 /// assert_eq!(match_process_name_to_game("StarRail.exe"), Some(TargetGame::HonkaiStarRail));
 /// assert_eq!(match_process_name_to_game("notepad.exe"), None);
 /// ```

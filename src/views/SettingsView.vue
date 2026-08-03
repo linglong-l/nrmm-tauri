@@ -228,20 +228,21 @@
  * 注意：表单直接绑定settingsStore，不使用本地副本，
  * 确保切换标签页后数据不丢失
  */
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, FolderOpened } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { usePlatform } from '@/stores/platform'
-import { selectFolder, checkForUpdates, getAppVersion } from '@/utils/tauri'
+import { selectFolder, checkForUpdates, getAppVersion, updateModData } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
 
 const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
 const modsStore = useModsStore()
 const { platformInfo } = usePlatform()
+const updateOverlay: any = inject('updateOverlay')
 
 /**
  * 判断路径是否为合法的Mods目录（最后一级目录名必须为"Mods"，大小写不敏感）
@@ -460,20 +461,24 @@ async function handleBrowse() {
  * - 重新计算modDisabled状态
  */
 async function handleUpdateModData() {
-  updatingModData.value = true
+  logger.debug('SettingsView', 'handleUpdateModData started')
   try {
     logger.info('SettingsView', 'Updating mod data (heavyweight)...')
     if (!settingsStore.currentModsPath) {
       ElMessage.warning(t('Mods path does not exist.'))
       return
     }
-    await modsStore.updateModData()
-    ElMessage.success(t('Update Mod Data completed successfully!'))
+    updateOverlay?.show('loading')
+    const start = Date.now()
+    try {
+      const result = await modsStore.updateModData() ?? (await updateModData(settingsStore.currentGame, settingsStore.currentModsPath))
+      updateOverlay?.show('completed', { result, durationMs: Date.now() - start })
+    } catch (e: any) {
+      const msg = typeof e === 'string' ? e : (e?.message ?? String(e))
+      updateOverlay?.show('error', { error: msg })
+    }
   } catch (e: any) {
-    ElMessage.error(t('Unknown error occurred.'))
     logger.error('SettingsView', 'Update mod data failed', e)
-  } finally {
-    updatingModData.value = false
   }
 }
 

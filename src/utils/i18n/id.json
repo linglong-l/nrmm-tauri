@@ -420,5 +420,16 @@
   "Updater.downloadError": "Failed to download update. Please check your network connection and try again.",
   "Updater.settingsToggleAutoUpdateLabel": "Enable update badge notification",
   "Updater.badgeTooltip": "New version v{version} available, click to view",
-  "Updater.alreadyLatest": "You are already on the latest version"
+  "Updater.alreadyLatest": "You are already on the latest version",
+  "updateModData": {
+    "title": "Kelola Mod",
+    "updating": "Memodifikasi mod",
+    "success": "Mod berhasil dikelola!",
+    "loadTime": "Waktu muat",
+    "optimizationTip": "Untuk mempercepat pemuatan mod, pertimbangkan untuk menonaktifkan mod yang tidak sering digunakan. Ada di tab \"Pengaturan\", gulir ke bawah sedikit.",
+    "xxmiDetected": "XXMI/3DMigoto standar terdeteksi.",
+    "xxmiBackground": "Sakelar mod/perpindahan tombol tetap berfungsi meskipun jendela game tidak dalam fokus.",
+    "closeAndReload": "Tutup & Muat Ulang",
+    "close": "Tutup"
+  }
 }

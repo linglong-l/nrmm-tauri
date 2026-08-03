@@ -56,6 +56,9 @@ pub struct UpdateResult {
     /// - MutexGroup：不使用 switch_mod 路径，始终 None
     #[serde(default)]
     pub selected_mod_index: Option<i32>,
+    /// 是否检测到标准 XXMI/3DMigoto 环境（[Constants] + XXMI 注入标记 + [Inject] 段）
+    #[serde(default)]
+    pub is_standard_xxmi: bool,
 }
 
 /// INI 恢复结果统计
@@ -74,6 +77,99 @@ pub struct SaveCustomizationsResult {
     pub success: bool,
     /// 消息
     pub message: String,
+}
+
+/// 检测当前游戏是否为标准 XXMI/3DMigoto 环境
+///
+/// 参考 NRMM `ini_handler_bridge.dart` 逻辑：
+/// 1. 读取 `{game_mods_path}/d3dx.ini`（或游戏特定主 INI）
+/// 2. 检查 `[Constants]` 段中是否存在 XXMI Launcher 注入标记
+///    （包含 `xxmi`、`xxmi_inject`、`global $xxmi`、`global $inject` 等键名或值）
+/// 3. 检查是否存在 `[Inject]` 段或包含 `run = CommandList` 引用
+/// 4. 以上条件均满足时返回 `true`
+///
+/// 任何错误（文件不存在、解析失败等）均返回 `false` 且不报错，
+/// 仅记录 `log::debug!` 供开发调试。
+///
+/// # 参数
+/// - `game_mods_path`: 游戏 Mods 目录路径
+/// - `main_ini_name`: 主 INI 文件名（由 TargetGame::d3dx_ini_name() 提供）
+///
+/// # 返回
+/// - `true`: 检测到标准 XXMI/3DMigoto 环境
+/// - `false`: 未检测到或检测过程发生错误
+pub fn detect_standard_xxmi(game_mods_path: &Path, main_ini_name: &str) -> bool {
+    let _start = std::time::Instant::now();
+    let main_ini_path = game_mods_path.join(main_ini_name);
+
+    // 1. 读取主 INI 文件
+    let content = match fs::read_to_string(&main_ini_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::debug!(
+                "[mod_manager] [detect_standard_xxmi] Main INI not found or unreadable: {:?}, err={}",
+                main_ini_path, e
+            );
+            return false;
+        }
+    };
+
+    // 2. 解析 INI，检查 [Constants] 和 [Inject] 段
+    let mut in_constants = false;
+    let mut has_xxmi_mark = false;
+    let mut has_inject_section = false;
+    let mut has_run_commandlist = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // 跳过空行和注释
+        if trimmed.is_empty() || trimmed.starts_with(';') || trimmed.starts_with('#') {
+            continue;
+        }
+
+        // 段头
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let section = trimmed[1..trimmed.len() - 1].trim().to_lowercase();
+            in_constants = section == "constants";
+            if section == "inject" {
+                has_inject_section = true;
+            }
+            continue;
+        }
+
+        // [Constants] 段内：查找 XXMI 注入标记变量
+        if in_constants {
+            let lower = trimmed.to_lowercase();
+            // XXMI Launcher 常见注入标记：global $xxmi_xxx、global $inject、xxmi_inject、$xxmi_inject 等
+            if lower.contains("xxmi")
+                || (lower.contains("global") && (lower.contains("$inject") || lower.contains("inject")))
+                || lower.contains("xxmi_inject")
+                || lower.contains("$xxmi")
+            {
+                has_xxmi_mark = true;
+            }
+        }
+
+        // 任意位置：检查 run = CommandList
+        let lower = trimmed.to_lowercase();
+        if lower.contains("run") && lower.contains("commandlist") {
+            has_run_commandlist = true;
+        }
+    }
+
+    let result = has_xxmi_mark && (has_inject_section || has_run_commandlist);
+
+    log::debug!(
+        "[mod_manager] [detect_standard_xxmi] result={} | has_xxmi_mark={}, has_inject_section={}, has_run_commandlist={}, elapsed={:?}ms",
+        result,
+        has_xxmi_mark,
+        has_inject_section,
+        has_run_commandlist,
+        _start.elapsed().as_millis()
+    );
+
+    result
 }
 
 /// 重量级更新模组数据（完整 INI 解析 + 注入）
@@ -98,6 +194,8 @@ pub struct SaveCustomizationsResult {
 /// - `game_mods_path`: 游戏 Mods 目录
 /// - `_settings`: 应用设置（预留参数）
 pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppSettings) -> Result<UpdateResult> {
+    log::debug!("[core::mod_manager] [update_mod_data] Starting heavy update | game={:?} path={:?}", game, game_mods_path);
+    let _s = std::time::Instant::now();
     let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);
     if !managed_folder.exists() {
         fs::create_dir_all(&managed_folder)?;
@@ -242,7 +340,10 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     fs::rename(&tmp_path, &main_ini_path)
         .with_context(|| format!("Failed to rename temp main INI to: {:?}", main_ini_path))?;
 
-    Ok(UpdateResult {
+    // 步骤9: 检测标准 XXMI/3DMigoto 环境
+    let is_standard_xxmi = detect_standard_xxmi(game_mods_path, main_ini_name);
+
+    let result = UpdateResult {
         total_groups: scan_result.groups.len() as u32,
         total_mods: scan_result.total_mods_count as u32,
         enabled_mods: enabled_mods.len() as u32,
@@ -250,8 +351,11 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         processed_mods,
         errors: all_errors,
         need_reload_manual,
+        is_standard_xxmi,
         ..Default::default()
-    })
+    };
+    log::debug!("[core::mod_manager] [update_mod_data] done | elapsed={:?}ms | processed={} errors={}", _s.elapsed().as_millis(), result.processed_mods, result.errors.len());
+    Ok(result)
 }
 
 /// 分组增量更新模组数据（仅更新指定分组的 ModFolder.ini）
@@ -388,6 +492,10 @@ pub fn update_group_mod_data(
     let nrmm_include_path = managed_folder.join(constants::INCLUDE_FILENAME);
     create_nrmm_include_ini(&nrmm_include_path, &managed_folder, &existing_ini_paths, game_mods_path)?;
 
+    // 步骤8: 检测标准 XXMI/3DMigoto 环境
+    let main_ini_name = game.d3dx_ini_name();
+    let is_standard_xxmi = detect_standard_xxmi(game_mods_path, main_ini_name);
+
     Ok(UpdateResult {
         total_groups: scan_result.groups.len() as u32,
         total_mods: scan_result.total_mods_count as u32,
@@ -396,6 +504,7 @@ pub fn update_group_mod_data(
         processed_mods,
         errors: all_errors,
         need_reload_manual,
+        is_standard_xxmi,
         ..Default::default()
     })
 }
@@ -708,6 +817,8 @@ pub fn switch_mod(
     group_index: u32,
     mod_index: u32,
 ) -> Result<UpdateResult> {
+    log::debug!("[core::mod_manager] [switch_mod] Starting | group={} mod={} path={:?}", group_index, mod_index, game_mods_path);
+    let _s = std::time::Instant::now();
     // 使用轻量扫描以匹配前端索引（None 在 mod_index=0，真实模组从 1 开始）
     let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
 
@@ -764,10 +875,12 @@ pub fn switch_mod(
         }
     }
 
-    Ok(UpdateResult {
+    let result = UpdateResult {
         selected_mod_index: Some(sel_idx_i32),
         ..Default::default()
-    })
+    };
+    log::debug!("[core::mod_manager] [switch_mod] done | elapsed={:?}ms | selected={:?}", _s.elapsed().as_millis(), result.selected_mod_index);
+    Ok(result)
 }
 
 /// 切换单个模组的启用/禁用状态（独立开关，不影响同组其他模组）

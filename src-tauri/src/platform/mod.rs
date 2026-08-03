@@ -36,22 +36,29 @@ pub struct PlatformInfo {
 ///
 /// 实现模拟键盘按键来操作 3Dmigoto 内置菜单
 pub trait KeySimulator: Send + Sync {
+    /// 设置目标进程名（用于定向按键发送）
+    ///
+    /// 默认空实现，返回 Ok(())。各平台 override 实现窗口查找逻辑。
+    fn set_target_process(&mut self, process_name: &str) -> Result<()> {
+        let _ = process_name;
+        Ok(())
+    }
     /// 模拟选择分组的按键序列
-    fn simulate_select_group(&self) -> Result<()>;
+    fn simulate_select_group(&mut self) -> Result<()>;
     /// 模拟选择模组的按键序列
-    fn simulate_select_mod(&self) -> Result<()>;
+    fn simulate_select_mod(&mut self) -> Result<()>;
     /// 模拟 F10 按键（3Dmigoto 重载快捷键）
-    fn simulate_f10(&self) -> Result<()>;
+    fn simulate_f10(&mut self) -> Result<()>;
     /// 模拟选择分组（带光标坐标绑定）
     /// x, y 为目标光标位置（屏幕坐标），用于将光标移动到 3Dmigoto 内置菜单对应位置
     /// 默认实现 fallback 到无坐标版本
-    fn simulate_select_group_at(&self, _x: i32, _y: i32) -> Result<()> {
+    fn simulate_select_group_at(&mut self, _x: i32, _y: i32) -> Result<()> {
         self.simulate_select_group()
     }
     /// 模拟选择模组（带光标坐标绑定）
     /// x, y 为目标光标位置（屏幕坐标），用于将光标移动到 3Dmigoto 内置菜单对应位置
     /// 默认实现 fallback 到无坐标版本
-    fn simulate_select_mod_at(&self, _x: i32, _y: i32) -> Result<()> {
+    fn simulate_select_mod_at(&mut self, _x: i32, _y: i32) -> Result<()> {
         self.simulate_select_mod()
     }
     /// 模拟一次完整的 NRMM 风格选择操作（与 NRMM simulateKeySelectMod 对齐）
@@ -67,8 +74,7 @@ pub trait KeySimulator: Send + Sync {
     ///
     /// # 返回
     /// 成功时 Ok(())，平台不支持或失败时返回 Err
-    fn simulate_select_full(&self, group_idx: u32, mod_idx: u32) -> Result<()> {
-        // 默认保守实现（老方式，不保证 VK_CLEAR 长按语义），各平台 override
+    fn simulate_select_full(&mut self, group_idx: u32, mod_idx: u32) -> Result<()> {
         let _ = group_idx;
         let _ = mod_idx;
         self.simulate_select_group()?;
@@ -104,7 +110,7 @@ pub trait ForegroundDetector: Send + Sync {
 /// 获取当前平台的按键模拟器实例
 pub fn get_key_simulator() -> Box<dyn KeySimulator> {
     #[cfg(target_os = "windows")]
-    { Box::new(windows::WindowsKeySimulator) }
+    { Box::new(windows::WindowsKeySimulator::default()) }
     #[cfg(target_os = "linux")]
     { Box::new(linux::LinuxKeySimulator::new()) }
     #[cfg(target_os = "macos")]

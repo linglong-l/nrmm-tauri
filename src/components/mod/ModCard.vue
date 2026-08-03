@@ -330,6 +330,7 @@ function handleClick() {
 
 /** 双击：确认启用模组（调用后端写入INI，自动同步选中状态） */
 function handleDoubleClick() {
+  logger.debug('ModCard', 'onDoubleClick activateModByIndex', { modIndex: props.modIndex, modName: mod.value?.name })
   if (isNoneSlot.value) return
   // 同步切换左侧导航栏对应分组为选中状态
   if (mod.value) {

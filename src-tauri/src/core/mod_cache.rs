@@ -81,7 +81,9 @@ impl ModCache {
     /// 此方法不会返回错误。
     pub fn get(&self, game: TargetGame, mods_path: &Path) -> Option<ScanResult> {
         let key = Self::make_key(game, mods_path);
-        self.cache.get(&key).map(|entry| entry.result.clone())
+        let result = self.cache.get(&key).map(|entry| entry.result.clone());
+        log::debug!("[core::mod_cache] [get] game={:?} hit={}", game, result.is_some());
+        result
     }
 
     /// 写入缓存条目。
@@ -104,12 +106,14 @@ impl ModCache {
     /// 此方法不会返回错误。
     pub fn set(&mut self, game: TargetGame, mods_path: &Path, result: ScanResult) {
         let key = Self::make_key(game, mods_path);
+        let mods_count = result.mods.len();
         self.cache.insert(key, CachedEntry {
             result,
             _timestamp: Instant::now(),
         });
         // 清除该游戏的失效标记，表示缓存已更新
         self.invalidated_games.remove(&game);
+        log::debug!("[core::mod_cache] [set] game={:?} mods={}", game, mods_count);
     }
 
     /// 精确移除指定游戏 + 路径的一个缓存条目。
@@ -127,7 +131,8 @@ impl ModCache {
     /// 此方法不会返回错误。
     pub fn invalidate(&mut self, game: TargetGame, mods_path: &Path) {
         let key = Self::make_key(game, mods_path);
-        self.cache.remove(&key);
+        let removed = self.cache.remove(&key);
+        log::debug!("[core::mod_cache] [invalidate] game={:?} removed={}", game, removed.is_some());
     }
 
     /// 失效指定游戏的所有缓存条目。

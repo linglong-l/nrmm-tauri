@@ -9,15 +9,15 @@ use anyhow::{Result, anyhow};
 pub struct MacOSKeySimulator;
 
 impl super::KeySimulator for MacOSKeySimulator {
-    fn simulate_select_group(&self) -> Result<()> {
+    fn simulate_select_group(&mut self) -> Result<()> {
         Err(anyhow!("macOS keypress simulation not yet implemented"))
     }
     
-    fn simulate_select_mod(&self) -> Result<()> {
+    fn simulate_select_mod(&mut self) -> Result<()> {
         Err(anyhow!("macOS keypress simulation not yet implemented"))
     }
     
-    fn simulate_f10(&self) -> Result<()> {
+    fn simulate_f10(&mut self) -> Result<()> {
         Err(anyhow!("macOS keypress simulation not supported"))
     }
 

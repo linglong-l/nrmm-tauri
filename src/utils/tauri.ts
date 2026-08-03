@@ -130,6 +130,7 @@ export async function refreshMods(game: string, modsPath: string): Promise<ScanR
  * @param groupIndex 分组索引
  * @param modIndex 模组索引
  * @param isMutex 是否为互斥组
+ * @param groupPath 分组文件夹路径（用于分组级防抖）
  * @param modPath 模组文件夹路径
  */
 export async function selectMod(
@@ -138,20 +139,26 @@ export async function selectMod(
   groupIndex: number,
   modIndex: number,
   isMutex: boolean,
+  groupPath: string,
   modPath: string,
   cursorX?: number,
   cursorY?: number
 ): Promise<UpdateResult> {
-  return invoke('select_mod', {
+  const args = { game, modsPath, groupIndex, modIndex, isMutex, groupPath, modPath, cursorX, cursorY }
+  logger.debug('Tauri', 'invoke start: select_mod', args)
+  const result = await invoke('select_mod', {
     game,
     modsPath,
     groupIndex,
     modIndex,
     isMutex,
+    groupPath,
     modPath,
     cursorX: cursorX ?? null,
     cursorY: cursorY ?? null,
-  })
+  }) as UpdateResult
+  logger.debug('Tauri', 'invoke end: select_mod', { result })
+  return result
 }
 
 /**
@@ -359,9 +366,14 @@ export async function simulateSelectMod(): Promise<void> {
 /**
  * 模拟 F10 按键（3Dmigoto 重载快捷键）
  * 与 NRMM 的 simulateKeyF10() 对齐
+ * @param game 目标游戏类型，传入时尝试定向发送到游戏窗口
  */
-export async function simulateF10(): Promise<void> {
-  return invoke('simulate_f10')
+export async function simulateF10(game?: string): Promise<void> {
+  const params: any = {}
+  if (game) params.game = game
+  logger.debug('Tauri', 'invoke start: simulate_f10', params)
+  await invoke('simulate_f10', params)
+  logger.debug('Tauri', 'invoke end: simulate_f10')
 }
 
 /**
@@ -469,7 +481,10 @@ export async function switchFileWatcher(modsPath: string): Promise<void> {
  * @returns 更新结果统计
  */
 export async function updateModData(game: string, modsPath: string): Promise<UpdateResult> {
-  return invoke('update_mod_data', { game, modsPath })
+  logger.debug('Tauri', 'invoke start: update_mod_data', { game, modsPath })
+  const result = await invoke('update_mod_data', { game, modsPath }) as UpdateResult
+  logger.debug('Tauri', 'invoke end: update_mod_data', { result })
+  return result
 }
 
 /**

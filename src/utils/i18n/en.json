@@ -555,5 +555,16 @@
     "close": "Close",
     "simulateKeyOnSelection": "Simulate keys on selection",
     "simulateKeyOnSelectionDesc": "Send key simulation to 3Dmigoto when selecting mods"
+  },
+  "updateModData": {
+    "title": "Manage Mods",
+    "updating": "Modifying mods",
+    "success": "Mods updated successfully!",
+    "loadTime": "Load time",
+    "optimizationTip": "To speed up mod loading, consider disabling mods you don't use. It's in the \"Settings\" tab, scroll down a bit.",
+    "xxmiDetected": "Standard XXMI/3DMigoto detected.",
+    "xxmiBackground": "Mod toggles/key swaps still work even when the game window is not focused.",
+    "closeAndReload": "Close & Reload",
+    "close": "Close"
   }
 }
