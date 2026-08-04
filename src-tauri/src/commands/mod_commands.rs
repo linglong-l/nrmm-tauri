@@ -35,6 +35,34 @@ use std::time::{Instant, Duration};
 
 static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// 选择模组命令的参数结构体
+///
+/// 将 select_mod 命令的 9 个独立参数封装为单个结构体，
+/// 以避免 clippy::too_many_arguments 警告，并提升参数可读性。
+/// 通过 #[serde(rename_all = "camelCase")] 与前端 camelCase 键名保持一致。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectModArgs {
+    /// 目标游戏标识（如 "wuwa"、"genshin"）
+    game: String,
+    /// 模组根目录路径
+    mods_path: String,
+    /// 分组索引
+    group_index: u32,
+    /// 模组索引
+    mod_index: u32,
+    /// 是否为互斥组
+    is_mutex: bool,
+    /// 分组路径
+    group_path: String,
+    /// 模组路径
+    mod_path: String,
+    /// 屏幕光标 X 坐标（可选，像素值）
+    cursor_x: Option<i32>,
+    /// 屏幕光标 Y 坐标（可选，像素值）
+    cursor_y: Option<i32>,
+}
+
 /// 获取模组列表（轻量扫描+缓存）
 ///
 /// 优先从内存缓存返回，缓存未命中时执行轻量扫描。
@@ -173,17 +201,18 @@ pub async fn update_group_mod_data(game: String, mods_path: String, group_index:
 
 /// 选择模组（支持互斥组）
 #[tauri::command]
-pub async fn select_mod(
-    game: String,
-    mods_path: String,
-    group_index: u32,
-    mod_index: u32,
-    is_mutex: bool,
-    group_path: String,
-    mod_path: String,
-    cursor_x: Option<i32>,
-    cursor_y: Option<i32>,
-) -> Result<mod_manager::UpdateResult, String> {
+pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult, String> {
+    let SelectModArgs {
+        game,
+        mods_path,
+        group_index,
+        mod_index,
+        is_mutex,
+        group_path,
+        mod_path,
+        cursor_x,
+        cursor_y,
+    } = args;
     log::debug!("[commands::mod_commands] [select_mod] game={} group={} mod={} mutex={}", game, group_index, mod_index, is_mutex);
     let game_enum = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);

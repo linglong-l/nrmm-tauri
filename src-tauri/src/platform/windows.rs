@@ -29,18 +29,13 @@ unsafe impl Send for SafeHWND {}
 unsafe impl Sync for SafeHWND {}
 
 /// Windows 按键模拟器
+#[derive(Default)]
 pub struct WindowsKeySimulator {
     target_hwnd: Option<SafeHWND>,
 }
 
 unsafe impl Send for WindowsKeySimulator {}
 unsafe impl Sync for WindowsKeySimulator {}
-
-impl Default for WindowsKeySimulator {
-    fn default() -> Self {
-        Self { target_hwnd: None }
-    }
-}
 
 impl WindowsKeySimulator {
     fn dispatch_key(&mut self, vk: VIRTUAL_KEY) -> Result<()> {

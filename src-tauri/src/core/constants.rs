@@ -221,7 +221,7 @@ where
 #[inline]
 pub fn is_injectable_section(section_name: &str) -> bool {
     let lower = section_name.to_lowercase();
-    if INJECTABLE_SECTION_EXACT.iter().any(|s| *s == lower.as_str()) {
+    if INJECTABLE_SECTION_EXACT.contains(&lower.as_str()) {
         return true;
     }
     INJECTABLE_SECTION_PREFIXES
