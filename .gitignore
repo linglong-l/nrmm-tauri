@@ -70,3 +70,4 @@ src-tauri/binaries/
 AGENTS.md
 clippy_output.txt
 SESSION_CONTEXT.md
+/temp/

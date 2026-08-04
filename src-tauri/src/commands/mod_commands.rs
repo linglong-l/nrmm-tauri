@@ -214,6 +214,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         cursor_y,
     } = args;
     log::debug!("[commands::mod_commands] [select_mod] game={} group={} mod={} mutex={}", game, group_index, mod_index, is_mutex);
+    let _start = std::time::Instant::now();
     let game_enum = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
@@ -249,6 +250,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         // 检查设置是否允许按键模拟
         let settings = settings_store::get_settings();
         let simulate_enabled = settings.simulate_key_on_selection;
+        log::debug!("[commands::mod_commands] [select_mod] simulate_key_on_selection={} mutex={}", simulate_enabled, is_mutex);
 
         if simulate_enabled {
             let mut simulator = crate::platform::get_key_simulator();
@@ -272,6 +274,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
                     .simulate_select_full(group_index, mod_index)
                     .map_err(|e| e.to_string()),
             };
+            log::debug!("[commands::mod_commands] [select_mod] simulate_result={:?}", result);
             if let Err(e) = result {
                 log::warn!(
                     "select_mod: simulate_select_full failed (g={}, m={}): {}",
@@ -289,12 +292,15 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         })
         .await
         .map_err(|e| e.to_string())??;
+        log::debug!("[commands::mod_commands] [select_mod] switch_result={:?}", result);
 
         {
             let mut cache = crate::core::mod_cache::MOD_CACHE.write();
             cache.invalidate_by_prefix(&managed_path);
         }
+        log::debug!("[commands::mod_commands] [select_mod] cache invalidated | prefix={:?}", managed_path);
 
+        log::debug!("[commands::mod_commands] [select_mod] completed | elapsed={:?}ms | selected_mod_index={:?}", _start.elapsed().as_millis(), result.selected_mod_index);
         Ok(result)
     }
 }

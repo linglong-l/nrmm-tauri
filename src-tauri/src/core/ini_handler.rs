@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::io::{Write, BufWriter};
 use anyhow::{Result, Context, bail};
 use std::fs;
+use regex::Regex;
 
 use crate::core::constants;
 use crate::models::mod_data::ErroredLines;
@@ -44,6 +45,103 @@ pub fn is_conditional_section(name: &str) -> bool {
     constants::CONDITIONAL_SECTION_PREFIXES
         .iter()
         .any(|p| lower.starts_with(&p.to_lowercase()))
+}
+
+/// 判断段名是否为 Key 触发段（大小写不敏感前缀匹配 "key"）
+///
+/// 对应 NRMM 的 `_isKeySection`（`sectionName.toLowerCase().startsWith("key")`）。
+/// Key 段在模组数据更新时使用 condition 追加方式注入槽位条件（而非 if 包裹）。
+pub fn is_key_section(name: &str) -> bool {
+    name.to_lowercase().starts_with("key")
+}
+
+/// 判断表达式是否被一对匹配的括号整体包裹（外层括号闭合于末尾）
+///
+/// 对应 NRMM 的 `_isWrappedInMatchingParens`。用于决定 condition 追加时
+/// 是否需要为原表达式补括号：已整体包裹则直接 `&&`，否则用 `(...) &&`。
+fn is_wrapped_in_matching_parens(expr: &str) -> bool {
+    let expr = expr.trim();
+    if !expr.starts_with('(') || !expr.ends_with(')') {
+        return false;
+    }
+    let mut depth = 0usize;
+    for (i, c) in expr.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                // 若最外层括号在末尾前已闭合，说明并非整体包裹（如 "(a)(b)"）
+                if depth == 0 && i != expr.len() - 1 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+/// 从 condition 表达式中移除本管理器注入的槽位条件，避免重复更新导致嵌套
+///
+/// 对应 NRMM 的 `_sanitizeKeyConditionExpressionFromModManager`：
+/// 1. 正则移除 `$managed_slot_id == $\modmanageragl\group_X\<token>` 段
+/// 2. 清理移除后遗留的空括号、悬空 `&&`/`||`、多余逻辑连接符
+/// 3. 若整段被外层括号包裹，则解包
+///
+/// 返回清理后的表达式（可能为空字符串，表示该行原本仅含管理器条件）。
+fn sanitize_condition_expression(expression: &str) -> String {
+    // 匹配 §managed_slot_id == $\\modmanageragl\\group_<数字>\\<token>，
+    // token 可为 active_slot（NRMM）或数字编号（本项目历史注入）。
+    let manager_re = Regex::new(
+        r"\$managed_slot_id\s*==\s*\$\\modmanageragl\\group_\d+\\[A-Za-z0-9_]+",
+    )
+    .unwrap();
+    if !manager_re.is_match(expression) {
+        return expression.to_string();
+    }
+
+    let mut expr = manager_re.replace_all(expression, "").trim().to_string();
+
+    // "(&& x)" -> "(x)"
+    expr = Regex::new(r"\(\s*&&\s*").unwrap().replace_all(&expr, "(").trim().to_string();
+    // "(|| x)" -> "(x)"
+    expr = Regex::new(r"\(\s*\|\|\s*").unwrap().replace_all(&expr, "(").trim().to_string();
+    // "(x && )" -> "(x)"
+    expr = Regex::new(r"\s*&&\s*\)").unwrap().replace_all(&expr, ")").trim().to_string();
+    // "(x || )" -> "(x)"
+    expr = Regex::new(r"\s*\|\|\s*\)").unwrap().replace_all(&expr, ")").trim().to_string();
+    // "()" -> ""
+    expr = Regex::new(r"\(\s*\)").unwrap().replace_all(&expr, "").trim().to_string();
+    // 尾部悬空 "&&"（连续移除，避免残留）
+    while expr.trim_end().ends_with("&&") {
+        expr = expr.trim_end()[..expr.trim_end().len() - 2].trim().to_string();
+    }
+    // 尾部悬空 "||"
+    while expr.trim_end().ends_with("||") {
+        expr = expr.trim_end()[..expr.trim_end().len() - 2].trim().to_string();
+    }
+    // 头部悬空 "&&"
+    if expr.starts_with("&&") {
+        expr = expr.replacen("&&", "", 1).trim().to_string();
+    }
+    // 头部悬空 "||"
+    if expr.starts_with("||") {
+        expr = expr.replacen("||", "", 1).trim().to_string();
+    }
+    // "&& &&" -> "&&"
+    expr = Regex::new(r"&&\s*&&").unwrap().replace_all(&expr, "&&").trim().to_string();
+    // "&& ||" -> "||"
+    expr = Regex::new(r"&&\s*\|\|").unwrap().replace_all(&expr, "||").trim().to_string();
+    // "|| ||" -> "||"
+    expr = Regex::new(r"\|\|\s*\|\|").unwrap().replace_all(&expr, "||").trim().to_string();
+    // "|| &&" -> "&&"
+    expr = Regex::new(r"\|\|\s*&&").unwrap().replace_all(&expr, "&&").trim().to_string();
+
+    // 若管理器表达式整体被外层括号包裹，解包
+    if is_wrapped_in_matching_parens(&expr) {
+        expr = expr[1..expr.len() - 1].trim().to_string();
+    }
+    expr
 }
 
 fn trim_trailing_whitespace(s: &str) -> &str {
@@ -429,6 +527,13 @@ impl IniFile {
         for section in &mut self.sections {
             let section_name_lower = section.name.to_lowercase();
 
+            // Key 段：与 NRMM 一致，使用 condition 追加方式注入槽位条件，
+            // 并清理旧的管理器表达式，避免重复更新导致嵌套。
+            if is_key_section(&section.name) {
+                Self::inject_key_condition(section, &condition_var);
+                continue;
+            }
+
             // NRMM 对齐：仅对按键触发段（历史逻辑）+ 注入白名单段（Present/CustomShader/
             // TextureOverride/ShaderOverride/CommandList/Resource/InputLayout/Draw*/Dispatch 等）
             // 包裹 VariableGroup 条件；其余段（如 String 等）不做处理。
@@ -491,6 +596,73 @@ impl IniFile {
                     }
                 }
                 section.lines = new_lines;
+            }
+        }
+    }
+
+    /// 对 Key 段注入槽位条件（condition 追加方式，对齐 NRMM）
+    ///
+    /// 处理流程：
+    /// 1. 若该段已被旧版 if 包裹（含 managed_slot_id 的 IfStart），保持幂等直接跳过；
+    /// 2. 清理所有 `condition`/disabled condition 行中遗留的旧管理器表达式；
+    /// 3. 若无有效 condition 行，在段首插入 `condition = <manager_expr>`；
+    /// 4. 否则对每个 condition 行追加 `&& <manager_expr>`（必要时用括号包裹原表达式）。
+    ///
+    /// # 参数
+    /// - `section`: 待处理的 Key 段
+    /// - `condition_var`: 本管理器注入的槽位条件表达式（如 `$managed_slot_id == $...\group_1\2`）
+    fn inject_key_condition(section: &mut IniSection, condition_var: &str) {
+        // 若已用旧版 if 包裹（含 managed_slot_id 的 IfStart），保持幂等，跳过注入
+        if section.lines.iter().any(|l| {
+            matches!(l, IniLine::IfStart { condition, .. } if condition.contains("managed_slot_id"))
+        }) {
+            return;
+        }
+
+        // 阶段1：清理所有 condition 行的旧管理器表达式
+        struct CleanedCond {
+            index: usize,
+            disabled: bool,
+            value: String,
+        }
+        let mut cleaned: Vec<CleanedCond> = Vec::new();
+        for (i, line) in section.lines.iter().enumerate() {
+            if let IniLine::KeyValue { key, value, disabled, .. } = line {
+                if key.eq_ignore_ascii_case("condition") {
+                    cleaned.push(CleanedCond {
+                        index: i,
+                        disabled: *disabled,
+                        value: sanitize_condition_expression(value),
+                    });
+                }
+            }
+        }
+
+        if cleaned.is_empty() {
+            // 无 condition 行，插入新条件
+            section.lines.insert(0, IniLine::KeyValue {
+                key: "condition".to_string(),
+                value: condition_var.to_string(),
+                disabled: false,
+                comment: None,
+            });
+        } else {
+            // 有 condition 行，逐条追加（清理后为空则直接替换为管理器表达式）
+            for cond in &cleaned {
+                let rhs = cond.value.trim();
+                let new_value = if rhs.is_empty() {
+                    condition_var.to_string()
+                } else if is_wrapped_in_matching_parens(rhs) {
+                    format!("{} && {}", rhs, condition_var)
+                } else {
+                    format!("({}) && {}", rhs, condition_var)
+                };
+                section.lines[cond.index] = IniLine::KeyValue {
+                    key: "condition".to_string(),
+                    value: new_value,
+                    disabled: cond.disabled,
+                    comment: None,
+                };
             }
         }
     }
@@ -942,6 +1114,82 @@ key = value
         let constants_lines = &ini.sections[0].lines;
         assert!(matches!(constants_lines[0], IniLine::IfStart { .. }));
         assert!(matches!(constants_lines[2], IniLine::EndIf { .. }));
+    }
+
+    #[test]
+    fn test_inject_key_condition_no_existing() {
+        // Key 段无 condition 行时，应插入一条 condition = manager_expr
+        let ini_content = "[KeyDefault]\nkey = a\n";
+        let f = write_temp_ini(ini_content);
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.inject_slot_conditions(1, 2);
+
+        let lines = &ini.sections[0].lines;
+        assert!(matches!(lines[0], IniLine::KeyValue { ref key, ref value, .. }
+            if key.eq_ignore_ascii_case("condition") && value.contains("$managed_slot_id")));
+        // 不应产生 if 包裹
+        assert!(!lines.iter().any(|l| matches!(l, IniLine::IfStart { .. })));
+    }
+
+    #[test]
+    fn test_inject_key_condition_append() {
+        // Key 段已有 condition 行时，应追加 && manager_expr
+        let ini_content = "[KeyDefault]\ncondition = $Key1 == 1\n";
+        let f = write_temp_ini(ini_content);
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.inject_slot_conditions(1, 2);
+
+        let lines = &ini.sections[0].lines;
+        let cond = lines.iter().find_map(|l| match l {
+            IniLine::KeyValue { key, value, .. } if key.eq_ignore_ascii_case("condition") => Some(value.clone()),
+            _ => None,
+        });
+        let cond = cond.expect("condition line should exist");
+        assert!(cond.contains("$Key1 == 1"));
+        assert!(cond.contains("$managed_slot_id"));
+        assert!(cond.contains("&&"));
+    }
+
+    #[test]
+    fn test_inject_key_condition_idempotent() {
+        // 重复注入不应累积 manager 表达式（幂等）
+        let ini_content = "[KeyDefault]\ncondition = $Key1 == 1\n";
+        let f = write_temp_ini(ini_content);
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.inject_slot_conditions(1, 2);
+        ini.inject_slot_conditions(1, 2);
+        ini.inject_slot_conditions(1, 2);
+
+        let lines = &ini.sections[0].lines;
+        let cond = lines.iter().find_map(|l| match l {
+            IniLine::KeyValue { key, value, .. } if key.eq_ignore_ascii_case("condition") => Some(value.clone()),
+            _ => None,
+        });
+        let cond = cond.expect("condition line should exist");
+        // 仅应出现一次 $managed_slot_id
+        assert_eq!(cond.matches("$managed_slot_id").count(), 1);
+    }
+
+    #[test]
+    fn test_sanitize_condition_expression() {
+        // 清理 NRMM 格式（active_slot）的旧表达式
+        let expr = "$Key1 == 1 && $managed_slot_id == $\\modmanageragl\\group_1\\active_slot";
+        let cleaned = sanitize_condition_expression(expr);
+        assert_eq!(cleaned.trim(), "$Key1 == 1");
+        assert!(!cleaned.contains("$managed_slot_id"));
+
+        // 清理本项目历史格式（数字编号）的旧表达式
+        let expr2 = "$Key1 == 1 && $managed_slot_id == $\\modmanageragl\\group_1\\2";
+        let cleaned2 = sanitize_condition_expression(expr2);
+        assert_eq!(cleaned2.trim(), "$Key1 == 1");
+
+        // 无管理器表达式时原样返回
+        let expr3 = "$Key1 == 1";
+        assert_eq!(sanitize_condition_expression(expr3), expr3);
+
+        // 仅含管理器表达式时清理为空
+        let expr4 = "$managed_slot_id == $\\modmanageragl\\group_1\\active_slot";
+        assert_eq!(sanitize_condition_expression(expr4).trim(), "");
     }
 
     #[test]

@@ -203,9 +203,11 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
     // 步骤1: 准备 _MANAGED_ 目录，创建模板 INI 文件
     let need_reload_manual = prepare_managed_folder(&managed_folder, game)?;
+    log::debug!("[mod_manager] [update_mod_data] step=prepare_managed_folder done need_reload_manual={}", need_reload_manual);
 
     // 步骤2: 扫描模组
     let scan_result = mod_scanner::scan_mods(game_mods_path)?;
+    log::debug!("[mod_manager] [update_mod_data] step=scan_mods done total_mods={} total_groups={}", scan_result.total_mods_count, scan_result.groups.len());
 
     let main_ini_name = game.d3dx_ini_name();
     let main_ini_path = game_mods_path.join(main_ini_name);
@@ -228,6 +230,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     let enabled_mods: Vec<&ModData> = scan_result.mods.iter()
         .filter(|m| !m.disabled && !m.mod_disabled)
         .collect();
+    log::debug!("[mod_manager] [update_mod_data] step=collect_enabled done enabled_mods_count={}", enabled_mods.len());
 
     let mut known_libraries = HashSet::new();
     for mod_data in &enabled_mods {
@@ -243,6 +246,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
     // 步骤4: 清理旧的 group INI 文件
     delete_group_ini_files(&managed_folder)?;
+    log::debug!("[mod_manager] [update_mod_data] step=delete_group_ini_files done");
 
     // 步骤5: 按 group 组织启用的模组 INI
     let mut group_mod_inis: std::collections::HashMap<u32, Vec<PathBuf>> = std::collections::HashMap::new();
@@ -310,6 +314,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
         group_mod_inis.entry(group_id).or_default().extend(mod_inis);
     }
+    log::debug!("[mod_manager] [update_mod_data] step=process_mod_inis done processed={} groups={} errors={}", processed_mods, group_mod_inis.len(), all_errors.len());
 
     // 步骤6: 为每个 group 创建 ModFolder.ini
     let mut group_ini_paths: Vec<PathBuf> = Vec::new();
@@ -339,6 +344,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         .with_context(|| format!("Failed to write temp main INI: {:?}", tmp_path))?;
     fs::rename(&tmp_path, &main_ini_path)
         .with_context(|| format!("Failed to rename temp main INI to: {:?}", main_ini_path))?;
+    log::debug!("[mod_manager] [update_mod_data] step=write_main_ini done path={:?}", main_ini_path);
 
     // 步骤9: 检测标准 XXMI/3DMigoto 环境
     let is_standard_xxmi = detect_standard_xxmi(game_mods_path, main_ini_name);
@@ -377,6 +383,8 @@ pub fn update_group_mod_data(
     _settings: &AppSettings,
     group_index: u32,
 ) -> Result<UpdateResult> {
+    log::debug!("[mod_manager] [update_group_mod_data] Starting | game={:?} target_group_index={} path={:?}", game, group_index, game_mods_path);
+    let _s = std::time::Instant::now();
     let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);
     if !managed_folder.exists() {
         fs::create_dir_all(&managed_folder)?;
@@ -384,14 +392,17 @@ pub fn update_group_mod_data(
 
     // 步骤1: 准备 _MANAGED_ 目录
     let need_reload_manual = prepare_managed_folder(&managed_folder, game)?;
+    log::debug!("[mod_manager] [update_group_mod_data] step=prepare_managed_folder done need_reload_manual={}", need_reload_manual);
 
     // 步骤2: 轻量扫描（仅扫描目标分组）
     let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
+    log::debug!("[mod_manager] [update_group_mod_data] step=scan_mods done total_mods={} total_groups={}", scan_result.total_mods_count, scan_result.groups.len());
 
     // 步骤3: 过滤出目标分组的启用模组
     let enabled_mods: Vec<&ModData> = scan_result.mods.iter()
         .filter(|m| m.group_index == group_index && !m.disabled && !m.mod_disabled)
         .collect();
+    log::debug!("[mod_manager] [update_group_mod_data] step=collect_enabled done target_group_index={} enabled_mods_count={}", group_index, enabled_mods.len());
 
     // 步骤4: 收集已知库
     let mut known_libraries = HashSet::new();
@@ -456,6 +467,8 @@ pub fn update_group_mod_data(
         }
     }
 
+    log::debug!("[mod_manager] [update_group_mod_data] step=process_mod_inis done processed={} target_group_index={} errors={}", processed_mods, group_index, all_errors.len());
+
     // 步骤6: 仅更新该分组的 ModFolder.ini
     let group_dir = managed_folder.join(format!("group_{}", group_index));
     let mut group_ini_paths: Vec<PathBuf> = Vec::new();
@@ -463,6 +476,7 @@ pub fn update_group_mod_data(
     if let Some(p) = group_ini {
         group_ini_paths.push(p);
     }
+    log::debug!("[mod_manager] [update_group_mod_data] step=create_group_ini done target_group_index={} group_ini_created={}", group_index, group_ini_paths.len());
 
     // 步骤7: 更新 nrmm_include.ini（需要包含所有分组，不只是当前分组）
     // 读取所有现有 group INI 路径，合并当前分组
@@ -491,12 +505,13 @@ pub fn update_group_mod_data(
 
     let nrmm_include_path = managed_folder.join(constants::INCLUDE_FILENAME);
     create_nrmm_include_ini(&nrmm_include_path, &managed_folder, &existing_ini_paths, game_mods_path)?;
+    log::debug!("[mod_manager] [update_group_mod_data] step=update_nrmm_include done target_group_index={} total_ini_paths={}", group_index, existing_ini_paths.len());
 
     // 步骤8: 检测标准 XXMI/3DMigoto 环境
     let main_ini_name = game.d3dx_ini_name();
     let is_standard_xxmi = detect_standard_xxmi(game_mods_path, main_ini_name);
 
-    Ok(UpdateResult {
+    let result = UpdateResult {
         total_groups: scan_result.groups.len() as u32,
         total_mods: scan_result.total_mods_count as u32,
         enabled_mods: enabled_mods.len() as u32,
@@ -506,7 +521,9 @@ pub fn update_group_mod_data(
         need_reload_manual,
         is_standard_xxmi,
         ..Default::default()
-    })
+    };
+    log::debug!("[mod_manager] [update_group_mod_data] done | target_group_index={} elapsed={:?}ms | processed={} errors={}", group_index, _s.elapsed().as_millis(), result.processed_mods, result.errors.len());
+    Ok(result)
 }
 
 /// 准备 _MANAGED_ 目录，创建 NRMM 所需的模板 INI 文件
@@ -821,11 +838,21 @@ pub fn switch_mod(
     let _s = std::time::Instant::now();
     // 使用轻量扫描以匹配前端索引（None 在 mod_index=0，真实模组从 1 开始）
     let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
+    log::debug!(
+        "[core::mod_manager] [switch_mod] scan completed | total_groups={} total_mods={}",
+        scan_result.groups.len(),
+        scan_result.mods.len()
+    );
 
     // 先找出分组目录路径（用于写入 selectedindex 文件）
     let group_dir = scan_result.groups.iter()
         .find(|g| g.group_index == group_index)
         .map(|g| g.full_path.clone());
+    log::debug!(
+        "[core::mod_manager] [switch_mod] looking for group by group_index={} found={}",
+        group_index,
+        group_dir.is_some()
+    );
 
     // 注意：group 分组下选择模组不使用互斥逻辑，不得自动禁用/启用同组其他模组。
     // 各模组的启用/禁用状态仅由用户通过开关显式抉择，选择模组只更新选中状态。
@@ -836,7 +863,18 @@ pub fn switch_mod(
         let selectedindex_path = g_dir.join(constants::SELECTED_INDEX_FILE);
         if let Err(e) = fs::write(&selectedindex_path, mod_index.to_string()) {
             log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
+        } else {
+            log::debug!(
+                "[core::mod_manager] [switch_mod] wrote selectedindex file | path={} content={}",
+                selectedindex_path.display(),
+                mod_index
+            );
         }
+    } else {
+        log::warn!(
+            "[core::mod_manager] [switch_mod] group not found by group_index={} (no selectedindex written)",
+            group_index
+        );
     }
 
     let result = UpdateResult {

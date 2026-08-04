@@ -676,6 +676,16 @@ export const useModsStore = defineStore('mods', () => {
       // 导致游戏内 [KeyMod] 的 condition（$group_id == active_group_id）无法命中。
       const groupIdx = group.groupIndex
 
+      logger.debug('ModsStore', '[activateModByIndex] calling selectMod', {
+        game: s.currentGame,
+        modsPath: s.currentModsPath,
+        groupIndex: groupIdx,
+        modIndex: modIdx,
+        isMutex,
+        groupPath: group.groupPath,
+        modPath,
+      })
+
       // 调用后端select_mod命令处理INI写入和互斥逻辑，取得写入磁盘后的最终索引
       const result = await selectMod(
         s.currentGame,
@@ -688,6 +698,9 @@ export const useModsStore = defineStore('mods', () => {
         undefined, // cursorX - pass undefined for now (no coordinate calculation yet)
         undefined, // cursorY - pass undefined for now (no coordinate calculation yet)
       )
+      logger.debug('ModsStore', '[activateModByIndex] selectMod result', {
+        selectedModIndex: result?.selectedModIndex,
+      })
       // 注意：模组选择不触发 markNeedUpdate，因为选择不涉及模组数据修改
       // 仅在启用/禁用模组时才需要提醒用户更新模组数据
 

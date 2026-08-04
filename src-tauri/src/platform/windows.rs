@@ -62,15 +62,32 @@ impl WindowsKeySimulator {
     }
 
     fn dispatch_simulate_key_with_cursor(&mut self, vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
+        let hwnd_exists = self.target_hwnd.is_some();
         if let Some(safe_hwnd) = &self.target_hwnd {
             match simulate_key_with_cursor_window(vk, x, y, safe_hwnd.0) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    log::debug!("[dispatch_simulate_key_with_cursor] target_hwnd exists=true vk={:04x} fallback_triggered=false", vk.0);
+                    return Ok(());
+                }
                 Err(e) => {
-                    log::warn!("定向 simulate_key_with_cursor 失败，fallback to global: {}", e);
+                    log::warn!("[dispatch_simulate_key_with_cursor] target_hwnd exists=true vk={:04x} fallback_triggered=true err={}", vk.0, e);
                 }
             }
         }
-        simulate_key_with_cursor(vk, x, y)
+        let result = simulate_key_with_cursor(vk, x, y);
+        match &result {
+            Ok(()) => {
+                if hwnd_exists {
+                    log::debug!("[dispatch_simulate_key_with_cursor] target_hwnd exists=true vk={:04x} fallback completed ok (window path failed, global path succeeded)", vk.0);
+                } else {
+                    log::debug!("[dispatch_simulate_key_with_cursor] target_hwnd exists=false vk={:04x} fallback completed ok (global path only)", vk.0);
+                }
+            }
+            Err(e) => {
+                log::warn!("[dispatch_simulate_key_with_cursor] target_hwnd exists={} vk={:04x} fallback completed with err={}", hwnd_exists, vk.0, e);
+            }
+        }
+        result
     }
 }
 
@@ -100,6 +117,7 @@ impl super::KeySimulator for WindowsKeySimulator {
     }
 
     fn simulate_select_full(&mut self, group_idx: u32, mod_idx: u32) -> Result<()> {
+        let start = std::time::Instant::now();
         log::debug!("[platform::windows] [simulate_select_full] target_hwnd exists: {:?} | group={} mod={}", self.target_hwnd.is_some(), group_idx, mod_idx);
         self.dispatch_key_down_only(VK_CLEAR)?;
         thread::sleep(Duration::from_millis(10));
@@ -120,7 +138,13 @@ impl super::KeySimulator for WindowsKeySimulator {
 
         self.dispatch_key_up_only(VK_CLEAR)?;
 
-        r1.and(r2)
+        let result = r1.and(r2);
+        let elapsed = start.elapsed().as_millis();
+        log::debug!(
+            "[platform::windows] [simulate_select_full] completed | elapsed={}ms result={:?}",
+            elapsed, result
+        );
+        result
     }
 
     fn simulate_select_group_at(&mut self, x: i32, y: i32) -> Result<()> {
@@ -221,6 +245,10 @@ fn send_key_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
         PostMessageW(Some(hwnd), WM_KEYDOWN, wparam, lparam_down).is_ok()
     };
     if !down_ok {
+        log::warn!(
+            "[send_key_to_window] vk={:04x} hwnd={:?} down_ok=false up_ok=skipped | WM_KEYDOWN failed, bailing",
+            vk.0, hwnd
+        );
         anyhow::bail!("PostMessageW WM_KEYDOWN failed");
     }
     thread::sleep(Duration::from_millis(30));
@@ -229,8 +257,16 @@ fn send_key_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
         PostMessageW(Some(hwnd), WM_KEYUP, wparam, lparam_up).is_ok()
     };
     if !up_ok {
+        log::warn!(
+            "[send_key_to_window] vk={:04x} hwnd={:?} down_ok=true up_ok=false | WM_KEYUP failed, bailing",
+            vk.0, hwnd
+        );
         anyhow::bail!("PostMessageW WM_KEYUP failed");
     }
+    log::debug!(
+        "[send_key_to_window] vk={:04x} hwnd={:?} down_ok={} up_ok={}",
+        vk.0, hwnd, down_ok, up_ok
+    );
     Ok(())
 }
 
@@ -249,7 +285,7 @@ fn send_key(vk: VIRTUAL_KEY) -> Result<()> {
                 },
             },
         };
-        SendInput(&[down], std::mem::size_of::<INPUT>() as i32);
+        let down_events = SendInput(&[down], std::mem::size_of::<INPUT>() as i32);
         thread::sleep(Duration::from_millis(50));
 
         // 按键抬起（对齐 NRMM：KEYEVENTF_KEYUP）
@@ -265,8 +301,12 @@ fn send_key(vk: VIRTUAL_KEY) -> Result<()> {
                 },
             },
         };
-        SendInput(&[up], std::mem::size_of::<INPUT>() as i32);
+        let up_events = SendInput(&[up], std::mem::size_of::<INPUT>() as i32);
         thread::sleep(Duration::from_millis(50));
+        log::debug!(
+            "[send_key] vk={:04x} down_sent={} up_sent={} result={}",
+            vk.0, down_events, up_events, if down_events == 1 && up_events == 1 { "Ok" } else { "Failed" }
+        );
     }
     Ok(())
 }
@@ -285,8 +325,12 @@ fn send_key_down_only(vk: VIRTUAL_KEY) -> Result<()> {
                 },
             },
         };
-        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        let events_sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
         thread::sleep(Duration::from_millis(5));
+        log::debug!(
+            "[send_key_down_only] vk={:04x} events_sent={} result={}",
+            vk.0, events_sent, if events_sent == 1 { "Ok" } else { "Failed" }
+        );
     }
     Ok(())
 }
@@ -305,8 +349,12 @@ fn send_key_up_only(vk: VIRTUAL_KEY) -> Result<()> {
                 },
             },
         };
-        SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
+        let events_sent = SendInput(&[input], std::mem::size_of::<INPUT>() as i32);
         thread::sleep(Duration::from_millis(5));
+        log::debug!(
+            "[send_key_up_only] vk={:04x} events_sent={} result={}",
+            vk.0, events_sent, if events_sent == 1 { "Ok" } else { "Failed" }
+        );
     }
     Ok(())
 }
@@ -316,8 +364,9 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
         let mut initial_pos = POINT { x: 0, y: 0 };
         let has_initial = GetCursorPos(&mut initial_pos).is_ok();
 
-        if SetCursorPos(x, y).is_err() {
-            log::warn!("SetCursorPos failed, falling back to cursor-free key simulation");
+        let set_cursor_result = SetCursorPos(x, y).is_ok();
+        if !set_cursor_result {
+            log::warn!("[simulate_key_with_cursor_window] fallback_triggered=true reason=SetCursorPos failed | vk={:04x} target=({}, {})", vk.0, x, y);
             return send_key(vk);
         }
 
@@ -329,17 +378,24 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
             right: x + 1,
             bottom: y + 1,
         };
-        let _ = ClipCursor(Some(&rect));
+        let clip_result = ClipCursor(Some(&rect)).is_ok();
 
         // 与 NRMM 一致使用 SendInput（全局输入队列），
         // 确保 3Dmigoto/xxmi 的底层键盘钩子能捕获按键并读取光标坐标
         let result = send_key(vk);
 
-        let _ = ClipCursor(None);
+        let clip_restore_result = ClipCursor(None).is_ok();
 
-        if has_initial {
-            let _ = SetCursorPos(initial_pos.x, initial_pos.y);
-        }
+        let restore_result = if has_initial {
+            SetCursorPos(initial_pos.x, initial_pos.y).is_ok()
+        } else {
+            false
+        };
+
+        log::debug!(
+            "[simulate_key_with_cursor_window] vk={:04x} target=({}, {}) set_cursor_result={} clip_result={} clip_restore_result={} restore_result={}",
+            vk.0, x, y, set_cursor_result, clip_result, clip_restore_result, restore_result
+        );
 
         result
     }
@@ -350,8 +406,9 @@ fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
         let mut initial_pos = POINT { x: 0, y: 0 };
         let has_initial = GetCursorPos(&mut initial_pos).is_ok();
 
-        if SetCursorPos(x, y).is_err() {
-            log::warn!("SetCursorPos failed, falling back to cursor-free key simulation");
+        let set_cursor_result = SetCursorPos(x, y).is_ok();
+        if !set_cursor_result {
+            log::warn!("[simulate_key_with_cursor] fallback_triggered=true reason=SetCursorPos failed | vk={:04x} target=({}, {})", vk.0, x, y);
             return send_key(vk);
         }
 
@@ -363,15 +420,22 @@ fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
             right: x + 1,
             bottom: y + 1,
         };
-        let _ = ClipCursor(Some(&rect));
+        let clip_result = ClipCursor(Some(&rect)).is_ok();
 
         let result = send_key(vk);
 
-        let _ = ClipCursor(None);
+        let clip_restore_result = ClipCursor(None).is_ok();
 
-        if has_initial {
-            let _ = SetCursorPos(initial_pos.x, initial_pos.y);
-        }
+        let restore_result = if has_initial {
+            SetCursorPos(initial_pos.x, initial_pos.y).is_ok()
+        } else {
+            false
+        };
+
+        log::debug!(
+            "[simulate_key_with_cursor] vk={:04x} target=({}, {}) set_cursor_result={} clip_result={} clip_restore_result={} restore_result={}",
+            vk.0, x, y, set_cursor_result, clip_result, clip_restore_result, restore_result
+        );
 
         result
     }
