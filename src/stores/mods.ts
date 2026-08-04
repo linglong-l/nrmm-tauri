@@ -329,9 +329,13 @@ export const useModsStore = defineStore('mods', () => {
     if (g) selectGroup(g)
   }
 
-  // 搜索词变化 → 重算命中
+  // 搜索词变化 → 重算命中（150ms 防抖，避免快速输入时频繁触发）
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
   watch(searchQuery, () => {
-    updateSearchMatches()
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+    searchDebounceTimer = setTimeout(() => {
+      updateSearchMatches()
+    }, 150)
   })
   // 分组/模组数据变化 → 重算命中
   watch([groups, mods], () => {

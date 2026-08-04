@@ -33,7 +33,7 @@
     </div>
 
     <!-- 分组名称（悬浮显示） -->
-    <span class="group-name" :class="{ 'virtual-label': isVirtualRoot }" :title="displayName" v-html="highlightedName"></span>
+    <span class="group-name" :class="{ 'virtual-label': isVirtualRoot }" :title="displayName"><HighlightText :text="displayName" :spans="highlightSpans" /></span>
 
     <!-- 子分组（递归渲染） -->
     <Transition name="tree-expand">
@@ -70,6 +70,7 @@ import { ArrowRight } from '@element-plus/icons-vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModGroupData } from '@/types'
 import { useModsStore } from '@/stores/mods'
+import HighlightText from '@/components/common/HighlightText.vue'
 
 const { t } = useI18n()
 const modsStore = useModsStore()
@@ -148,27 +149,14 @@ watch(isSelected, (selected) => {
 /** 分组显示名称（优先使用name字段，去掉DISABLED_前缀后的名称） */
 const displayName = computed(() => props.group.name || props.group.groupName)
 
-const highlightedName = computed(() => {
+const highlightSpans = computed<[number, number][]>(() => {
   const name = displayName.value || ''
   const q = props.searchQuery?.trim()
-  if (!q || !name) return escapeHtml(name)
+  if (!q || !name) return []
   const { matched, spans } = modsStore.fuzzyMatchWithSpansSimple(name, q)
-  if (!matched || !spans.length) return escapeHtml(name)
-  let html = ''
-  let cursor = 0
-  for (const [start, end] of spans) {
-    if (start > cursor) html += escapeHtml(name.slice(cursor, start))
-    html += `<mark class="search-mark">${escapeHtml(name.slice(start, end))}</mark>`
-    cursor = end
-  }
-  if (cursor < name.length) html += escapeHtml(name.slice(cursor))
-  return html
+  if (!matched || !spans.length) return []
+  return spans
 })
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[c] as string))
-}
 
 /** 头像显示文字：虚拟根使用"G"标识，其他使用首字母大写 */
 const initialText = computed(() => {
@@ -468,14 +456,6 @@ function onContextMenu(e: MouseEvent) {
   font-size: 10px;
 }
 
-/* 搜索命中字符高亮：金黄色底色 + 加粗 */
-:deep(.search-mark) {
-  background: rgba(245, 195, 90, 0.35);
-  color: #ffe7a3;
-  font-weight: 700;
-  border-radius: 2px;
-  padding: 0 1px;
-}
 /* 搜索命中的分组节点（发光光环 + 放大） */
 .search-hit-item {
   background: rgba(245, 195, 90, 0.12) !important;

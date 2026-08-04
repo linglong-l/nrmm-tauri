@@ -151,7 +151,7 @@ impl FileWatcher {
         // 启动防抖线程：消费 channel 事件，实现防抖 + 增量更新管线
         // 管线流程：collect（收集变更路径）→ consolidate（合并根路径）→ scan_partial_path（局部重扫）
         // → subtree_replace（替换缓存子树）→ emit（通知前端）
-        let debounce_thread = std::thread::spawn(move || {
+        crate::utils::spawn_safe("file_watcher_debounce", std::panic::AssertUnwindSafe(move || {
             loop {
                 // 50ms 超时轮询：收到事件立即处理，超时后检查防抖就绪状态
                 match rx.recv_timeout(Duration::from_millis(50)) {
@@ -203,7 +203,7 @@ impl FileWatcher {
 
                             // consolidate：将收集到的路径合并为根路径（如从多个子文件合并到其父目录）
                             let consolidated = {
-                                let mut u = updater_clone.lock().unwrap();
+                                let mut u = crate::utils::lock_or_recover(&updater_clone);
                                 let paths = u.consolidate(&managed_path_clone);
                                 u.reset();
                                 paths
@@ -273,11 +273,11 @@ impl FileWatcher {
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-        });
+        }));
 
         self.watcher = Some(watcher);
         self._tx = Some(tx);
-        self._debounce_thread = Some(debounce_thread);
+        self._debounce_thread = None;
         self.watched_path = Some(managed_path);
         self.updater = Some(updater);
         self.paused.store(false, Ordering::SeqCst);

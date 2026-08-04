@@ -152,6 +152,7 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
 
     let _tray = TrayIconBuilder::new()
         .tooltip(tray_lang_str(&lang, "tooltip"))
+        // SAFETY: The default window icon is configured in tauri.conf.json and is always present at runtime.
         .icon(app.default_window_icon().unwrap().clone())
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -161,27 +162,27 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 // 游戏切换涉及写设置文件（阻塞IO），在新线程中执行避免阻塞托盘回调
                 "showGameWuwa" => {
                     let app_handle = app.clone();
-                    std::thread::spawn(move || handle_game_switch(&app_handle, TargetGame::Wuwa));
+                    crate::utils::spawn_safe("tray_game_switch_wuwa", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::Wuwa)));
                 }
                 "showGameGenshin" => {
                     let app_handle = app.clone();
-                    std::thread::spawn(move || handle_game_switch(&app_handle, TargetGame::GenshinImpact));
+                    crate::utils::spawn_safe("tray_game_switch_genshin", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::GenshinImpact)));
                 }
                 "showGameHSR" => {
                     let app_handle = app.clone();
-                    std::thread::spawn(move || handle_game_switch(&app_handle, TargetGame::HonkaiStarRail));
+                    crate::utils::spawn_safe("tray_game_switch_hsr", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::HonkaiStarRail)));
                 }
                 "showGameZZZ" => {
                     let app_handle = app.clone();
-                    std::thread::spawn(move || handle_game_switch(&app_handle, TargetGame::ZZZ));
+                    crate::utils::spawn_safe("tray_game_switch_zzz", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::ZZZ)));
                 }
                 "showGameHi3" => {
                     let app_handle = app.clone();
-                    std::thread::spawn(move || handle_game_switch(&app_handle, TargetGame::HonkaiImpact3rd));
+                    crate::utils::spawn_safe("tray_game_switch_hi3", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::HonkaiImpact3rd)));
                 }
                 "showGameEndfield" => {
                     let app_handle = app.clone();
-                    std::thread::spawn(move || handle_game_switch(&app_handle, TargetGame::ArknightsEndfield));
+                    crate::utils::spawn_safe("tray_game_switch_endfield", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::ArknightsEndfield)));
                 }
                 "resetWindowPosition" => {
                     let _ = crate::window::reset_window_position(app.clone(), "main".to_string());

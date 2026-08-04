@@ -357,7 +357,17 @@ pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<
        .arg(format!("-o{}", temp_dir.to_string_lossy()));
 
     if let Some(pw) = password {
-        cmd.arg(format!("-p{}", pw));
+        // 安全说明：Command::new 使用 CreateProcess/exec 传递参数数组，不经 shell 解释，
+        // 传统 shell 注入（; rm -rf /）不适用。7z 的 -p 参数将密码直接附加在 -p 后面，
+        // 不会将密码解析为独立选项。
+        // 但密码中的控制字符（换行符 \n、回车 \r、空字符 \0）可能导致 7z 解析异常，
+        // 在此过滤以确保密码仅包含可打印字符。
+        let sanitized: String = pw.chars().filter(|c| !c.is_control()).collect();
+        if sanitized.is_empty() {
+            cmd.arg("-p");
+        } else {
+            cmd.arg(format!("-p{}", sanitized));
+        }
     } else {
         cmd.arg("-p");
     }

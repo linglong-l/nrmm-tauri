@@ -54,6 +54,45 @@ export async function handlePathNotFoundError(error: unknown): Promise<boolean> 
 }
 
 /**
+ * 统一 Tauri invoke 调用中间件
+ *
+ * 所有后端命令调用均通过此函数统一封装，提供以下保障：
+ * - 记录调用日志（debug 级别）：命令名 + 参数摘要
+ * - 捕获并记录错误（error 级别）：包含命令名和错误详情
+ * - 自动处理路径不存在错误：当 options.suppressPathNotFound 为 true 时，
+ *   自动调用 handlePathNotFoundError 执行缓存清除和模组重读取
+ * - 统一错误格式：将字符串错误包装为 Error 对象
+ *
+ * @param cmd 后端命令名（snake_case，如 'get_settings'）
+ * @param args 传给后端的参数对象（camelCase 键名）
+ * @param options 可选配置：suppressPathNotFound=true 时自动处理路径不存在错误
+ * @returns 后端命令的返回值
+ * @throws 当后端返回错误且未被自动处理时，抛出 Error 对象
+ */
+async function safeInvoke<T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+  options?: { suppressPathNotFound?: boolean }
+): Promise<T> {
+  logger.debug('Tauri', `invoke: ${cmd}`, args)
+  try {
+    return await invoke<T>(cmd, args)
+  } catch (error) {
+    const errObj = error instanceof Error ? error : new Error(String(error))
+    logger.error('Tauri', `invoke failed: ${cmd}`, errObj)
+
+    if (options?.suppressPathNotFound) {
+      const handled = await handlePathNotFoundError(error)
+      if (handled) {
+        return undefined as unknown as T
+      }
+    }
+
+    throw errObj
+  }
+}
+
+/**
  * 打开文件夹选择对话框
  * 后端命令：N/A（使用Tauri dialog插件）
  * @param defaultPath 对话框默认打开路径
@@ -74,7 +113,7 @@ export async function selectFolder(defaultPath?: string): Promise<string | null>
  * @returns 应用设置对象
  */
 export async function getSettings(): Promise<any> {
-  return invoke('get_settings')
+  return safeInvoke('get_settings')
 }
 
 /**
@@ -83,7 +122,7 @@ export async function getSettings(): Promise<any> {
  * @param settings 要保存的设置对象
  */
 export async function saveSettings(settings: any): Promise<void> {
-  return invoke('save_settings', { settings })
+  return safeInvoke('save_settings', { settings })
 }
 
 /**
@@ -91,7 +130,7 @@ export async function saveSettings(settings: any): Promise<void> {
  * 后端命令：reset_settings
  */
 export async function resetSettings(): Promise<any> {
-  return invoke('reset_settings')
+  return safeInvoke('reset_settings')
 }
 
 /**
@@ -104,7 +143,7 @@ export async function resetSettings(): Promise<any> {
  * @returns 扫描结果（分组列表+模组列表）
  */
 export async function getMods(game: string, modsPath: string): Promise<ScanResult> {
-  return invoke('get_mods', { game, modsPath })
+  return safeInvoke<ScanResult>('get_mods', { game, modsPath })
 }
 
 /**
@@ -117,7 +156,7 @@ export async function getMods(game: string, modsPath: string): Promise<ScanResul
  * @returns 扫描结果
  */
 export async function refreshMods(game: string, modsPath: string): Promise<ScanResult> {
-  return invoke('refresh_mods', { game, modsPath })
+  return safeInvoke<ScanResult>('refresh_mods', { game, modsPath })
 }
 
 /**
@@ -144,9 +183,7 @@ export async function selectMod(
   cursorX?: number,
   cursorY?: number
 ): Promise<UpdateResult> {
-  const args = { game, modsPath, groupIndex, modIndex, isMutex, groupPath, modPath, cursorX, cursorY }
-  logger.debug('Tauri', 'invoke start: select_mod', args)
-  const result = await invoke('select_mod', {
+  const result = await safeInvoke<UpdateResult>('select_mod', {
     game,
     modsPath,
     groupIndex,
@@ -156,8 +193,7 @@ export async function selectMod(
     modPath,
     cursorX: cursorX ?? null,
     cursorY: cursorY ?? null,
-  }) as UpdateResult
-  logger.debug('Tauri', 'invoke end: select_mod', { result })
+  })
   return result
 }
 
@@ -169,7 +205,7 @@ export async function selectMod(
  * @param groupIndex 分组索引
  */
 export async function deselectGroupMod(game: string, modsPath: string, groupIndex: number): Promise<any> {
-  return invoke('deselect_group_mod', { game, modsPath, groupIndex })
+  return safeInvoke('deselect_group_mod', { game, modsPath, groupIndex })
 }
 
 /**
@@ -180,7 +216,7 @@ export async function deselectGroupMod(game: string, modsPath: string, groupInde
  * @param groupName 分组名称（可选，默认自动生成）
  */
 export async function addGroup(modsPath: string, game: string, groupName?: string): Promise<any> {
-  return invoke('add_group', { modsPath, game, groupName })
+  return safeInvoke('add_group', { modsPath, game, groupName })
 }
 
 /**
@@ -189,7 +225,7 @@ export async function addGroup(modsPath: string, game: string, groupName?: strin
  * @param groupPath 分组文件夹路径
  */
 export async function removeGroup(groupPath: string): Promise<void> {
-  return invoke('remove_group', { groupPath })
+  return safeInvoke('remove_group', { groupPath })
 }
 
 /**
@@ -198,7 +234,7 @@ export async function removeGroup(groupPath: string): Promise<void> {
  * @param modPath 模组文件夹路径
  */
 export async function removeMod(modPath: string): Promise<void> {
-  return invoke('remove_mod', { modPath })
+  return safeInvoke('remove_mod', { modPath })
 }
 
 /**
@@ -209,7 +245,7 @@ export async function removeMod(modPath: string): Promise<void> {
  * @returns 重命名后的模组名称
  */
 export async function renameMod(modPath: string, newName: string): Promise<string> {
-  return invoke('rename_mod', { modPath, newName })
+  return safeInvoke<string>('rename_mod', { modPath, newName })
 }
 
 /**
@@ -221,7 +257,7 @@ export async function renameMod(modPath: string, newName: string): Promise<strin
  * @returns 重命名后的分组名称
  */
 export async function renameGroup(groupPath: string, newName: string, isGroupXx: boolean): Promise<string> {
-  return invoke('rename_group', { groupPath, newName, isGroupXx })
+  return safeInvoke<string>('rename_group', { groupPath, newName, isGroupXx })
 }
 
 /**
@@ -232,7 +268,7 @@ export async function renameGroup(groupPath: string, newName: string, isGroupXx:
  * @param isMutex 是否为互斥组成员
  */
 export async function toggleModDisabled(modPath: string, enable: boolean, isMutex: boolean): Promise<void> {
-  return invoke('toggle_mod_disabled', { modPath, enable, isMutex })
+  return safeInvoke('toggle_mod_disabled', { modPath, enable, isMutex })
 }
 
 /**
@@ -242,7 +278,7 @@ export async function toggleModDisabled(modPath: string, enable: boolean, isMute
  * @returns 切换后的收藏状态
  */
 export async function toggleFavorite(modPath: string): Promise<boolean> {
-  return invoke('toggle_favorite', { modPath })
+  return safeInvoke<boolean>('toggle_favorite', { modPath })
 }
 
 /**
@@ -252,7 +288,7 @@ export async function toggleFavorite(modPath: string): Promise<boolean> {
  * @returns 是否已收藏
  */
 export async function isFavorite(modPath: string): Promise<boolean> {
-  return invoke('is_favorite', { modPath })
+  return safeInvoke<boolean>('is_favorite', { modPath })
 }
 
 /**
@@ -261,7 +297,7 @@ export async function isFavorite(modPath: string): Promise<boolean> {
  * @param modPath 模组文件夹路径
  */
 export async function openModFolder(modPath: string): Promise<void> {
-  return invoke('open_mod_folder', { modPath })
+  return safeInvoke('open_mod_folder', { modPath }, { suppressPathNotFound: true })
 }
 
 /**
@@ -270,7 +306,7 @@ export async function openModFolder(modPath: string): Promise<void> {
  * @param groupPath 分组文件夹路径
  */
 export async function openGroupFolder(groupPath: string): Promise<void> {
-  return invoke('open_group_folder', { groupPath })
+  return safeInvoke('open_group_folder', { groupPath }, { suppressPathNotFound: true })
 }
 
 /**
@@ -280,7 +316,7 @@ export async function openGroupFolder(groupPath: string): Promise<void> {
  * @returns 恢复统计结果
  */
 export async function restoreAllInis(modsPath: string): Promise<RestoredCount> {
-  return invoke('restore_all_inis', { modsPath })
+  return safeInvoke<RestoredCount>('restore_all_inis', { modsPath })
 }
 
 /**
@@ -291,7 +327,7 @@ export async function restoreAllInis(modsPath: string): Promise<RestoredCount> {
  * @returns 保存结果
  */
 export async function saveCustomizations(game: string, modsPath: string): Promise<SaveCustomizationsResult> {
-  return invoke('save_customizations', { game, modsPath })
+  return safeInvoke<SaveCustomizationsResult>('save_customizations', { game, modsPath })
 }
 
 /**
@@ -303,7 +339,7 @@ export async function saveCustomizations(game: string, modsPath: string): Promis
  * @returns 成功处理的模组数量
  */
 export async function batchToggleMods(modPaths: string[], enable: boolean, isMutex: boolean): Promise<number> {
-  return invoke('batch_toggle_mods', { modPaths, enable, isMutex })
+  return safeInvoke<number>('batch_toggle_mods', { modPaths, enable, isMutex })
 }
 
 /**
@@ -314,7 +350,7 @@ export async function batchToggleMods(modPaths: string[], enable: boolean, isMut
  * @returns 路径状态：normal/empty/noAccess/notSet
  */
 export async function checkModsPathStatus(game: string, modsPath: string): Promise<string> {
-  return invoke('check_mods_path_status', { game, modsPath })
+  return safeInvoke<string>('check_mods_path_status', { game, modsPath })
 }
 
 /**
@@ -325,7 +361,7 @@ export async function checkModsPathStatus(game: string, modsPath: string): Promi
  * macOS检查辅助功能权限
  */
 export async function checkKeypressSupport(): Promise<void> {
-  return invoke('check_keypress_support')
+  return safeInvoke('check_keypress_support')
 }
 
 /**
@@ -335,7 +371,7 @@ export async function checkKeypressSupport(): Promise<void> {
  * @returns 是否在前台
  */
 export async function isGameForeground(game: string): Promise<boolean> {
-  return invoke('is_game_foreground', { game })
+  return safeInvoke<boolean>('is_game_foreground', { game })
 }
 
 /**
@@ -344,7 +380,7 @@ export async function isGameForeground(game: string): Promise<boolean> {
  * @returns [x, y] 坐标元组
  */
 export async function getCursorPosition(): Promise<[number, number]> {
-  return invoke('get_cursor_position')
+  return safeInvoke<[number, number]>('get_cursor_position')
 }
 
 /**
@@ -352,7 +388,7 @@ export async function getCursorPosition(): Promise<[number, number]> {
  * 后端命令：simulate_select_group
  */
 export async function simulateSelectGroup(): Promise<void> {
-  return invoke('simulate_select_group')
+  return safeInvoke('simulate_select_group')
 }
 
 /**
@@ -360,7 +396,7 @@ export async function simulateSelectGroup(): Promise<void> {
  * 后端命令：simulate_select_mod
  */
 export async function simulateSelectMod(): Promise<void> {
-  return invoke('simulate_select_mod')
+  return safeInvoke('simulate_select_mod')
 }
 
 /**
@@ -369,11 +405,9 @@ export async function simulateSelectMod(): Promise<void> {
  * @param game 目标游戏类型，传入时尝试定向发送到游戏窗口
  */
 export async function simulateF10(game?: string): Promise<void> {
-  const params: any = {}
+  const params: Record<string, unknown> = {}
   if (game) params.game = game
-  logger.debug('Tauri', 'invoke start: simulate_f10', params)
-  await invoke('simulate_f10', params)
-  logger.debug('Tauri', 'invoke end: simulate_f10')
+  await safeInvoke('simulate_f10', params)
 }
 
 /**
@@ -382,7 +416,7 @@ export async function simulateF10(game?: string): Promise<void> {
  * @param windowName 窗口名称（默认为'main'）
  */
 export async function showWindow(windowName: string): Promise<void> {
-  return invoke('show_window', { windowName })
+  return safeInvoke('show_window', { windowName })
 }
 
 /**
@@ -391,7 +425,7 @@ export async function showWindow(windowName: string): Promise<void> {
  * @param windowName 窗口名称
  */
 export async function hideWindow(windowName: string): Promise<void> {
-  return invoke('hide_window', { windowName })
+  return safeInvoke('hide_window', { windowName })
 }
 
 /**
@@ -400,7 +434,7 @@ export async function hideWindow(windowName: string): Promise<void> {
  * @param windowName 窗口名称
  */
 export async function closeWindow(windowName: string): Promise<void> {
-  return invoke('close_window', { windowName })
+  return safeInvoke('close_window', { windowName })
 }
 
 /**
@@ -409,7 +443,7 @@ export async function closeWindow(windowName: string): Promise<void> {
  * @param windowName 窗口名称
  */
 export async function minimizeWindow(windowName: string): Promise<void> {
-  return invoke('minimize_window', { windowName })
+  return safeInvoke('minimize_window', { windowName })
 }
 
 /**
@@ -418,7 +452,7 @@ export async function minimizeWindow(windowName: string): Promise<void> {
  * @param windowName 窗口名称
  */
 export async function toggleMaximize(windowName: string): Promise<void> {
-  return invoke('toggle_maximize', { windowName })
+  return safeInvoke('toggle_maximize', { windowName })
 }
 
 /**
@@ -429,7 +463,7 @@ export async function toggleMaximize(windowName: string): Promise<void> {
  * @param windowHotkey 可选的窗口切换热键，不传则从settings读取
  */
 export async function reregisterHotkeys(windowHotkey?: string): Promise<void> {
-  return invoke('reregister_hotkeys', { windowHotkey })
+  return safeInvoke('reregister_hotkeys', { windowHotkey })
 }
 
 /**
@@ -437,7 +471,7 @@ export async function reregisterHotkeys(windowHotkey?: string): Promise<void> {
  * 后端命令：unregister_hotkeys
  */
 export async function unregisterHotkeys(): Promise<void> {
-  return invoke('unregister_hotkeys')
+  return safeInvoke('unregister_hotkeys')
 }
 
 /**
@@ -448,7 +482,7 @@ export async function unregisterHotkeys(): Promise<void> {
  * @param modsPath 要监听的模组路径
  */
 export async function startFileWatcher(modsPath: string): Promise<void> {
-  return invoke('start_file_watcher', { modsPath })
+  return safeInvoke('start_file_watcher', { modsPath })
 }
 
 /**
@@ -456,7 +490,7 @@ export async function startFileWatcher(modsPath: string): Promise<void> {
  * 后端命令：stop_file_watcher
  */
 export async function stopFileWatcher(): Promise<void> {
-  return invoke('stop_file_watcher')
+  return safeInvoke('stop_file_watcher')
 }
 
 /**
@@ -467,7 +501,7 @@ export async function stopFileWatcher(): Promise<void> {
  * @param modsPath 新的模组路径
  */
 export async function switchFileWatcher(modsPath: string): Promise<void> {
-  return invoke('switch_file_watcher', { modsPath })
+  return safeInvoke('switch_file_watcher', { modsPath })
 }
 
 /**
@@ -481,10 +515,7 @@ export async function switchFileWatcher(modsPath: string): Promise<void> {
  * @returns 更新结果统计
  */
 export async function updateModData(game: string, modsPath: string): Promise<UpdateResult> {
-  logger.debug('Tauri', 'invoke start: update_mod_data', { game, modsPath })
-  const result = await invoke('update_mod_data', { game, modsPath }) as UpdateResult
-  logger.debug('Tauri', 'invoke end: update_mod_data', { result })
-  return result
+  return safeInvoke<UpdateResult>('update_mod_data', { game, modsPath })
 }
 
 /**
@@ -499,7 +530,7 @@ export async function updateModData(game: string, modsPath: string): Promise<Upd
  * @returns 更新结果统计
  */
 export async function updateGroupModData(game: string, modsPath: string, groupIndex: number): Promise<UpdateResult> {
-  return invoke('update_group_mod_data', { game, modsPath, groupIndex })
+  return safeInvoke<UpdateResult>('update_group_mod_data', { game, modsPath, groupIndex })
 }
 
 /**
@@ -511,7 +542,7 @@ export async function updateGroupModData(game: string, modsPath: string, groupIn
  * @returns 是否支持
  */
 export async function isSupportedArchive(path: string): Promise<boolean> {
-  return invoke('is_supported_archive_cmd', { path })
+  return safeInvoke<boolean>('is_supported_archive_cmd', { path })
 }
 
 /**
@@ -524,7 +555,7 @@ export async function isSupportedArchive(path: string): Promise<boolean> {
  * @param password 压缩包密码（可选）
  */
 export async function importModAuto(archivePath: string, modsPath: string, password?: string): Promise<any> {
-  return invoke('import_mod_auto_cmd', { archivePath, modsPath, password })
+  return safeInvoke('import_mod_auto_cmd', { archivePath, modsPath, password })
 }
 
 /**
@@ -545,7 +576,7 @@ export interface ImportItemRequest {
  * @returns 每项的导入结果数组
  */
 export async function importItems(req: ImportItemRequest): Promise<any[]> {
-  return invoke('import_item_cmd', { req })
+  return safeInvoke('import_item_cmd', { req })
 }
 
 /**
@@ -556,7 +587,7 @@ export async function importItems(req: ImportItemRequest): Promise<any[]> {
  * @returns 更新信息（有新版本时返回版本信息，无则返回null/false）
  */
 export async function checkForUpdates(): Promise<any> {
-  return invoke('check_for_updates')
+  return safeInvoke('check_for_updates')
 }
 
 /**
@@ -565,7 +596,7 @@ export async function checkForUpdates(): Promise<any> {
  * @returns 版本号字符串（如"1.0.0"）
  */
 export async function getAppVersion(): Promise<string> {
-  return invoke('get_app_version')
+  return safeInvoke<string>('get_app_version')
 }
 
 /**
@@ -576,7 +607,7 @@ export async function getAppVersion(): Promise<string> {
  * @returns latest是否大于current
  */
 export async function compareVersions(current: string, latest: string): Promise<boolean> {
-  return invoke('compare_versions', { current, latest })
+  return safeInvoke<boolean>('compare_versions', { current, latest })
 }
 
 /**
@@ -587,7 +618,7 @@ export async function compareVersions(current: string, latest: string): Promise<
  * @returns JSON序列化的PlatformInfo字符串
  */
 export async function getPlatformInfo(): Promise<string> {
-  return invoke('get_platform_info')
+  return safeInvoke<string>('get_platform_info')
 }
 
 /**
@@ -596,7 +627,7 @@ export async function getPlatformInfo(): Promise<string> {
  * @param windowName 窗口名称，默认为'main'
  */
 export async function resetWindowPosition(windowName = 'main'): Promise<void> {
-  return invoke('reset_window_position', { windowName })
+  return safeInvoke('reset_window_position', { windowName })
 }
 
 /**
@@ -607,7 +638,7 @@ export async function resetWindowPosition(windowName = 'main'): Promise<void> {
  * @param game 目标游戏类型
  */
 export async function switchTargetGame(game: any): Promise<void> {
-  return invoke('switch_target_game', { game })
+  return safeInvoke('switch_target_game', { game })
 }
 
 /**
@@ -617,7 +648,7 @@ export async function switchTargetGame(game: any): Promise<void> {
  * 不保存状态直接退出进程
  */
 export async function hardQuitApp(): Promise<void> {
-  return invoke('hard_quit_app')
+  return safeInvoke('hard_quit_app')
 }
 
 /**
@@ -628,7 +659,7 @@ export async function hardQuitApp(): Promise<void> {
  * @returns [name: 清理后的名称, valid: 是否合法, message: 错误信息]
  */
 export async function validateSubfolderName(parentPath: string, folderName: string): Promise<[string, boolean, string]> {
-  return invoke('validate_subfolder_name', { parentPath, folderName })
+  return safeInvoke<[string, boolean, string]>('validate_subfolder_name', { parentPath, folderName })
 }
 
 /**
@@ -638,7 +669,7 @@ export async function validateSubfolderName(parentPath: string, folderName: stri
  * @param folderName 文件夹名称（应先通过validateSubfolderName校验）
  */
 export async function createSubfolder(parentPath: string, folderName: string): Promise<void> {
-  return invoke('create_subfolder', { parentPath, folderName })
+  return safeInvoke('create_subfolder', { parentPath, folderName })
 }
 
 /**
@@ -649,7 +680,7 @@ export async function createSubfolder(parentPath: string, folderName: string): P
  * @returns 进程名字符串（如 "StarRail.exe"）
  */
 export async function getForegroundProcessName(): Promise<string> {
-  return invoke('get_foreground_process_name')
+  return safeInvoke<string>('get_foreground_process_name')
 }
 
 /**
@@ -660,7 +691,7 @@ export async function getForegroundProcessName(): Promise<string> {
  * @returns 缓存是否有效
  */
 export async function checkModCacheValid(game: string, modsPath: string): Promise<boolean> {
-  return invoke('check_mod_cache_valid', { game, modsPath })
+  return safeInvoke<boolean>('check_mod_cache_valid', { game, modsPath })
 }
 
 /**
@@ -669,7 +700,7 @@ export async function checkModCacheValid(game: string, modsPath: string): Promis
  * @returns 文件监控是否运行中
  */
 export async function isFileWatcherRunning(): Promise<boolean> {
-  return invoke('is_file_watcher_running')
+  return safeInvoke<boolean>('is_file_watcher_running')
 }
 
 /**
@@ -678,7 +709,7 @@ export async function isFileWatcherRunning(): Promise<boolean> {
  * @returns 当前监控的路径，未运行则返回null
  */
 export async function currentWatchedPath(): Promise<string | null> {
-  return invoke('current_watched_path')
+  return safeInvoke<string | null>('current_watched_path')
 }
 
 /**
@@ -689,7 +720,7 @@ export async function currentWatchedPath(): Promise<string | null> {
  * @returns 成功禁用的模组数量
  */
 export async function disableAllModsInGroup(groupPath: string): Promise<number> {
-  return invoke('disable_all_mods_in_group', { groupPath })
+  return safeInvoke<number>('disable_all_mods_in_group', { groupPath })
 }
 
 /**
@@ -700,7 +731,7 @@ export async function disableAllModsInGroup(groupPath: string): Promise<number> 
  * @returns 成功启用的模组数量
  */
 export async function enableAllModsInGroup(groupPath: string): Promise<number> {
-  return invoke('enable_all_mods_in_group', { groupPath })
+  return safeInvoke<number>('enable_all_mods_in_group', { groupPath })
 }
 
 /**
@@ -712,5 +743,5 @@ export async function enableAllModsInGroup(groupPath: string): Promise<number> {
  * @param isGroupXx 是否为 group_xx 格式的普通分组
  */
 export async function removeGroupEx(groupPath: string, isGroupXx: boolean): Promise<void> {
-  return invoke('remove_group_ex', { groupPath, isGroupXx })
+  return safeInvoke('remove_group_ex', { groupPath, isGroupXx })
 }

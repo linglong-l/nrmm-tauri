@@ -21,7 +21,7 @@ pub mod platform;
 pub mod resources;
 pub mod tray;
 pub mod updater;
-mod utils;
+pub mod utils;
 pub mod window;
 use crate::core::file_watcher::FileWatcher;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,6 +88,7 @@ pub fn run() {
         .init();
     log::info!("[BOOT] T+{:>6}ms - 日志系统初始化完成", boot_start.elapsed().as_millis());
 
+    // SAFETY: Settings initialization is critical for app startup; failure is unrecoverable.
     config::settings_store::init_settings().expect("Failed to initialize settings");
     log::info!("[BOOT] T+{:>6}ms - 设置存储初始化完成", boot_start.elapsed().as_millis());
 
@@ -169,6 +170,7 @@ pub fn run() {
             });
 
             // 监听窗口事件，记录窗口首次显示时间
+            // SAFETY: The main window is declared in tauri.conf.json and must exist during setup().
             let window = app.get_webview_window("main").expect("Main window not found");
             let boot_start_for_window = boot_start;
             let first_resized_logged = Arc::new(AtomicBool::new(false));
@@ -273,6 +275,7 @@ pub fn run() {
             window::get_foreground_process_name,
             platform::get_platform_info,
         ])
+        // SAFETY: Standard Tauri run entry; failure means the application cannot start.
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

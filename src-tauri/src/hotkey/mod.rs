@@ -92,7 +92,7 @@ impl HotkeyManager {
         let settings = settings_store::get_settings();
         if !settings.window_hotkey.is_empty() {
             self.register_hotkey(gsm, &settings.window_hotkey);
-            *self.window_hotkey.lock().unwrap() = Some(settings.window_hotkey);
+            *crate::utils::lock_or_recover(&self.window_hotkey) = Some(settings.window_hotkey);
         }
 
         Ok(())
@@ -113,7 +113,7 @@ impl HotkeyManager {
         }
         match gsm.register(accel) {
             Ok(_) => {
-                self.registered_hotkeys.lock().unwrap().push(accel.to_string());
+                crate::utils::lock_or_recover(&self.registered_hotkeys).push(accel.to_string());
                 log::debug!("Registered hotkey: {}", accel);
             }
             Err(e) => {
@@ -127,7 +127,7 @@ impl HotkeyManager {
     /// 返回 `Some(accel_string)` 表示已配置，`None` 表示未配置。
     /// 用于 `handle_hotkey` 中判断触发快捷键是否匹配窗口热键。
     pub fn get_window_hotkey(&self) -> Option<String> {
-        self.window_hotkey.lock().unwrap().clone()
+        crate::utils::lock_or_recover(&self.window_hotkey).clone()
     }
 
     /// 注销所有已注册的快捷键
@@ -137,8 +137,8 @@ impl HotkeyManager {
     pub fn unregister_all(&self) {
         let gsm = self.app_handle.global_shortcut();
         let _ = gsm.unregister_all();
-        self.registered_hotkeys.lock().unwrap().clear();
-        *self.window_hotkey.lock().unwrap() = None;
+        crate::utils::lock_or_recover(&self.registered_hotkeys).clear();
+        *crate::utils::lock_or_recover(&self.window_hotkey) = None;
     }
 }
 

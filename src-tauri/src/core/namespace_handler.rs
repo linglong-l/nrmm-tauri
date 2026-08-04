@@ -167,7 +167,7 @@ fn collect_namespaces_recursive(_base: &Path, dir: &Path, namespaces: &mut HashS
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            let name = path.file_name().unwrap().to_string_lossy();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
             if name.starts_with('.') || name == "_MANAGED_" {
                 continue;
             }

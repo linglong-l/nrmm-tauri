@@ -52,6 +52,7 @@ static ICON_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp", 
 /// 3Dmigoto 的槽位索引从 1 开始，`group_0` 无效。
 /// 前导零（如 `group_01` vs `group_1`）会导致字符串排序与数值排序不一致，引发解析混乱。
 /// 此正则确保了 `group_index` 的解析既严格又安全。
+// SAFETY: Hardcoded valid regex literal; compilation cannot fail at runtime.
 static GROUP_N_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^group_([1-9][0-9]*)$").unwrap());
 
 /// DISABLED 前缀正则（不区分大小写）
@@ -65,6 +66,7 @@ static GROUP_N_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^group_([1-9][0-9]*)$
 /// # 用途
 /// 用于 `is_disabled_dir()` 检测目录是否被禁用，以及 `DISABLED_PREFIX_RE.replace()` 移除前缀获取显示名称。
 /// 设计为不区分大小写以兼容不同用户命名习惯，同时允许灵活的分隔符以保持可读性。
+// SAFETY: Hardcoded valid regex literal; compilation cannot fail at runtime.
 static DISABLED_PREFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(?i:disabled)[_\- ]*").unwrap());
 
 /// 扫描结果结构体
@@ -147,6 +149,7 @@ pub fn check_mods_path(game: TargetGame, mods_path: &Path) -> ModsPathStatus {
 /// 使用 GROUP_N_RE 严格匹配，禁止 group_0 和前导零（如 group_01）
 pub fn is_normal_group_dir(dir_name: &str) -> Option<u32> {
     let captures = GROUP_N_RE.captures(dir_name)?;
+    // SAFETY: The regex GROUP_N_RE defines exactly one capture group; if captures() succeeded, group 1 is guaranteed.
     let index_str = captures.get(1).unwrap().as_str();
     index_str.parse::<u32>().ok()
 }
@@ -438,7 +441,7 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     let normal_tasks: Vec<(PathBuf, String, u32)> = root_dirs_vec
         .iter()
         .filter_map(|dir_path| {
-            let dir_name = dir_path.file_name().unwrap().to_string_lossy().to_string();
+            let dir_name = dir_path.file_name().unwrap_or_default().to_string_lossy().to_string();
             is_normal_group_dir(&dir_name).map(|gi| (dir_path.clone(), dir_name, gi))
         })
         .collect();
@@ -459,7 +462,7 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     let mutex_roots: Vec<PathBuf> = root_dirs_vec
         .iter()
         .filter(|p| {
-            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
             is_normal_group_dir(&name).is_none()
         })
         .cloned()
@@ -751,7 +754,7 @@ struct DfsStackItem {
 /// # Errors
 /// 当目录无法读取、标记文件无法创建时返回 `Err`。
 fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<ModData>)> {
-    let root_name = root_path.file_name().unwrap().to_string_lossy().to_string();
+    let root_name = root_path.file_name().unwrap_or_default().to_string_lossy().to_string();
     let root_disabled = is_disabled_dir(&root_name);
     let base_root_name = if root_disabled {
         DISABLED_PREFIX_RE.replace(&root_name, "").to_string()
@@ -853,6 +856,7 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
 
             // 添加到父分组
             if let Some(pidx) = parent_idx {
+                // SAFETY: all_mods.push() was called immediately above; all_mods is guaranteed non-empty.
                 groups[pidx].mods.push(all_mods.last().unwrap().clone());
                 groups[pidx].mod_paths.push(current_path.clone());
                 groups[pidx].mod_count += 1;
@@ -863,7 +867,7 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         }
 
         // 没有 ini，视为分组节点
-        let dir_name = current_path.file_name().unwrap().to_string_lossy().to_string();
+        let dir_name = current_path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let dir_disabled = is_disabled_dir(&dir_name);
         let base_dir_name = if dir_disabled {
             DISABLED_PREFIX_RE.replace(&dir_name, "").to_string()
@@ -998,7 +1002,7 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
 ///
 /// 使用 `entry.file_type()` 避免 `metadata()` 系统调用。
 fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> Result<ModData> {
-    let dir_name = mod_path.file_name().unwrap().to_string_lossy().to_string();
+    let dir_name = mod_path.file_name().unwrap_or_default().to_string_lossy().to_string();
     let disabled = is_disabled_dir(&dir_name);
     let display_name = if disabled {
         DISABLED_PREFIX_RE.replace(&dir_name, "").to_string()

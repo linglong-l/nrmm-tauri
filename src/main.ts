@@ -20,6 +20,7 @@ import ElementPlus from 'element-plus'
 import 'element-plus/dist/index.css'
 import App from './App.vue'
 import i18n from './utils/i18n'
+import { logger } from './utils/logger'
 
 console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - 所有import完成`)
 
@@ -76,6 +77,25 @@ document.addEventListener('selectstart', (e) => {
     e.preventDefault()
   }
 })
+
+/**
+ * 三层错误兜底机制
+ * 1. Vue errorHandler：捕获组件内未处理的异常
+ * 2. unhandledrejection：捕获未处理的 Promise 拒绝
+ * 3. window.onerror：捕获全局脚本错误
+ */
+app.config.errorHandler = (err, _instance, info) => {
+  logger.error('VueApp', `Unhandled error in component: ${info}`, err)
+}
+
+window.addEventListener('unhandledrejection', (event) => {
+  logger.error('Promise', 'Unhandled promise rejection', event.reason)
+})
+
+window.onerror = (message, source, lineno, colno, error) => {
+  logger.error('Window', `Script error: ${message} at ${source}:${lineno}:${colno}`, error)
+  return false
+}
 
 /** 挂载应用到DOM */
 console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - 即将调用 app.mount('#app')`)

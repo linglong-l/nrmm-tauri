@@ -73,7 +73,7 @@
       </template>
     </div>
     <!-- 模组名称 -->
-    <div v-if="!isNoneSlot && mod" class="card-name" :title="mod.modName" v-html="highlightedModName"></div>
+    <div v-if="!isNoneSlot && mod" class="card-name" :title="mod.modName"><HighlightText :text="mod.modName" :spans="highlightSpans" /></div>
     <div v-else class="card-name empty-name">{{ t('common.emptySlot', '空槽位') }}</div>
 
     <!-- 右键菜单：Teleport到body，避免父元素transform导致fixed定位漂移 -->
@@ -132,6 +132,7 @@ import type { ModData } from '@/types'
 import { toggleModDisabled, toggleFavorite, renameMod, removeMod, openModFolder, handlePathNotFoundError } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'
 import { useImageLazyLoad } from '@/composables/useImageLazyLoad'
+import HighlightText from '@/components/common/HighlightText.vue'
 import type { ImageLoadState } from '@/composables/useImageLazyLoad'
 import { logger } from '@/utils/logger'
 
@@ -157,27 +158,14 @@ const emit = defineEmits<{
 /** 模组数据计算属性 */
 const mod = computed(() => props.mod)
 
-const highlightedModName = computed<string>(() => {
+const highlightSpans = computed<[number, number][]>(() => {
   const name = mod.value?.modName || ''
   const q = modsStore.searchQuery?.trim()
-  if (!q || !name) return escapeHtml(name)
+  if (!q || !name) return []
   const { matched, spans } = modsStore.fuzzyMatchWithSpansSimple(name, q)
-  if (!matched || !spans.length) return escapeHtml(name)
-  let html = ''
-  let cursor = 0
-  for (const [start, end] of spans) {
-    if (start > cursor) html += escapeHtml(name.slice(cursor, start))
-    html += `<mark class="card-search-mark">${escapeHtml(name.slice(start, end))}</mark>`
-    cursor = end
-  }
-  if (cursor < name.length) html += escapeHtml(name.slice(cursor))
-  return html
+  if (!matched || !spans.length) return []
+  return spans
 })
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[c] as string))
-}
 
 /**
  * 是否为 None 空槽位
@@ -729,13 +717,5 @@ onUnmounted(() => {
   height: 1px;
   background: rgba(255, 255, 255, 0.08);
   margin: 4px 0;
-}
-
-:deep(.card-search-mark) {
-  background: rgba(245, 195, 90, 0.35);
-  color: #ffe7a3;
-  font-weight: 700;
-  border-radius: 2px;
-  padding: 0 1px;
 }
 </style>

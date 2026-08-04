@@ -414,7 +414,7 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
             return Err("Mod path does not exist".to_string());
         }
         let parent = path.parent().ok_or_else(|| "Invalid mod path".to_string())?;
-        let parent_name = parent.file_name().unwrap().to_string_lossy().to_string();
+        let parent_name = parent.file_name().unwrap_or_default().to_string_lossy().to_string();
 
         // NRMM 逻辑：group_xx 普通分组下的模组，重命名仅修改 modname 标记文件（展示名），文件夹名保持不变
         if mod_scanner::is_group_xx_dir(&parent_name) {
@@ -425,7 +425,7 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
         }
 
         // 其余情况（互斥组等）：重命名文件夹
-        let dir_name = path.file_name().unwrap().to_string_lossy().to_string();
+        let dir_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
         let final_name = if is_disabled {
             format!("{}{}", constants::DISABLED_PREFIX, new_name)
