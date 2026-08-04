@@ -343,6 +343,8 @@ function handleDoubleClick() {
 async function handleToggleEnabled() {
   if (!mod.value) return
   closeContextMenu()
+  // 操作前捕获原禁用状态，用于生成操作后的提示文案（refresh 后会更新为操作后状态，不能直接拿来判断）
+  const wasDisabled = mod.value.modDisabled
   try {
     await toggleModDisabled(mod.value.modPath, mod.value.modDisabled, mod.value.isMutex)
     // 标记需要更新模组数据（仅NormalGroup操作）
@@ -350,7 +352,7 @@ async function handleToggleEnabled() {
       modsStore.markNeedUpdate(mod.value.groupIndex)
     }
     await modsStore.refresh()
-    ElMessage.success(mod.value.modDisabled ? t('Enabled') : t('Disabled'))
+    ElMessage.success(wasDisabled ? t('Enabled') : t('Disabled'))
   } catch (e: any) {
     ElMessage.error(t('Failed to enable mod') + ': ' + (e?.message || e))
   }
