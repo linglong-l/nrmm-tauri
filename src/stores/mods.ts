@@ -363,39 +363,10 @@ export const useModsStore = defineStore('mods', () => {
     return null
   }
 
-  /**
-   * 递归查找目标分组所在的顶层根分组索引
-   * 
-   * @param groupList 分组列表
-   * @param path 目标分组路径
-   * @param topLevelIndex 当前顶层索引（递归时传递，用于定位根分组）
-   * @returns 顶层根分组索引，未找到返回-1
-   */
-  function findRootGroupIndex(groupList: ModGroupData[], path: string, topLevelIndex: number = -1): number {
-    for (let i = 0; i < groupList.length; i++) {
-      const g = groupList[i]
-      const currentTopIndex = topLevelIndex === -1 ? i : topLevelIndex
-      if (g.groupPath === path) {
-        return currentTopIndex
-      }
-      if (g.children && g.children.length > 0) {
-        const found = findRootGroupIndex(g.children, path, currentTopIndex)
-        if (found >= 0) return found
-      }
-    }
-    return -1
-  }
-
   /** 当前选中的分组对象（通过路径递归查找） */
   const currentGroup = computed<ModGroupData | null>(() => {
     if (!selectedGroupPath.value) return groups.value[0] || null
     return findGroupByPathInList(groups.value, selectedGroupPath.value)
-  })
-
-  /** 当前选中分组所在的顶层根分组索引（用于后端select_mod调用） */
-  const selectedGroupRootIndex = computed<number>(() => {
-    if (!selectedGroupPath.value) return 0
-    return findRootGroupIndex(groups.value, selectedGroupPath.value)
   })
 
   /** 当前选中的模组对象（显示用：如果是子分组，从子分组mods中取） */
@@ -699,7 +670,11 @@ export const useModsStore = defineStore('mods', () => {
       const isMutex = group.groupType === 'mutexGroup'
       const mod = displayedMods[modIdx]
       const modPath = mod?.modPath || ''
-      const groupIdx = selectedGroupRootIndex.value
+      // 使用 group_xx 目录编号（如 group_1 → 1）作为后端 group_index，
+      // 而非 groups 数组下标。后端 switch_mod 与按键模拟的 active_group_id
+      // 均以该编号为准；若存在互斥组或编号不连续（删除过分组），数组下标会与编号错位，
+      // 导致游戏内 [KeyMod] 的 condition（$group_id == active_group_id）无法命中。
+      const groupIdx = group.groupIndex
 
       // 调用后端select_mod命令处理INI写入和互斥逻辑，取得写入磁盘后的最终索引
       const result = await selectMod(
@@ -891,7 +866,6 @@ export const useModsStore = defineStore('mods', () => {
     mods,
     loading,
     selectedGroupPath,
-    selectedGroupRootIndex,
     selectedModIndex,
     searchQuery,
     showFavoritesOnly,

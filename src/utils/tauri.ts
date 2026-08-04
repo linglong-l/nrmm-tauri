@@ -183,16 +183,20 @@ export async function selectMod(
   cursorX?: number,
   cursorY?: number
 ): Promise<UpdateResult> {
+  // 后端 select_mod 命令参数已重构为 SelectModArgs 结构体（修复 clippy::too_many_arguments），
+  // Tauri 要求将结构体字段整体嵌套在 args 键下传递，故此处需包裹一层 args。
   const result = await safeInvoke<UpdateResult>('select_mod', {
-    game,
-    modsPath,
-    groupIndex,
-    modIndex,
-    isMutex,
-    groupPath,
-    modPath,
-    cursorX: cursorX ?? null,
-    cursorY: cursorY ?? null,
+    args: {
+      game,
+      modsPath,
+      groupIndex,
+      modIndex,
+      isMutex,
+      groupPath,
+      modPath,
+      cursorX: cursorX ?? null,
+      cursorY: cursorY ?? null,
+    },
   })
   return result
 }

@@ -51,26 +51,13 @@ impl WindowsKeySimulator {
     }
 
     fn dispatch_key_down_only(&mut self, vk: VIRTUAL_KEY) -> Result<()> {
-        if let Some(safe_hwnd) = &self.target_hwnd {
-            match send_key_down_to_window(vk, safe_hwnd.0) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    log::warn!("PostMessage KEYDOWN 失败 target_hwnd，fallback to SendInput: {}", e);
-                }
-            }
-        }
+        // 选择序列必须与 SPACE/RETURN 一致走 SendInput（全局输入队列），
+        // 确保 3Dmigoto/xxmi 的底层键盘钩子能捕获 VK_CLEAR 按下状态，
+        // 从而匹配 [KeyMod]/[KeyGroup] 的组合条件（VK_CLEAR + VK_RETURN / VK_CLEAR + VK_SPACE）
         send_key_down_only(vk)
     }
 
     fn dispatch_key_up_only(&mut self, vk: VIRTUAL_KEY) -> Result<()> {
-        if let Some(safe_hwnd) = &self.target_hwnd {
-            match send_key_up_to_window(vk, safe_hwnd.0) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    log::warn!("PostMessage KEYUP 失败 target_hwnd，fallback to SendInput: {}", e);
-                }
-            }
-        }
         send_key_up_only(vk)
     }
 
@@ -247,69 +234,38 @@ fn send_key_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
     Ok(())
 }
 
-fn send_key_down_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
-    let scan_code = get_scan_code(vk);
-    let lparam_down: LPARAM = LPARAM(0x00000001 | ((scan_code as isize) << 16));
-    let wparam = WPARAM(vk.0 as usize);
-
-    let down_ok = unsafe {
-        PostMessageW(Some(hwnd), WM_KEYDOWN, wparam, lparam_down).is_ok()
-    };
-    if !down_ok {
-        anyhow::bail!("PostMessageW WM_KEYDOWN failed");
-    }
-    thread::sleep(Duration::from_millis(5));
-    Ok(())
-}
-
-fn send_key_up_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
-    let scan_code = get_scan_code(vk);
-    let lparam_up: LPARAM = LPARAM(0xC0000001 | ((scan_code as isize) << 16));
-    let wparam = WPARAM(vk.0 as usize);
-
-    let up_ok = unsafe {
-        PostMessageW(Some(hwnd), WM_KEYUP, wparam, lparam_up).is_ok()
-    };
-    if !up_ok {
-        anyhow::bail!("PostMessageW WM_KEYUP failed");
-    }
-    thread::sleep(Duration::from_millis(5));
-    Ok(())
-}
-
 fn send_key(vk: VIRTUAL_KEY) -> Result<()> {
     unsafe {
-        let mut inputs = [
-            INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: vk,
-                        wScan: 0,
-                        dwFlags: KEYEVENTF_KEYUP,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
+        // 按键按下（对齐 NRMM：dwFlags = 0，即普通按下）
+        let down = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: KEYBD_EVENT_FLAGS(0),
+                    time: 0,
+                    dwExtraInfo: 0,
                 },
             },
-            INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: vk,
-                        wScan: 0,
-                        dwFlags: KEYEVENTF_EXTENDEDKEY,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
-                },
-            },
-        ];
-        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        };
+        SendInput(&[down], std::mem::size_of::<INPUT>() as i32);
         thread::sleep(Duration::from_millis(50));
 
-        inputs[1].Anonymous.ki.dwFlags = KEYEVENTF_KEYUP;
-        SendInput(&inputs[1..], std::mem::size_of::<INPUT>() as i32);
+        // 按键抬起（对齐 NRMM：KEYEVENTF_KEYUP）
+        let up = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        SendInput(&[up], std::mem::size_of::<INPUT>() as i32);
         thread::sleep(Duration::from_millis(50));
     }
     Ok(())
@@ -323,7 +279,7 @@ fn send_key_down_only(vk: VIRTUAL_KEY) -> Result<()> {
                 ki: KEYBDINPUT {
                     wVk: vk,
                     wScan: 0,
-                    dwFlags: KEYEVENTF_EXTENDEDKEY,
+                    dwFlags: KEYBD_EVENT_FLAGS(0),
                     time: 0,
                     dwExtraInfo: 0,
                 },
@@ -375,6 +331,8 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
         };
         let _ = ClipCursor(Some(&rect));
 
+        // 与 NRMM 一致使用 SendInput（全局输入队列），
+        // 确保 3Dmigoto/xxmi 的底层键盘钩子能捕获按键并读取光标坐标
         let result = send_key(vk);
 
         let _ = ClipCursor(None);

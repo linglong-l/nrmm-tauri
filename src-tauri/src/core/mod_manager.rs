@@ -827,44 +827,8 @@ pub fn switch_mod(
         .find(|g| g.group_index == group_index)
         .map(|g| g.full_path.clone());
 
-    for mod_data in &scan_result.mods {
-        if mod_data.group_index == group_index {
-            // None 槽位的 full_path 为空，跳过目录操作（由下面的 !is_target 分支禁用其他模组）
-            if mod_data.full_path.as_os_str().is_empty() {
-                continue;
-            }
-
-            let mod_dir = &mod_data.full_path;
-            let dir_name = mod_dir.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let target_disabled = dir_name.to_uppercase().starts_with("DISABLED");
-
-            let is_target = mod_data.mod_index == mod_index;
-
-            if is_target && target_disabled {
-                // 启用目标模组：移除 DISABLED 前缀
-                let new_name = dir_name
-                    .trim_start_matches("DISABLED")
-                    .trim_start_matches("disabled")
-                    .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
-                let new_path = mod_dir.parent().unwrap_or(mod_dir).join(new_name);
-                if mod_dir != &new_path {
-                    fs::rename(mod_dir, &new_path)
-                        .with_context(|| format!("Failed to enable mod: {:?}", mod_dir))?;
-                }
-            } else if !is_target && !target_disabled {
-                // 禁用非目标模组：添加 DISABLED 前缀
-                let new_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
-                let new_path = mod_dir.parent().unwrap_or(mod_dir).join(new_name);
-                if mod_dir != &new_path {
-                    fs::rename(mod_dir, &new_path)
-                        .with_context(|| format!("Failed to disable mod: {:?}", mod_dir))?;
-                }
-            }
-        }
-    }
+    // 注意：group 分组下选择模组不使用互斥逻辑，不得自动禁用/启用同组其他模组。
+    // 各模组的启用/禁用状态仅由用户通过开关显式抉择，选择模组只更新选中状态。
 
     // 将选中的 mod_index 写入该分组的 selectedindex 文件，使 is_active 状态持久化
     let sel_idx_i32 = mod_index as i32;
