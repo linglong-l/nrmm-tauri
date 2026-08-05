@@ -567,5 +567,18 @@
     "xxmiBackground": "即使游戏窗口未处于焦点状态，模组开关/按键切换仍可正常使用。",
     "closeAndReload": "关闭并重新加载",
     "close": "关闭"
+  },
+  "removeMod": {
+    "title": "移除模组",
+    "confirm": "确认",
+    "cancel": "取消",
+    "warning": "删除模组后，该模组将可再次在无需模组管理器的情况下使用，该模组不会被重置。",
+    "folderMovedTo": "文件夹将被移动至 Mods/DISABLED_MANAGED_REMOVED 之后可安全手动删除。",
+    "success": {
+      "title": "移除模组",
+      "folderMoved": "文件夹已移至 Mods/DISABLED_MANAGED_REMOVED",
+      "modRestored": "模组还原成功！"
+    },
+    "loading": "正在移动并还原模组..."
   }
 }

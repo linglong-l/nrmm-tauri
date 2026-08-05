@@ -108,6 +108,13 @@
         </div>
       </div>
     </Teleport>
+    <!-- 移除模组对话框（UI1确认 + UI2成功提示） -->
+    <RemoveModDialog
+      v-model="removeDialogVisible"
+      :mod-name="removeDialogModName"
+      :mod-path="removeDialogModPath"
+      @removed="handleRemoved"
+    />
   </div>
 </template>
 
@@ -129,10 +136,11 @@ import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus 
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModData } from '@/types'
-import { toggleModDisabled, toggleFavorite, renameMod, removeMod, openModFolder, handlePathNotFoundError } from '@/utils/tauri'
+import { toggleModDisabled, toggleFavorite, renameMod, openModFolder, handlePathNotFoundError } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'
 import { useImageLazyLoad } from '@/composables/useImageLazyLoad'
 import HighlightText from '@/components/common/HighlightText.vue'
+import RemoveModDialog from '@/components/mod/RemoveModDialog.vue'
 import type { ImageLoadState } from '@/composables/useImageLazyLoad'
 import { logger } from '@/utils/logger'
 
@@ -413,26 +421,38 @@ async function handleOpenFolder() {
 }
 
 /**
- * 删除模组（移入回收站）
- * 弹出确认对话框，确认后调用后端remove_mod命令
+ * 移除模组对话框显隐状态
+ * 由 RemoveModDialog 组件通过 v-model 双向绑定
  */
-async function handleDelete() {
+const removeDialogVisible = ref(false)
+/** 待移除模组名称（传入对话框显示） */
+const removeDialogModName = ref('')
+/** 待移除模组路径（传入对话框调用后端） */
+const removeDialogModPath = ref('')
+
+/**
+ * 移除模组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED + 还原 INI）
+ * 打开自定义确认对话框（UI1），后续流程由 RemoveModDialog 组件接管：
+ * - 用户确认 → 调用后端 remove_mod → 显示成功提示（UI2）
+ * - UI2 确认 → 触发 handleRemoved 重读模组
+ */
+function handleDelete() {
   if (!mod.value) return
   closeContextMenu()
+  removeDialogModName.value = mod.value.modName
+  removeDialogModPath.value = mod.value.modPath
+  removeDialogVisible.value = true
+}
+
+/**
+ * 移除模组成功后回调（由 RemoveModDialog 的 UI2 确认按钮触发）
+ * 执行模组重读取以反映文件夹移动后的目录结构变化
+ */
+async function handleRemoved() {
   try {
-    await ElMessageBox.confirm(
-      t('Removing mod will move it to restore zone.'),
-      t('Warning'),
-      {
-        confirmButtonText: t('common.confirm'),
-        cancelButtonText: t('common.cancel'),
-        type: 'warning'
-      }
-    )
-    await removeMod(mod.value.modPath)
     await modsStore.refresh()
-    ElMessage.success(t('Mod removed successfully'))
   } catch (e) {
+    logger.error('ModCard', 'refresh after remove failed', e)
   }
 }
 

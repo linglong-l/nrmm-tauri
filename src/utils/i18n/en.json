@@ -566,5 +566,18 @@
     "xxmiBackground": "Mod toggles/key swaps still work even when the game window is not focused.",
     "closeAndReload": "Close & Reload",
     "close": "Close"
+  },
+  "removeMod": {
+    "title": "Remove Mod",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "warning": "After removing, the mod can be used again without mod manager. The mod will not be reset.",
+    "folderMovedTo": "Folder will be moved to Mods/DISABLED_MANAGED_REMOVED and can be safely deleted manually afterwards.",
+    "success": {
+      "title": "Remove Mod",
+      "folderMoved": "Folder moved to Mods/DISABLED_MANAGED_REMOVED",
+      "modRestored": "Mod restored successfully!"
+    },
+    "loading": "Moving and restoring mod..."
   }
 }

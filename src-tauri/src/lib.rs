@@ -214,7 +214,6 @@ pub fn run() {
             commands::mod_commands::check_mods_path_status,
             commands::mod_commands::refresh_mods,
             commands::mod_commands::update_mod_data,
-            commands::mod_commands::update_group_mod_data,
             commands::mod_commands::select_mod,
             commands::mod_commands::deselect_group_mod,
             commands::mod_commands::add_group,

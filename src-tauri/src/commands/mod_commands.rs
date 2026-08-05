@@ -169,36 +169,6 @@ pub async fn update_mod_data(game: String, mods_path: String) -> Result<mod_mana
     Ok(result)
 }
 
-/// 分组增量更新模组数据（仅更新指定分组）
-#[tauri::command]
-pub async fn update_group_mod_data(game: String, mods_path: String, group_index: u32) -> Result<mod_manager::UpdateResult, String> {
-    let game = parse_game(&game)?;
-    let mods_path = PathBuf::from(mods_path);
-    let settings = settings_store::get_settings();
-    let managed_path = mods_path.join(constants::MANAGED_FOLDER);
-
-    log::info!("[update_group_mod_data] Running group incremental update for group_index={}", group_index);
-    let start = std::time::Instant::now();
-
-    let update_path = mods_path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
-        mod_manager::update_group_mod_data(game, &update_path, &settings, group_index).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    let elapsed = start.elapsed();
-    log::info!("Group incremental update completed in {}ms, processed {} mods",
-        elapsed.as_millis(), result.processed_mods);
-
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_by_prefix(&managed_path);
-    }
-
-    Ok(result)
-}
-
 /// 选择模组（支持互斥组）
 #[tauri::command]
 pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult, String> {
@@ -417,16 +387,20 @@ pub async fn remove_group(group_path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// 删除模组（移至回收站）
+/// 移除模组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED + 还原 INI）
+///
+/// 完整流程：
+/// 1. 将模组文件夹移动到 `Mods/DISABLED_MANAGED_REMOVED/<modname>`（冲突追加 _1、_2…）
+/// 2. 对移动后的模组执行 INI 还原（清理所有 NRMM 注入内容）
+/// 3. 清除模组缓存
+///
+/// 返回 `RemoveModResult`，包含移动后路径、INI 还原状态等信息
 #[tauri::command]
-pub async fn remove_mod(mod_path: String) -> Result<(), String> {
+pub async fn remove_mod(mod_path: String) -> Result<crate::core::mod_manager::RemoveModResult, String> {
     let path = PathBuf::from(mod_path);
 
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        if !path.exists() {
-            return Err("Mod path does not exist".to_string());
-        }
-        trash_delete(&path).map_err(|e| e.to_string())
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<crate::core::mod_manager::RemoveModResult, String> {
+        crate::core::mod_manager::remove_mod(&path).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -436,7 +410,7 @@ pub async fn remove_mod(mod_path: String) -> Result<(), String> {
         cache.invalidate_all();
     }
 
-    Ok(())
+    Ok(result)
 }
 
 /// 重命名模组
@@ -891,7 +865,7 @@ pub async fn enable_all_mods_in_group(group_path: String) -> Result<u32, String>
     Ok(count)
 }
 
-/// 移除分组（NRMM 对齐：移至 _MANAGED_REMOVED_；非group先移子分组到父级再移除）
+/// 移除分组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED；非group先移子分组到父级再移除）
 #[tauri::command]
 pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<(), String> {
     let path = PathBuf::from(group_path);

@@ -11,6 +11,10 @@
 /// NRMM 管理的模组根目录名，所有模组都存放在此目录下
 pub const MANAGED_FOLDER: &str = "_MANAGED_";
 
+/// NRMM 移除模组/分组的回收目录名（位于 Mods 根目录，与 _MANAGED_ 同级）
+/// 对齐 NRMM 原版常量 `managedRemovedFolderName = "DISABLED_MANAGED_REMOVED"`
+pub const MANAGED_REMOVED_FOLDER: &str = "DISABLED_MANAGED_REMOVED";
+
 /// 按键监听文件名（用于游戏内按键检测）
 pub const KEYPRESS_FILENAME: &str = "nrmm_keypress.txt";
 

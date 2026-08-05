@@ -9,7 +9,11 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "ts:check": "npx tsc --noEmit",
+    "vue:check": "npx vue-tsc --noEmit",
+    "tsc:strict": "npx tsc --noEmit --strict",
+    "biome:check": "npx biome check ."
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2",

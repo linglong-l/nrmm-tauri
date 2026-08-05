@@ -1506,57 +1506,131 @@ fn build_mod_data_deep(
 
 /// 对单个收敛后路径执行局部扫描，返回该路径下的 `ScanResult` 子树
 ///
-/// 增量更新专用：先调用 `scan_mods_light()` 获取全量扫描结果，然后按 `target_subpath` 过滤。
+/// 增量更新专用：仅扫描 `target_subpath` 指向的分组子树，避免全量扫描。
 ///
-/// # 过滤逻辑
-/// - 分组过滤（`filtered_groups`）：保留所有分组路径以 `target_subpath` 开头，或 `target_subpath` 以分组路径开头的分组。
-///   即分组与目标路径存在包含关系（互为祖先或后代）。
-/// - 模组过滤（`filtered_mods`）：仅保留模组路径以 `target_subpath` 开头的模组。
+/// # 局部扫描策略
+/// - `target_subpath` 为空或指向 `_MANAGED_` 根目录 → 退化为全量轻量扫描
+/// - `target_subpath` 指向 `group_xx` 目录 → 仅扫描该 NormalGroup
+/// - `target_subpath` 指向 `group_xx/mod_yyy` → 扫描其所在的 `group_xx` 分组
+/// - `target_subpath` 指向 MutexGroup 根目录 → 仅扫描该 MutexGroup 根
+/// - 目标路径不存在 → 退化为全量扫描（兜底）
 ///
-/// 路径比较前通过 `normalize_subpath()` 统一为 `/` 分隔符，去除末尾 `/`。
+/// 粒度到分组级，覆盖 file_watcher 的常见场景。保持返回类型 `ScanResult` 不变，
+/// `subtree_replace` 调用方无需修改。
 ///
 /// # Errors
-/// 当 `scan_mods_light()` 失败时传播错误。
+/// 当底层扫描函数失败时传播错误。
 pub fn scan_partial_path(mods_path: &Path, target_subpath: &Path) -> Result<ScanResult> {
-    let full = scan_mods_light(mods_path)?;
+    let managed_folder = get_managed_folder(mods_path);
     let target_norm = normalize_subpath(target_subpath, mods_path);
 
-    let filtered_groups: Vec<ModGroupData> = full
-        .groups
-        .into_iter()
-        .filter(|g| {
-            let gp = normalize_subpath(Path::new(&g.group_path), mods_path);
-            gp.starts_with(&target_norm) || target_norm.starts_with(&gp)
-        })
-        .collect();
+    // 若 target_subpath 为空或指向 _MANAGED_ 根目录，退化为全量轻量扫描
+    if target_norm.is_empty() || target_norm == "_MANAGED_" {
+        return scan_mods_light(mods_path);
+    }
 
-    let filtered_mods: Vec<ModData> = full
-        .mods
-        .into_iter()
-        .filter(|m| {
-            let mp = normalize_subpath(Path::new(&m.mod_path), mods_path);
-            mp.starts_with(&target_norm)
-        })
-        .collect();
+    // 解析 target_subpath 相对于 _MANAGED_ 的路径
+    let target_full = managed_folder.join(&target_norm);
+    if !target_full.exists() {
+        // 目标路径不存在，退化为全量扫描
+        return scan_mods_light(mods_path);
+    }
 
-    Ok(ScanResult {
-        total_mods_count: filtered_mods.len(),
-        enabled_mods_count: filtered_mods.iter().filter(|m| m.is_active).count(),
-        disabled_mods_count: filtered_mods.iter().filter(|m| !m.is_active).count(),
-        groups: filtered_groups,
-        mods: filtered_mods,
-    })
+    // 提取 target_subpath 的第一段（_MANAGED_ 下的直接子目录名）
+    // 粒度到分组级：无论 target_subpath 指向分组目录还是其下的模组目录，都扫描整个分组
+    let first_segment = target_norm.split('/').next().filter(|s| !s.is_empty());
+
+    if let Some(first_seg) = first_segment {
+        let first_dir = managed_folder.join(first_seg);
+        let dir_name = first_seg.to_string();
+
+        // 判断是否是 NormalGroup（group_xx）
+        if let Some(group_index) = is_normal_group_dir(&dir_name) {
+            // 仅扫描该 NormalGroup
+            let (g, ms) = scan_normal_group_light(&first_dir, &dir_name, group_index)?;
+            let total = ms.iter().filter(|m| m.name != "None").count();
+            let enabled = ms.iter().filter(|m| !m.disabled && !m.mod_disabled && m.name != "None").count();
+            let disabled = ms.iter().filter(|m| (m.disabled || m.mod_disabled) && m.name != "None").count();
+            return Ok(ScanResult {
+                groups: vec![g],
+                mods: ms,
+                total_mods_count: total,
+                enabled_mods_count: enabled,
+                disabled_mods_count: disabled,
+            });
+        }
+
+        // 否则视为 MutexGroup 根目录
+        let (g_opt, ms) = scan_mutex_group_dfs(&first_dir)?;
+        let total = ms.iter().filter(|m| m.name != "None").count();
+        let enabled = ms.iter().filter(|m| !m.disabled && !m.mod_disabled && m.name != "None").count();
+        let disabled = ms.iter().filter(|m| (m.disabled || m.mod_disabled) && m.name != "None").count();
+        return Ok(ScanResult {
+            groups: g_opt.into_iter().collect(),
+            mods: ms,
+            total_mods_count: total,
+            enabled_mods_count: enabled,
+            disabled_mods_count: disabled,
+        });
+    }
+
+    // 兜底：全量扫描
+    scan_mods_light(mods_path)
 }
 
-/// 规范化子路径：统一为 `/` 分隔符，去除末尾 `/`
+/// 规范化子路径：将任意形式的路径转换为相对于 `_MANAGED_` 的相对路径。
 ///
-/// 用于 `scan_partial_path()` 中的路径比较，确保跨平台路径一致性。
-/// Windows 上的 `\\` 和 Unix 上的 `/` 统一为 `/`，避免路径比较时因分隔符不同而失败。
-fn normalize_subpath(p: &Path, _mods_path: &Path) -> String {
-    p.to_string_lossy()
+/// 用于 `scan_partial_path()` 中提取目标分组名，支持以下输入形式：
+/// - 绝对路径（来自文件监听器的 `consolidate` 结果）：`D:\Games\Mods\_MANAGED_\group_1`
+/// - 带 `_MANAGED_` 前缀的相对路径：`_MANAGED_/group_1`
+/// - 不带前缀的相对路径：`group_1`
+///
+/// 统一输出为 `/` 分隔符、无末尾斜杠的相对路径（如 `group_1`）。
+/// 若输入为空或仅指向 `_MANAGED_` 根目录，返回空字符串（触发全量扫描降级）。
+///
+/// # 参数
+/// - `p`: 待规范化的路径，可为绝对或相对路径
+/// - `mods_path`: 模组根目录路径，用于计算 `_MANAGED_` 文件夹位置
+///
+/// # 返回值
+/// 相对于 `_MANAGED_` 的规范化子路径字符串
+fn normalize_subpath(p: &Path, mods_path: &Path) -> String {
+    let managed_folder = get_managed_folder(mods_path);
+
+    // 策略 1：优先使用 canonicalize 进行可靠的路径前缀剥离
+    // 适用于绝对路径（文件监听器 consolidate 的返回值）
+    let p_can = p.canonicalize();
+    let managed_can = managed_folder.canonicalize();
+    if let (Ok(p_abs), Ok(mgr_abs)) = (p_can, managed_can) {
+        if let Ok(rel) = p_abs.strip_prefix(&mgr_abs) {
+            return rel
+                .to_string_lossy()
+                .replace('\\', "/")
+                .trim_end_matches('/')
+                .to_string();
+        }
+        // 路径不在 _MANAGED_ 下，返回空字符串触发全量扫描降级
+        return String::new();
+    }
+
+    // 策略 2：canonicalize 失败（如测试中的相对路径），使用字符串匹配剥离前缀
+    let normalized = p
+        .to_string_lossy()
         .replace('\\', "/")
         .trim_end_matches('/')
-        .to_string()
+        .to_string();
+
+    // 剥离 `_MANAGED_/` 前缀
+    if let Some(stripped) = normalized.strip_prefix("_MANAGED_/") {
+        return stripped.to_string();
+    }
+    // 整个路径就是 `_MANAGED_`，返回空字符串触发全量扫描
+    if normalized == "_MANAGED_" {
+        return String::new();
+    }
+
+    // 已是相对路径（如 `group_1`），直接返回
+    normalized
 }
 
 // ============================================================================
@@ -2346,5 +2420,251 @@ mod tests_non_group_no_markers {
         // group_xx 目录应创建标记文件
         assert!(group1.join("groupname").exists(), "group_xx 应创建 groupname 文件");
         assert!(mod_dir.join("modname").exists(), "group_xx 下模组应创建 modname 文件");
+    }
+}
+
+// ============================================================================
+// scan_partial_path 单元测试
+//
+// 验证局部扫描的分组级粒度与降级策略：
+// - 空/根路径降级为全量扫描
+// - 不存在的目标路径降级为全量扫描
+// - NormalGroup（group_xx）目标仅扫描该分组
+// - MutexGroup（#xxx）目标仅扫描该分组子树
+// - 目标为分组内模组路径时，粒度仍为分组级（扫描整个分组）
+// ============================================================================
+#[cfg(test)]
+mod tests_scan_partial_path {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// 测试辅助：创建带 _MANAGED_ 子目录的临时根目录
+    fn setup_test_dir() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+        dir
+    }
+
+    /// 测试辅助：在 _MANAGED_ 下创建分组目录
+    fn create_group_dir(base: &Path, group_name: &str) -> PathBuf {
+        let group_path = base.join("_MANAGED_").join(group_name);
+        fs::create_dir_all(&group_path).unwrap();
+        group_path
+    }
+
+    /// 测试辅助：在分组目录下创建带 INI 文件的模组目录
+    fn create_mod_with_ini(group_path: &Path, mod_name: &str, ini_content: &str) -> PathBuf {
+        let mod_path = group_path.join(mod_name);
+        fs::create_dir_all(&mod_path).unwrap();
+        let ini_path = mod_path.join("mod.ini");
+        fs::write(&ini_path, ini_content).unwrap();
+        mod_path
+    }
+
+    /// 测试辅助：在根目录创建 d3dx.ini
+    fn create_d3dx_ini(base: &Path) {
+        fs::write(base.join("d3dx.ini"), "; test").unwrap();
+    }
+
+    /// 空 target_subpath 应降级为全量扫描，返回所有分组
+    #[test]
+    fn test_partial_empty_subpath_falls_back_to_full_scan() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        let g1 = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(&g1, "Mod1", "[TextureOverride1]\nhash=1\n");
+        let g2 = create_group_dir(dir.path(), "group_2");
+        create_mod_with_ini(&g2, "Mod2", "[TextureOverride2]\nhash=2\n");
+
+        // 空路径降级
+        let result = scan_partial_path(dir.path(), Path::new("")).unwrap();
+        assert_eq!(
+            result.groups.len(),
+            2,
+            "空 target_subpath 应降级为全量扫描，返回 2 个分组"
+        );
+    }
+
+    /// target_subpath 指向 _MANAGED_ 根目录应降级为全量扫描
+    #[test]
+    fn test_partial_managed_root_falls_back_to_full_scan() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        let g1 = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(&g1, "Mod1", "[TextureOverride1]\nhash=1\n");
+        let g2 = create_group_dir(dir.path(), "group_2");
+        create_mod_with_ini(&g2, "Mod2", "[TextureOverride2]\nhash=2\n");
+
+        let result = scan_partial_path(dir.path(), Path::new("_MANAGED_")).unwrap();
+        assert_eq!(
+            result.groups.len(),
+            2,
+            "target_subpath=_MANAGED_ 应降级为全量扫描"
+        );
+    }
+
+    /// target_subpath 不存在时应降级为全量扫描
+    #[test]
+    fn test_partial_nonexistent_path_falls_back_to_full_scan() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        let g1 = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(&g1, "Mod1", "[TextureOverride1]\nhash=1\n");
+
+        // 指向不存在的分组
+        let result =
+            scan_partial_path(dir.path(), Path::new("_MANAGED_/group_999")).unwrap();
+        assert_eq!(
+            result.groups.len(),
+            1,
+            "目标路径不存在时应降级为全量扫描，返回已存在的 1 个分组"
+        );
+    }
+
+    /// target_subpath 指向 NormalGroup（group_xx）时仅扫描该分组
+    #[test]
+    fn test_partial_normal_group_scans_only_target_group() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        let g1 = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(&g1, "Mod1", "[TextureOverride1]\nhash=1\n");
+        let g2 = create_group_dir(dir.path(), "group_2");
+        create_mod_with_ini(&g2, "Mod2", "[TextureOverride2]\nhash=2\n");
+        let g10 = create_group_dir(dir.path(), "group_10");
+        create_mod_with_ini(&g10, "Mod10", "[TextureOverride10]\nhash=10\n");
+
+        // 仅扫描 group_2
+        let result =
+            scan_partial_path(dir.path(), Path::new("_MANAGED_/group_2")).unwrap();
+
+        // 仅返回 group_2，不包含 group_1 和 group_10
+        assert_eq!(result.groups.len(), 1, "应仅返回目标分组");
+        assert_eq!(result.groups[0].group_name, "group_2");
+        // 模组仅包含 Mod2（轻量扫描会插入 None 槽位，故长度为 2）
+        assert_eq!(result.mods.len(), 2, "应包含 None 槽位 + Mod2");
+        assert_eq!(result.mods.iter().filter(|m| m.name == "Mod2").count(), 1);
+        // total_mods_count 不计入 None
+        assert_eq!(result.total_mods_count, 1);
+    }
+
+    /// target_subpath 指向 MutexGroup（#xxx）时仅扫描该分组子树
+    #[test]
+    fn test_partial_mutex_group_scans_only_target_group() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        // 创建一个 MutexGroup：#CustomGroup 下含 ModA
+        let mutex_group = dir.path().join("_MANAGED_").join("#CustomGroup");
+        fs::create_dir_all(&mutex_group).unwrap();
+        let mod_a = mutex_group.join("ModA");
+        fs::create_dir_all(&mod_a).unwrap();
+        fs::write(mod_a.join("ModA.ini"), "[ShaderOverride]\n").unwrap();
+
+        // 另一个分组不应被扫描
+        let g1 = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(&g1, "Mod1", "[TextureOverride1]\nhash=1\n");
+
+        // 仅扫描 #CustomGroup
+        let result =
+            scan_partial_path(dir.path(), Path::new("_MANAGED_/#CustomGroup")).unwrap();
+
+        // 仅包含 ModA，不包含 Mod1
+        assert_eq!(
+            result.mods.iter().filter(|m| m.name == "ModA").count(),
+            1,
+            "应扫描到 ModA"
+        );
+        assert_eq!(
+            result.mods.iter().filter(|m| m.name == "Mod1").count(),
+            0,
+            "不应扫描到 group_1 下的 Mod1"
+        );
+    }
+
+    /// target_subpath 指向分组内的模组目录时，粒度仍为分组级（扫描整个分组）
+    #[test]
+    fn test_partial_mod_path_scans_whole_group() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        let g1 = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(&g1, "Mod1", "[TextureOverride1]\nhash=1\n");
+        create_mod_with_ini(&g1, "Mod2", "[TextureOverride2]\nhash=2\n");
+
+        let g2 = create_group_dir(dir.path(), "group_2");
+        create_mod_with_ini(&g2, "Mod3", "[TextureOverride3]\nhash=3\n");
+
+        // 指向 group_1 下的 Mod1（粒度仍为分组级）
+        let result =
+            scan_partial_path(dir.path(), Path::new("_MANAGED_/group_1/Mod1")).unwrap();
+
+        // 应扫描整个 group_1（None + Mod1 + Mod2），不包含 group_2 的 Mod3
+        assert_eq!(result.groups.len(), 1, "应仅返回 group_1");
+        assert_eq!(result.groups[0].group_name, "group_1");
+        assert_eq!(
+            result.mods.iter().filter(|m| m.name == "Mod3").count(),
+            0,
+            "不应扫描到 group_2 的 Mod3"
+        );
+        // group_1 内的 Mod1 和 Mod2 都应被扫描到
+        assert_eq!(
+            result.mods.iter().filter(|m| m.name == "Mod1").count(),
+            1,
+            "应扫描到 Mod1"
+        );
+        assert_eq!(
+            result.mods.iter().filter(|m| m.name == "Mod2").count(),
+            1,
+            "应扫描到 Mod2（粒度为分组级）"
+        );
+    }
+
+    /// normalize_subpath 应统一分隔符、去除末尾斜杠，并剥离 `_MANAGED_` 前缀
+    #[test]
+    fn test_normalize_subpath_handles_separators() {
+        // canonicalize 在空 mods_path 下会失败，走策略 2（字符串匹配）
+        // Windows 风格反斜杠应被转换为正斜杠，并剥离 _MANAGED_ 前缀
+        let n1 = normalize_subpath(Path::new("_MANAGED_\\group_1"), Path::new(""));
+        assert_eq!(n1, "group_1");
+
+        // 末尾斜杠应被去除
+        let n2 = normalize_subpath(Path::new("_MANAGED_/group_1/"), Path::new(""));
+        assert_eq!(n2, "group_1");
+
+        // 混合分隔符
+        let n3 = normalize_subpath(Path::new("_MANAGED_\\group_1/Mod1\\"), Path::new(""));
+        assert_eq!(n3, "group_1/Mod1");
+
+        // 不带 _MANAGED_ 前缀的相对路径应原样返回
+        let n4 = normalize_subpath(Path::new("group_1"), Path::new(""));
+        assert_eq!(n4, "group_1");
+
+        // 仅 _MANAGED_ 应返回空字符串（触发全量扫描降级）
+        let n5 = normalize_subpath(Path::new("_MANAGED_"), Path::new(""));
+        assert_eq!(n5, "");
+    }
+
+    /// normalize_subpath 应正确处理绝对路径（文件监听器 consolidate 的返回格式）
+    #[test]
+    fn test_normalize_subpath_absolute_path() {
+        let dir = setup_test_dir();
+        let g1 = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(&g1, "Mod1", "[Section]\n");
+
+        // 模拟 consolidate 返回的绝对路径：mods_path/_MANAGED_/group_1
+        let abs_path = dir.path().join("_MANAGED_").join("group_1");
+        let result = normalize_subpath(&abs_path, dir.path());
+        assert_eq!(result, "group_1", "绝对路径应被剥离为相对于 _MANAGED_ 的子路径");
+
+        // 模组级绝对路径：mods_path/_MANAGED_/group_1/Mod1
+        let abs_mod_path = g1.join("Mod1");
+        let result2 = normalize_subpath(&abs_mod_path, dir.path());
+        assert_eq!(result2, "group_1/Mod1", "模组级绝对路径应保留分组/模组结构");
     }
 }

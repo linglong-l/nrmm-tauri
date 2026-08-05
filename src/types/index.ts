@@ -440,6 +440,25 @@ export interface UpdateResult {
 }
 
 /**
+ * 移除模组结果（后端 RemoveModResult）
+ *
+ * 对应后端 `crate::core::mod_manager::RemoveModResult`
+ * 字段采用 camelCase 命名（Rust 端通过 serde rename_all 自动转换）
+ */
+export interface RemoveModResult {
+  /** 模组名称 */
+  modName: string;
+  /** 移动后的目标路径（Mods/DISABLED_MANAGED_REMOVED/ 下） */
+  movedTo: string;
+  /** INI 还原是否成功（true=全部成功，false=部分或全部失败） */
+  restored: boolean;
+  /** 还原过程中处理的 INI 文件数 */
+  iniCount: number;
+  /** 还原过程中失败的文件数 */
+  failedCount: number;
+}
+
+/**
  * Save Customizations操作结果
  */
 export interface SaveCustomizationsResult {

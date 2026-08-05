@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::fs;
 use crate::core::constants;
 use crate::core::ini_handler::IniFile;
+use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::namespace_handler;
 use crate::core::mod_scanner;
 use crate::models::enums::TargetGame;
@@ -52,7 +53,7 @@ pub struct UpdateResult {
     pub need_reload_manual: bool,
     /// 选择操作（switch_mod）成功写入磁盘 selectedindex 文件的最终值。
     /// - NormalGroup：范围为 [0, g.mods.len()-1]，0 代表 None 槽位
-    /// - update_mod_data / update_group_mod_data（非选择类操作）：默认返回 None（null）
+    /// - update_mod_data（非选择类操作）：默认返回 None（null）
     /// - MutexGroup：不使用 switch_mod 路径，始终 None
     #[serde(default)]
     pub selected_mod_index: Option<i32>,
@@ -236,7 +237,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     for mod_data in &enabled_mods {
         for ini_data in &mod_data.mod_ini_data {
             let ini_path = PathBuf::from(&ini_data.ini_path);
-            if let Ok(ini) = IniFile::parse(&ini_path) {
+            if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
                 for lib in ini.defined_libraries() {
                     known_libraries.insert(lib);
                 }
@@ -253,7 +254,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     let mut all_errors: Vec<ErroredLines> = Vec::new();
     let mut processed_mods = 0u32;
 
-    for (_, mod_data) in enabled_mods.iter().enumerate() {
+    for mod_data in enabled_mods.iter() {
         let group_id = mod_data.group_index;
         let mut mod_inis: Vec<PathBuf> = Vec::new();
 
@@ -268,7 +269,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
                 }
             }
 
-            match IniFile::parse(&ini_path) {
+            match D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
                 Ok(mut ini) => {
                     // 错误检测
                     let errors = ini.detect_errors(&ini_path, &known_libraries);
@@ -361,168 +362,6 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         ..Default::default()
     };
     log::debug!("[core::mod_manager] [update_mod_data] done | elapsed={:?}ms | processed={} errors={}", _s.elapsed().as_millis(), result.processed_mods, result.errors.len());
-    Ok(result)
-}
-
-/// 分组增量更新模组数据（仅更新指定分组的 ModFolder.ini）
-///
-/// 与全量 `update_mod_data` 的区别：
-/// - 仅扫描目标分组，不扫描其他分组
-/// - 仅处理该分组内启用的模组 INI
-/// - 仅更新该分组的 ModFolder.ini 文件
-/// - 跳过 nrmm_include.ini 和主 INI 的重生成（include 链保持不变）
-///
-/// # 参数
-/// - `game`: 目标游戏
-/// - `game_mods_path`: 游戏 Mods 目录
-/// - `_settings`: 应用设置
-/// - `group_index`: 目标分组索引
-pub fn update_group_mod_data(
-    game: TargetGame,
-    game_mods_path: &Path,
-    _settings: &AppSettings,
-    group_index: u32,
-) -> Result<UpdateResult> {
-    log::debug!("[mod_manager] [update_group_mod_data] Starting | game={:?} target_group_index={} path={:?}", game, group_index, game_mods_path);
-    let _s = std::time::Instant::now();
-    let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);
-    if !managed_folder.exists() {
-        fs::create_dir_all(&managed_folder)?;
-    }
-
-    // 步骤1: 准备 _MANAGED_ 目录
-    let need_reload_manual = prepare_managed_folder(&managed_folder, game)?;
-    log::debug!("[mod_manager] [update_group_mod_data] step=prepare_managed_folder done need_reload_manual={}", need_reload_manual);
-
-    // 步骤2: 轻量扫描（仅扫描目标分组）
-    let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
-    log::debug!("[mod_manager] [update_group_mod_data] step=scan_mods done total_mods={} total_groups={}", scan_result.total_mods_count, scan_result.groups.len());
-
-    // 步骤3: 过滤出目标分组的启用模组
-    let enabled_mods: Vec<&ModData> = scan_result.mods.iter()
-        .filter(|m| m.group_index == group_index && !m.disabled && !m.mod_disabled)
-        .collect();
-    log::debug!("[mod_manager] [update_group_mod_data] step=collect_enabled done target_group_index={} enabled_mods_count={}", group_index, enabled_mods.len());
-
-    // 步骤4: 收集已知库
-    let mut known_libraries = HashSet::new();
-    for mod_data in &enabled_mods {
-        for ini_data in &mod_data.mod_ini_data {
-            let ini_path = PathBuf::from(&ini_data.ini_path);
-            if let Ok(ini) = IniFile::parse(&ini_path) {
-                for lib in ini.defined_libraries() {
-                    known_libraries.insert(lib);
-                }
-            }
-        }
-    }
-
-    // 步骤5: 处理目标分组内启用模组的 INI
-    let mut group_mod_inis: Vec<PathBuf> = Vec::new();
-    let mut all_errors: Vec<ErroredLines> = Vec::new();
-    let mut processed_mods = 0u32;
-
-    for (_, mod_data) in enabled_mods.iter().enumerate() {
-        for ini_data in &mod_data.mod_ini_data {
-            let ini_path = PathBuf::from(&ini_data.ini_path);
-
-            // 备份模组 INI（如果尚未备份）
-            let mod_backup = ini_path.with_extension(constants::BACKUP_EXTENSION);
-            if !mod_backup.exists() {
-                if let Err(e) = fs::copy(&ini_path, &mod_backup) {
-                    log::warn!("Failed to backup mod INI {}: {}", ini_path.display(), e);
-                }
-            }
-
-            match IniFile::parse(&ini_path) {
-                Ok(mut ini) => {
-                    let errors = ini.detect_errors(&ini_path, &known_libraries);
-                    if !errors.is_empty() {
-                        all_errors.extend(errors);
-                    }
-
-                    if let Some(ns) = namespace_handler::extract_namespace(&ini) {
-                        namespace_handler::expand_ini_variables(&mut ini, &ns);
-                    }
-
-                    ini.inject_slot_conditions(group_index);
-                    ini.comment_crash_lines();
-                    ini.remove_empty_if_blocks();
-                    ini.apply_indentation();
-                    ini.prepend_header_comment();
-
-                    ini.write_atomic(&ini_path)?;
-                    group_mod_inis.push(ini_path.clone());
-                    processed_mods += 1;
-                }
-                Err(e) => {
-                    log::error!("Failed to process mod INI {}: {}", ini_path.display(), e);
-                    all_errors.push(ErroredLines {
-                        error_type: 3,
-                        error_message: format!("Processing error: {}", e),
-                        ..Default::default()
-                    });
-                }
-            }
-        }
-    }
-
-    log::debug!("[mod_manager] [update_group_mod_data] step=process_mod_inis done processed={} target_group_index={} errors={}", processed_mods, group_index, all_errors.len());
-
-    // 步骤6: 仅更新该分组的 ModFolder.ini
-    let group_dir = managed_folder.join(format!("group_{}", group_index));
-    let mut group_ini_paths: Vec<PathBuf> = Vec::new();
-    let group_ini = create_group_ini(&group_dir, group_index, &group_mod_inis, game_mods_path)?;
-    if let Some(p) = group_ini {
-        group_ini_paths.push(p);
-    }
-    log::debug!("[mod_manager] [update_group_mod_data] step=create_group_ini done target_group_index={} group_ini_created={}", group_index, group_ini_paths.len());
-
-    // 步骤7: 更新 nrmm_include.ini（需要包含所有分组，不只是当前分组）
-    // 读取所有现有 group INI 路径，合并当前分组
-    let mut existing_ini_paths: Vec<PathBuf> = Vec::new();
-    // 收集所有已存在的 group INI 路径（除了当前分组的）
-    if let Ok(entries) = fs::read_dir(&managed_folder) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if let Some(group_num_str) = dir_name.strip_prefix("group_") {
-                    if let Ok(group_num) = group_num_str.parse::<u32>() {
-                        if group_num != group_index {
-                            let ini_path = path.join(format!("group_{}.ini", group_num));
-                            if ini_path.exists() {
-                                existing_ini_paths.push(ini_path);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // 合并当前分组的新 INI
-    existing_ini_paths.extend(group_ini_paths.clone());
-
-    let nrmm_include_path = managed_folder.join(constants::INCLUDE_FILENAME);
-    create_nrmm_include_ini(&nrmm_include_path, &managed_folder, &existing_ini_paths, game_mods_path)?;
-    log::debug!("[mod_manager] [update_group_mod_data] step=update_nrmm_include done target_group_index={} total_ini_paths={}", group_index, existing_ini_paths.len());
-
-    // 步骤8: 检测标准 XXMI/3DMigoto 环境
-    let main_ini_name = game.d3dx_ini_name();
-    let is_standard_xxmi = detect_standard_xxmi(game_mods_path, main_ini_name);
-
-    let result = UpdateResult {
-        total_groups: scan_result.groups.len() as u32,
-        total_mods: scan_result.total_mods_count as u32,
-        enabled_mods: enabled_mods.len() as u32,
-        disabled_mods: scan_result.disabled_mods_count as u32,
-        processed_mods,
-        errors: all_errors,
-        need_reload_manual,
-        is_standard_xxmi,
-        ..Default::default()
-    };
-    log::debug!("[mod_manager] [update_group_mod_data] done | target_group_index={} elapsed={:?}ms | processed={} errors={}", group_index, _s.elapsed().as_millis(), result.processed_mods, result.errors.len());
     Ok(result)
 }
 
@@ -1491,7 +1330,342 @@ fn restore_inis_recursive(dir: &Path, restored: &mut u32, failed: &mut u32) -> R
     Ok(())
 }
 
-/// 移除分组（NRMM 对齐：移至 _MANAGED_REMOVED_ 目录，非group先移子分组再移除）
+// ============================================================================
+// 模组移除与 INI 还原（NRMM 对齐）
+// 严格复刻 NRMM 的 restoreManagedMod + renameOrMoveFolder 流程
+// ============================================================================
+
+/// 模组移除结果
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveModResult {
+    /// 模组名称
+    pub mod_name: String,
+    /// 移动后的目标路径
+    pub moved_to: PathBuf,
+    /// INI 还原是否成功（true=全部成功，false=部分或全部失败）
+    pub restored: bool,
+    /// 还原过程中处理的 INI 文件数
+    pub ini_count: u32,
+    /// 还原过程中失败的文件数
+    pub failed_count: u32,
+}
+
+/// 还原模组 INI 到管理前状态（NRMM 对齐：`restoreManagedMod`）
+///
+/// 严格复刻 NRMM 的 `restoreManagedMod` 逻辑，对指定目录下递归找到的每个 INI 文件执行：
+/// 1. 移除 NRMM 管理注释（含 `no reload mod manager`、`";-;" are errored`、
+///    `";+;" are disabled keys`、`errored conditional blocks`、
+///    `if certain syntax is only available` 关键字的注释行）
+/// 2. 移除 `global $managed_slot_id =` 变量声明
+/// 3. 净化 `condition=` 表达式（移除 `$managed_slot_id == $\modmanageragl\group_X\...` 段，
+///    清理孤立的 `&&`/`||`/空括号等）
+/// 4. 移除管理器 `if $managed_slot_id == ... endif` 块（栈匹配 if/endif）
+/// 5. 移除 NRMM 管理时添加的前 4 个空格缩进
+///
+/// # 参数
+/// - `mod_dir`: 已移动到回收目录的模组文件夹路径
+///
+/// # 返回值
+/// 返回 `(处理的 INI 文件数, 失败数)`。单个文件失败不会中断整体流程。
+pub fn restore_managed_mod(mod_dir: &Path) -> (u32, u32) {
+    let mut total = 0u32;
+    let mut failed = 0u32;
+
+    // 递归收集所有 .ini 文件
+    let ini_files = match collect_ini_files_recursive(mod_dir) {
+        Ok(files) => files,
+        Err(e) => {
+            log::error!("[restore_managed_mod] Failed to collect INI files in {:?}: {}", mod_dir, e);
+            return (0, 1);
+        }
+    };
+
+    for ini_path in &ini_files {
+        total += 1;
+        if let Err(e) = restore_single_ini(ini_path) {
+            log::warn!("[restore_managed_mod] Failed to restore {:?}: {}", ini_path, e);
+            failed += 1;
+        }
+    }
+
+    (total, failed)
+}
+
+/// 递归收集目录下所有 .ini 文件（对齐 NRMM `_findIniFilesRecursive`）
+fn collect_ini_files_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut result = Vec::new();
+    collect_ini_files_recursive_inner(dir, &mut result)?;
+    Ok(result)
+}
+
+fn collect_ini_files_recursive_inner(dir: &Path, result: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_ini_files_recursive_inner(&path, result)?;
+        } else if let Some(ext) = path.extension() {
+            if ext.eq_ignore_ascii_case("ini") {
+                // 跳过 .ini_managed_backup 备份文件
+                if !path.to_string_lossy().ends_with(&format!(".{}", constants::BACKUP_EXTENSION)) {
+                    result.push(path);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 还原单个 INI 文件（对齐 NRMM `restoreManagedMod` 内层循环）
+///
+/// 处理流程严格对齐 NRMM：
+/// 1. 读取文件（UTF-8 强制转换）
+/// 2. 逐行扫描，标记需删除的行（管理注释、变量声明、管理器 if/endif）
+/// 3. 净化 condition= 表达式
+/// 4. 移除前 4 个空格缩进
+/// 5. 若有修改则写回文件
+fn restore_single_ini(ini_path: &Path) -> Result<()> {
+    let content = IniFile::force_read_as_utf8(ini_path)?;
+    let raw_lines: Vec<&str> = content.lines().collect();
+    let mut lines: Vec<String> = raw_lines.iter().map(|s| s.to_string()).collect();
+    let mut modified = false;
+
+    // if 栈：跟踪 if/endif 配对，用于识别管理器 if 块的 endif
+    let mut if_stack: Vec<bool> = Vec::new(); // true = 管理器 if
+
+    for line in lines.iter_mut() {
+        let trimmed_lower = line.trim().to_lowercase();
+
+        // 新 section 重置 if 栈
+        if trimmed_lower.starts_with('[') {
+            if_stack.clear();
+            // section 头不移除缩进，继续
+            *line = remove_first_four_spaces(line);
+            continue;
+        }
+
+        // 1. 移除 NRMM 管理注释
+        if trimmed_lower.starts_with(';')
+            && (trimmed_lower.contains("no reload mod manager")
+                || trimmed_lower.contains(r#"";-;" are errored"#)
+                || trimmed_lower.contains(r#"";+;" are disabled keys"#)
+                || trimmed_lower.contains("errored conditional blocks")
+                || trimmed_lower.contains("if certain syntax is only available"))
+        {
+            *line = "-----".to_string(); // 标记删除
+            modified = true;
+            continue;
+        }
+
+        // 2. 移除 `global $managed_slot_id =` 变量声明
+        let no_space = trimmed_lower.replace(' ', "");
+        if no_space.starts_with("global$managed_slot_id=") {
+            *line = "-----".to_string();
+            modified = true;
+            continue;
+        }
+
+        // 3. 净化 condition= 表达式（含 ;-;condition= 和 ;+;condition= 变体）
+        let starts_with_condition = no_space.starts_with("condition=");
+        let starts_with_special_comment1 = no_space.starts_with(";-;condition=");
+        let starts_with_special_comment2 = no_space.starts_with(";+;condition=");
+
+        if starts_with_condition || starts_with_special_comment1 || starts_with_special_comment2 {
+            if let Some(equal_idx) = line.find('=') {
+                let expression = line[equal_idx + 1..].trim();
+                let modified_expr = sanitize_condition_expression_inline(expression);
+
+                if expression != modified_expr {
+                    if modified_expr.is_empty() {
+                        *line = "-----".to_string();
+                    } else if starts_with_special_comment1 {
+                        *line = format!(";-;condition = {}", modified_expr);
+                    } else if starts_with_special_comment2 {
+                        *line = format!(";+;condition = {}", modified_expr);
+                    } else {
+                        *line = format!("condition = {}", modified_expr);
+                    }
+                    modified = true;
+                    continue;
+                }
+            }
+        }
+
+        // 4. 移除管理器 if 行 + 跟踪 if 栈
+        if trimmed_lower.starts_with("if ") {
+            let is_manager_if = no_space
+                .contains("if$managed_slot_id==$\\modmanageragl\\group_");
+            if_stack.push(is_manager_if);
+            if is_manager_if {
+                *line = "-----".to_string();
+                modified = true;
+                continue;
+            }
+        }
+
+        // 5. 移除与管理器 if 配对的 endif
+        if trimmed_lower == "endif" {
+            if let Some(is_manager) = if_stack.pop() {
+                if is_manager {
+                    *line = "-----".to_string();
+                    modified = true;
+                    continue;
+                }
+            }
+        }
+
+        // 移除前 4 个空格缩进（NRMM 管理时添加的缩进）
+        *line = remove_first_four_spaces(line);
+    }
+
+    if modified {
+        let filtered: Vec<&String> = lines.iter().filter(|s| s.as_str() != "-----").collect();
+        let new_content = filtered.iter().map(|s| s.as_str()).collect::<Vec<&str>>().join("\n");
+        atomic_write_file(ini_path, new_content.as_bytes())?;
+    }
+
+    Ok(())
+}
+
+/// 从行首移除最多 4 个空格（对齐 NRMM `_removeFirstFourSpaces`）
+fn remove_first_four_spaces(line: &str) -> String {
+    let mut count = 0;
+    let mut idx = 0;
+    for (i, ch) in line.chars().enumerate() {
+        if ch == ' ' && count < 4 {
+            count += 1;
+            idx = i + 1;
+        } else {
+            break;
+        }
+    }
+    line[idx..].to_string()
+}
+
+/// 净化 condition 表达式中的管理器注入部分（对齐 NRMM `_sanitizeKeyConditionExpressionFromModManager`）
+///
+/// 复用 `ini_handler::sanitize_condition_expression` 的核心逻辑，通过公开包装调用。
+fn sanitize_condition_expression_inline(expression: &str) -> String {
+    crate::core::ini_handler::sanitize_condition_expression_public(expression)
+}
+
+/// 移除模组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED + 还原 INI）
+///
+/// 严格复刻 NRMM 的 `renameOrMoveFolder` + `restoreManagedMod` 流程：
+/// 1. 定位 `Mods/DISABLED_MANAGED_REMOVED` 目录（与 `_MANAGED_` 同级）
+/// 2. 若不存在则创建
+/// 3. 构造目标路径，名称冲突时追加 `_1`、`_2`…（对齐 NRMM `_getAvailableFolderName`）
+/// 4. `fs::rename` 移动模组文件夹到目标路径
+/// 5. 对移动后的模组调用 `restore_managed_mod` 清理所有 NRMM 注入内容
+///
+/// # 参数
+/// - `mod_path`: 要移除的模组文件夹路径（如 `Mods/_MANAGED_/group_1/MyMod`）
+///
+/// # 返回值
+/// 返回 `RemoveModResult`，包含移动后路径、INI 还原状态等
+///
+/// # 错误
+/// - 模组路径不存在
+/// - 无法定位 Mods 根目录
+/// - 创建 DISABLED_MANAGED_REMOVED 目录失败
+/// - 移动文件夹失败（如跨卷）
+pub fn remove_mod(mod_path: &Path) -> Result<RemoveModResult> {
+    if !mod_path.exists() {
+        return Err(anyhow::anyhow!("Mod path does not exist: {:?}", mod_path));
+    }
+    if !mod_path.is_dir() {
+        return Err(anyhow::anyhow!("Mod path is not a directory: {:?}", mod_path));
+    }
+
+    let mod_name = mod_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // ========== 定位 Mods 根目录 ==========
+    // mod_path 结构：Mods/_MANAGED_/group_X/MyMod 或 Mods/_MANAGED_/#MutexGroup/MyMod
+    // 需向上查找直到找到 _MANAGED_ 的父目录（即 Mods 根目录）
+    let mods_root = locate_mods_root(mod_path)?;
+
+    // ========== 定位 DISABLED_MANAGED_REMOVED 目录 ==========
+    let removed_folder = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
+    if !removed_folder.exists() {
+        fs::create_dir_all(&removed_folder)
+            .with_context(|| format!("Failed to create {}: {:?}", constants::MANAGED_REMOVED_FOLDER, removed_folder))?;
+    }
+
+    // ========== 构造目标路径（冲突追加 _1、_2…） ==========
+    let target = get_available_folder_name(&mod_name, &removed_folder);
+
+    // ========== 移动模组文件夹 ==========
+    fs::rename(mod_path, &target)
+        .with_context(|| format!("Failed to move mod {:?} to {:?}", mod_path, target))?;
+
+    // ========== 还原 INI ==========
+    let (ini_count, failed_count) = restore_managed_mod(&target);
+
+    log::info!(
+        "[remove_mod] Moved '{}' to {:?}, INI restored: {} total, {} failed",
+        mod_name,
+        target,
+        ini_count,
+        failed_count
+    );
+
+    Ok(RemoveModResult {
+        mod_name,
+        moved_to: target,
+        restored: failed_count == 0,
+        ini_count,
+        failed_count,
+    })
+}
+
+/// 向上查找 Mods 根目录（_MANAGED_ 的父目录）
+///
+/// 从 `start_path` 开始逐级向上，找到包含 `_MANAGED_` 子目录的路径即为 Mods 根目录。
+/// 若向上 5 级仍未找到，返回 `start_path` 的父目录作为兜底。
+fn locate_mods_root(start_path: &Path) -> Result<PathBuf> {
+    let mut current = start_path.parent();
+    for _ in 0..5 {
+        if let Some(dir) = current {
+            if dir.join(constants::MANAGED_FOLDER).exists() {
+                return Ok(dir.to_path_buf());
+            }
+            current = dir.parent();
+        } else {
+            break;
+        }
+    }
+    // 兜底：使用 start_path 的父目录
+    start_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| anyhow::anyhow!("Cannot locate Mods root from {:?}", start_path))
+}
+
+/// 构造可用文件夹名（冲突时追加 _1、_2…）
+///
+/// 对齐 NRMM `_getAvailableFolderName`：在 `base_dir` 下查找不冲突的文件夹名。
+fn get_available_folder_name(base_name: &str, base_dir: &Path) -> PathBuf {
+    let target = base_dir.join(base_name);
+    if !target.exists() {
+        return target;
+    }
+
+    let mut i = 1u32;
+    loop {
+        let resolved = base_dir.join(format!("{}_{}", base_name, i));
+        if !resolved.exists() {
+            return resolved;
+        }
+        i += 1;
+    }
+}
+
+
+/// 移除分组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED 目录，非group先移子分组再移除）
 ///
 /// # 参数
 /// - `group_path`: 要移除的分组目录路径
@@ -1499,16 +1673,13 @@ fn restore_inis_recursive(dir: &Path, restored: &mut u32, failed: &mut u32) -> R
 ///
 /// # 对于 group_xx：
 /// 1. 定位 mods_path（group_path 的父目录，即 _MANAGED_ 的父目录）
-/// 2. 确保 `Mods/_MANAGED_REMOVED_` 目录存在
-/// 3. 将整个分组目录移至 `_MANAGED_REMOVED_/原名`，名称冲突追加 `_`
+/// 2. 确保 `Mods/DISABLED_MANAGED_REMOVED` 目录存在
+/// 3. 将整个分组目录移至 `DISABLED_MANAGED_REMOVED/原名`，名称冲突追加 `_1`、`_2`…
 ///
 /// # 对于非group：
 /// 1. 先将分组下的**一级子目录且不含 .ini 的目录**（即子分组目录）移至父级目录
 ///    - 子分组目录重名时追加 `_` 后缀
-/// 2. 然后将被清空的分组目录按 group_xx 规则移至 `_MANAGED_REMOVED_/`
-///
-/// 然后尝试 `trash` crate 移至回收站（失败静默，不中断流程）。
-/// 实际逻辑：先移至 _MANAGED_REMOVED_ 作为主要的移除方式，保留历史。
+/// 2. 然后将被清空的分组目录按 group_xx 规则移至 `DISABLED_MANAGED_REMOVED/`
 ///
 /// # 错误
 /// 路径不存在或目录移动失败时返回错误
@@ -1579,23 +1750,23 @@ pub fn remove_group_ex(group_path: &Path, is_group_xx: bool) -> Result<()> {
         }
     }
 
-    // ========== 定位 _MANAGED_REMOVED_ 目录 ==========
-    // 规则：_MANAGED_REMOVED_ 位于 Mods 根目录（与 _MANAGED_ 同级）
+    // ========== 定位 DISABLED_MANAGED_REMOVED 目录 ==========
+    // 规则：DISABLED_MANAGED_REMOVED 位于 Mods 根目录（与 _MANAGED_ 同级）
     // 如果 group_path 是 _MANAGED_/group_1，则 mods_root = parent(_MANAGED_)
     // 如果 group_path 是 Mods/#NonGroup，则 mods_root = parent(#NonGroup)（即 Mods）
     let mut mods_root = parent_dir;
     let parent_name = mods_root.file_name().map(|n| n.to_string_lossy().to_string());
     if parent_name.as_deref() == Some(constants::MANAGED_FOLDER) {
-        // group 目录在 _MANAGED_ 下，_MANAGED_REMOVED_ 应在其上级目录（Mods）
+        // group 目录在 _MANAGED_ 下，DISABLED_MANAGED_REMOVED 应在其上级目录（Mods）
         if let Some(grand_parent) = mods_root.parent() {
             mods_root = grand_parent;
         }
     }
 
-    let removed_folder = mods_root.join("_MANAGED_REMOVED_");
+    let removed_folder = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
     if !removed_folder.exists() {
         fs::create_dir_all(&removed_folder)
-            .with_context(|| format!("Failed to create _MANAGED_REMOVED_: {:?}", removed_folder))?;
+            .with_context(|| format!("Failed to create {}: {:?}", constants::MANAGED_REMOVED_FOLDER, removed_folder))?;
     }
 
     // 构造目标路径，冲突追加 _
@@ -1613,7 +1784,7 @@ pub fn remove_group_ex(group_path: &Path, is_group_xx: bool) -> Result<()> {
         }
     }
 
-    // 移动分组至 _MANAGED_REMOVED_
+    // 移动分组至 DISABLED_MANAGED_REMOVED
     fs::rename(group_path, &target)
         .with_context(|| format!("Failed to move group {:?} to {:?}", group_path, target))?;
 
@@ -2169,7 +2340,7 @@ mod tests_remove_group_ex {
         dir
     }
 
-    /// group_xx 场景：移至 _MANAGED_REMOVED_ 目录
+    /// group_xx 场景：移至 DISABLED_MANAGED_REMOVED 目录
     #[test]
     fn test_remove_group_xx() {
         let tmp = TempDir::new().unwrap();
@@ -2183,15 +2354,15 @@ mod tests_remove_group_ex {
 
         // 原分组应不存在
         assert!(!group.exists(), "原 group_1 应被移除");
-        // _MANAGED_REMOVED_ 下应有 group_1
-        let removed_root = mods_root.join("_MANAGED_REMOVED_");
+        // DISABLED_MANAGED_REMOVED 下应有 group_1
+        let removed_root = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
         assert!(removed_root.exists());
         let removed_group = removed_root.join("group_1");
-        assert!(removed_group.exists(), "_MANAGED_REMOVED_ 下应存在 group_1");
+        assert!(removed_group.exists(), "DISABLED_MANAGED_REMOVED 下应存在 group_1");
         assert!(removed_group.join("ModA").exists(), "模组应随之移动");
     }
 
-    /// 非group场景：先移子分组到父级，再移至 _MANAGED_REMOVED_
+    /// 非group场景：先移子分组到父级，再移至 DISABLED_MANAGED_REMOVED
     #[test]
     fn test_remove_group_non_group_with_subgroups() {
         let tmp = TempDir::new().unwrap();
@@ -2215,21 +2386,21 @@ mod tests_remove_group_ex {
         assert!(mods_root.join("SubGroup1").exists(), "SubGroup1 应移至 Mods 根目录");
         assert!(mods_root.join("SubGroup1").join("SubMod1").exists(), "SubGroup1 下的模组应保留");
         assert!(mods_root.join("SubGroup2").exists(), "SubGroup2 应移至 Mods 根目录");
-        // 被移除目录在 _MANAGED_REMOVED_ 下
-        let removed = mods_root.join("_MANAGED_REMOVED_").join("#MyMutexGroup");
+        // 被移除目录在 DISABLED_MANAGED_REMOVED 下
+        let removed = mods_root.join(constants::MANAGED_REMOVED_FOLDER).join("#MyMutexGroup");
         assert!(removed.exists());
         assert!(removed.join("ModA").exists(), "ModA 随原分组被移除");
         assert!(!removed.join("SubGroup1").exists(), "SubGroup1 不应随原分组被移除");
     }
 
-    /// 名称冲突场景：_MANAGED_REMOVED_/group_1 已存在应追加 _1
+    /// 名称冲突场景：DISABLED_MANAGED_REMOVED/group_1 已存在应追加 _1
     #[test]
     fn test_remove_group_conflict() {
         let tmp = TempDir::new().unwrap();
         let mods_root = tmp.path();
         let managed = mods_root.join("_MANAGED_");
         let group = managed.join("group_1");
-        let removed_root = mods_root.join("_MANAGED_REMOVED_");
+        let removed_root = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
         fs::create_dir_all(&group).unwrap();
         // 已存在的已删除组
         fs::create_dir_all(removed_root.join("group_1")).unwrap();

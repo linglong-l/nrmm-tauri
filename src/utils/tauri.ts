@@ -10,7 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount } from '../types'
+import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult } from '../types'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from './logger'
@@ -233,12 +233,19 @@ export async function removeGroup(groupPath: string): Promise<void> {
 }
 
 /**
- * 删除模组（移入回收站）
+ * 移除模组（NRMM 对齐：移至 Mods/DISABLED_MANAGED_REMOVED/ + 还原 INI）
  * 后端命令：remove_mod
+ *
+ * 流程：
+ * 1. 将模组文件夹移动至 Mods/DISABLED_MANAGED_REMOVED/（冲突时追加 _1、_2…）
+ * 2. 还原 INI：移除 NRMM 管理注释、变量声明、条件表达式、if/endif 块
+ * 3. 清除模组缓存
+ *
  * @param modPath 模组文件夹路径
+ * @returns 移除结果（包含移动后路径、INI 还原统计等）
  */
-export async function removeMod(modPath: string): Promise<void> {
-  return safeInvoke('remove_mod', { modPath })
+export async function removeMod(modPath: string): Promise<RemoveModResult> {
+  return safeInvoke<RemoveModResult>('remove_mod', { modPath })
 }
 
 /**
@@ -520,21 +527,6 @@ export async function switchFileWatcher(modsPath: string): Promise<void> {
  */
 export async function updateModData(game: string, modsPath: string): Promise<UpdateResult> {
   return safeInvoke<UpdateResult>('update_mod_data', { game, modsPath })
-}
-
-/**
- * 分组增量更新模组数据
- * 后端命令：update_group_mod_data
- *
- * 仅更新指定分组的ModFolder.ini，不扫描其他分组
- * 相比全量updateModData更轻量，适合分组级增量更新
- * @param game 目标游戏类型
- * @param modsPath 模组文件夹路径
- * @param groupIndex 要更新的分组索引
- * @returns 更新结果统计
- */
-export async function updateGroupModData(game: string, modsPath: string, groupIndex: number): Promise<UpdateResult> {
-  return safeInvoke<UpdateResult>('update_group_mod_data', { game, modsPath, groupIndex })
 }
 
 /**

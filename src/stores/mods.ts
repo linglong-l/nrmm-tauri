@@ -11,7 +11,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed, reactive, watch } from 'vue'
-import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, updateGroupModData } from '../utils/tauri'
+import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData } from '../utils/tauri'
 import { useSettingsStore } from './settings'
 import type { ModGroupData, ModData, TargetGame, UpdateResult } from '../types'
 import { logger } from '../utils/logger'
@@ -807,12 +807,14 @@ export const useModsStore = defineStore('mods', () => {
   /**
    * 更新模组数据（重量级操作）
    *
-   * 更新策略：
-   * - 当 needUpdatePerGroup 中存在分组标记时 → 仅更新指定分组（分组增量更新）
-   * - 当 needUpdatePerGroup 为空（无分组标记）→ 执行全量更新（update_mod_data）
-   * - 更新完成后清除所有标记和提醒条
+   * 统一全量策略：始终调用全量 update_mod_data，不再使用分组增量更新。
+   * 原因：全量 update_mod_data 已验证 <10s，而分组增量更新在多分组标记时
+   * 会导致 N×全量扫描的 300s+ 性能问题。
    *
-   * @returns Promise<void> 更新完成后自动调用 loadMods() 刷新前端数据；失败时抛出异常
+   * needUpdatePerGroup 仅用于提示条显示逻辑，不再用于选择更新路径。
+   * 更新完成后清除所有标记和提醒条。
+   *
+   * @returns Promise<UpdateResult | null> 更新完成后自动调用 loadMods() 刷新前端数据；失败时抛出异常
    */
   async function updateModData() {
     logger.debug('ModsStore', 'updateModData started')
@@ -821,21 +823,8 @@ export const useModsStore = defineStore('mods', () => {
     isUpdatingModData.value = true
     loading.value = true
     try {
-      const groupIndices = Object.keys(needUpdatePerGroup.value)
-        .filter(k => needUpdatePerGroup.value[Number(k)])
-        .map(Number)
-
-      let lastResult: UpdateResult | null = null
-      if (groupIndices.length > 0) {
-        for (const groupIndex of groupIndices) {
-          lastResult = await updateGroupModData(s.currentGame, s.currentModsPath, groupIndex)
-        }
-        needReloadManual.value = lastResult?.needReloadManual ?? false
-      } else {
-        lastResult = await tauriUpdateModData(s.currentGame, s.currentModsPath)
-        needReloadManual.value = lastResult.needReloadManual
-      }
-
+      const lastResult = await tauriUpdateModData(s.currentGame, s.currentModsPath)
+      needReloadManual.value = lastResult.needReloadManual
       updateResult.value = lastResult
 
       await loadMods()

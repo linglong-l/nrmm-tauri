@@ -1,13 +1,13 @@
 <template>
   <Transition name="reminder-fade">
     <div v-if="modsStore.needUpdate" class="update-mod-reminder">
-      <!-- 提示文本 -->
+      <!-- 提示文本（黄色） -->
       <span class="reminder-text">{{ t('settings.dontForgetUpdate') }}</span>
-      <!-- 操作按钮区：仅显示"更新模组数据"按钮 -->
+      <!-- 操作按钮区：更新模组数据按钮（蓝色，胶囊按钮，无背景色） -->
       <div class="reminder-actions">
-        <el-button type="primary" class="reminder-btn" @click="handleClick">
+        <button class="reminder-btn" @click="handleClick">
           {{ t('settings.updateModData') }}
-        </el-button>
+        </button>
       </div>
     </div>
   </Transition>
@@ -85,7 +85,7 @@ async function handleClick() {
 }
 
 .reminder-text {
-  color: var(--text-primary);
+  color: #ffc107;
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
@@ -101,7 +101,16 @@ async function handleClick() {
   padding: 8px 18px;
   font-size: 13px;
   font-weight: 600;
+  color: #409eff;
+  background: transparent;
+  border: none;
   border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.reminder-btn:hover {
+  background-color: #454B5D;
 }
 
 /* 淡入淡出过渡动画 */

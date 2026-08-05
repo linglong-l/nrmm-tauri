@@ -63,6 +63,17 @@ let unlistenManagedFolderChanged: (() => void) | null = null
  * 组件卸载时调用以移除 Tauri 事件监听，防止内存泄漏
  */
 let unlistenHotkeyRefresh: (() => void) | null = null
+/**
+ * managed-folder-changed 事件防抖定时器句柄
+ *
+ * 文件系统可能在短时间内连续触发多次变更事件（例如批量导入、
+ * 互斥组重命名目录等场景）。若无防抖，每次事件都会触发一次
+ * modsStore.refresh() 全量轻量扫描，导致 300s+ 级别的耗时峰值。
+ * 此处通过 500ms 防抖窗口合并连续事件，仅保留最后一次刷新。
+ */
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+/** 防抖延迟：500ms（覆盖文件系统连续事件的最小间隔） */
+const REFRESH_DEBOUNCE_MS = 500
 
 function handleDragOver(e: DragEvent) {
   if (e.dataTransfer?.types.includes('Files')) {
@@ -182,7 +193,13 @@ onMounted(async () => {
 
   try {
     unlistenManagedFolderChanged = await listen('managed-folder-changed', () => {
-      modsStore.refresh()
+      // 防抖处理：合并短时间内的连续文件变更事件
+      // 避免批量操作（如互斥组目录重命名）触发多次全量 refresh，导致耗时飙升
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => {
+        modsStore.refresh()
+        refreshTimer = null
+      }, REFRESH_DEBOUNCE_MS)
     })
   } catch (e) {
     logger.info('ModsView', 'Event listeners not available (dev mode)')
@@ -204,6 +221,11 @@ onUnmounted(async () => {
   // 这样在切换 Tab 时文件监控仍保持运行，数据缓存有效，切回时无需重新加载
   unlistenManagedFolderChanged?.()
   unlistenHotkeyRefresh?.()
+  // 清理防抖定时器，避免组件卸载后残留定时器触发已销毁的 store
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
 })
 </script>
 

@@ -89,6 +89,10 @@ fn is_wrapped_in_matching_parens(expr: &str) -> bool {
 /// 3. 若整段被外层括号包裹，则解包
 ///
 /// 返回清理后的表达式（可能为空字符串，表示该行原本仅含管理器条件）。
+pub fn sanitize_condition_expression_public(expression: &str) -> String {
+    sanitize_condition_expression(expression)
+}
+
 fn sanitize_condition_expression(expression: &str) -> String {
     // 匹配 §managed_slot_id == $\\modmanageragl\\group_<数字>\\<token>，
     // token 可为 active_slot（NRMM）或数字编号（本项目历史注入）。
