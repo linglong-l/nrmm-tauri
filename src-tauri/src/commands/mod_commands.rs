@@ -169,6 +169,30 @@ pub async fn update_mod_data(game: String, mods_path: String) -> Result<mod_mana
     Ok(result)
 }
 
+/// 检测 hash 冲突命令
+///
+/// 全量扫描所有模组 INI 中的 hash 值，返回冲突列表。
+/// 由用户在设置页面主动触发，扫描策略：
+/// - NormalGroup（group_xx）：仅扫描当前选中模组
+/// - MutexGroup（非 group_xx）：扫描所有启用模组
+#[tauri::command]
+pub async fn detect_hash_conflicts(mods_path: String) -> Result<mod_manager::HashConflictResult, String> {
+    let mods_path = PathBuf::from(mods_path);
+    log::info!("[detect_hash_conflicts] Starting full hash conflict scan: {}", mods_path.display());
+    let start = std::time::Instant::now();
+
+    let scan_path = mods_path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::HashConflictResult, String> {
+        mod_manager::detect_hash_conflicts(&scan_path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    log::info!("[detect_hash_conflicts] Completed in {}ms, found {} conflicts",
+        start.elapsed().as_millis(), result.conflicts.len());
+    Ok(result)
+}
+
 /// 选择模组（支持互斥组）
 #[tauri::command]
 pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult, String> {

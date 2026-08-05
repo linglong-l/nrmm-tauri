@@ -946,6 +946,113 @@ impl IniFile {
         libs
     }
 
+    /// 提取 INI 文件中所有 TextureOverride/ShaderOverride 段的 hash 值
+    ///
+    /// 遍历所有 section，对名称以 `textureoverride` 或 `shaderoverride` 开头的段，
+    /// 提取 `hash` 键的值（不区分大小写）。返回 (section_name, hash_value) 列表。
+    ///
+    /// # 返回
+    /// Vec<(String, String)> — (段名, hash 值原始字符串，已转小写归一化)
+    pub fn extract_hashes(&self) -> Vec<(String, String)> {
+        let mut hashes = Vec::new();
+        for section in &self.sections {
+            let name_lower = section.name.to_lowercase();
+            if name_lower.starts_with("textureoverride") || name_lower.starts_with("shaderoverride") {
+                for line in &section.lines {
+                    if let IniLine::KeyValue { key, value, .. } | IniLine::DisabledKeyValue { key, value, .. } = line {
+                        if key.to_lowercase() == "hash" && !value.trim().is_empty() {
+                            hashes.push((section.name.clone(), value.trim().to_lowercase()));
+                        }
+                    }
+                }
+            }
+        }
+        hashes
+    }
+
+    /// 提取 INI 中所有 `namespace = xxx` 键值声明的命名空间
+    ///
+    /// 遍历所有 section 的所有行，收集 `namespace` 键的值（不区分大小写）。
+    /// 返回 (namespace_value, section_name) 列表。
+    pub fn extract_namespace_declarations(&self) -> Vec<(String, String)> {
+        let mut decls = Vec::new();
+        for section in &self.sections {
+            for line in &section.lines {
+                if let IniLine::KeyValue { key, value, .. } | IniLine::DisabledKeyValue { key, value, .. } = line {
+                    if key.to_lowercase() == "namespace" && !value.trim().is_empty() {
+                        decls.push((value.trim().to_string(), section.name.clone()));
+                    }
+                }
+            }
+        }
+        decls
+    }
+
+    /// 提取 INI 中所有 `run = xxx` 引用的库命名空间
+    ///
+    /// 仅提取引用已知库命名空间的 `run` 值。
+    /// 返回 (referenced_namespace, section_name) 列表。
+    ///
+    /// # 参数
+    /// - `known_lib_namespaces`: 已知库命名空间集合（小写）
+    pub fn extract_run_references(&self, known_lib_namespaces: &std::collections::HashSet<String>) -> Vec<(String, String)> {
+        let mut refs = Vec::new();
+        for section in &self.sections {
+            for line in &section.lines {
+                if let IniLine::KeyValue { key, value, .. } | IniLine::DisabledKeyValue { key, value, .. } = line {
+                    if key.to_lowercase() == "run" && !value.trim().is_empty() {
+                        let val_lower = value.trim().to_lowercase();
+                        // 检查 run 值是否包含已知库命名空间（如 "customshader\xxx\global\orfix\yyy"）
+                        for ns in known_lib_namespaces {
+                            if val_lower.contains(ns) {
+                                refs.push((ns.clone(), section.name.clone()));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        refs
+    }
+
+    /// 检测 INI 中是否声明了已知库命名空间（通过 [Resource.xxx] 段名或 namespace = xxx 键值）
+    ///
+    /// 返回检测到的已知库显示名列表（如 ["ORFix", "TexFx"]）。
+    ///
+    /// # 参数
+    /// - `known_lib_namespaces`: 已知库命名空间集合（小写）
+    pub fn detect_known_lib_declarations(&self, known_lib_namespaces: &std::collections::HashSet<String>) -> Vec<String> {
+        let mut detected = std::collections::HashSet::new();
+
+        // 1. 检查 [Resource.xxx] 段名是否包含已知库命名空间
+        for section in &self.sections {
+            let name_lower = section.name.to_lowercase();
+            if name_lower.starts_with("resource") {
+                for ns in known_lib_namespaces {
+                    if name_lower.contains(ns) {
+                        if let Some(display) = crate::core::constants::lookup_lib_display_name(ns) {
+                            detected.insert(display.to_string());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 2. 检查 namespace = xxx 键值
+        for (ns, _) in self.extract_namespace_declarations() {
+            let ns_lower = ns.to_lowercase();
+            if known_lib_namespaces.contains(&ns_lower) {
+                if let Some(display) = crate::core::constants::lookup_lib_display_name(&ns_lower) {
+                    detected.insert(display.to_string());
+                }
+            }
+        }
+
+        detected.into_iter().collect()
+    }
+
     pub fn has_include(&self) -> bool {
         for line in &self.preamble {
             if matches!(line, IniLine::Include(_)) {

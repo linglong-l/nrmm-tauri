@@ -429,7 +429,18 @@
     "optimizationTip": "Untuk mempercepat pemuatan mod, pertimbangkan untuk menonaktifkan mod yang tidak sering digunakan. Ada di tab \"Pengaturan\", gulir ke bawah sedikit.",
     "xxmiDetected": "XXMI/3DMigoto standar terdeteksi.",
     "xxmiBackground": "Sakelar mod/perpindahan tombol tetap berfungsi meskipun jendela game tidak dalam fokus.",
+    "orfixDetectedIn": "terdeteksi di mod {mod}.",
+    "orfixMoveToRoot": "Silakan pindahkan ORFix/TexFx ke folder root \"Mods\", lalu gunakan fungsi zona pemulihan di pengaturan.",
+    "orfixDuplicate": "dideklarasikan duplikat di {mods}.",
+    "orfixNonExistent": "dirujuk tetapi tidak dideklarasikan di {mods}.",
     "closeAndReload": "Tutup & Muat Ulang",
+    "close": "Tutup"
+  },
+  "hashConflict": {
+    "title": "Deteksi Konflik Hash",
+    "scanning": "Memindai hash mod",
+    "summary": "Ditemukan {conflicts} konflik (memindai {mods} mod, {hashes} hash)",
+    "noConflict": "Tidak ada konflik hash terdeteksi",
     "close": "Tutup"
   }
 }

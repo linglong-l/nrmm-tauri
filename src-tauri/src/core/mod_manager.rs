@@ -30,8 +30,13 @@ use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::namespace_handler;
 use crate::core::mod_scanner;
 use crate::models::enums::TargetGame;
-use crate::models::mod_data::{ModData, ErroredLines};
+use crate::models::mod_data::{ModData, ModGroupData, ErroredLines, HashConflict, LibInMod, DuplicateLib, NonExistentLib};
+use crate::models::enums::GroupType;
 use crate::models::settings::AppSettings;
+
+// 重导出供 commands 层使用（避免 commands 直接依赖 models 模块）
+// 同时供本模块内部使用（pub use 也会将名称引入当前作用域）
+pub use crate::models::mod_data::{HashConflictResult, OrfixDetection};
 
 /// 模组更新结果结构体
 #[derive(Debug, Clone, serde::Serialize, Default)]
@@ -60,6 +65,9 @@ pub struct UpdateResult {
     /// 是否检测到标准 XXMI/3DMigoto 环境（[Constants] + XXMI 注入标记 + [Inject] 段）
     #[serde(default)]
     pub is_standard_xxmi: bool,
+    /// ORFix/TexFx 检测结果（在 INI 修改之前使用原始内容检测）
+    #[serde(default)]
+    pub orfix_detection: OrfixDetection,
 }
 
 /// INI 恢复结果统计
@@ -173,6 +181,233 @@ pub fn detect_standard_xxmi(game_mods_path: &Path, main_ini_name: &str) -> bool 
     result
 }
 
+/// 检测 hash 冲突
+///
+/// 全量扫描模组 INI 中的 hash 值，按模组为单位返回冲突列表。
+///
+/// 扫描策略（对齐 NRMM）：
+/// - NormalGroup（group_xx）：仅扫描当前选中模组（`is_active=true`）的 INI
+/// - MutexGroup（非 group_xx）：扫描所有启用模组（`!disabled && !mod_disabled`）的 INI
+///
+/// hash 值来源：`[TextureOverride.xxx]` / `[ShaderOverride.xxx]` 段下的 `hash` 键，
+/// 提取时统一转小写做归一化。同一模组内多次使用同一 hash 不算冲突，
+/// 仅当同一 hash 被 ≥2 个不同模组使用时才计入冲突。
+///
+/// # 参数
+/// - `game_mods_path`: 游戏 Mods 目录路径
+///
+/// # 返回
+/// `HashConflictResult` — 含所有冲突列表（按 hash 值升序排序）、扫描统计
+pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult> {
+    let _s = std::time::Instant::now();
+    let scan_result = mod_scanner::scan_mods(game_mods_path)?;
+    let mut hash_to_mods: std::collections::HashMap<String, Vec<(String, String)>> =
+        std::collections::HashMap::new();
+    let mut scanned_mods = 0u32;
+    let mut scanned_hashes = 0u32;
+
+    fn process_group(
+        group: &ModGroupData,
+        hash_to_mods: &mut std::collections::HashMap<String, Vec<(String, String)>>,
+        scanned_mods: &mut u32,
+        scanned_hashes: &mut u32,
+    ) {
+        let is_normal = group.group_type == GroupType::NormalGroup;
+        for mod_data in &group.mods {
+            // NormalGroup 仅扫描 is_active 模组；MutexGroup 扫描所有启用模组
+            let should_scan = if is_normal {
+                mod_data.is_active && !mod_data.disabled && !mod_data.mod_disabled
+            } else {
+                !mod_data.disabled && !mod_data.mod_disabled
+            };
+            if !should_scan || mod_data.mod_name == "None" {
+                continue;
+            }
+
+            let mod_name = mod_data.name.clone();
+            let mod_path = mod_data.mod_path.clone();
+            *scanned_mods += 1;
+
+            for ini_data in &mod_data.mod_ini_data {
+                let ini_path = PathBuf::from(&ini_data.ini_path);
+                if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
+                    for (_section, hash) in ini.extract_hashes() {
+                        *scanned_hashes += 1;
+                        hash_to_mods
+                            .entry(hash)
+                            .or_default()
+                            .push((mod_name.clone(), mod_path.clone()));
+                    }
+                }
+            }
+        }
+        // 递归子分组
+        for child in &group.children {
+            process_group(child, hash_to_mods, scanned_mods, scanned_hashes);
+        }
+    }
+
+    for group in &scan_result.groups {
+        process_group(
+            group,
+            &mut hash_to_mods,
+            &mut scanned_mods,
+            &mut scanned_hashes,
+        );
+    }
+
+    // 筛选冲突：同一 hash 被 ≥2 个不同模组使用
+    let mut conflicts: Vec<HashConflict> = hash_to_mods
+        .into_iter()
+        .filter_map(|(hash, mods)| {
+            // 去重：同一模组可能多次使用同一 hash，只算一次
+            let mut unique_mods: Vec<(String, String)> = Vec::new();
+            for (name, path) in mods.into_iter() {
+                if !unique_mods.iter().any(|(n, _)| n == &name) {
+                    unique_mods.push((name, path));
+                }
+            }
+            if unique_mods.len() >= 2 {
+                Some(HashConflict {
+                    hash,
+                    mod_names: unique_mods.iter().map(|(n, _)| n.clone()).collect(),
+                    mod_paths: unique_mods.iter().map(|(_, p)| p.clone()).collect(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // 按 hash 值排序，保证输出稳定
+    conflicts.sort_by(|a, b| a.hash.cmp(&b.hash));
+
+    log::info!(
+        "[mod_manager] [detect_hash_conflicts] done | elapsed={:?}ms | scanned_mods={} scanned_hashes={} conflicts={}",
+        _s.elapsed().as_millis(),
+        scanned_mods,
+        scanned_hashes,
+        conflicts.len()
+    );
+
+    Ok(HashConflictResult {
+        conflicts,
+        scanned_mods,
+        scanned_hashes,
+    })
+}
+
+/// 检测 ORFix/TexFx 命名空间异常
+///
+/// 三种检测（对齐 NRMM `checkLibraries` 逻辑）：
+/// 1. **库在模组内**（`libs_in_mods`）：模组 INI 声明了已知库命名空间
+///    （`global\orfix` / `texfx`），这些库应位于 Mods 根目录而非模组内。
+/// 2. **重复声明**（`duplicate_libs`）：同一已知库命名空间被多个模组声明。
+/// 3. **引用未声明**（`nonexistent_libs`）：`run =` 引用了已知库但全局无任何模组声明。
+///
+/// 仅扫描传入的启用模组列表，跳过 None 空槽位。
+///
+/// # 参数
+/// - `enabled_mods`: 启用模组列表（引用）
+///
+/// # 返回
+/// `OrfixDetection` — 含三类检测结果及 `has_detection` 汇总标志
+pub fn detect_orfix_texfx(enabled_mods: &[&ModData]) -> OrfixDetection {
+    let known_libs = constants::known_lib_namespaces_set();
+    let mut libs_in_mods: Vec<LibInMod> = Vec::new();
+    // lib_display → 声明该库的模组名列表
+    let mut lib_declarations: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    // lib_display → 引用该库的模组名列表
+    let mut lib_references: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+
+    for mod_data in enabled_mods {
+        if mod_data.mod_name == "None" {
+            continue;
+        }
+        let mod_name = mod_data.name.clone();
+        let mod_path = mod_data.mod_path.clone();
+
+        for ini_data in &mod_data.mod_ini_data {
+            let ini_path = PathBuf::from(&ini_data.ini_path);
+            if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
+                // 1. 检测库在模组内（同时记入声明表，用于重复声明检测）
+                let detected = ini.detect_known_lib_declarations(&known_libs);
+                if !detected.is_empty() {
+                    libs_in_mods.push(LibInMod {
+                        mod_name: mod_name.clone(),
+                        mod_path: mod_path.clone(),
+                        lib_names: detected.clone(),
+                    });
+                    for lib in &detected {
+                        lib_declarations
+                            .entry(lib.clone())
+                            .or_default()
+                            .push(mod_name.clone());
+                    }
+                }
+
+                // 2. 收集 run = 引用（仅引用已知库命名空间的）
+                for (ns, _) in ini.extract_run_references(&known_libs) {
+                    if let Some(display) = constants::lookup_lib_display_name(&ns) {
+                        lib_references
+                            .entry(display.to_string())
+                            .or_default()
+                            .push(mod_name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 重复声明：同一库被 ≥2 个模组声明
+    let duplicate_libs: Vec<DuplicateLib> = lib_declarations
+        .into_iter()
+        .filter_map(|(lib, mods)| {
+            let mut unique: Vec<String> = mods.into_iter().collect::<std::collections::HashSet<_>>().into_iter().collect();
+            unique.sort();
+            if unique.len() >= 2 {
+                Some(DuplicateLib {
+                    lib_name: lib,
+                    mod_names: unique,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // 4. 引用未声明：引用了但全局无任何模组声明
+    let nonexistent_libs: Vec<NonExistentLib> = lib_references
+        .into_iter()
+        .filter_map(|(lib, mods)| {
+            // 检查该库是否被任何模组声明
+            let is_declared = libs_in_mods.iter().any(|m| m.lib_names.contains(&lib));
+            if !is_declared {
+                let mut unique: Vec<String> = mods.into_iter().collect::<std::collections::HashSet<_>>().into_iter().collect();
+                unique.sort();
+                Some(NonExistentLib {
+                    lib_name: lib,
+                    mod_names: unique,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let has_detection =
+        !libs_in_mods.is_empty() || !duplicate_libs.is_empty() || !nonexistent_libs.is_empty();
+
+    OrfixDetection {
+        libs_in_mods,
+        duplicate_libs,
+        nonexistent_libs,
+        has_detection,
+    }
+}
+
 /// 重量级更新模组数据（完整 INI 解析 + 注入）
 ///
 /// 这是模组管理的核心函数，严格复刻 NRMM 的 updateModData 流程：
@@ -244,6 +479,10 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
             }
         }
     }
+
+    // 步骤3.5: ORFix/TexFx 检测（在 INI 修改之前，使用原始 INI 内容）
+    let orfix_detection = detect_orfix_texfx(&enabled_mods);
+    log::debug!("[mod_manager] [update_mod_data] step=detect_orfix_texfx done has_detection={}", orfix_detection.has_detection);
 
     // 步骤4: 清理旧的 group INI 文件
     delete_group_ini_files(&managed_folder)?;
@@ -359,6 +598,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         errors: all_errors,
         need_reload_manual,
         is_standard_xxmi,
+        orfix_detection,
         ..Default::default()
     };
     log::debug!("[core::mod_manager] [update_mod_data] done | elapsed={:?}ms | processed={} errors={}", _s.elapsed().as_millis(), result.processed_mods, result.errors.len());

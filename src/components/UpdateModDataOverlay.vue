@@ -15,6 +15,48 @@
           </template>
 
           <template v-else-if="state === 'completed'">
+            <!-- ORFix/TexFx 检测结果（位于"模组管理"标题与"模组管理成功"之间） -->
+            <div v-if="result?.orfixDetection?.hasDetection" class="overlay-orfix-hint">
+              <!-- 库在模组内 -->
+              <div
+                v-for="lib in result.orfixDetection.libsInMods"
+                :key="`inmod-${lib.modPath}`"
+                class="orfix-block"
+              >
+                <div class="orfix-line orfix-warning">
+                  {{ lib.libNames.join('/') }} {{ $t('updateModData.orfixDetectedIn', { mod: lib.modName }) }}
+                </div>
+                <div class="orfix-line orfix-error">
+                  {{ $t('updateModData.orfixMoveToRoot') }}
+                </div>
+              </div>
+              <!-- 重复声明 -->
+              <div
+                v-for="dup in result.orfixDetection.duplicateLibs"
+                :key="`dup-${dup.libName}`"
+                class="orfix-block"
+              >
+                <div class="orfix-line orfix-warning">
+                  {{ dup.libName }} {{ $t('updateModData.orfixDuplicate', { mods: dup.modNames.join('、') }) }}
+                </div>
+                <div class="orfix-line orfix-error">
+                  {{ $t('updateModData.orfixMoveToRoot') }}
+                </div>
+              </div>
+              <!-- 引用未声明 -->
+              <div
+                v-for="ne in result.orfixDetection.nonexistentLibs"
+                :key="`ne-${ne.libName}`"
+                class="orfix-block"
+              >
+                <div class="orfix-line orfix-warning">
+                  {{ ne.libName }} {{ $t('updateModData.orfixNonExistent', { mods: ne.modNames.join('、') }) }}
+                </div>
+                <div class="orfix-line orfix-error">
+                  {{ $t('updateModData.orfixMoveToRoot') }}
+                </div>
+              </div>
+            </div>
             <div class="overlay-success-line">
               <span class="success-text">{{ $t('updateModData.success') }}</span>
               <span v-if="durationSec >= 0" class="duration-text">
@@ -138,6 +180,12 @@ onBeforeUnmount(() => stopDots())
 .overlay-tip-text { color: #fff; font-size: 14px; margin-bottom: 14px; line-height: 1.6; }
 .overlay-xxmi-hint { margin-top: 4px; padding-top: 12px; }
 .xxmi-line { color: #606266; font-size: 12px; line-height: 1.6; }
+.overlay-orfix-hint { margin-bottom: 14px; padding: 12px 0; max-height: 200px; overflow-y: auto; }
+.orfix-block { margin-bottom: 12px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.orfix-block:last-child { border-bottom: none; margin-bottom: 0; }
+.orfix-line { font-size: 13px; line-height: 1.6; }
+.orfix-warning { color: #e6a23c; }
+.orfix-error { color: #f56c6c; }
 .overlay-footer { display: flex; justify-content: flex-end; margin-top: 18px; }
 .btn-close-reload {
   background: transparent; border: none; color: #409eff; font-size: 14px;

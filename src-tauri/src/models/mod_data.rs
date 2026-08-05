@@ -340,3 +340,73 @@ pub struct KeybindConflict {
     pub hotkey_id: String,
     pub conflict_with: String,
 }
+
+/// Hash 冲突信息（一个 hash 被多个模组使用）
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HashConflict {
+    /// 冲突的 hash 值（原始字符串，如 "0x12345678"）
+    pub hash: String,
+    /// 使用该 hash 的模组名称列表
+    pub mod_names: Vec<String>,
+    /// 使用该 hash 的模组路径列表（用于调试/定位）
+    pub mod_paths: Vec<String>,
+}
+
+/// Hash 冲突检测结果
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HashConflictResult {
+    /// 所有冲突列表
+    pub conflicts: Vec<HashConflict>,
+    /// 扫描的模组总数
+    pub scanned_mods: u32,
+    /// 扫描的 hash 总数
+    pub scanned_hashes: u32,
+}
+
+/// ORFix/TexFx 检测结果
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OrfixDetection {
+    /// 库在模组内（模组声明了已知库命名空间）：mod_name → library_name 列表
+    pub libs_in_mods: Vec<LibInMod>,
+    /// 重复声明（DUPLICATE LIB）：同一已知库命名空间被多个 INI 声明
+    pub duplicate_libs: Vec<DuplicateLib>,
+    /// 引用未声明（NON EXISTENT LIB）：run = 引用了已知库但全局未声明
+    pub nonexistent_libs: Vec<NonExistentLib>,
+    /// 是否检测到任何 ORFix/TexFx 异常
+    pub has_detection: bool,
+}
+
+/// 库在模组内
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LibInMod {
+    /// 模组名称
+    pub mod_name: String,
+    /// 模组路径
+    pub mod_path: String,
+    /// 检测到的库名称列表（如 "ORFix"、"TexFx"）
+    pub lib_names: Vec<String>,
+}
+
+/// 重复声明库
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateLib {
+    /// 库名称（如 "ORFix"）
+    pub lib_name: String,
+    /// 声明该库的模组名称列表
+    pub mod_names: Vec<String>,
+}
+
+/// 引用未声明的库
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NonExistentLib {
+    /// 被引用的库名称（如 "ORFix"）
+    pub lib_name: String,
+    /// 引用该库的模组名称列表
+    pub mod_names: Vec<String>,
+}

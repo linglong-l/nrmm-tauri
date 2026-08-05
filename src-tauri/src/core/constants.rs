@@ -192,6 +192,32 @@ pub fn is_desktop_ini(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+// ==========================================================================
+// 已知模组库命名空间（ORFix/TexFx 检测用）
+// 参考 NRMM constant_var.dart:92-115 的 knownModdingLibraries 映射
+// ==========================================================================
+
+/// 已知模组库命名空间映射（namespace → 显示名）
+/// 参考 NRMM constant_var.dart:92-115
+pub const KNOWN_LIB_NAMESPACES: &[(&str, &str)] = &[
+    ("global\\orfix", "ORFix"),
+    ("texfx", "TexFx"),
+    // 其他已知库可后续补充
+];
+
+/// 将已知库命名空间转为 HashSet（小写）
+pub fn known_lib_namespaces_set() -> std::collections::HashSet<String> {
+    KNOWN_LIB_NAMESPACES.iter().map(|(ns, _)| ns.to_lowercase()).collect()
+}
+
+/// 根据命名空间查找显示名
+pub fn lookup_lib_display_name(namespace: &str) -> Option<&'static str> {
+    let ns_lower = namespace.to_lowercase();
+    KNOWN_LIB_NAMESPACES.iter()
+        .find(|(ns, _)| *ns == ns_lower)
+        .map(|(_, display)| *display)
+}
+
 /// 判断 path 是否位于 base 下的某个 DISABLED* 目录中（路径段匹配，不区分大小写）
 /// 如果 base 为空或无法归一化，则回退为在 path 的完整路径段上查找（保守过滤）
 #[inline]

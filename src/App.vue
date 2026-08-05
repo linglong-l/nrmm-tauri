@@ -13,6 +13,7 @@
       <SettingsView v-else-if="activeTab === 'settings'" />
     </div>
     <UpdateModDataOverlay ref="overlayRef" />
+    <HashConflictOverlay ref="hashConflictOverlayRef" />
   </div>
 </template>
 
@@ -30,6 +31,7 @@ import { isPermissionGranted, requestPermission, sendNotification } from '@tauri
 import TitleBar from '@/components/common/TitleBar.vue'
 import PillTabs from '@/components/nav/PillTabs.vue'
 import UpdateModDataOverlay from '@/components/UpdateModDataOverlay.vue'
+import HashConflictOverlay from '@/components/HashConflictOverlay.vue'
 import { initPlatform } from '@/stores/platform'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
@@ -73,6 +75,12 @@ const overlayRef = ref<InstanceType<typeof UpdateModDataOverlay> | null>(null)
 provide('updateOverlay', {
   show: (s: any, data?: any) => overlayRef.value?.show(s, data),
   hide: () => overlayRef.value?.hide(),
+})
+
+const hashConflictOverlayRef = ref<InstanceType<typeof HashConflictOverlay> | null>(null)
+provide('hashConflictOverlay', {
+  show: () => hashConflictOverlayRef.value?.show(),
+  hide: () => hashConflictOverlayRef.value?.hide(),
 })
 reportBootStage('script-setup-begin')
 

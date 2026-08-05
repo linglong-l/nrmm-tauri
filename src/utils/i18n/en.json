@@ -547,6 +547,8 @@
     "saveCustomizationsDesc": "Set current mod customizations (toggles/states) as default",
     "enableDisableMods": "Enable/Disable Mods",
     "enableDisableModsDesc": "Helpful for troubleshooting and reducing mod reload (F10) time",
+    "detectHashConflicts": "Hash Conflict Detection",
+    "detectHashConflictsDesc": "Scan all mod INIs for hash values and detect conflicts (same hash used by multiple mods)",
     "restoreZonePlaceholder": "Drop mod folders or the \"Mods\" folder here, or click to select a folder",
     "restoreZoneDesc": "Mods can be used again without the mod manager. Mods are not reset, only lines added by the mod manager are removed.",
     "hotkeyComingSoon": "Hotkey feature coming soon",
@@ -564,7 +566,18 @@
     "optimizationTip": "To speed up mod loading, consider disabling mods you don't use. It's in the \"Settings\" tab, scroll down a bit.",
     "xxmiDetected": "Standard XXMI/3DMigoto detected.",
     "xxmiBackground": "Mod toggles/key swaps still work even when the game window is not focused.",
+    "orfixDetectedIn": "was detected in mod {mod}.",
+    "orfixMoveToRoot": "Please move ORFix/TexFx to the root \"Mods\" folder, then use the restore zone in settings.",
+    "orfixDuplicate": "is duplicate declared in {mods}.",
+    "orfixNonExistent": "is referenced but not declared in {mods}.",
     "closeAndReload": "Close & Reload",
+    "close": "Close"
+  },
+  "hashConflict": {
+    "title": "Hash Conflict Detection",
+    "scanning": "Scanning mod hashes",
+    "summary": "Found {conflicts} conflicts (scanned {mods} mods, {hashes} hashes)",
+    "noConflict": "No hash conflicts detected",
     "close": "Close"
   },
   "removeMod": {

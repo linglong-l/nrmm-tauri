@@ -53,6 +53,12 @@
             </el-button>
             <p class="big-btn-desc">{{ t('settings.enableDisableModsDesc') }}</p>
           <br>
+
+            <el-button class="big-main-btn" @click="handleDetectHashConflicts">
+              {{ t('settings.detectHashConflicts') }}
+            </el-button>
+            <p class="big-btn-desc">{{ t('settings.detectHashConflictsDesc') }}</p>
+          <br>
         </div>
 
         <!-- 还原区：从还原区恢复已删除模组 -->
@@ -243,6 +249,7 @@ const settingsStore = useSettingsStore()
 const modsStore = useModsStore()
 const { platformInfo } = usePlatform()
 const updateOverlay: any = inject('updateOverlay')
+const hashConflictOverlay: any = inject('hashConflictOverlay')
 
 /**
  * 判断路径是否为合法的Mods目录（最后一级目录名必须为"Mods"，大小写不敏感）
@@ -492,6 +499,12 @@ function handleSaveCustomizations() {
 function handleToggleModsEnabled() {
   logger.info('SettingsView', 'Toggle mods enabled (placeholder)')
   ElMessage.info(t('Task completed!'))
+}
+
+/** 触发 Hash 冲突检测遮罩 */
+function handleDetectHashConflicts() {
+  logger.info('SettingsView', 'Detect hash conflicts clicked')
+  hashConflictOverlay?.show()
 }
 
 /** 生成文件夹图标（占位功能） */

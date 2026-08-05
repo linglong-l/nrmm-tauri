@@ -437,6 +437,8 @@ export interface UpdateResult {
   selectedModIndex?: number;
   /** 是否检测到标准 XXMI/3DMigoto 环境（仅 updateModData 结果中有效） */
   isStandardXxmi?: boolean;
+  /** ORFix/TexFx 检测结果（仅 updateModData 结果中有效） */
+  orfixDetection?: OrfixDetection;
 }
 
 /**
@@ -476,4 +478,87 @@ export interface RestoredCount {
   restored: number;
   /** 恢复失败的文件数 */
   failed: number;
+}
+
+/**
+ * Hash 冲突信息（一个 hash 被多个模组使用）
+ *
+ * 对应后端 `crate::models::mod_data::HashConflict`
+ */
+export interface HashConflict {
+  /** 冲突的 hash 值（如 "0x12345678"） */
+  hash: string;
+  /** 使用该 hash 的模组名称列表 */
+  modNames: string[];
+  /** 使用该 hash 的模组路径列表（用于调试/定位） */
+  modPaths: string[];
+}
+
+/**
+ * Hash 冲突检测结果
+ *
+ * 对应后端 `crate::models::mod_data::HashConflictResult`
+ */
+export interface HashConflictResult {
+  /** 所有冲突列表 */
+  conflicts: HashConflict[];
+  /** 扫描的模组总数 */
+  scannedMods: number;
+  /** 扫描的 hash 总数 */
+  scannedHashes: number;
+}
+
+/**
+ * 库在模组内（ORFix/TexFx 应在 Mods 根目录而非模组内）
+ *
+ * 对应后端 `crate::models::mod_data::LibInMod`
+ */
+export interface LibInMod {
+  /** 模组名称 */
+  modName: string;
+  /** 模组路径 */
+  modPath: string;
+  /** 检测到的库名称列表（如 ["ORFix", "TexFx"]） */
+  libNames: string[];
+}
+
+/**
+ * 重复声明库（同一已知库被多个模组声明）
+ *
+ * 对应后端 `crate::models::mod_data::DuplicateLib`
+ */
+export interface DuplicateLib {
+  /** 库名称（如 "ORFix"） */
+  libName: string;
+  /** 声明该库的模组名称列表 */
+  modNames: string[];
+}
+
+/**
+ * 引用未声明的库（run = 引用了已知库但全局未声明）
+ *
+ * 对应后端 `crate::models::mod_data::NonExistentLib`
+ */
+export interface NonExistentLib {
+  /** 被引用的库名称（如 "ORFix"） */
+  libName: string;
+  /** 引用该库的模组名称列表 */
+  modNames: string[];
+}
+
+/**
+ * ORFix/TexFx 检测结果
+ *
+ * 对应后端 `crate::models::mod_data::OrfixDetection`
+ * 由 update_mod_data 在修改 INI 之前使用原始内容检测得到
+ */
+export interface OrfixDetection {
+  /** 库在模组内（模组声明了已知库命名空间） */
+  libsInMods: LibInMod[];
+  /** 重复声明（同一已知库命名空间被多个 INI 声明） */
+  duplicateLibs: DuplicateLib[];
+  /** 引用未声明（run = 引用了已知库但全局未声明） */
+  nonexistentLibs: NonExistentLib[];
+  /** 是否检测到任何 ORFix/TexFx 异常 */
+  hasDetection: boolean;
 }

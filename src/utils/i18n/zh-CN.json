@@ -548,6 +548,8 @@
     "saveCustomizationsDesc": "将当前模组自定义设置（开关/状态）设为默认",
     "enableDisableMods": "启用/禁用模组",
     "enableDisableModsDesc": "有助于排查未知问题，并缩短模组重新加载（F10）时间",
+    "detectHashConflicts": "Hash 冲突检测",
+    "detectHashConflictsDesc": "扫描所有模组 INI 中的 hash 值，检测冲突（同一 hash 被多个模组使用）",
     "restoreZonePlaceholder": "将模组文件夹或「Mods」文件夹拖放到此处，或点击选择文件夹",
     "restoreZoneDesc": "即可无需模组管理器再次使用模组。模组不会被重置，仅移除模组管理器添加的专属行。",
     "hotkeyComingSoon": "快捷键功能即将推出",
@@ -565,7 +567,18 @@
     "optimizationTip": "如需加快模组加载速度，可以考虑禁用不常用的模组。位于「设置」选项卡中，向下滚动一点即可。",
     "xxmiDetected": "检测到标准 XXMI/3DMigoto。",
     "xxmiBackground": "即使游戏窗口未处于焦点状态，模组开关/按键切换仍可正常使用。",
+    "orfixDetectedIn": "在 {mod} 模组中被检测到。",
+    "orfixMoveToRoot": "请将 ORFix/TexFx 移动至根目录 \"Mods\" 文件夹，然后使用设置中的还原区功能。",
+    "orfixDuplicate": "在 {mods} 中重复声明。",
+    "orfixNonExistent": "在 {mods} 中引用但未声明。",
     "closeAndReload": "关闭并重新加载",
+    "close": "关闭"
+  },
+  "hashConflict": {
+    "title": "Hash 冲突检测",
+    "scanning": "正在扫描模组 hash",
+    "summary": "发现 {conflicts} 个冲突（扫描 {mods} 个模组，{hashes} 个 hash）",
+    "noConflict": "未检测到 hash 冲突",
     "close": "关闭"
   },
   "removeMod": {

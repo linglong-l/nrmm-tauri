@@ -10,7 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult } from '../types'
+import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult } from '../types'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from './logger'
@@ -527,6 +527,21 @@ export async function switchFileWatcher(modsPath: string): Promise<void> {
  */
 export async function updateModData(game: string, modsPath: string): Promise<UpdateResult> {
   return safeInvoke<UpdateResult>('update_mod_data', { game, modsPath })
+}
+
+/**
+ * 检测 hash 冲突（全量扫描，用户主动触发）
+ * 后端命令：detect_hash_conflicts
+ *
+ * 扫描策略：
+ * - NormalGroup（group_xx）：仅扫描当前选中模组的 INI
+ * - MutexGroup（非 group_xx）：扫描所有启用模组的 INI
+ *
+ * @param modsPath 游戏 Mods 目录路径
+ * @returns HashConflictResult 含冲突列表与扫描统计
+ */
+export async function detectHashConflicts(modsPath: string): Promise<HashConflictResult> {
+  return safeInvoke<HashConflictResult>('detect_hash_conflicts', { modsPath })
 }
 
 /**
