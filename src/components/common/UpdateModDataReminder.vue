@@ -3,19 +3,10 @@
     <div v-if="modsStore.needUpdate" class="update-mod-reminder">
       <!-- 提示文本 -->
       <span class="reminder-text">{{ t('settings.dontForgetUpdate') }}</span>
-      <!-- 操作按钮区 -->
+      <!-- 操作按钮区：仅显示"更新模组数据"按钮 -->
       <div class="reminder-actions">
-        <!-- 更新按钮：触发重量级模组数据更新 -->
-        <el-button type="primary" class="reminder-btn" @click="handleClick" :loading="loading">
+        <el-button type="primary" class="reminder-btn" @click="handleClick">
           {{ t('settings.updateModData') }}
-        </el-button>
-        <!-- 关闭并重载按钮：仅在需要手动重载时显示 -->
-        <el-button v-if="modsStore.needReloadManual" class="reminder-btn" @click="handleCloseAndReload">
-          {{ t('settings.closeAndReload') }}
-        </el-button>
-        <!-- 关闭按钮 -->
-        <el-button class="reminder-btn" @click="handleClose">
-          {{ t('settings.close') }}
         </el-button>
       </div>
     </div>
@@ -33,66 +24,46 @@
  * - 按游戏独立维护显示状态
  * - 点击"更新模组数据"成功后自动隐藏
  */
-import { ref } from 'vue'
+import { inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
-import { simulateF10 } from '@/utils/tauri'
+import { updateModData as tauriUpdateModData } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
 const modsStore = useModsStore()
-
-/** 按钮加载状态 */
-const loading = ref(false)
+/** 复用 App.vue 提供的更新遮罩控制（与设置页 handleUpdateModData 相同的遮罩） */
+const updateOverlay: any = inject('updateOverlay')
 
 /**
- * 点击更新按钮处理
- * 调用modsStore.updateModData()执行重量级更新：
- * - 解析所有INI文件完整内容
- * - 检测并修复namespace冲突
- * - 处理missingEndif等错误
- * - 重新计算modDisabled状态
- * 更新成功后modsStore.updateModData内部会自动清除needUpdate状态
+ * 点击"更新模组数据"按钮
+ * 与设置页 handleUpdateModData 完全相同的逻辑与遮罩：
+ * - 显示 loading 遮罩
+ * - 调用 modsStore.updateModData() 执行重量级更新
+ * - 完成后显示 completed 遮罩（含 XXMI 检测提示、耗时统计）
+ * - 失败显示 error 遮罩
  */
 async function handleClick() {
-  loading.value = true
   try {
     if (!settingsStore.currentModsPath) {
       ElMessage.warning(t('Mods path does not exist.'))
       return
     }
-    await modsStore.updateModData()
-    ElMessage.success(t('Update Mod Data completed successfully!'))
+    updateOverlay?.show('loading')
+    const start = Date.now()
+    try {
+      const result = await modsStore.updateModData() ?? (await tauriUpdateModData(settingsStore.currentGame, settingsStore.currentModsPath))
+      updateOverlay?.show('completed', { result, durationMs: Date.now() - start })
+    } catch (e: any) {
+      const msg = typeof e === 'string' ? e : (e?.message ?? String(e))
+      updateOverlay?.show('error', { error: msg })
+    }
   } catch (e: any) {
-    logger.error('UpdateModDataReminder', 'Failed to update mod data', e)
-    ElMessage.error(t('Unknown error occurred.'))
-  } finally {
-    loading.value = false
+    logger.error('UpdateModDataReminder', 'Update mod data failed', e)
   }
-}
-
-/**
- * 关闭并重载按钮处理
- * 调用 simulateF10() 模拟 F10 按键（3Dmigoto 重载），然后清除提醒状态
- */
-async function handleCloseAndReload() {
-  try {
-    await simulateF10(settingsStore.currentGame ?? undefined)
-  } catch (e: any) {
-    logger.error('UpdateModDataReminder', 'Failed to simulate F10', e)
-  }
-  modsStore.clearNeedUpdate()
-}
-
-/**
- * 关闭按钮处理
- * 清除提醒状态，隐藏提示条
- */
-function handleClose() {
-  modsStore.clearNeedUpdate()
 }
 </script>
 
@@ -130,6 +101,7 @@ function handleClose() {
   padding: 8px 18px;
   font-size: 13px;
   font-weight: 600;
+  border-radius: 999px;
 }
 
 /* 淡入淡出过渡动画 */

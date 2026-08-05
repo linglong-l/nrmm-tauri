@@ -11,6 +11,15 @@
     <ModGrid />
     <!-- 更新模组数据提示条（仅Mods页面显示） -->
     <UpdateModDataReminder />
+    <!-- 全页面加载遮罩：加载模组期间覆盖整个模组页，加载完成后淡出重渲染 -->
+    <!-- 条件排除 isUpdatingModData：更新模组数据时由 UpdateModDataOverlay 独占显示，避免两遮罩冲突 -->
+    <Transition name="overlay-fade">
+      <div v-if="modsStore.loading && !modsStore.isUpdatingModData" class="full-loading-overlay">
+        <div class="loading-box">
+          <span class="loading-text">{{ t('Loading...') }}</span>
+        </div>
+      </div>
+    </Transition>
     <!-- 拖拽文件时的覆盖提示层 -->
     <div v-if="isDragging" class="drag-overlay">
       <div class="drag-content">
@@ -224,6 +233,44 @@ onUnmounted(async () => {
   border-radius: var(--border-radius);
   margin: 8px;
   pointer-events: none;
+}
+
+/* 全页面加载遮罩：覆盖整个模组页（含左侧分组面板），风格与更新模组弹窗统一 */
+.full-loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: all;
+}
+
+.loading-box {
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 24px 36px;
+  min-width: 200px;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.loading-text {
+  color: #fff;
+  font-size: 14px;
+}
+
+.overlay-fade-enter-active,
+.overlay-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+.overlay-fade-enter-from,
+.overlay-fade-leave-to {
+  opacity: 0;
 }
 
 .drag-content {

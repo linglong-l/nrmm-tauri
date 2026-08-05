@@ -5,7 +5,7 @@
       :current-index="currentMatchIndex" @next="nextMatch" @prev="prevMatch" @close="onSearchClose" />
 
     <!-- 模组网格内容区：支持拖拽滚动 -->
-    <div ref="gridContentRef" class="grid-content" v-loading="loading" :element-loading-text="t('Loading...')">
+    <div ref="gridContentRef" class="grid-content">
       <!-- 空状态：无模组时显示提示 -->
       <div v-if="displayMods.length === 0 && !loading" class="empty-state">
         <el-icon :size="64" class="empty-icon">

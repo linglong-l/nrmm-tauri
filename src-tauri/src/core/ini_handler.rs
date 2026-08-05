@@ -384,6 +384,19 @@ impl IniFile {
         })
     }
 
+    /// 在文件头部添加 NRMM 标准注释头（对齐 NRMM 输出格式）
+    pub fn prepend_header_comment(&mut self) {
+        let header_lines = [
+            "; \";-;\" are errored conditional lines.",
+            "; \";+;\" are disabled keys.",
+            "; Errored conditional blocks (if/else/elif/endif) are handled correctly (newer syntax may require further testing), including namespaced variables.",
+            "; If certain syntax is only available in newer XXMI versions, make sure to use the latest XXMI.",
+        ];
+        for line in header_lines.iter().rev() {
+            self.preamble.insert(0, IniLine::Comment(line.to_string()));
+        }
+    }
+
     pub fn write_atomic(&self, path: &Path) -> Result<()> {
         let tmp_path = path.with_extension("ini.tmp");
         let file = fs::File::create(&tmp_path)
@@ -518,15 +531,13 @@ impl IniFile {
         priority + found_resources.len() as u32
     }
 
-    pub fn inject_slot_conditions(&mut self, group_id: u32, mod_index: u32) {
+    pub fn inject_slot_conditions(&mut self, group_id: u32) {
         let condition_var = format!(
-            "$managed_slot_id == $\\modmanageragl\\group_{}\\{}",
-            group_id, mod_index
+            "$managed_slot_id == $\\modmanageragl\\group_{}\\active_slot",
+            group_id
         );
 
         for section in &mut self.sections {
-            let section_name_lower = section.name.to_lowercase();
-
             // Key 段：与 NRMM 一致，使用 condition 追加方式注入槽位条件，
             // 并清理旧的管理器表达式，避免重复更新导致嵌套。
             if is_key_section(&section.name) {
@@ -553,49 +564,22 @@ impl IniFile {
                 let last_idx = Self::last_command_line_index(&section.lines);
 
                 if let (Some(first), Some(last)) = (first_idx, last_idx) {
-                    let match_priority = Self::calculate_match_priority(&section.lines);
-
-                    section.lines.insert(first, IniLine::KeyValue {
-                        key: "match_priority".to_string(),
-                        value: match_priority.to_string(),
-                        disabled: false,
-                        comment: None,
-                    });
-                    section.lines.insert(first, IniLine::KeyValue {
-                        key: "allow_duplicate_hash".to_string(),
-                        value: "true".to_string(),
-                        disabled: false,
-                        comment: None,
-                    });
+                    // NRMM 对齐：先插入 if，再插入 match_priority=0（match_priority 在 if 之前）
                     section.lines.insert(first, IniLine::IfStart {
                         condition: condition_var.clone(),
                         indent: 0,
                     });
+                    section.lines.insert(first, IniLine::KeyValue {
+                        key: "match_priority".to_string(),
+                        value: "0".to_string(),
+                        disabled: false,
+                        comment: None,
+                    });
 
-                    let insert_end = last + 4;
+                    // 2 个元素插入在 last 之前，last 偏移 +2，endif 在 last+3
+                    let insert_end = last + 3;
                     section.lines.insert(insert_end.min(section.lines.len()), IniLine::EndIf { indent: 0 });
                 }
-            } else if section_name_lower == "constants" {
-                let mut new_lines: Vec<IniLine> = Vec::new();
-                for line in &section.lines {
-                    match line {
-                        IniLine::KeyValue { key, value, disabled, comment } if key.starts_with('$') => {
-                            new_lines.push(IniLine::IfStart {
-                                condition: condition_var.clone(),
-                                indent: 0,
-                            });
-                            new_lines.push(IniLine::KeyValue {
-                                key: key.clone(),
-                                value: value.clone(),
-                                disabled: *disabled,
-                                comment: comment.clone(),
-                            });
-                            new_lines.push(IniLine::EndIf { indent: 0 });
-                        }
-                        other => new_lines.push(other.clone()),
-                    }
-                }
-                section.lines = new_lines;
             }
         }
     }
@@ -1104,16 +1088,19 @@ key = value
         let ini_content = "[Constants]\n$active = 0\n$other = hello\n\n[TextureOverrideTest]\nhash = 0x123\nps-t0 = Res\ndrawindexed\n\n[Present]\nx = 1\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
-        ini.inject_slot_conditions(1, 2);
+        ini.inject_slot_conditions(1);
 
+        // TextureOverride 段：match_priority=0 在 if 之前，无 allow_duplicate_hash
         let to_lines = &ini.sections[1].lines;
-        assert!(matches!(to_lines[0], IniLine::IfStart { .. }));
-        assert!(matches!(to_lines[1], IniLine::KeyValue { ref key, .. } if key == "allow_duplicate_hash"));
+        assert!(matches!(to_lines[0], IniLine::KeyValue { ref key, ref value, .. } if key == "match_priority" && value == "0"));
+        assert!(matches!(to_lines[1], IniLine::IfStart { ref condition, .. } if condition.contains("active_slot")));
         assert!(to_lines.iter().any(|l| matches!(l, IniLine::EndIf { .. })));
+        assert!(!to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, .. } if key == "allow_duplicate_hash")));
 
+        // Constants 段：NRMM 不包裹，变量原样保留
         let constants_lines = &ini.sections[0].lines;
-        assert!(matches!(constants_lines[0], IniLine::IfStart { .. }));
-        assert!(matches!(constants_lines[2], IniLine::EndIf { .. }));
+        assert!(!constants_lines.iter().any(|l| matches!(l, IniLine::IfStart { .. })));
+        assert!(!constants_lines.iter().any(|l| matches!(l, IniLine::EndIf { .. })));
     }
 
     #[test]
@@ -1122,7 +1109,7 @@ key = value
         let ini_content = "[KeyDefault]\nkey = a\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
-        ini.inject_slot_conditions(1, 2);
+        ini.inject_slot_conditions(1);
 
         let lines = &ini.sections[0].lines;
         assert!(matches!(lines[0], IniLine::KeyValue { ref key, ref value, .. }
@@ -1137,7 +1124,7 @@ key = value
         let ini_content = "[KeyDefault]\ncondition = $Key1 == 1\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
-        ini.inject_slot_conditions(1, 2);
+        ini.inject_slot_conditions(1);
 
         let lines = &ini.sections[0].lines;
         let cond = lines.iter().find_map(|l| match l {
@@ -1156,9 +1143,9 @@ key = value
         let ini_content = "[KeyDefault]\ncondition = $Key1 == 1\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
-        ini.inject_slot_conditions(1, 2);
-        ini.inject_slot_conditions(1, 2);
-        ini.inject_slot_conditions(1, 2);
+        ini.inject_slot_conditions(1);
+        ini.inject_slot_conditions(1);
+        ini.inject_slot_conditions(1);
 
         let lines = &ini.sections[0].lines;
         let cond = lines.iter().find_map(|l| match l {
