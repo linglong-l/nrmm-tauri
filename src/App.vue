@@ -34,6 +34,7 @@ import { initPlatform } from '@/stores/platform'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { logger } from '@/utils/logger'
+import { DEV_MODE } from '@/utils/env'
 import { switchTargetGame, checkModCacheValid, isFileWatcherRunning, currentWatchedPath } from '@/utils/tauri'
 import type { TargetGame } from '@/types'
 
@@ -47,8 +48,11 @@ const ModsView = defineAsyncComponent(() => import('@/views/ModsView.vue'))
 const SettingsView = defineAsyncComponent(() => import('@/views/SettingsView.vue'))
 
 // ===== 前端启动计时（使用main.ts的全局起点） =====
+// dev 模式输出启动耗时到控制台；prod 模式静默（编译期消除）
 const FE_BOOT_START: number = (window as any).__NRMM_FE_BOOT_START__ ?? performance.now()
-console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padStart(6)}ms - App.vue <script setup> 开始执行`)
+if (DEV_MODE) {
+  console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padStart(6)}ms - App.vue <script setup> 开始执行`)
+}
 
 /**
  * 向后端报告前端启动阶段
@@ -56,7 +60,9 @@ console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padSta
  */
 function reportBootStage(stage: string) {
   const ms = performance.now() - FE_BOOT_START
-  console.log(`[FE-BOOT] T+${ms.toFixed(0).padStart(6)}ms - ${stage}`)
+  if (DEV_MODE) {
+    console.log(`[FE-BOOT] T+${ms.toFixed(0).padStart(6)}ms - ${stage}`)
+  }
   invoke('report_frontend_ready', { stage, frontendMs: ms }).catch(() => {})
 }
 
@@ -193,8 +199,10 @@ async function sendStartupNotification() {
       permissionGranted = permission === 'granted'
     }
     if (permissionGranted) {
-      // 发送系统通知前输出时间戳（用户可感知的关键节点）
-      console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padStart(6)}ms - >>> 正在发送系统通知（用户可见）<<<`)
+      // 发送系统通知前输出时间戳（用户可感知的关键节点），dev 模式可见
+      if (DEV_MODE) {
+        console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padStart(6)}ms - >>> 正在发送系统通知（用户可见）<<<`)
+      }
       sendNotification({
         title: t('notification.startupSuccess.title'),
         body: t('notification.startupSuccess.body'),
@@ -217,7 +225,9 @@ onMounted(async () => {
   const settingsLoadStart = performance.now()
   try {
     await settingsStore.load()
-    console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padStart(6)}ms - 设置加载完成 (耗时${(performance.now() - settingsLoadStart).toFixed(0)}ms)`)
+    if (DEV_MODE) {
+      console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padStart(6)}ms - 设置加载完成 (耗时${(performance.now() - settingsLoadStart).toFixed(0)}ms)`)
+    }
   } catch (e) {
     logger.error('App', 'settingsStore.load failed', e)
   }
@@ -235,7 +245,9 @@ onMounted(async () => {
   // 发送启动通知（用户可感知的"启动完成"信号）
   const notifyStart = performance.now()
   sendStartupNotification().then(() => {
-    console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padStart(6)}ms - 系统通知已发送 (耗时${(performance.now() - notifyStart).toFixed(0)}ms)`)
+    if (DEV_MODE) {
+      console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padStart(6)}ms - 系统通知已发送 (耗时${(performance.now() - notifyStart).toFixed(0)}ms)`)
+    }
     reportBootStage('notification-sent')
   })
 
