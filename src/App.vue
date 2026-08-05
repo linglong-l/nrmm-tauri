@@ -328,6 +328,13 @@ onMounted(async () => {
               await modsStore.startWatching()
             }
           }
+          // 兜底校验：缓存命中时 selectedGroupPath 应已保留，但若数据异常则回退到第一个分组
+          if (modsStore.groups.length > 0) {
+            const sp = modsStore.selectedGroupPath
+            if (!sp || !modsStore.findGroupByPathInList(modsStore.groups, sp)) {
+              modsStore.selectGroupByPath(modsStore.groups[0].groupPath)
+            }
+          }
           return
         }
 

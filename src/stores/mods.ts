@@ -503,28 +503,12 @@ export const useModsStore = defineStore('mods', () => {
         initGroupSelectedIndex(g)
       }
 
-      // 默认选中第一个分组
-      if (groups.value.length > 0 && !selectedGroupPath.value) {
-        selectedGroupPath.value = groups.value[0].groupPath
-      } else if (selectedGroupPath.value) {
-        // 检查之前选中的分组是否还存在，不存在则选第一个
-        const found = findGroupByPathInList(groups.value, selectedGroupPath.value)
-        if (!found && groups.value.length > 0) {
-          selectedGroupPath.value = groups.value[0].groupPath
-        }
-      }
-
-      // 根据当前选中分组设置 selectedModIndex
-      const curGroup = currentGroup.value
-      if (curGroup) {
-        const path = curGroup.groupPath
-        if (path.startsWith('__') || path === '__groups__') {
-          selectedModIndex.value = 0
-        } else if (selectedModIndicesByGroup[path] !== undefined) {
-          selectedModIndex.value = selectedModIndicesByGroup[path]
-        } else {
-          selectedModIndex.value = 0
-        }
+      // 恢复上次选中的分组：路径有效则保留，无效则回退到第一个分组
+      // 配合 clearData 不重置 selectedGroupPath，实现窗口隐藏/显示时保留分组选择
+      if (groups.value.length > 0) {
+        const savedPath = selectedGroupPath.value
+        const found = savedPath ? findGroupByPathInList(groups.value, savedPath) : null
+        restoreGroupSelection(found || groups.value[0])
       }
     } catch (e) {
       logger.error('ModsStore', 'Failed to load mods', e)
@@ -766,18 +750,45 @@ export const useModsStore = defineStore('mods', () => {
   /**
    * 清空所有模组数据
    * 用于切换游戏或页面卸载时重置状态
+   *
+   * 注意：保留 selectedGroupPath，配合 loadMods 末尾的恢复逻辑实现窗口隐藏/显示时保留分组选择。
+   * - 同一游戏窗口隐藏/显示：selectedGroupPath 保留，loadMods 检查路径仍有效后恢复选中状态
+   * - 切换游戏：旧 selectedGroupPath 在新游戏 groups 中找不到，loadMods 自动回退到第一个分组
+   * - 路径不存在刷新：保留选择，loadMods 后若分组仍存在则恢复，否则回退到第一个
    */
   function clearData() {
     groups.value = []
     mods.value = []
     loading.value = false
-    selectedGroupPath.value = ''
+    // 保留 selectedGroupPath：由 loadMods 的恢复逻辑判断是否仍有效
     selectedModIndex.value = 0
     searchQuery.value = ''
     showFavoritesOnly.value = false
-    // 清空分组选中记录
+    // 清空分组选中记录（loadMods 会用后端 activeModIndex 重新初始化）
     for (const key of Object.keys(selectedModIndicesByGroup)) {
       delete selectedModIndicesByGroup[key]
+    }
+  }
+
+  /**
+   * 恢复分组选中状态（selectedGroupPath + selectedModIndex）
+   *
+   * 优先级：selectedModIndicesByGroup（会话内用户选择） > group.activeModIndex（后端持久化） > 0（默认）
+   * 虚拟节点路径（__all__/__fav__/__groups__）固定为 0
+   *
+   * @param group 目标分组对象
+   */
+  function restoreGroupSelection(group: ModGroupData) {
+    selectedGroupPath.value = group.groupPath
+    const path = group.groupPath
+    if (path.startsWith('__') || path === '__groups__') {
+      selectedModIndex.value = 0
+    } else if (selectedModIndicesByGroup[path] !== undefined) {
+      selectedModIndex.value = selectedModIndicesByGroup[path]
+    } else if (group.activeModIndex >= 0) {
+      selectedModIndex.value = group.activeModIndex
+    } else {
+      selectedModIndex.value = 0
     }
   }
 
