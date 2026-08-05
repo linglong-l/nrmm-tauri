@@ -30,7 +30,7 @@ use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::namespace_handler;
 use crate::core::mod_scanner;
 use crate::models::enums::TargetGame;
-use crate::models::mod_data::{ModData, ModGroupData, ErroredLines, HashConflict, LibInMod, DuplicateLib, NonExistentLib};
+use crate::models::mod_data::{ModData, ModGroupData, ErroredLines, HashConflict, HashConflictEntry, LibInMod, DuplicateLib, NonExistentLib};
 use crate::models::enums::GroupType;
 use crate::models::settings::AppSettings;
 
@@ -193,6 +193,19 @@ pub fn detect_standard_xxmi(game_mods_path: &Path, main_ini_name: &str) -> bool 
 /// 提取时统一转小写做归一化。同一模组内多次使用同一 hash 不算冲突，
 /// 仅当同一 hash 被 ≥2 个不同模组使用时才计入冲突。
 ///
+/// # entries 字段
+/// 每条 `HashConflict` 的 `entries` 字段记录单个模组使用该 hash 的详情，
+/// 每个模组一条 `HashConflictEntry`，其 `ini_vec` 保存该模组所有包含此 hash 的
+/// INI 文件绝对路径（去重粒度为 (mod_name, ini_path)：同一模组同一 INI 内多次出现
+/// 同一 hash 只算一条，同一模组不同 INI 各保留一条）。前端据此实现悬浮提示
+/// （显示模组目录）和点击展开详情（按模组分组显示 INI 路径列表）。
+///
+/// # 非group目录参与策略
+/// 使用 `scan_mods_light` 而非 `scan_mods_deep`，确保 MutexGroup（非group目录）
+/// 下的模组也参与 hash 冲突检测。轻量扫描不解析 INI 内容，因此本函数会在
+/// 扫描时按需从模组目录查找 .ini 文件并解析。非group目录不涉及标记文件生成，
+/// 仅参与模组读取和 hash 冲突检测。
+///
 /// # 参数
 /// - `game_mods_path`: 游戏 Mods 目录路径
 ///
@@ -200,15 +213,20 @@ pub fn detect_standard_xxmi(game_mods_path: &Path, main_ini_name: &str) -> bool 
 /// `HashConflictResult` — 含所有冲突列表（按 hash 值升序排序）、扫描统计
 pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult> {
     let _s = std::time::Instant::now();
-    let scan_result = mod_scanner::scan_mods(game_mods_path)?;
-    let mut hash_to_mods: std::collections::HashMap<String, Vec<(String, String)>> =
+    // 使用 scan_mods_light 而非 scan_mods_deep：
+    // 深度扫描仅处理 group_xx 目录，会遗漏 MutexGroup（非group目录）下的模组。
+    // 需求要求非group目录参与 hash 冲突检测，故改用轻量扫描以包含两类分组。
+    let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
+    // 三元组：(mod_name, mod_path, ini_path)
+    // 记录 INI 文件路径以支持前端悬浮提示和点击展开详情
+    let mut hash_to_mods: std::collections::HashMap<String, Vec<(String, String, PathBuf)>> =
         std::collections::HashMap::new();
     let mut scanned_mods = 0u32;
     let mut scanned_hashes = 0u32;
 
     fn process_group(
         group: &ModGroupData,
-        hash_to_mods: &mut std::collections::HashMap<String, Vec<(String, String)>>,
+        hash_to_mods: &mut std::collections::HashMap<String, Vec<(String, String, PathBuf)>>,
         scanned_mods: &mut u32,
         scanned_hashes: &mut u32,
     ) {
@@ -228,15 +246,15 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
             let mod_path = mod_data.mod_path.clone();
             *scanned_mods += 1;
 
-            for ini_data in &mod_data.mod_ini_data {
-                let ini_path = PathBuf::from(&ini_data.ini_path);
+            // 轻量扫描未解析 INI，需从模组目录查找 .ini 文件并按需解析
+            for ini_path in collect_mod_ini_files(&mod_data.full_path) {
                 if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
                     for (_section, hash) in ini.extract_hashes() {
                         *scanned_hashes += 1;
                         hash_to_mods
                             .entry(hash)
                             .or_default()
-                            .push((mod_name.clone(), mod_path.clone()));
+                            .push((mod_name.clone(), mod_path.clone(), ini_path.clone()));
                     }
                 }
             }
@@ -260,19 +278,41 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
     let mut conflicts: Vec<HashConflict> = hash_to_mods
         .into_iter()
         .filter_map(|(hash, mods)| {
-            // 去重：同一模组可能多次使用同一 hash，只算一次
-            let mut unique_mods: Vec<(String, String)> = Vec::new();
-            for (name, path) in mods.into_iter() {
-                if !unique_mods.iter().any(|(n, _)| n == &name) {
-                    unique_mods.push((name, path));
+            // 去重粒度为 (mod_name, ini_path)：
+            // 同一模组同一 INI 内多次出现同一 hash 只算一条；
+            // 同一模组不同 INI 各保留一条，聚合到该模组的 ini_vec。
+            let mut unique_entries: Vec<(String, String, PathBuf)> = Vec::new();
+            for (name, path, ini) in mods.into_iter() {
+                if !unique_entries.iter().any(|(n, _, i)| n == &name && i == &ini) {
+                    unique_entries.push((name, path, ini));
                 }
             }
-            if unique_mods.len() >= 2 {
-                Some(HashConflict {
-                    hash,
-                    mod_names: unique_mods.iter().map(|(n, _)| n.clone()).collect(),
-                    mod_paths: unique_mods.iter().map(|(_, p)| p.clone()).collect(),
-                })
+            // 仅当涉及 ≥2 个不同模组时才算冲突
+            let unique_mod_count = unique_entries.iter()
+                .map(|(n, _, _)| n.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            if unique_mod_count >= 2 {
+                // 按模组聚合：key=mod_name, value=(mod_path, ini 列表)，每个模组一条 entry
+                let mut mod_map: std::collections::HashMap<String, (String, Vec<String>)> =
+                    std::collections::HashMap::new();
+                for (n, p, ini) in unique_entries.into_iter() {
+                    let ini_str = ini.to_string_lossy().to_string();
+                    mod_map
+                        .entry(n.clone())
+                        .or_insert_with(|| (p.clone(), Vec::new()))
+                        .1
+                        .push(ini_str);
+                }
+                let entries: Vec<HashConflictEntry> = mod_map
+                    .into_iter()
+                    .map(|(mod_name, (mod_path, ini_vec))| HashConflictEntry {
+                        mod_name,
+                        mod_path,
+                        ini_vec,
+                    })
+                    .collect();
+                Some(HashConflict { hash, entries })
             } else {
                 None
             }
@@ -920,11 +960,14 @@ pub fn switch_mod(
     );
 
     // 先找出分组目录路径（用于写入 selectedindex 文件）
+    // 严格限制：仅 NormalGroup（group_xx 目录）允许写入 selectedindex 标记文件。
+    // MutexGroup（非group目录）不参与标记文件生成，仅参与模组读取和 hash 冲突检测。
+    // 通过 group_type == NormalGroup 校验避免误在非group目录下写入标记文件。
     let group_dir = scan_result.groups.iter()
-        .find(|g| g.group_index == group_index)
+        .find(|g| g.group_index == group_index && g.group_type == GroupType::NormalGroup)
         .map(|g| g.full_path.clone());
     log::debug!(
-        "[core::mod_manager] [switch_mod] looking for group by group_index={} found={}",
+        "[core::mod_manager] [switch_mod] looking for NormalGroup by group_index={} found={}",
         group_index,
         group_dir.is_some()
     );
@@ -1655,6 +1698,52 @@ fn collect_ini_files_recursive_inner(dir: &Path, result: &mut Vec<PathBuf>) -> R
         }
     }
     Ok(())
+}
+
+/// 收集模组目录下的直接 .ini 文件（不递归子目录）
+///
+/// 用于 `detect_hash_conflicts` 中从轻量扫描结果（`ModData.full_path`）查找
+/// 模组的 INI 文件。轻量扫描不解析 INI 内容，故需按需查找并解析。
+///
+/// 过滤规则：
+/// - 仅扫描目录下的直接文件，不递归子目录（与深度扫描 `check_directory_for_mod_deep` 一致）
+/// - 排除 `desktop.ini` 系统配置文件（NRMM 对齐）
+/// - 排除 `.ini_managed_backup` 备份文件
+///
+/// # 参数
+/// - `mod_dir`: 模组目录路径
+///
+/// # 返回
+/// 目录下所有符合条件的 .ini 文件路径列表（无序）
+fn collect_mod_ini_files(mod_dir: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    let entries = match fs::read_dir(mod_dir) {
+        Ok(e) => e,
+        Err(_) => return result,
+    };
+    for entry in entries.flatten() {
+        let ft = match entry.file_type() {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        if !ft.is_file() && !ft.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        // 排除 desktop.ini 系统配置文件
+        if constants::is_desktop_ini(&path) {
+            continue;
+        }
+        if let Some(ext) = path.extension() {
+            if ext.eq_ignore_ascii_case("ini") {
+                // 排除 .ini_managed_backup 备份文件
+                if !path.to_string_lossy().ends_with(&format!(".{}", constants::BACKUP_EXTENSION)) {
+                    result.push(path);
+                }
+            }
+        }
+    }
+    result
 }
 
 /// 还原单个 INI 文件（对齐 NRMM `restoreManagedMod` 内层循环）
@@ -2726,5 +2815,333 @@ mod tests_enable_all {
         assert!(entries.iter().any(|n| n == "MyMod"));
         assert!(entries.iter().any(|n| n == "OtherMod"));
         assert!(entries.iter().any(|n| n == "Third"));
+    }
+}
+
+// ============================================================================
+// 非group目录隔离性测试
+//
+// 验证核心需求：更新模组数据、groupname 等文件的生成不涉及非group目录，
+// 非group目录仅参与模组读取和 hash 冲突检测。
+// ============================================================================
+#[cfg(test)]
+mod tests_non_group_isolation {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// 创建带 _MANAGED_ 子目录的临时根目录
+    fn setup_test_dir() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+        dir
+    }
+
+    /// 在分组目录下创建带 INI 文件的模组目录
+    fn create_mod_with_ini(group_path: &Path, mod_name: &str, ini_content: &str) -> PathBuf {
+        let mod_path = group_path.join(mod_name);
+        fs::create_dir_all(&mod_path).unwrap();
+        let ini_path = mod_path.join("mod.ini");
+        fs::write(&ini_path, ini_content).unwrap();
+        mod_path
+    }
+
+    /// 在根目录创建 d3dx.ini
+    fn create_d3dx_ini(base: &Path) {
+        fs::write(base.join("d3dx.ini"), "; test\n").unwrap();
+    }
+
+    /// 测试：detect_hash_conflicts 应扫描 MutexGroup（非group目录）下的模组
+    ///
+    /// 验证：非group目录下的模组参与 hash 冲突检测
+    /// - 创建两个非group目录，各含一个使用相同 hash 的模组
+    /// - 调用 detect_hash_conflicts 应检测到冲突
+    #[test]
+    fn test_hash_conflict_detects_mutex_group_mods() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        // 非group目录1: #MutexA/ModA（使用 hash=0x12345678）
+        let mutex_a = dir.path().join("_MANAGED_").join("#MutexA");
+        fs::create_dir_all(&mutex_a).unwrap();
+        create_mod_with_ini(
+            &mutex_a,
+            "ModA",
+            "[TextureOverrideTexA]\nhash = 0x12345678\n",
+        );
+
+        // 非group目录2: #MutexB/ModB（使用相同 hash=0x12345678，应冲突）
+        let mutex_b = dir.path().join("_MANAGED_").join("#MutexB");
+        fs::create_dir_all(&mutex_b).unwrap();
+        create_mod_with_ini(
+            &mutex_b,
+            "ModB",
+            "[TextureOverrideTexB]\nhash = 0x12345678\n",
+        );
+
+        let result = detect_hash_conflicts(dir.path()).unwrap();
+        // 应检测到至少 1 个冲突（hash=0x12345678 被 ModA 和 ModB 同时使用）
+        assert!(
+            !result.conflicts.is_empty(),
+            "非group目录下的模组应参与 hash 冲突检测，但未检测到冲突"
+        );
+        // 验证冲突涉及两个模组
+        let first_conflict = &result.conflicts[0];
+        assert_eq!(first_conflict.entries.len(), 2);
+        let mod_names: Vec<&str> = first_conflict.entries.iter().map(|e| e.mod_name.as_str()).collect();
+        assert!(mod_names.contains(&"ModA"));
+        assert!(mod_names.contains(&"ModB"));
+        // 验证 entries 已填充且 ini_vec 指向 .ini 文件
+        assert!(!first_conflict.entries.is_empty(), "entries 应填充详情");
+        for entry in &first_conflict.entries {
+            assert!(!entry.ini_vec.is_empty(), "ini_vec 不应为空");
+            assert!(entry.ini_vec[0].ends_with(".ini"), "ini_vec 应指向 .ini 文件");
+        }
+    }
+
+    /// 测试：detect_hash_conflicts 同时扫描 NormalGroup 和 MutexGroup
+    ///
+    /// 验证：group_xx 目录和非group目录下的模组都参与 hash 冲突检测
+    #[test]
+    fn test_hash_conflict_scans_both_group_types() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        // group_1 下的启用模组（需要在 selectedindex 中标记为选中）
+        let group1 = dir.path().join("_MANAGED_").join("group_1");
+        fs::create_dir_all(&group1).unwrap();
+        fs::write(group1.join("selectedindex"), "1").unwrap();
+        create_mod_with_ini(
+            &group1,
+            "NormalMod",
+            "[TextureOverrideNormal]\nhash = 0xdeadbeef\n",
+        );
+
+        // 非group目录下的启用模组
+        let mutex_group = dir.path().join("_MANAGED_").join("#Mutex");
+        fs::create_dir_all(&mutex_group).unwrap();
+        create_mod_with_ini(
+            &mutex_group,
+            "MutexMod",
+            "[TextureOverrideMutex]\nhash = 0xdeadbeef\n",
+        );
+
+        let result = detect_hash_conflicts(dir.path()).unwrap();
+        // 应检测到冲突：NormalMod 和 MutexMod 使用相同 hash
+        assert!(
+            !result.conflicts.is_empty(),
+            "应检测到 NormalGroup 和 MutexGroup 之间的 hash 冲突"
+        );
+        let conflict = &result.conflicts[0];
+        assert_eq!(conflict.entries.len(), 2);
+        let mod_names: Vec<&str> = conflict.entries.iter().map(|e| e.mod_name.as_str()).collect();
+        assert!(mod_names.contains(&"NormalMod"));
+        assert!(mod_names.contains(&"MutexMod"));
+        // 验证 entries 已填充且 ini_vec 指向 .ini 文件
+        assert!(!conflict.entries.is_empty(), "entries 应填充详情");
+        for entry in &conflict.entries {
+            assert!(!entry.ini_vec.is_empty(), "ini_vec 不应为空");
+            assert!(entry.ini_vec[0].ends_with(".ini"), "ini_vec 应指向 .ini 文件");
+        }
+    }
+
+    /// 测试：switch_mod 不会在 MutexGroup 目录下写入 selectedindex 文件
+    ///
+    /// 验证：传入 group_index=0（MutexGroup 默认 group_index）时，
+    /// 不会在 MutexGroup 目录下创建 selectedindex 文件
+    #[test]
+    fn test_switch_mod_no_selectedindex_in_mutex_group() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+        let settings = AppSettings::default();
+
+        // 非group目录（MutexGroup 根分组 group_index 默认为 0）
+        let mutex_group = dir.path().join("_MANAGED_").join("#MutexGroup");
+        fs::create_dir_all(&mutex_group).unwrap();
+        create_mod_with_ini(&mutex_group, "MutexMod", "[Section]\n");
+
+        // 调用 switch_mod 传入 group_index=0（对应 MutexGroup）
+        let _result = switch_mod(
+            TargetGame::GenshinImpact,
+            dir.path(),
+            &settings,
+            0, // group_index=0 对应 MutexGroup
+            1,
+        ).unwrap();
+
+        // 验证 MutexGroup 目录下未创建 selectedindex 文件
+        assert!(
+            !mutex_group.join(constants::SELECTED_INDEX_FILE).exists(),
+            "非group目录不应创建 selectedindex 文件"
+        );
+        // 验证 MutexGroup 目录下未创建 groupname 文件
+        assert!(
+            !mutex_group.join("groupname").exists(),
+            "非group目录不应创建 groupname 文件"
+        );
+    }
+
+    /// 测试：switch_mod 对 NormalGroup 正常写入 selectedindex 文件
+    ///
+    /// 验证：group_xx 目录下调用 switch_mod 仍正常工作
+    #[test]
+    fn test_switch_mod_writes_selectedindex_for_normal_group() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+        let settings = AppSettings::default();
+
+        // group_1（NormalGroup，group_index=1）
+        let group1 = dir.path().join("_MANAGED_").join("group_1");
+        fs::create_dir_all(&group1).unwrap();
+        create_mod_with_ini(&group1, "TestMod", "[Section]\n");
+
+        // 调用 switch_mod 传入 group_index=1（对应 NormalGroup）
+        let _result = switch_mod(
+            TargetGame::GenshinImpact,
+            dir.path(),
+            &settings,
+            1, // group_index=1 对应 group_1
+            1, // mod_index=1（TestMod）
+        ).unwrap();
+
+        // 验证 group_1 目录下已创建/更新 selectedindex 文件
+        assert!(
+            group1.join(constants::SELECTED_INDEX_FILE).exists(),
+            "NormalGroup 应创建 selectedindex 文件"
+        );
+        let content = fs::read_to_string(group1.join(constants::SELECTED_INDEX_FILE)).unwrap();
+        assert_eq!(content.trim(), "1");
+    }
+
+    /// 测试：collect_mod_ini_files 正确收集模组目录下的 .ini 文件
+    ///
+    /// 验证：
+    /// - 收集直接子 .ini 文件
+    /// - 不递归子目录
+    /// - 排除 desktop.ini
+    /// - 排除 .ini_managed_backup 备份文件
+    #[test]
+    fn test_collect_mod_ini_files() {
+        let dir = TempDir::new().unwrap();
+        let mod_dir = dir.path().join("TestMod");
+        fs::create_dir_all(&mod_dir).unwrap();
+
+        // 正常 .ini 文件
+        fs::write(mod_dir.join("mod.ini"), "[Section]\n").unwrap();
+        fs::write(mod_dir.join("config.ini"), "[Other]\n").unwrap();
+        // desktop.ini 应被排除
+        fs::write(mod_dir.join("desktop.ini"), "[System]\n").unwrap();
+        // .ini_managed_backup 备份文件应被排除
+        fs::write(mod_dir.join("mod.ini_managed_backup"), "[Backup]\n").unwrap();
+        // 子目录中的 .ini 应被排除（不递归）
+        let subdir = mod_dir.join("SubDir");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(subdir.join("nested.ini"), "[Nested]\n").unwrap();
+        // 非 .ini 文件应被排除
+        fs::write(mod_dir.join("readme.txt"), "text\n").unwrap();
+
+        let ini_files = collect_mod_ini_files(&mod_dir);
+        // 应收集到 mod.ini 和 config.ini（2 个文件）
+        assert_eq!(ini_files.len(), 2, "应仅收集直接 .ini 文件，排除 desktop/backup/nested");
+        let file_names: Vec<String> = ini_files.iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert!(file_names.contains(&"mod.ini".to_string()));
+        assert!(file_names.contains(&"config.ini".to_string()));
+    }
+
+    /// 测试：update_mod_data 不涉及非group目录的标记文件生成
+    ///
+    /// 验证：调用 update_mod_data 后，非group目录下不会创建 groupname/selectedindex/modname
+    #[test]
+    fn test_update_mod_data_no_markers_in_non_group() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+        let settings = AppSettings::default();
+
+        // group_1 下的模组
+        let group1 = dir.path().join("_MANAGED_").join("group_1");
+        fs::create_dir_all(&group1).unwrap();
+        create_mod_with_ini(&group1, "NormalMod", "[TextureOverride]\nhash=0x1\n");
+
+        // 非group目录下的模组
+        let mutex_group = dir.path().join("_MANAGED_").join("#Mutex");
+        fs::create_dir_all(&mutex_group).unwrap();
+        let mutex_mod = create_mod_with_ini(&mutex_group, "MutexMod", "[TextureOverride]\nhash=0x2\n");
+
+        let _result = update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+
+        // 验证非group目录下未创建标记文件
+        assert!(
+            !mutex_group.join("groupname").exists(),
+            "update_mod_data 不应在非group目录创建 groupname 文件"
+        );
+        assert!(
+            !mutex_group.join(constants::SELECTED_INDEX_FILE).exists(),
+            "update_mod_data 不应在非group目录创建 selectedindex 文件"
+        );
+        assert!(
+            !mutex_mod.join("modname").exists(),
+            "update_mod_data 不应在非group目录下模组创建 modname 文件"
+        );
+    }
+
+    /// 测试：同一模组在多个 INI 文件中使用相同 hash 时，聚合到该模组的 ini_vec
+    ///
+    /// 验证边界场景：
+    /// - 模组 ModA 有两个 INI 文件（a1.ini、a2.ini），都使用 hash=0xcafebabe
+    /// - 模组 ModB 有一个 INI 文件，也使用 hash=0xcafebabe
+    /// - entries 应包含 2 条记录（ModA、ModB 各一条）
+    /// - ModA 的 ini_vec 应有 2 个元素（a1.ini、a2.ini），ModB 的 ini_vec 应有 1 个元素
+    #[test]
+    fn test_hash_conflict_entries_tracks_ini_path() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        // ModA：两个 INI 文件都使用 hash=0xcafebabe
+        let mutex_a = dir.path().join("_MANAGED_").join("#MutexA");
+        fs::create_dir_all(&mutex_a).unwrap();
+        let mod_a_dir = mutex_a.join("ModA");
+        fs::create_dir_all(&mod_a_dir).unwrap();
+        fs::write(mod_a_dir.join("a1.ini"), "[TextureOverrideT1]\nhash = 0xcafebabe\n").unwrap();
+        fs::write(mod_a_dir.join("a2.ini"), "[TextureOverrideT2]\nhash = 0xcafebabe\n").unwrap();
+
+        // ModB：一个 INI 文件使用相同 hash
+        let mutex_b = dir.path().join("_MANAGED_").join("#MutexB");
+        fs::create_dir_all(&mutex_b).unwrap();
+        create_mod_with_ini(
+            &mutex_b,
+            "ModB",
+            "[TextureOverrideT3]\nhash = 0xcafebabe\n",
+        );
+
+        let result = detect_hash_conflicts(dir.path()).unwrap();
+        assert!(!result.conflicts.is_empty(), "应检测到 hash 冲突");
+
+        let conflict = &result.conflicts[0];
+        assert_eq!(conflict.hash, "0xcafebabe");
+
+        // entries 按模组聚合：ModA、ModB 各一条
+        assert_eq!(
+            conflict.entries.len(),
+            2,
+            "entries 应包含 2 条记录（ModA、ModB 各一条），实际：{:?}",
+            conflict.entries.iter().map(|e| &e.mod_name).collect::<Vec<_>>()
+        );
+
+        // 验证 ModA 聚合了两条 INI 路径
+        let mod_a_entry = conflict.entries.iter()
+            .find(|e| e.mod_name == "ModA")
+            .expect("应存在 ModA 的 entry");
+        assert_eq!(mod_a_entry.ini_vec.len(), 2, "ModA 的 ini_vec 应有 2 个元素");
+        assert!(mod_a_entry.ini_vec.iter().any(|p| p.ends_with("a1.ini")), "应包含 a1.ini 路径");
+        assert!(mod_a_entry.ini_vec.iter().any(|p| p.ends_with("a2.ini")), "应包含 a2.ini 路径");
+
+        // 验证 ModB 聚合了一条 INI 路径
+        let mod_b_entry = conflict.entries.iter()
+            .find(|e| e.mod_name == "ModB")
+            .expect("应存在 ModB 的 entry");
+        assert_eq!(mod_b_entry.ini_vec.len(), 1, "ModB 的 ini_vec 应有 1 个元素");
     }
 }

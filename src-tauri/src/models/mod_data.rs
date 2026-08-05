@@ -341,16 +341,30 @@ pub struct KeybindConflict {
     pub conflict_with: String,
 }
 
+/// Hash 冲突单条详情（一个模组使用该 hash 的一个或多个 INI 文件）
+///
+/// 用于前端悬浮提示和点击展开详情，提供模组目录路径和冲突 INI 文件绝对路径列表。
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HashConflictEntry {
+    /// 模组名称
+    pub mod_name: String,
+    /// 模组目录路径（绝对路径）
+    pub mod_path: String,
+    /// 包含该 hash 的 INI 文件绝对路径列表（同一模组可能多个 INI 共用同一 hash）
+    #[serde(default)]
+    pub ini_vec: Vec<String>,
+}
+
 /// Hash 冲突信息（一个 hash 被多个模组使用）
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HashConflict {
     /// 冲突的 hash 值（原始字符串，如 "0x12345678"）
     pub hash: String,
-    /// 使用该 hash 的模组名称列表
-    pub mod_names: Vec<String>,
-    /// 使用该 hash 的模组路径列表（用于调试/定位）
-    pub mod_paths: Vec<String>,
+    /// 使用该 hash 的模组详情列表（每个模组一条，含其全部冲突 INI）
+    #[serde(default)]
+    pub entries: Vec<HashConflictEntry>,
 }
 
 /// Hash 冲突检测结果

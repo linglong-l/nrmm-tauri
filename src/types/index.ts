@@ -481,6 +481,20 @@ export interface RestoredCount {
 }
 
 /**
+ * Hash 冲突单条详情（一个模组使用该 hash 的一个或多个 INI 文件）
+ *
+ * 对应后端 `crate::models::mod_data::HashConflictEntry`
+ */
+export interface HashConflictEntry {
+  /** 模组名称 */
+  modName: string;
+  /** 模组目录路径（绝对路径） */
+  modPath: string;
+  /** 包含该 hash 的 INI 文件绝对路径列表 */
+  iniVec: string[];
+}
+
+/**
  * Hash 冲突信息（一个 hash 被多个模组使用）
  *
  * 对应后端 `crate::models::mod_data::HashConflict`
@@ -488,10 +502,8 @@ export interface RestoredCount {
 export interface HashConflict {
   /** 冲突的 hash 值（如 "0x12345678"） */
   hash: string;
-  /** 使用该 hash 的模组名称列表 */
-  modNames: string[];
-  /** 使用该 hash 的模组路径列表（用于调试/定位） */
-  modPaths: string[];
+  /** 使用该 hash 的模组详情列表（每个模组一条，含其全部冲突 INI） */
+  entries: HashConflictEntry[];
 }
 
 /**

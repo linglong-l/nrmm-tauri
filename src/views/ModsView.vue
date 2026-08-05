@@ -15,7 +15,7 @@
          v-if="DEV_MODE" 守卫：prod 模式下 DEV_MODE 编译期为 false，组件不渲染、setup 不执行
          注意：Vue SFC 静态导入无法被 rollup tree-shaking 完全消除，组件代码会进入 prod 包
          但功能层面完全不可访问（约 12KB / gzip 4KB，对 Tauri 桌面安装包可忽略） -->
-    <RemoveModDialogPreview v-if="DEV_MODE" />
+    <!-- <RemoveModDialogPreview v-if="DEV_MODE" /> -->
     <!-- 全页面加载遮罩：加载模组期间覆盖整个模组页，加载完成后淡出重渲染 -->
     <!-- 条件排除 isUpdatingModData：更新模组数据时由 UpdateModDataOverlay 独占显示，避免两遮罩冲突 -->
     <Transition name="overlay-fade">
