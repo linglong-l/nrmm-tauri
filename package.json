@@ -15,6 +15,9 @@
     "tsc:strict": "npx tsc --noEmit --strict",
     "biome:check": "npx biome check ."
   },
+  "engines": {
+    "node": ">=22.21.0"
+  },
   "dependencies": {
     "@element-plus/icons-vue": "^2",
     "@tauri-apps/api": "^2",
