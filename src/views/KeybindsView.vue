@@ -191,6 +191,8 @@ function detachDrag() {
 }
 
 onBeforeUnmount(() => {
+  // 离开按键绑定页时清理目标模组（防止切回 Mods 后 selectedMod 仍显示旧 keybind 目标）
+  modsStore.clearKeybindTargetMod()
   detachDrag()
 })
 

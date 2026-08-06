@@ -92,6 +92,11 @@
           <el-icon><Star /></el-icon>
           {{ mod.isFavorite ? t('Unfavorite') : t('Favorite') }}
         </div>
+        <!-- ============ 按键切换：位于收藏与重命名之间（对齐NRMM） ============ -->
+        <div v-if="mod && !isNoneSlot" class="menu-item" @click="handleOpenKeybind">
+          <el-icon><Setting /></el-icon>
+          {{ t('Keybind Toggle', '按键切换') }}
+        </div>
         <div class="menu-divider"></div>
         <div class="menu-item" @click="handleRename">
           <el-icon><Edit /></el-icon>
@@ -130,10 +135,9 @@
  * - 虚线边框：空槽位（用于网格对齐）
  * 支持：单击选中、双击确认启用、右键菜单
  */
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus, Setting } from '@element-plus/icons-vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModData } from '@/types'
 import { toggleModDisabled, toggleFavorite, renameMod, openModFolder, handlePathNotFoundError } from '@/utils/tauri'
@@ -146,6 +150,8 @@ import { logger } from '@/utils/logger'
 
 const { t } = useI18n()
 const modsStore = useModsStore()
+/** 从 App.vue provide 注入的标签页切换函数，用于「按键切换」菜单跳转到 Keybinds 页 */
+const switchTab = inject<(key: 'keybinds' | 'mods' | 'settings') => void>('switchTab', () => {})
 
 const props = defineProps<{
   /** 模组数据（空槽位时无） */
@@ -325,9 +331,28 @@ function handleClick() {
 }
 
 /** 双击：确认启用模组（调用后端写入INI，自动同步选中状态） */
-function handleDoubleClick() {
+async function handleDoubleClick() {
   logger.debug('ModCard', 'onDoubleClick activateModByIndex', { modIndex: props.modIndex, modName: mod.value?.name })
-  if (isNoneSlot.value) return
+  // ===== None 空槽位双击分支 =====
+  if (isNoneSlot.value) {
+    const g = modsStore.currentGroup
+    if (!g) return
+    try {
+      await modsStore.deselectOrDisableNoneSlot(
+        g.groupType as 'normalGroup' | 'mutexGroup',
+        g.groupIndex,
+        g.groupPath,
+      )
+      ElMessage.success(
+        g.groupType === 'normalGroup'
+          ? t('mods.deselectGroup', '已取消该分组模组选择')
+          : t('mods.disableAllInGroup', '已禁用该分组所有模组')
+      )
+    } catch (e: any) {
+      ElMessage.error(t('mods.operationFailed', '操作失败') + ': ' + (e?.message || e))
+    }
+    return
+  }
   // 同步切换左侧导航栏对应分组为选中状态
   if (mod.value) {
     const modPath = mod.value.modPath
@@ -376,6 +401,18 @@ async function handleToggleFavorite() {
   } catch (e: any) {
     logger.error('ModCard', 'Failed to toggle favorite', e)
   }
+}
+
+/**
+ * 跳转按键绑定页并设置目标模组（对齐 NRMM modKeybindProvider）
+ * - 设置 keybindTargetMod 使 KeybindsView.selectedMod 优先显示当前模组
+ * - 切换胶囊导航到 Keybinds 标签页
+ */
+function handleOpenKeybind() {
+  if (!mod.value) return
+  closeContextMenu()
+  modsStore.setKeybindTargetMod(mod.value)
+  switchTab('keybinds')
 }
 
 /** 重命名模组 */

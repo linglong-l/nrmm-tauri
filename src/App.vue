@@ -95,7 +95,14 @@ const tabs = [
  * 当前激活的标签页，默认为模组页面
  * 值可以是 'keybinds' | 'mods' | 'settings'，对应三个Tab视图
  */
-const activeTab = ref("mods")
+const activeTab = ref<'keybinds' | 'mods' | 'settings'>("mods")
+/**
+ * 暴露给子组件的标签页切换函数（provide/inject 机制）
+ * 用于 ModCard 等组件从右键菜单「按键切换」跳转到 Keybinds 页
+ */
+provide('switchTab', (key: 'keybinds' | 'mods' | 'settings') => {
+  activeTab.value = key
+})
 /**
  * 游戏切换事件（target-game-switched）的取消监听函数
  * 用于在组件卸载时移除 Tauri 事件监听，防止内存泄漏

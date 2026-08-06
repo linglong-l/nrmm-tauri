@@ -1,12 +1,28 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
+import AutoImport from "unplugin-auto-import/vite";
+import Components from "unplugin-vue-components/vite";
+import { ElementPlusResolver } from "unplugin-vue-components/resolvers";
 import { resolve } from "path";
 const __dirname = resolve(import.meta.dirname);
 
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(async () => ({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    // ElementPlus 按需引入：自动导入 compose API（vue/vue-i18n/pinia）及 ElMessage 等 API
+    AutoImport({
+      imports: ["vue", "vue-i18n", "pinia"],
+      resolvers: [ElementPlusResolver()],
+      dts: "src/auto-imports.d.ts",
+    }),
+    // ElementPlus 组件按需引入：模板中的 el-* 组件自动注册
+    Components({
+      resolvers: [ElementPlusResolver()],
+      dts: "src/components.d.ts",
+    }),
+  ],
 
   resolve: {
     alias: {
@@ -56,9 +72,7 @@ export default defineConfig(async () => ({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules/element-plus')) {
-            return 'element-plus';
-          }
+          // ElementPlus 已改为按需引入，组件随各视图 chunk 打包，不再强制聚块
           if (id.includes('node_modules/vue') || id.includes('node_modules/pinia')) {
             return 'vue-core';
           }

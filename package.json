@@ -33,6 +33,8 @@
     "@vue/test-utils": "^2.4.11",
     "jsdom": "^29.1.1",
     "typescript": "~6.0",
+    "unplugin-auto-import": "^21.1.0",
+    "unplugin-vue-components": "^32.1.0",
     "vite": "^8.1",
     "vitest": "^4.1.10",
     "vue-tsc": "^3.3"

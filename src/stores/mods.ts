@@ -11,7 +11,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed, reactive, watch } from 'vue'
-import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData } from '../utils/tauri'
+import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, deselectGroupMod, disableAllModsInGroup } from '../utils/tauri'
 import { useSettingsStore } from './settings'
 import type { ModGroupData, ModData, TargetGame, UpdateResult } from '../types'
 import { logger } from '../utils/logger'
@@ -33,6 +33,12 @@ export const useModsStore = defineStore('mods', () => {
    * 虚拟节点路径（__all__/__fav__/__groups__）不记录
    */
   const selectedModIndicesByGroup: Record<string, number> = reactive({})
+  /**
+   * 按键绑定页的目标模组（对齐 NRMM modKeybindProvider）
+   * - 当右键菜单「按键切换」设置该值时，selectedMod 计算属性优先返回此值
+   * - KeybindsView 离开或 ModsView onMounted 时清空，避免跨分组残留
+   */
+  const keybindTargetMod = ref<ModData | null>(null)
   /** 搜索关键词 */
   const searchQuery = ref('')
   /** 是否仅显示收藏模组 */
@@ -369,12 +375,28 @@ export const useModsStore = defineStore('mods', () => {
     return findGroupByPathInList(groups.value, selectedGroupPath.value)
   })
 
-  /** 当前选中的模组对象（显示用：如果是子分组，从子分组mods中取） */
+  /** 当前选中的模组对象（显示用：如果是子分组，从子分组mods中取）
+   *  优先返回按键绑定页显式设置的目标模组（keybindTargetMod），对齐 NRMM modKeybindProvider
+   */
   const selectedMod = computed<ModData | null>(() => {
+    if (keybindTargetMod.value) return keybindTargetMod.value
     const g = currentGroup.value
     if (!g) return null
     return g.mods[selectedModIndex.value] || null
   })
+  /**
+   * 设置按键绑定页的目标模组（右键菜单「按键切换」时调用）
+   * @param mod 要在 Keybinds 页显示的模组对象，传 null 清空
+   */
+  function setKeybindTargetMod(mod: ModData | null) {
+    keybindTargetMod.value = mod
+  }
+  /**
+   * 清空按键绑定页的目标模组（离开 KeybindsView 或切回 ModsView 时调用）
+   */
+  function clearKeybindTargetMod() {
+    keybindTargetMod.value = null
+  }
 
   /** 当前分组显示的模组列表（所有分组类型均仅返回自身直接模组，不递归子分组） */
   const currentGroupMods = computed<ModData[]>(() => {
@@ -740,6 +762,55 @@ export const useModsStore = defineStore('mods', () => {
   }
 
   /**
+   * 双击 None 空槽位时的统一处理入口
+   * - NormalGroup（group_xx） → 取消分组选中（写入 selectedindex=0，不选择模组）
+   * - MutexGroup（非 group_xx）→ 禁用该分组下所有一级模组（添加 DISABLED_ 前缀）
+   *
+   * 虚拟节点（__all__ / __fav__ / __groups__）不执行任何操作（兜底 guard）。
+   *
+   * @param groupType  当前分组类型（仅 normalGroup / mutexGroup 有行为）
+   * @param groupIndex group_xx 编号（NormalGroup 写 selectedindex 用）
+   * @param groupPath  分组目录绝对路径（MutexGroup 批量禁用用；NormalGroup 也传入用于日志）
+   */
+  async function deselectOrDisableNoneSlot(
+    groupType: 'normalGroup' | 'mutexGroup',
+    groupIndex: number,
+    groupPath: string,
+  ) {
+    // 虚拟节点兜底：仅 normalGroup / mutexGroup 才实际操作
+    if (groupType !== 'normalGroup' && groupType !== 'mutexGroup') {
+      logger.warn('mods', 'deselectOrDisableNoneSlot called on virtual group, skip', { groupType })
+      return
+    }
+    if (isUpdatingModData.value || isActivating.value) return
+    const s = useSettingsStore()
+    if (!s.currentModsPath) return
+    isActivating.value = true
+    try {
+      if (groupType === 'normalGroup') {
+        logger.debug('mods', 'deselectOrDisableNoneSlot → deselectGroupMod', { groupIndex, groupPath })
+        await deselectGroupMod(s.currentGame, s.currentModsPath, groupIndex)
+        // 同步前端选中索引到 0（None 槽位），减少 refresh 前的视觉闪动
+        selectedModIndex.value = 0
+        const path = selectedGroupPath.value
+        if (path && !path.startsWith('__') && path !== '__groups__') {
+          selectedModIndicesByGroup[path] = 0
+        }
+      } else {
+        logger.debug('mods', 'deselectOrDisableNoneSlot → disableAllModsInGroup', { groupPath })
+        const n = await disableAllModsInGroup(groupPath)
+        logger.info('mods', `Disabled ${n} mods in mutex group ${groupPath}`)
+      }
+      await refresh()
+    } catch (e: any) {
+      logger.error('mods', 'deselectOrDisableNoneSlot failed', e)
+      throw e
+    } finally {
+      isActivating.value = false
+    }
+  }
+
+  /**
    * 选中模组（写入INI，处理互斥组逻辑）
    * @deprecated 请使用 activateModByIndex 代替（双击启用）或 highlightMod（单击高亮）
    */
@@ -898,6 +969,9 @@ export const useModsStore = defineStore('mods', () => {
     selectModByIndex,
     highlightMod,
     activateModByIndex,
+    deselectOrDisableNoneSlot,
+    setKeybindTargetMod,
+    clearKeybindTargetMod,
     clearData,
     startWatching,
     stopWatching,

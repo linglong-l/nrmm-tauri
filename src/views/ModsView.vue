@@ -39,18 +39,14 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { UploadFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
 import GroupPanel from '@/components/mod/GroupPanel.vue'
 import ModGrid from '@/components/mod/ModGrid.vue'
 import UpdateModDataReminder from '@/components/common/UpdateModDataReminder.vue'
-// dev 工具组件：静态导入 + v-if="DEV_MODE" 守卫
-// prod 模式下组件不渲染、setup 不执行；代码体积约 12KB（gzip 4KB），对 Tauri 安装包可忽略
-import RemoveModDialogPreview from '@/components/mod/RemoveModDialogPreview.vue'
+// 原 dev 工具组件 RemoveModDialogPreview 已在模板中注释（见第18行），若需恢复请同步重写 v-if="DEV_MODE" 守卫与 import
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { importItems, isFileWatcherRunning, currentWatchedPath } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
-import { DEV_MODE } from '@/utils/env'
 import { listen } from '@tauri-apps/api/event'
 
 const { t } = useI18n()

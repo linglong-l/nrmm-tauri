@@ -236,7 +236,6 @@
  */
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage } from 'element-plus'
 import { UploadFilled, FolderOpened } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'

@@ -134,6 +134,19 @@ export function useImageLazyLoad(
     observer.observe(element)
     // 通过 dataset 存储索引，供 IntersectionObserver 回调使用
     element.dataset.lazyIndex = String(index)
+    // 主动可见性检测：切换分组/组件重建时，IntersectionObserver 的异步初始回调存在时序问题，
+    // 元素已在视口（或 rootMargin 预加载区域）内却可能漏报 isIntersecting，导致图片停留在 idle 不加载。
+    // 此处立即判断元素是否已位于预加载区域，若在则直接加入加载队列兜底，无需等待异步初始回调。
+    const rect = element.getBoundingClientRect()
+    const buffer = 200
+    const alreadyInView = rect.top < window.innerHeight + buffer && rect.bottom > -buffer
+    if (alreadyInView && getState(index) === 'idle') {
+      pendingQueue.push({ index, element })
+      observer.unobserve(element)
+      if (processTimer === null) {
+        processQueue()
+      }
+    }
   }
 
   /**

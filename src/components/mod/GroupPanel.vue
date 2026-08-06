@@ -80,7 +80,6 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Edit, Delete, FolderOpened, FolderAdd, VideoPause, VideoPlay } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
 import type { ModGroupData } from '@/types'
 import { addGroup, renameGroup, removeGroupEx, openGroupFolder, validateSubfolderName, createSubfolder, handlePathNotFoundError, disableAllModsInGroup, enableAllModsInGroup } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'

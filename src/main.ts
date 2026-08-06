@@ -16,8 +16,6 @@ console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padS
 
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import ElementPlus from 'element-plus'
-import 'element-plus/dist/index.css'
 import App from './App.vue'
 import i18n from './utils/i18n'
 import { logger } from './utils/logger'
@@ -35,8 +33,6 @@ app.use(pinia)
 console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - pinia挂载完成`)
 app.use(i18n)
 console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - i18n挂载完成`)
-app.use(ElementPlus)
-console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - ElementPlus挂载完成`)
 
 /** 设置文档颜色方案为深色模式 */
 document.documentElement.style.setProperty('color-scheme', 'dark')
