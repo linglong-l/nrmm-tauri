@@ -29,7 +29,6 @@ import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
-import { updateModData as tauriUpdateModData } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
 
 const { t } = useI18n()
@@ -55,7 +54,7 @@ async function handleClick() {
     updateOverlay?.show('loading')
     const start = Date.now()
     try {
-      const result = await modsStore.updateModData() ?? (await tauriUpdateModData(settingsStore.currentGame, settingsStore.currentModsPath))
+      const result = await modsStore.updateModData()
       updateOverlay?.show('completed', { result, durationMs: Date.now() - start })
     } catch (e: any) {
       const msg = typeof e === 'string' ? e : (e?.message ?? String(e))

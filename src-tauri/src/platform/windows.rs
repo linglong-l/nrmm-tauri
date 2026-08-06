@@ -94,7 +94,12 @@ impl WindowsKeySimulator {
 impl super::KeySimulator for WindowsKeySimulator {
     fn set_target_process(&mut self, process_name: &str) -> Result<()> {
         self.target_hwnd = find_game_window(process_name).map(SafeHWND);
-        Ok(())
+        if self.target_hwnd.is_some() {
+            log::debug!("[platform::windows] game window found for process: {}", process_name);
+            Ok(())
+        } else {
+            anyhow::bail!("game window not found for process: {}", process_name)
+        }
     }
 
     fn simulate_select_group(&mut self) -> Result<()> {

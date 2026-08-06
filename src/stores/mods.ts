@@ -55,11 +55,6 @@ export const useModsStore = defineStore('mods', () => {
   const isUpdatingModData = ref(false)
   /** 更新模组数据结果（保存最近一次的 UpdateResult） */
   const updateResult = ref<UpdateResult | null>(null)
-  /** 分组级选择操作防抖：key=groupPath，value=Date.now() 时间戳（ms） */
-  const lastSelectionTime = reactive<Record<string, number>>({})
-  /** 防抖阈值：3000ms（3秒内同一分组不重复选择） */
-  const SELECTION_DEBOUNCE_MS = 3000
-
   // ========== 全局搜索状态（Ctrl+F） ==========
   /** 搜索栏是否可见 */
   const searchVisible = ref(false)
@@ -662,15 +657,6 @@ export const useModsStore = defineStore('mods', () => {
       return
     }
 
-    const groupPath = group.groupPath
-    const now = Date.now()
-    const lastTs = lastSelectionTime[groupPath] ?? 0
-    if (now - lastTs < SELECTION_DEBOUNCE_MS) {
-      logger.debug('mods', `[activateModByIndex] debounced: groupPath=${groupPath}, elapsed=${now - lastTs}ms`)
-      return
-    }
-    lastSelectionTime[groupPath] = now
-
     isActivating.value = true
     try {
       const isMutex = group.groupType === 'mutexGroup'
@@ -722,7 +708,7 @@ export const useModsStore = defineStore('mods', () => {
       }
       // 关键同步：在 groups.value 整棵树上定位该分组，更新其 activeModIndex
       // 保证下一次点击该分组时，UI 依然显示为后端写入的选中索引
-      if (group.groupType === 'normalGroup') {
+      if (group.groupType !== 'mutexGroup') {
         const groupPathMatch = group.groupPath
         const found = (function syncRec(list: ModGroupData[]): boolean {
           for (const g of list) {
@@ -752,7 +738,13 @@ export const useModsStore = defineStore('mods', () => {
         }
       }
       setActiveRecursive(group, modPath)
-    } catch (e) {
+    } catch (e: any) {
+      // 防抖命中时静默处理，不弹出错误提示
+      const errMsg = typeof e === 'string' ? e : (e?.message ?? String(e))
+      if (errMsg === 'debounced') {
+        logger.debug('ModsStore', 'activateModByIndex debounced, skipping')
+        return
+      }
       logger.error('ModsStore', 'Failed to activate mod', e)
       // 向调用方冒泡异常，保证调用方能感知到失败
       throw e
@@ -766,19 +758,20 @@ export const useModsStore = defineStore('mods', () => {
    * - NormalGroup（group_xx） → 取消分组选中（写入 selectedindex=0，不选择模组）
    * - MutexGroup（非 group_xx）→ 禁用该分组下所有一级模组（添加 DISABLED_ 前缀）
    *
-   * 虚拟节点（__all__ / __fav__ / __groups__）不执行任何操作（兜底 guard）。
+   * 所有非 mutexGroup 类型（normalGroup/exclusiveSlot/customParallel）均按 NormalGroup 处理。
+   * 虚拟节点（__ 开头）不执行任何操作（兜底 guard）。
    *
-   * @param groupType  当前分组类型（仅 normalGroup / mutexGroup 有行为）
+   * @param groupType  当前分组类型
    * @param groupIndex group_xx 编号（NormalGroup 写 selectedindex 用）
    * @param groupPath  分组目录绝对路径（MutexGroup 批量禁用用；NormalGroup 也传入用于日志）
    */
   async function deselectOrDisableNoneSlot(
-    groupType: 'normalGroup' | 'mutexGroup',
+    groupType: string,
     groupIndex: number,
     groupPath: string,
   ) {
-    // 虚拟节点兜底：仅 normalGroup / mutexGroup 才实际操作
-    if (groupType !== 'normalGroup' && groupType !== 'mutexGroup') {
+    const isMutex = groupType === 'mutexGroup'
+    if (groupType.startsWith('__') || groupType === '__groups__') {
       logger.warn('mods', 'deselectOrDisableNoneSlot called on virtual group, skip', { groupType })
       return
     }
@@ -787,10 +780,9 @@ export const useModsStore = defineStore('mods', () => {
     if (!s.currentModsPath) return
     isActivating.value = true
     try {
-      if (groupType === 'normalGroup') {
+      if (!isMutex) {
         logger.debug('mods', 'deselectOrDisableNoneSlot → deselectGroupMod', { groupIndex, groupPath })
         await deselectGroupMod(s.currentGame, s.currentModsPath, groupIndex)
-        // 同步前端选中索引到 0（None 槽位），减少 refresh 前的视觉闪动
         selectedModIndex.value = 0
         const path = selectedGroupPath.value
         if (path && !path.startsWith('__') && path !== '__groups__') {

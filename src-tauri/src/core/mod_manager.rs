@@ -478,7 +478,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     }
 
     // 步骤1: 准备 _MANAGED_ 目录，创建模板 INI 文件
-    let need_reload_manual = prepare_managed_folder(&managed_folder, game)?;
+    let mut need_reload_manual = prepare_managed_folder(&managed_folder, game)?;
     log::debug!("[mod_manager] [update_mod_data] step=prepare_managed_folder done need_reload_manual={}", need_reload_manual);
 
     // 步骤2: 扫描模组
@@ -610,13 +610,12 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     let nrmm_include_path = managed_folder.join(constants::INCLUDE_FILENAME);
     create_nrmm_include_ini(&nrmm_include_path, &managed_folder, &group_ini_paths, game_mods_path)?;
 
-    // 步骤8: 生成主 INI 注入段
-    let injected = generate_nrmm_injected_content(&nrmm_include_path, game_mods_path)?;
-    let final_content = if main_ini_content.is_empty() {
-        injected
-    } else {
-        format!("{}\n\n{}", main_ini_content, injected)
-    };
+    // 步骤8: 不再向 d3dx.ini 注入 include（对齐 NRMM 原版）
+    // NRMM 原版依赖标准 XXMI 的 include_recursive = Mods 自动加载 _MANAGED_ 下的 .ini 文件。
+    // 之前的实现将 include 放入 [Constants] 段，3Dmigoto 不处理此位置的 include 指令，
+    // 导致 nrmm_keypress.txt / manager_group.ini / group_N.ini 未被加载。
+    // 现仅保留清理旧注入内容（main_ini_content 已通过 strip_nrmm_injected_content 清理）。
+    let final_content = main_ini_content;
 
     // 原子写入主 INI
     let tmp_path = main_ini_path.with_extension("ini.tmp");
@@ -625,6 +624,17 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     fs::rename(&tmp_path, &main_ini_path)
         .with_context(|| format!("Failed to rename temp main INI to: {:?}", main_ini_path))?;
     log::debug!("[mod_manager] [update_mod_data] step=write_main_ini done path={:?}", main_ini_path);
+
+    // 检测 d3dx.ini 是否配置了 include_recursive
+    // 若缺失，_MANAGED_ 下的管理文件不会被 3Dmigoto 加载，按键模拟将无效
+    let has_include_recursive = detect_include_recursive(&main_ini_path, game_mods_path);
+    if !has_include_recursive {
+        log::warn!(
+            "[mod_manager] [update_mod_data] d3dx.ini 缺少 include_recursive 配置，模组可能无法在游戏内切换。\
+             请确保 d3dx.ini 包含 [Include] 段及 include_recursive = Mods 指令"
+        );
+        need_reload_manual = true;
+    }
 
     // 步骤9: 检测标准 XXMI/3DMigoto 环境
     let is_standard_xxmi = detect_standard_xxmi(game_mods_path, main_ini_name);
@@ -854,6 +864,7 @@ fn strip_nrmm_injected_content(content: &str) -> String {
 /// - ;NRMM_INI_START / ;NRMM_INI_END 标记
 /// - [Constants] 段定义管理变量
 /// - include nrmm_include.ini
+#[allow(dead_code)]
 fn generate_nrmm_injected_content(nrmm_include_path: &Path, game_mods_path: &Path) -> Result<String> {
     let mut content = String::new();
 
@@ -877,6 +888,51 @@ fn generate_nrmm_injected_content(nrmm_include_path: &Path, game_mods_path: &Pat
     content.push_str(";NRMM_INI_END\n");
 
     Ok(content)
+}
+
+/// 检测 d3dx.ini 是否配置了指向 game_mods_path 的 include_recursive 指令
+///
+/// 3Dmigoto 通过 [Include] 段内的 include_recursive 指令递归加载目录下所有 .ini 文件。
+/// NRMM 依赖此机制自动加载 _MANAGED_ 下的 nrmm_include.ini 等文件。
+/// 若 d3dx.ini 缺少此配置，_MANAGED_ 下的管理文件不会被 3Dmigoto 加载，
+/// 导致按键模拟钩子（[KeyMod]/[KeyGroup]）和前台窗口设置（check_foreground_window）无效。
+///
+/// # 参数
+/// - `main_ini_path`: d3dx.ini 文件路径
+/// - `game_mods_path`: Mods 目录路径（include_recursive 应指向此目录）
+///
+/// # 返回值
+/// - `true`: 检测到 [Include] 段内包含指向 Mods 目录的 include_recursive 指令
+/// - `false`: 未检测到，需警告用户手动添加
+fn detect_include_recursive(main_ini_path: &Path, game_mods_path: &Path) -> bool {
+    let content = match IniFile::force_read_as_utf8(main_ini_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let mods_dir_name = game_mods_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Mods");
+
+    let mut in_include_section = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let section = &trimmed[1..trimmed.len() - 1];
+            in_include_section = section.eq_ignore_ascii_case("Include");
+            continue;
+        }
+        if in_include_section {
+            if let Some(rest) = trimmed.strip_prefix("include_recursive") {
+                let value = rest.trim_start_matches(['=', ' ']).trim();
+                if value.contains(mods_dir_name) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn create_default_main_ini(path: &Path, ini_name: &str) -> Result<()> {
@@ -1304,7 +1360,10 @@ pub fn is_mutex_mod(mod_path: &Path, managed_path: &Path) -> bool {
     }
 }
 
-/// 取消选中分组内所有模组（禁用整个分组）
+/// 取消选中分组内模组（NormalGroup 专用）
+///
+/// 对齐 NRMM `setSelectedModIndex(ref, 0, groupPath)`：向分组目录写入 `selectedindex=0`，
+/// 选择 None 槽位以取消选中，而非重命名禁用模组。
 ///
 /// # 参数
 /// - `game`: 目标游戏
@@ -1317,29 +1376,35 @@ pub fn deselect_group_mods(
     _settings: &AppSettings,
     group_index: u32,
 ) -> Result<UpdateResult> {
-    let scan_result = mod_scanner::scan_mods(game_mods_path)?;
+    let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
 
-    for mod_data in &scan_result.mods {
-        if mod_data.group_index == group_index {
-            let mod_dir = &mod_data.full_path;
-            let dir_name = mod_dir.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
+    // 仅 NormalGroup 写入 selectedindex，MutexGroup 不参与标记文件
+    let group_dir = scan_result.groups.iter()
+        .find(|g| g.group_index == group_index && g.group_type == GroupType::NormalGroup)
+        .map(|g| g.full_path.clone());
 
-            if !is_disabled {
-                let new_name = format!("{}{}", constants::DISABLED_PREFIX, dir_name);
-                let new_path = mod_dir.parent().unwrap_or(mod_dir).join(new_name);
-                if mod_dir != &new_path {
-                    fs::rename(mod_dir, &new_path)
-                        .with_context(|| format!("Failed to disable mod: {:?}", mod_dir))?;
-                }
-            }
+    if let Some(g_dir) = group_dir {
+        let selectedindex_path = g_dir.join(constants::SELECTED_INDEX_FILE);
+        // 写入 0 表示选择 None 槽位（取消选择）
+        if let Err(e) = fs::write(&selectedindex_path, "0") {
+            log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
+        } else {
+            log::debug!(
+                "[core::mod_manager] [deselect_group_mods] wrote selectedindex=0 | path={}",
+                selectedindex_path.display()
+            );
         }
+    } else {
+        log::warn!(
+            "[core::mod_manager] [deselect_group_mods] NormalGroup not found by group_index={}",
+            group_index
+        );
     }
 
-    Ok(UpdateResult::default())
+    Ok(UpdateResult {
+        selected_mod_index: Some(0),
+        ..Default::default()
+    })
 }
 
 /// 批量切换模组启用/禁用状态
@@ -2182,6 +2247,47 @@ y = 2
     }
 
     #[test]
+    fn test_detect_include_recursive_present() {
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().join("Mods");
+        fs::create_dir_all(&mods_path).unwrap();
+        let ini_path = dir.path().join("d3dx.ini");
+        fs::write(&ini_path, "[Include]\ninclude_recursive = Mods\n\n[Constants]\nglobal $test = 0\n").unwrap();
+        assert!(detect_include_recursive(&ini_path, &mods_path));
+    }
+
+    #[test]
+    fn test_detect_include_recursive_missing() {
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().join("Mods");
+        fs::create_dir_all(&mods_path).unwrap();
+        let ini_path = dir.path().join("d3dx.ini");
+        fs::write(&ini_path, "[Constants]\nglobal $test = 0\n").unwrap();
+        assert!(!detect_include_recursive(&ini_path, &mods_path));
+    }
+
+    #[test]
+    fn test_detect_include_recursive_wrong_section() {
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().join("Mods");
+        fs::create_dir_all(&mods_path).unwrap();
+        let ini_path = dir.path().join("d3dx.ini");
+        // include_recursive 放在 [Constants] 段内，3Dmigoto 不处理此位置
+        fs::write(&ini_path, "[Constants]\ninclude_recursive = Mods\n").unwrap();
+        assert!(!detect_include_recursive(&ini_path, &mods_path));
+    }
+
+    #[test]
+    fn test_detect_include_recursive_case_insensitive() {
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().join("Mods");
+        fs::create_dir_all(&mods_path).unwrap();
+        let ini_path = dir.path().join("d3dx.ini");
+        fs::write(&ini_path, "[INCLUDE]\ninclude_recursive = Mods\n").unwrap();
+        assert!(detect_include_recursive(&ini_path, &mods_path));
+    }
+
+    #[test]
     fn test_generate_injected_content() {
         let dir = TempDir::new().unwrap();
         let managed = dir.path().join("_MANAGED_");
@@ -2324,9 +2430,10 @@ y = 2
 
         let main_ini = dir.path().join("d3dx.ini");
         let content = fs::read_to_string(&main_ini).unwrap();
-        assert!(content.contains(";NRMM_INI_START"));
-        assert!(content.contains(";NRMM_INI_END"));
-        assert!(content.contains("nrmm_include.ini"));
+        // 对齐 NRMM 原版：d3dx.ini 不再注入 include 标记，依赖 include_recursive 自动加载
+        assert!(!content.contains(";NRMM_INI_START"));
+        assert!(!content.contains(";NRMM_INI_END"));
+        assert!(!content.contains("nrmm_include.ini"));
 
         // 验证管理文件已创建
         let managed = dir.path().join("_MANAGED_");
@@ -2386,7 +2493,8 @@ y = 2
 
         let main_ini_path = dir.path().join("d3dx.ini");
         let modified_content = fs::read_to_string(&main_ini_path).unwrap();
-        assert!(modified_content.contains(";NRMM_INI_START"));
+        // 对齐 NRMM 原版：d3dx.ini 不再注入 include 标记，依赖 include_recursive 自动加载
+        assert!(!modified_content.contains(";NRMM_INI_START"));
 
         let result = restore_all_inis(dir.path()).unwrap();
         assert!(result.restored >= 2);
@@ -3012,6 +3120,36 @@ mod tests_non_group_isolation {
         );
         let content = fs::read_to_string(group1.join(constants::SELECTED_INDEX_FILE)).unwrap();
         assert_eq!(content.trim(), "1");
+    }
+
+    /// 测试：deselect_group_mods 写入 selectedindex=0 且不重命名禁用模组
+    ///
+    /// 验证：对 NormalGroup 调用 deselect_group_mods 应写入 "0"（选择 None 槽位），
+    /// 且不应通过 DISABLED 前缀重命名模组目录。
+    #[test]
+    fn test_deselect_group_mods_writes_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mods_path = tmp.path();
+        let managed = mods_path.join("_MANAGED_");
+        let group_dir = managed.join("group_1");
+        fs::create_dir_all(&group_dir).unwrap();
+        let mod_dir = group_dir.join("TestMod");
+        fs::create_dir_all(&mod_dir).unwrap();
+        fs::write(mod_dir.join("test.ini"), "[Section]\nkey=val\n").unwrap();
+
+        let settings = AppSettings::default();
+        let result = deselect_group_mods(
+            TargetGame::GenshinImpact,
+            mods_path,
+            &settings,
+            1,
+        ).unwrap();
+
+        assert_eq!(result.selected_mod_index, Some(0));
+        let sel = fs::read_to_string(group_dir.join("selectedindex")).unwrap();
+        assert_eq!(sel, "0");
+        assert!(mod_dir.exists(), "mod directory should not be renamed");
+        assert!(!group_dir.join("DISABLEDTestMod").exists());
     }
 
     /// 测试：collect_mod_ini_files 正确收集模组目录下的 .ini 文件

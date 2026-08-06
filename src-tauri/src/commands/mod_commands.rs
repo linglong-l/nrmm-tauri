@@ -213,6 +213,17 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
     let mods_path = PathBuf::from(mods_path);
 
     if is_mutex {
+        // Mutex 分支防抖（与非 Mutex 分支一致，防止快速重复点击触发多次互斥切换）
+        {
+            let mut debounce_map = SELECTION_DEBOUNCE.lock().map_err(|_| "debounce lock poisoned")?;
+            if let Some(last_time) = debounce_map.get(&group_path) {
+                if Instant::now() - *last_time < Duration::from_millis(500) {
+                    return Err("debounced".to_string());
+                }
+            }
+            debounce_map.insert(group_path.clone(), Instant::now());
+        }
+
         let mod_path_buf = PathBuf::from(mod_path);
         let managed_path = mods_path.join(constants::MANAGED_FOLDER);
 
@@ -235,7 +246,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         {
             let mut debounce_map = SELECTION_DEBOUNCE.lock().map_err(|_| "debounce lock poisoned")?;
             if let Some(last_time) = debounce_map.get(&group_path) {
-                if Instant::now() - *last_time < Duration::from_secs(3) {
+                if Instant::now() - *last_time < Duration::from_millis(500) {
                     return Err("debounced".to_string());
                 }
             }
@@ -249,8 +260,10 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         if simulate_enabled {
             let mut simulator = crate::platform::get_key_simulator();
             let process_names = game_enum.process_names();
-            if let Some(first_pn) = process_names.first() {
-                let _ = simulator.set_target_process(first_pn);
+            for pn in process_names {
+                if simulator.set_target_process(pn).is_ok() {
+                    break;
+                }
             }
             // 参数语义对齐NRMM：优先使用调用方传入的屏幕坐标（cursor_x/cursor_y 为实际像素时），
             // 否则 fallback 到 (mod_index, group_index) 作为虚拟坐标（3Dmigoto/xxmi 据此识别）。

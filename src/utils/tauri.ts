@@ -208,8 +208,8 @@ export async function selectMod(
  * @param modsPath 模组文件夹路径
  * @param groupIndex 分组索引
  */
-export async function deselectGroupMod(game: string, modsPath: string, groupIndex: number): Promise<any> {
-  return safeInvoke('deselect_group_mod', { game, modsPath, groupIndex })
+export async function deselectGroupMod(game: string, modsPath: string, groupIndex: number): Promise<UpdateResult> {
+  return safeInvoke<UpdateResult>('deselect_group_mod', { game, modsPath, groupIndex })
 }
 
 /**

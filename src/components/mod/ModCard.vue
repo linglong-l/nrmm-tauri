@@ -339,12 +339,12 @@ async function handleDoubleClick() {
     if (!g) return
     try {
       await modsStore.deselectOrDisableNoneSlot(
-        g.groupType as 'normalGroup' | 'mutexGroup',
+        g.groupType,
         g.groupIndex,
         g.groupPath,
       )
       ElMessage.success(
-        g.groupType === 'normalGroup'
+        g.groupType !== 'mutexGroup'
           ? t('mods.deselectGroup', '已取消该分组模组选择')
           : t('mods.disableAllInGroup', '已禁用该分组所有模组')
       )
@@ -353,18 +353,7 @@ async function handleDoubleClick() {
     }
     return
   }
-  // 同步切换左侧导航栏对应分组为选中状态
-  if (mod.value) {
-    const modPath = mod.value.modPath
-    // 从模组路径中提取分组路径（向上查找 _MANAGED_ 目录）
-    const managedIndex = modPath.indexOf('_MANAGED_')
-    if (managedIndex !== -1) {
-      // 分组路径 = _MANAGED_ 目录 + 后续路径
-      const groupPath = modPath.substring(managedIndex)
-      // 查找并选中对应分组
-      modsStore.selectGroupByPath(groupPath)
-    }
-  }
+  // 注意：双击的模组必定在当前选中分组内，无需额外切换分组
   // 双击直接触发启用（activate）= 右键菜单中的「启用」效果
   emit('activate', props.modIndex)
 }
