@@ -226,17 +226,21 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
 
     fn process_group(
         group: &ModGroupData,
+        parent_disabled: bool,
         hash_to_mods: &mut std::collections::HashMap<String, Vec<(String, String, PathBuf)>>,
         scanned_mods: &mut u32,
         scanned_hashes: &mut u32,
     ) {
+        // 传播分组禁用状态：父分组禁用或当前分组禁用 → 整个子树跳过
+        let group_disabled = parent_disabled || group.group_disabled;
         let is_normal = group.group_type == GroupType::NormalGroup;
         for mod_data in &group.mods {
             // NormalGroup 仅扫描 is_active 模组；MutexGroup 扫描所有启用模组
+            // 两者均需检查 group_disabled，避免被禁用分组下的模组参与检测
             let should_scan = if is_normal {
-                mod_data.is_active && !mod_data.disabled && !mod_data.mod_disabled
+                mod_data.is_active && !mod_data.disabled && !mod_data.mod_disabled && !group_disabled
             } else {
-                !mod_data.disabled && !mod_data.mod_disabled
+                !mod_data.disabled && !mod_data.mod_disabled && !group_disabled
             };
             if !should_scan || mod_data.mod_name == "None" {
                 continue;
@@ -259,15 +263,16 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
                 }
             }
         }
-        // 递归子分组
+        // 递归子分组，传递 group_disabled
         for child in &group.children {
-            process_group(child, hash_to_mods, scanned_mods, scanned_hashes);
+            process_group(child, group_disabled, hash_to_mods, scanned_mods, scanned_hashes);
         }
     }
 
     for group in &scan_result.groups {
         process_group(
             group,
+            false,
             &mut hash_to_mods,
             &mut scanned_mods,
             &mut scanned_hashes,
@@ -1734,13 +1739,22 @@ pub fn restore_managed_mod(mod_dir: &Path) -> (u32, u32) {
     let mut total = 0u32;
     let mut failed = 0u32;
 
-    // 递归收集所有 .ini 文件
-    let ini_files = match collect_ini_files_recursive(mod_dir) {
-        Ok(files) => files,
-        Err(e) => {
-            log::error!("[restore_managed_mod] Failed to collect INI files in {:?}: {}", mod_dir, e);
-            return (0, 1);
+    // 收集待还原的 .ini 文件：
+    // - 目录：递归收集其下所有 .ini 文件
+    // - 单个文件：仅当为 .ini 文件（且非备份）时纳入，非 .ini 文件直接忽略（pass）
+    let ini_files: Vec<PathBuf> = if mod_dir.is_dir() {
+        match collect_ini_files_recursive(mod_dir) {
+            Ok(files) => files,
+            Err(e) => {
+                log::error!("[restore_managed_mod] Failed to collect INI files in {:?}: {}", mod_dir, e);
+                return (0, 1);
+            }
         }
+    } else if is_restorable_ini(mod_dir) {
+        vec![mod_dir.to_path_buf()]
+    } else {
+        log::info!("[restore_managed_mod] Skip non-ini file: {:?}", mod_dir);
+        Vec::new()
     };
 
     for ini_path in &ini_files {
@@ -1752,6 +1766,17 @@ pub fn restore_managed_mod(mod_dir: &Path) -> (u32, u32) {
     }
 
     (total, failed)
+}
+
+/// 判断路径是否为可还原的 .ini 文件（扩展名为 ini 且非备份文件）
+fn is_restorable_ini(path: &Path) -> bool {
+    if let Some(ext) = path.extension() {
+        if ext.eq_ignore_ascii_case("ini") {
+            // 跳过 .ini_managed_backup 备份文件
+            return !path.to_string_lossy().ends_with(&format!(".{}", constants::BACKUP_EXTENSION));
+        }
+    }
+    false
 }
 
 /// 递归收集目录下所有 .ini 文件（对齐 NRMM `_findIniFilesRecursive`）
@@ -1767,13 +1792,8 @@ fn collect_ini_files_recursive_inner(dir: &Path, result: &mut Vec<PathBuf>) -> R
         let path = entry.path();
         if path.is_dir() {
             collect_ini_files_recursive_inner(&path, result)?;
-        } else if let Some(ext) = path.extension() {
-            if ext.eq_ignore_ascii_case("ini") {
-                // 跳过 .ini_managed_backup 备份文件
-                if !path.to_string_lossy().ends_with(&format!(".{}", constants::BACKUP_EXTENSION)) {
-                    result.push(path);
-                }
-            }
+        } else if is_restorable_ini(&path) {
+            result.push(path);
         }
     }
     Ok(())
@@ -2529,6 +2549,50 @@ y = 2
     }
 
     #[test]
+    fn test_restore_managed_mod_single_ini_file() {
+        let dir = setup_test_env();
+        // 构造一个含 NRMM 管理注入的单个 .ini 文件
+        let ini_path = dir.path().join("mod.ini");
+        fs::write(&ini_path, "[TextureOverrideTest]\nhash = 0x1\n; no reload mod manager\n").unwrap();
+
+        // 单 .ini 文件应被还原
+        let (restored, failed) = restore_managed_mod(&ini_path);
+        assert_eq!(restored, 1);
+        assert_eq!(failed, 0);
+        let content = fs::read_to_string(&ini_path).unwrap();
+        assert!(!content.contains("no reload mod manager"));
+    }
+
+    #[test]
+    fn test_restore_managed_mod_skips_non_ini_file() {
+        let dir = setup_test_env();
+        // 非 .ini 文件应被忽略（pass），不报错也不处理
+        let txt_path = dir.path().join("readme.txt");
+        fs::write(&txt_path, "hello").unwrap();
+
+        let (restored, failed) = restore_managed_mod(&txt_path);
+        assert_eq!(restored, 0);
+        assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn test_restore_managed_mod_directory_recursive() {
+        let dir = setup_test_env();
+        let group_path = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(&group_path, "ModA", "[TextureOverrideA]\nhash = 0x1\n; no reload mod manager\n");
+        create_mod_with_ini(&group_path, "ModB", "[TextureOverrideB]\nhash = 0x2\nglobal $managed_slot_id = 0\n");
+
+        // 目录应递归还原其下所有 .ini 文件
+        let (restored, failed) = restore_managed_mod(&group_path);
+        assert_eq!(restored, 2);
+        assert_eq!(failed, 0);
+        let a = fs::read_to_string(group_path.join("ModA").join("mod.ini")).unwrap();
+        assert!(!a.contains("no reload mod manager"));
+        let b = fs::read_to_string(group_path.join("ModB").join("mod.ini")).unwrap();
+        assert!(!b.contains("global $managed_slot_id"));
+    }
+
+    #[test]
     fn test_update_mod_data_creates_default_ini() {
         let dir = setup_test_env();
         let settings = AppSettings::default();
@@ -3188,6 +3252,124 @@ mod tests_non_group_isolation {
             assert!(!entry.ini_vec.is_empty(), "ini_vec 不应为空");
             assert!(entry.ini_vec[0].ends_with(".ini"), "ini_vec 应指向 .ini 文件");
         }
+    }
+
+    /// 测试：detect_hash_conflicts 应跳过被 NRMM 禁用的 hash 行（;-;hash = ...）
+    ///
+    /// 验证：当模组 A 的 hash 行被 `;-;` 禁用（DisabledKeyValue），
+    /// 模组 B 正常使用同一 hash 时，不报告冲突。
+    #[test]
+    fn test_hash_conflict_skips_disabled_hash_lines() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        // 非group目录1: ModA 的 hash 行被 ;-; 禁用
+        let mutex_a = dir.path().join("_MANAGED_").join("#MutexA");
+        fs::create_dir_all(&mutex_a).unwrap();
+        create_mod_with_ini(
+            &mutex_a,
+            "ModA",
+            "[TextureOverrideTexA]\n;-;hash = 0x12345678\n",
+        );
+
+        // 非group目录2: ModB 正常使用同一 hash
+        let mutex_b = dir.path().join("_MANAGED_").join("#MutexB");
+        fs::create_dir_all(&mutex_b).unwrap();
+        create_mod_with_ini(
+            &mutex_b,
+            "ModB",
+            "[TextureOverrideTexB]\nhash = 0x12345678\n",
+        );
+
+        let result = detect_hash_conflicts(dir.path()).unwrap();
+        // ModA 的 hash 被禁用，仅 ModB 有该 hash → 不构成冲突
+        assert!(
+            result.conflicts.is_empty(),
+            "被 ;-; 禁用的 hash 行不应参与冲突检测，但检测到了冲突"
+        );
+    }
+
+    /// 测试：detect_hash_conflicts 应跳过被禁用分组（DISABLED_ 前缀）下的模组
+    ///
+    /// 验证：当 MutexGroup 子分组目录有 DISABLED_ 前缀（group_disabled=true），
+    /// 但其内模组目录无前缀时，该模组不参与冲突检测。
+    #[test]
+    fn test_hash_conflict_skips_disabled_group_mods() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        // MutexGroup 根分组（未禁用），内含一个被禁用的子分组
+        let mutex_root = dir.path().join("_MANAGED_").join("#MutexRoot");
+        fs::create_dir_all(&mutex_root).unwrap();
+        // DISABLED_SubGroup 无 .ini 文件 → 被视为子分组节点，group_disabled=true
+        let disabled_sub = mutex_root.join("DISABLED_SubGroup");
+        fs::create_dir_all(&disabled_sub).unwrap();
+        // SubGroup 内的模组（无 DISABLED_ 前缀，但父分组被禁用）
+        create_mod_with_ini(
+            &disabled_sub,
+            "ModA",
+            "[TextureOverrideTexA]\nhash = 0xdeadbeef\n",
+        );
+
+        // 另一个正常 MutexGroup，含使用相同 hash 的模组
+        let another = dir.path().join("_MANAGED_").join("#Another");
+        fs::create_dir_all(&another).unwrap();
+        create_mod_with_ini(
+            &another,
+            "ModB",
+            "[TextureOverrideTexB]\nhash = 0xdeadbeef\n",
+        );
+
+        let result = detect_hash_conflicts(dir.path()).unwrap();
+        // ModA 在被禁用分组下，应被跳过；仅 ModB 有该 hash → 不构成冲突
+        assert!(
+            result.conflicts.is_empty(),
+            "被禁用分组（DISABLED_ 前缀）下的模组不应参与冲突检测，但检测到了冲突"
+        );
+    }
+
+    /// 测试：detect_hash_conflicts 应扫描启用分组内嵌套子分组中的启用模组（回归测试）
+    ///
+    /// 验证：当 MutexGroup 子分组未禁用（无 DISABLED_ 前缀）时，
+    /// 其内嵌套的模组正常参与冲突检测，确保 group_disabled 传播不影响正常场景。
+    #[test]
+    fn test_hash_conflict_scans_enabled_mod_in_enabled_group() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        // MutexGroup 根分组（未禁用），内含一个正常子分组
+        let mutex_root = dir.path().join("_MANAGED_").join("#GroupA");
+        fs::create_dir_all(&mutex_root).unwrap();
+        // SubGroup 无 .ini 文件 → 被视为子分组节点，group_disabled=false
+        let enabled_sub = mutex_root.join("SubGroup");
+        fs::create_dir_all(&enabled_sub).unwrap();
+        // 子分组内的模组
+        create_mod_with_ini(
+            &enabled_sub,
+            "ModA",
+            "[TextureOverrideTexA]\nhash = 0xcafebabe\n",
+        );
+
+        // 另一个正常 MutexGroup，含使用相同 hash 的模组
+        let another = dir.path().join("_MANAGED_").join("#GroupB");
+        fs::create_dir_all(&another).unwrap();
+        create_mod_with_ini(
+            &another,
+            "ModB",
+            "[TextureOverrideTexB]\nhash = 0xcafebabe\n",
+        );
+
+        let result = detect_hash_conflicts(dir.path()).unwrap();
+        // 两个启用模组使用相同 hash → 应检测到冲突
+        assert!(
+            !result.conflicts.is_empty(),
+            "启用分组内嵌套子分组中的启用模组应参与冲突检测，但未检测到冲突"
+        );
+        let conflict = &result.conflicts[0];
+        assert_eq!(conflict.entries.len(), 2);
+        let mod_names: Vec<&str> = conflict.entries.iter().map(|e| e.mod_name.as_str()).collect();
+        assert!(mod_names.contains(&"ModA"));
+        assert!(mod_names.contains(&"ModB"));
     }
 
     /// 测试：switch_mod 不会在 MutexGroup 目录下写入 selectedindex 文件

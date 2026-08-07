@@ -902,10 +902,14 @@ impl IniFile {
         libs
     }
 
-    /// 提取 INI 文件中所有 TextureOverride/ShaderOverride 段的 hash 值
+    /// 提取 INI 文件中所有 TextureOverride/ShaderOverride 段的活跃 hash 值
     ///
     /// 遍历所有 section，对名称以 `textureoverride` 或 `shaderoverride` 开头的段，
-    /// 提取 `hash` 键的值（不区分大小写）。返回 (section_name, hash_value) 列表。
+    /// 提取 `hash` 键的值（不区分大小写）。
+    ///
+    /// 仅提取活跃行（`KeyValue { disabled: false }`），跳过被 NRMM 禁用的行
+    /// （`DisabledKeyValue` 即 `;-;hash = ...`，以及 `KeyValue { disabled: true }`），
+    /// 避免已禁用的 hash 值造成假冲突。
     ///
     /// # 返回
     /// Vec<(String, String)> — (段名, hash 值原始字符串，已转小写归一化)
@@ -915,7 +919,9 @@ impl IniFile {
             let name_lower = section.name.to_lowercase();
             if name_lower.starts_with("textureoverride") || name_lower.starts_with("shaderoverride") {
                 for line in &section.lines {
-                    if let IniLine::KeyValue { key, value, .. } | IniLine::DisabledKeyValue { key, value, .. } = line {
+                    // 仅提取活跃 hash 行（KeyValue 且 disabled=false），
+                    // 跳过 DisabledKeyValue（;-; 前缀禁用行）和 KeyValue { disabled: true }
+                    if let IniLine::KeyValue { key, value, disabled: false, .. } = line {
                         if key.to_lowercase() == "hash" && !value.trim().is_empty() {
                             hashes.push((section.name.clone(), value.trim().to_lowercase()));
                         }

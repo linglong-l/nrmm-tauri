@@ -64,7 +64,7 @@
  * - 右键菜单
  * - 不同层级缩进
  */
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ArrowRight } from '@element-plus/icons-vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -130,21 +130,6 @@ watch(
 
 /** 当前分组是否被选中 */
 const isSelected = computed(() => !isVirtualRoot.value && props.selectedGroupPath === props.group.groupPath)
-
-/**
- * 监听选中状态变化，确保选中分组在可视区域内
- * 退出搜索后布局恢复时，自动滚动到选中的分组节点
- */
-watch(isSelected, (selected) => {
-  if (selected) {
-    nextTick(() => {
-      const el = document.querySelector(`.group-item.active`)
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-      }
-    })
-  }
-})
 
 /** 分组显示名称（优先使用name字段，去掉DISABLED_前缀后的名称） */
 const displayName = computed(() => props.group.name || props.group.groupName)

@@ -62,7 +62,7 @@
         </div>
 
         <!-- 还原区：从还原区恢复已删除模组 -->
-        <div class="section-block">
+        <div ref="restoreZoneRef" class="section-block">
           <h4 class="section-heading">{{ t('settings.restoreZone') }}</h4>
           <button
             type="button"
@@ -246,6 +246,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { UploadFilled, FolderOpened } from '@element-plus/icons-vue'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { usePlatform } from '@/stores/platform'
@@ -397,6 +398,10 @@ function detachDrag() {
 
 onBeforeUnmount(() => {
   detachDrag()
+  if (unlistenDragDrop) {
+    unlistenDragDrop()
+    unlistenDragDrop = null
+  }
 })
 
 /**
@@ -526,6 +531,64 @@ function handleGenerateFolderIcon() {
 const isRestoreDragging = ref(false)
 /** 还原操作进行中状态 */
 const restoring = ref(false)
+/** 还原区整块DOM引用（标题+按钮，判断拖放落点是否在还原区内） */
+const restoreZoneRef = ref<HTMLElement | null>(null)
+/** Tauri拖放事件解绑函数 */
+let unlistenDragDrop: (() => void) | null = null
+
+/**
+ * 判断拖放坐标是否落在还原区整块区域内（含标题与按钮上方区域）
+ * @param x 拖放位置X坐标（Tauri 物理像素）
+ * @param y 拖放位置Y坐标（Tauri 物理像素）
+ * @returns 是否落在还原区矩形范围内
+ */
+function isInsideRestoreZone(x: number, y: number): boolean {
+  const el = restoreZoneRef.value
+  if (!el) return false
+  const rect = el.getBoundingClientRect()
+  // Tauri v2 的拖放 position 为物理像素（PhysicalPosition），
+  // getBoundingClientRect 返回 CSS 逻辑像素；高 DPI 缩放（dpr>1）下二者不一致，
+  // 需先将物理像素除以 devicePixelRatio 转为逻辑像素再比较，否则还原区下半部分会越界无法触发。
+  const dpr = window.devicePixelRatio || 1
+  const cx = x / dpr
+  const cy = y / dpr
+  return cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom
+}
+
+/**
+ * 注册 Tauri 原生拖放事件监听
+ *
+ * Tauri v2 默认拦截系统文件拖放事件，HTML5 的 dragover/drop 不触发，
+ * 必须通过 getCurrentWebview().onDragDropEvent 获取真实文件路径。
+ * 仅在 Tauri 运行时可用；非 Tauri 环境（浏览器预览）下注册失败即跳过，
+ * 由 HTML5 的 handleRestoreDragOver/handleRestoreDrop 兜底。
+ */
+async function setupTauriDragDrop() {
+  try {
+    unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload
+      // enter/over：指针进入或悬停还原区时高亮；leave：移出取消高亮
+      if (payload.type === 'enter' || payload.type === 'over') {
+        isRestoreDragging.value = isInsideRestoreZone(payload.position.x, payload.position.y)
+        return
+      }
+      if (payload.type === 'leave') {
+        isRestoreDragging.value = false
+        return
+      }
+      // drop：释放文件，仅当落点在还原区内时触发还原流程
+      if (payload.type === 'drop') {
+        isRestoreDragging.value = false
+        if (isInsideRestoreZone(payload.position.x, payload.position.y) && payload.paths.length > 0) {
+          doRestore(payload.paths)
+        }
+      }
+    })
+  } catch (e) {
+    // 非 Tauri 环境（如浏览器预览）不支持 onDragDropEvent，静默降级给 HTML5 事件
+    logger.warn('SettingsView', 'Tauri onDragDropEvent unavailable, fallback to HTML5 drag events', e)
+  }
+}
 
 /**
  * 还原区拖拽进入/移动：识别文件拖入并提示可投放
@@ -737,6 +800,7 @@ onMounted(async () => {
   }
   await nextTick()
   attachDrag()
+  await setupTauriDragDrop()
 })
 </script>
 

@@ -97,6 +97,13 @@ const tabs = [
  */
 const activeTab = ref<'keybinds' | 'mods' | 'settings'>("mods")
 /**
+ * 模组页焦点令牌：每次窗口显示或切回模组页时自增。
+ * 子组件（GroupPanel/ModGrid）监听此令牌，在焦点回归时把选中的分组居中、
+ * 选中的模组卡片滚动到可视范围。
+ */
+const modsFocusTick = ref(0)
+provide('modsFocusTick', modsFocusTick)
+/**
  * 暴露给子组件的标签页切换函数（provide/inject 机制）
  * 用于 ModCard 等组件从右键菜单「按键切换」跳转到 Keybinds 页
  */
@@ -233,6 +240,18 @@ watch(bgAlpha, applyBackground, { flush: 'post' })
 /** 监听设置变化，实时应用界面缩放 */
 watch(scaleVal, applyScale, { flush: 'post' })
 
+/**
+ * 切回模组页时自增焦点令牌
+ * 触发子组件（GroupPanel/ModGrid）滚动选中分组居中、选中模组卡片到可视范围
+ */
+watch(activeTab, (tab) => {
+  if (tab === 'mods') {
+    nextTick(() => {
+      modsFocusTick.value++
+    })
+  }
+})
+
 onMounted(async () => {
   reportBootStage('dom-mounted')
 
@@ -317,6 +336,10 @@ onMounted(async () => {
 
       if (gameSwitchPending) {
         gameSwitchPending = false
+        // 已通过 window-show-with-game 完成加载，焦点回归也需滚动
+        nextTick(() => {
+          modsFocusTick.value++
+        })
         return
       }
 
@@ -334,34 +357,43 @@ onMounted(async () => {
         logger.info('App', `cacheValid=${cacheValid}, watcherRunning=${watcherRunning}, watched=${watchedPath ?? 'null'}`)
 
         if (cacheValid) {
+            if (!watcherRunning) {
+              await modsStore.startWatching()
+            } else {
+              const expectedManaged = `${s.currentModsPath.replace(/[\\/]$/, '')}\\${'_MANAGED_'}`.replace(/\//g, '\\')
+              const actualNormalized = watchedPath?.replace(/\//g, '\\') ?? ''
+              if (!actualNormalized.endsWith(expectedManaged.slice(-12))) {
+                await modsStore.startWatching()
+              }
+            }
+            // 兜底校验：缓存命中时 selectedGroupPath 应已保留，但若数据异常则回退到第一个分组
+            if (modsStore.groups.length > 0) {
+              const sp = modsStore.selectedGroupPath
+              if (!sp || !modsStore.findGroupByPathInList(modsStore.groups, sp)) {
+                modsStore.selectGroupByPath(modsStore.groups[0].groupPath)
+              }
+            }
+            nextTick(() => {
+              modsFocusTick.value++
+            })
+            return
+          }
+
           if (!watcherRunning) {
             await modsStore.startWatching()
-          } else {
-            const expectedManaged = `${s.currentModsPath.replace(/[\\/]$/, '')}\\${'_MANAGED_'}`.replace(/\//g, '\\')
-            const actualNormalized = watchedPath?.replace(/\//g, '\\') ?? ''
-            if (!actualNormalized.endsWith(expectedManaged.slice(-12))) {
-              await modsStore.startWatching()
-            }
           }
-          // 兜底校验：缓存命中时 selectedGroupPath 应已保留，但若数据异常则回退到第一个分组
-          if (modsStore.groups.length > 0) {
-            const sp = modsStore.selectedGroupPath
-            if (!sp || !modsStore.findGroupByPathInList(modsStore.groups, sp)) {
-              modsStore.selectGroupByPath(modsStore.groups[0].groupPath)
-            }
-          }
-          return
-        }
-
-        if (!watcherRunning) {
+          await modsStore.loadMods()
+          nextTick(() => {
+            modsFocusTick.value++
+          })
+        } catch (e) {
+          logger.warn('App', 'window-shown cache check failed, fallback to full load', e)
           await modsStore.startWatching()
+          await modsStore.loadMods()
+          nextTick(() => {
+            modsFocusTick.value++
+          })
         }
-        await modsStore.loadMods()
-      } catch (e) {
-        logger.warn('App', 'window-shown cache check failed, fallback to full load', e)
-        await modsStore.startWatching()
-        await modsStore.loadMods()
-      }
     })
   } catch (e) {
     logger.warn('App', 'Failed to register window-shown listener', e)
@@ -374,6 +406,10 @@ onMounted(async () => {
       const game = event.payload
       logger.info('App', `Window shown with detected game: ${game}`)
       await applyDetectedGameSwitch(game, true)
+      // 焦点回归模组页：触发子组件滚动选中分组居中、选中模组可见
+      nextTick(() => {
+        modsFocusTick.value++
+      })
     })
   } catch (e) {
     logger.warn('App', 'Failed to register window-show-with-game listener', e)

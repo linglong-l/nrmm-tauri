@@ -77,7 +77,8 @@
  * 左侧导航栏，以圆形头像树状列表展示所有模组分组
  * 支持：递归树结构、点击选中分组、展开/折叠子分组、右键菜单、拖拽滚动
  */
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, inject, nextTick } from 'vue'
+import type { Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Edit, Delete, FolderOpened, FolderAdd, VideoPause, VideoPlay } from '@element-plus/icons-vue'
 import type { ModGroupData } from '@/types'
@@ -94,6 +95,12 @@ const settingsStore = useSettingsStore()
 /** 分组列表DOM引用，用于拖拽滚动 */
 const groupListRef = ref<HTMLElement | null>(null)
 useDragScroll(groupListRef)
+
+/**
+ * 模组页焦点令牌（由 App.vue provide）
+ * 窗口显示或切回模组页时自增，触发选中分组居中滚动
+ */
+const modsFocusTick = inject<Ref<number>>('modsFocusTick', ref(0))
 
 /** 分组列表计算属性：从modsStore获取 */
 const groups = computed(() => modsStore.groups)
@@ -582,9 +589,38 @@ function handlePanelClick() {
   }
 }
 
+/**
+ * 将当前选中的分组滚动到可视范围中央（尽量居中）
+ * 选中分组节点为 .group-item.active（可能位于任意递归深度）
+ * scrollIntoView({ block: 'center' }) 在无法真正居中时（靠近顶部/底部）会自动滚动到最接近位置
+ */
+function scrollToSelectedGroup() {
+  const container = groupListRef.value
+  if (!container) return
+  const active = container.querySelector<HTMLElement>('.group-item.active')
+  if (active) {
+    active.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  // 挂载后（分组数据可能尚未加载完成，selectedGroupPath变化时也会再次触发）
+  nextTick(scrollToSelectedGroup)
 })
+
+/**
+ * 焦点回归 / 选中分组变化 / 分组数量变化时，确保选中分组居中
+ * - selectedGroupPath 变化：用户切换分组
+ * - groups.length 变化：分组数据首次加载完成（此时 selectedGroupPath 可能未变）
+ * - modsFocusTick 变化：窗口显示或切回模组页（焦点回归）
+ */
+watch(
+  () => [selectedGroupPath.value, groups.value.length, modsFocusTick.value],
+  () => {
+    nextTick(scrollToSelectedGroup)
+  }
+)
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)

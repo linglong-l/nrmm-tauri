@@ -67,7 +67,8 @@
  * - 拖拽滚动
  * - 收藏过滤
  */
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch, inject } from 'vue'
+import type { Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FolderOpened } from '@element-plus/icons-vue'
 import ModCard from './ModCard.vue'
@@ -79,6 +80,12 @@ import type { ModData } from '@/types'
 
 const { t } = useI18n()
 const modsStore = useModsStore()
+
+/**
+ * 模组页焦点令牌（由 App.vue provide）
+ * 窗口显示或切回模组页时自增，触发选中模组卡片滚动到可视范围
+ */
+const modsFocusTick = inject<Ref<number>>('modsFocusTick', ref(0))
 
 /** 网格内容区DOM引用，用于拖拽滚动 */
 const gridContentRef = ref<HTMLElement | null>(null)
@@ -391,6 +398,15 @@ watch(
     }
   }
 )
+
+/**
+ * 焦点回归（窗口显示 / 切回模组页）→ 确保选中模组卡片可见
+ */
+watch(modsFocusTick, () => {
+  if (!loading.value) {
+    nextTick(ensureSelectedCardVisible)
+  }
+})
 </script>
 
 <style scoped>
