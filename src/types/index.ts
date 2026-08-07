@@ -481,6 +481,22 @@ export interface RestoredCount {
 }
 
 /**
+ * 还原模组 INI 结果（还原区功能）
+ *
+ * 对应后端 `crate::core::mod_manager::RestoreManagedResult`
+ */
+export interface RestoreManagedResult {
+  /** 被还原的目录路径 */
+  path: string;
+  /** 处理的 INI 文件数 */
+  iniCount: number;
+  /** 还原失败的文件数 */
+  failedCount: number;
+  /** 是否全部还原成功 */
+  success: boolean;
+}
+
+/**
  * Hash 冲突单条详情（一个模组使用该 hash 的一个或多个 INI 文件）
  *
  * 对应后端 `crate::models::mod_data::HashConflictEntry`

@@ -1699,6 +1699,20 @@ pub struct RemoveModResult {
     pub failed_count: u32,
 }
 
+/// 还原模组 INI 结果（还原区功能）
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreManagedResult {
+    /// 被还原的目录路径
+    pub path: PathBuf,
+    /// 处理的 INI 文件数
+    pub ini_count: u32,
+    /// 还原失败的文件数
+    pub failed_count: u32,
+    /// 是否全部还原成功
+    pub success: bool,
+}
+
 /// 还原模组 INI 到管理前状态（NRMM 对齐：`restoreManagedMod`）
 ///
 /// 严格复刻 NRMM 的 `restoreManagedMod` 逻辑，对指定目录下递归找到的每个 INI 文件执行：

@@ -10,7 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult } from '../types'
+import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult } from '../types'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from './logger'
@@ -328,6 +328,16 @@ export async function openGroupFolder(groupPath: string): Promise<void> {
  */
 export async function restoreAllInis(modsPath: string): Promise<RestoredCount> {
   return safeInvoke<RestoredCount>('restore_all_inis', { modsPath })
+}
+
+/**
+ * 还原模组 INI 到管理前状态（还原区功能）
+ * 后端命令：restore_managed_folder
+ * @param path 要还原的模组文件夹路径
+ * @returns 还原结果（路径、INI 处理数、失败数、成功标志）
+ */
+export async function restoreManagedFolder(path: string): Promise<RestoreManagedResult> {
+  return safeInvoke<RestoreManagedResult>('restore_managed_folder', { path })
 }
 
 /**

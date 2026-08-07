@@ -228,6 +228,7 @@ pub fn run() {
             commands::mod_commands::open_mod_folder,
             commands::mod_commands::open_group_folder,
             commands::mod_commands::restore_all_inis,
+            commands::mod_commands::restore_managed_folder,
             commands::mod_commands::save_customizations,
             commands::mod_commands::batch_toggle_mods,
             commands::mod_commands::validate_subfolder_name,

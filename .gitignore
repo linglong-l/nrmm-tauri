@@ -42,6 +42,10 @@ Desktop.ini
 # Rust debug symbols
 *.pdb
 
+# Python cache
+__pycache__/
+.mypy_cache/
+
 # Tauri WiX toolchain (Windows installer)
 src-tauri/WixTools/
 
@@ -71,3 +75,4 @@ AGENTS.md
 clippy_output.txt
 SESSION_CONTEXT.md
 /tmp/
+/docs/

@@ -643,6 +643,43 @@ pub async fn restore_all_inis(mods_path: String) -> Result<mod_manager::Restored
     Ok(result)
 }
 
+/// 还原模组 INI 到管理前状态（还原区功能）
+///
+/// 对用户拖拽/选择的目录递归清理 NRMM 管理器注入的专属行，
+/// 使模组无需模组管理器即可在 3Dmigoto 中使用。
+///
+/// # 参数
+/// - `path`: 要还原的模组文件夹路径
+///
+/// # 返回值
+/// 返回 `RestoreManagedResult`，包含路径、INI 处理数、失败数与成功标志。
+///
+/// # 错误
+/// - 路径不存在（带 `[PATH_NOT_FOUND]` 前缀，供前端识别）
+#[tauri::command]
+pub async fn restore_managed_folder(path: String) -> Result<mod_manager::RestoreManagedResult, String> {
+    let path_buf = PathBuf::from(&path);
+    if !path_buf.exists() {
+        log::warn!("Restore managed folder: path not found: {:?}", path_buf);
+        return Err(format!("{}{}", ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"));
+    }
+
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> mod_manager::RestoreManagedResult {
+            let (ini_count, failed_count) = mod_manager::restore_managed_mod(&path_buf);
+            mod_manager::RestoreManagedResult {
+                path: path_buf,
+                ini_count,
+                failed_count,
+                success: failed_count == 0,
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
 /// Save Mod Customizations：保存用户自定义INI设置到d3dx_user.ini
 #[tauri::command]
 pub async fn save_customizations(game: String, mods_path: String) -> Result<mod_manager::SaveCustomizationsResult, String> {

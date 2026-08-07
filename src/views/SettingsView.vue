@@ -64,7 +64,16 @@
         <!-- 还原区：从还原区恢复已删除模组 -->
         <div class="section-block">
           <h4 class="section-heading">{{ t('settings.restoreZone') }}</h4>
-          <button type="button" class="restore-zone-btn" @click="handleRestoreZone">
+          <button
+            type="button"
+            class="restore-zone-btn"
+            :class="{ 'drag-over': isRestoreDragging }"
+            :disabled="restoring"
+            @click="handleRestoreZone"
+            @dragover.prevent="handleRestoreDragOver"
+            @dragleave.prevent="handleRestoreDragLeave"
+            @drop.prevent="handleRestoreDrop"
+          >
             <el-icon :size="40" class="restore-icon" aria-hidden="true"><UploadFilled /></el-icon>
             <span class="restore-main">{{ t('settings.restoreZonePlaceholder') }}</span>
             <span class="restore-desc">{{ t('settings.restoreZoneDesc') }}</span>
@@ -240,7 +249,8 @@ import { UploadFilled, FolderOpened } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { usePlatform } from '@/stores/platform'
-import { selectFolder, checkForUpdates, getAppVersion, updateModData } from '@/utils/tauri'
+import { selectFolder, checkForUpdates, getAppVersion, updateModData, restoreManagedFolder } from '@/utils/tauri'
+import type { RestoreManagedResult } from '@/types'
 import { logger } from '@/utils/logger'
 
 const { t, locale } = useI18n()
@@ -512,15 +522,146 @@ function handleGenerateFolderIcon() {
   ElMessage.info(t('Task completed!'))
 }
 
-/** 还原区选择文件夹 */
-function handleRestoreZone() {
-  logger.info('SettingsView', 'Restore zone clicked (placeholder: select folder)')
-  selectFolder().then(selected => {
-    if (selected) {
-      ElMessage.info(t('Task completed!'))
-      logger.info('SettingsView', 'Restore zone selected:', selected)
+/** 还原区是否正在拖拽文件（用于高亮反馈） */
+const isRestoreDragging = ref(false)
+/** 还原操作进行中状态 */
+const restoring = ref(false)
+
+/**
+ * 还原区拖拽进入/移动：识别文件拖入并提示可投放
+ * @param e 拖拽事件对象
+ */
+function handleRestoreDragOver(e: DragEvent) {
+  if (e.dataTransfer?.types.includes('Files')) {
+    e.dataTransfer.dropEffect = 'copy'
+    isRestoreDragging.value = true
+  }
+}
+
+/**
+ * 还原区拖拽离开：指针移出区域时取消高亮
+ * @param e 拖拽事件对象
+ */
+function handleRestoreDragLeave(e: DragEvent) {
+  const el = e.currentTarget as HTMLElement
+  const rect = el.getBoundingClientRect()
+  if (
+    e.clientX <= rect.left ||
+    e.clientX >= rect.right ||
+    e.clientY <= rect.top ||
+    e.clientY >= rect.bottom
+  ) {
+    isRestoreDragging.value = false
+  }
+}
+
+/**
+ * 还原区拖放：从拖拽文件中提取目录路径并触发还原
+ * @param e 拖拽事件对象
+ */
+async function handleRestoreDrop(e: DragEvent) {
+  isRestoreDragging.value = false
+  const files = e.dataTransfer?.files
+  if (!files || files.length === 0) return
+
+  const paths: string[] = []
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i] as any
+    const p = f.path || f.webkitRelativePath
+    if (p) paths.push(p)
+  }
+
+  if (paths.length === 0) {
+    ElMessage.warning(t('settings.restoreNoPath'))
+    return
+  }
+  await doRestore(paths)
+}
+
+/**
+ * 还原区选择文件夹：通过系统文件夹选择器获取目录路径并触发还原
+ */
+async function handleRestoreZone() {
+  logger.info('SettingsView', 'Restore zone clicked')
+  try {
+    const selected = await selectFolder()
+    if (!selected) return
+    await doRestore([selected])
+  } catch (e: any) {
+    logger.error('SettingsView', 'Restore zone select failed', e)
+  }
+}
+
+/**
+ * 还原模组核心流程
+ * 1. 二次确认是否还原
+ * 2. 逐个调用后端还原接口
+ * 3. 汇总还原结果并弹出结果对话框（右下角关闭按钮）
+ * @param paths 待还原的目录路径数组
+ */
+async function doRestore(paths: string[]) {
+  // 二次确认
+  try {
+    await ElMessageBox.confirm(
+      t('settings.restoreConfirm', { count: paths.length }),
+      t('settings.restoreZone'),
+      {
+        confirmButtonText: t('common.confirm', '确定'),
+        cancelButtonText: t('common.cancel', '取消'),
+        type: 'warning',
+        customClass: 'restore-confirm-dialog',
+      }
+    )
+  } catch {
+    // 用户取消，不执行还原
+    logger.info('SettingsView', 'Restore cancelled by user')
+    return
+  }
+
+  restoring.value = true
+  try {
+    const results: RestoreManagedResult[] = []
+    for (const p of paths) {
+      try {
+        results.push(await restoreManagedFolder(p))
+      } catch (err: any) {
+        // 单个目录还原失败：记录失败结果，不中断其余目录
+        logger.error('SettingsView', 'Restore failed for path', p, err)
+        results.push({ path: p, iniCount: 0, failedCount: 1, success: false })
+      }
     }
-  }).catch(() => {})
+    await showRestoreResult(results)
+  } finally {
+    restoring.value = false
+  }
+}
+
+/**
+ * 展示还原结果对话框
+ * 逐行列出每个路径的还原成功/失败信息，
+ * 关闭按钮位于右下角（蓝色字体、胶囊框、无背景色，悬停淡蓝色背景）
+ * @param results 还原结果数组
+ */
+async function showRestoreResult(results: RestoreManagedResult[]) {
+  const allSuccess = results.every(r => r.success)
+  const lines = results.map(r => {
+    const pathText = r.path
+    if (r.success) {
+      return t('settings.restoreResultSuccessLine', { path: pathText, iniCount: r.iniCount })
+    }
+    return t('settings.restoreResultFailedLine', { path: pathText, failedCount: r.failedCount })
+  })
+  const message = lines.join('\n')
+
+  await ElMessageBox({
+    title: allSuccess ? t('settings.restoreResultSuccessTitle') : t('settings.restoreResultFailedTitle'),
+    message,
+    showCancelButton: false,
+    confirmButtonText: t('common.close', '关闭'),
+    customClass: 'restore-result-dialog',
+    confirmButtonClass: 'restore-result-close-btn',
+    dangerouslyUseHTMLString: false,
+  })
 }
 
 /** 检查应用更新 */
@@ -1093,6 +1234,20 @@ onMounted(async () => {
   opacity: 0.75;
 }
 
+/* 还原区拖拽高亮反馈 */
+.restore-zone-btn.drag-over {
+  border-color: var(--accent-primary, #4a9eff) !important;
+  background: rgba(74, 158, 255, 0.12) !important;
+  opacity: 1;
+  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.25) inset;
+}
+
+/* 还原操作进行中禁用态 */
+.restore-zone-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .restore-icon {
   color: var(--text-muted);
   margin-bottom: 6px;
@@ -1273,5 +1428,36 @@ onMounted(async () => {
   background: rgba(74, 158, 255, 0.18);
   color: #ffffff;
   font-weight: 600;
+}
+
+/* 还原结果对话框：右下角关闭按钮（蓝色字体、胶囊框、无背景色，悬停淡蓝色背景） */
+.restore-result-dialog.el-message-box {
+  background: #1a1a1a;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+}
+.restore-result-dialog.el-message-box .el-message-box__title {
+  color: #ffffff;
+  font-weight: 600;
+}
+.restore-result-dialog.el-message-box .el-message-box__content {
+  color: #e5e7eb;
+  white-space: pre-line;
+  line-height: 1.6;
+  text-align: left;
+}
+.restore-result-dialog .el-button.restore-result-close-btn {
+  background: transparent !important;
+  border: none !important;
+  color: #4a9eff !important;
+  border-radius: 999px !important;
+  padding: 0 20px !important;
+  height: 32px;
+  box-shadow: none !important;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.restore-result-dialog .el-button.restore-result-close-btn:hover {
+  background: rgba(74, 158, 255, 0.15) !important;
+  color: #7ab8ff !important;
 }
 </style>
