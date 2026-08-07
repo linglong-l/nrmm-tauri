@@ -11,6 +11,8 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+use super::KeySimulator;
+
 /// 按键模拟方法
 #[derive(Debug, Clone)]
 enum KeyMethod {

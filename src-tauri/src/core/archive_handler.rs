@@ -303,6 +303,7 @@ pub fn paths_on_same_disk(a: &Path, b: &Path) -> bool {
     }
     #[cfg(not(windows))]
     {
+        let _ = (a, b);
         false
     }
 }
