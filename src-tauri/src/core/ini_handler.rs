@@ -491,50 +491,6 @@ impl IniFile {
         None
     }
 
-    fn calculate_match_priority(lines: &[IniLine]) -> u32 {
-        let mut priority: u32 = 0;
-        let mut found_resources = std::collections::HashSet::new();
-
-        for line in lines {
-            match line {
-                IniLine::KeyValue { key, .. } | IniLine::DisabledKeyValue { key, .. } => {
-                    let lower_key = key.to_lowercase();
-                    let key_str = lower_key.as_str();
-
-                    if key_str == "drawindexed" || key_str == "draw" {
-                        priority += 50;
-                    }
-                    if key_str == "ib" {
-                        priority += 30;
-                    }
-                    if key_str.starts_with("vb") && key_str.len() >= 3 && key_str[2..3].chars().all(|c| c.is_ascii_digit()) {
-                        priority += 20;
-                    }
-
-                    let resource_prefixes = [
-                        "ps-t", "vs-t", "ps-", "vs-", "cs-", "o", "u",
-                    ];
-                    for rp in &resource_prefixes {
-                        if let Some(suffix) = key_str.strip_prefix(rp) {
-                            if suffix.is_empty() || suffix.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
-                                found_resources.insert(key_str.to_string());
-                            }
-                        }
-                    }
-                }
-                IniLine::Command(cmd) => {
-                    let lower_cmd = cmd.trim_start().to_lowercase();
-                    if lower_cmd.starts_with("drawindexed") || lower_cmd.starts_with("draw") {
-                        priority += 50;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        priority + found_resources.len() as u32
-    }
-
     pub fn inject_slot_conditions(&mut self, group_id: u32) {
         let condition_var = format!(
             "$managed_slot_id == $\\modmanageragl\\group_{}\\active_slot",

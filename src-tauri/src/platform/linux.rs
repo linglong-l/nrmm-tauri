@@ -37,6 +37,12 @@ pub struct LinuxKeySimulator {
     wayland_method: Option<WaylandMethod>,
 }
 
+impl Default for LinuxKeySimulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LinuxKeySimulator {
     pub fn new() -> Self {
         let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
@@ -482,6 +488,12 @@ enum ForegroundMethod {
     Unsupported,
 }
 
+impl Default for LinuxForegroundDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LinuxForegroundDetector {
     pub fn new() -> Self {
         let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
@@ -558,10 +570,7 @@ pub fn get_linux_platform_info() -> super::PlatformInfo {
     };
     
     let fg = LinuxForegroundDetector::new();
-    let fg_supported = match fg.method {
-        ForegroundMethod::X11 => true,
-        _ => false,
-    };
+    let fg_supported = matches!(fg.method, ForegroundMethod::X11);
     
     super::PlatformInfo {
         os: "linux".to_string(),
