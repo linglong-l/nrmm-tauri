@@ -940,12 +940,37 @@ pub async fn enable_all_mods_in_group(group_path: String) -> Result<u32, String>
 }
 
 /// 移除分组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED；非group先移子分组到父级再移除）
+///
+/// 顶层函数：负责从设置数据获取 Mods 根目录、在线程池中执行底层移动、
+/// 处理错误并记录日志。具体「哪些目录移动到哪里」由底层编排层 `remove_group_ex` 决定。
 #[tauri::command]
 pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<(), String> {
     let path = PathBuf::from(group_path);
+    log::info!(
+        "[remove_group_ex] start | group_path={:?} is_group_xx={}",
+        path,
+        is_group_xx
+    );
 
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        crate::core::mod_manager::remove_group_ex(&path, is_group_xx)
+    // 从设置数据定位 Mods 根目录（与 _MANAGED_ 同级）
+    let settings = settings_store::get_settings();
+    let mods_root = settings
+        .game_mods_path
+        .values()
+        .map(PathBuf::from)
+        .find(|p| path.starts_with(p))
+        .ok_or_else(|| {
+            log::error!(
+                "[remove_group_ex] failed to locate Mods root from settings for {:?}",
+                path
+            );
+            "无法从设置数据定位 Mods 根目录".to_string()
+        })?;
+    log::debug!("[remove_group_ex] mods_root={:?}", mods_root);
+
+    let path_for_log = path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        crate::core::mod_manager::remove_group_ex(&path, is_group_xx, &mods_root)
             .map_err(|e| e.to_string())
     })
     .await
@@ -956,5 +981,6 @@ pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<()
         cache.invalidate_all();
     }
 
-    Ok(())
+    log::info!("[remove_group_ex] completed | group_path={:?}", path_for_log);
+    Ok(result)
 }

@@ -2032,21 +2032,43 @@ pub fn remove_mod(mod_path: &Path) -> Result<RemoveModResult> {
 
 /// 向上查找 Mods 根目录（_MANAGED_ 的父目录）
 ///
-/// 从 `start_path` 开始逐级向上，找到包含 `_MANAGED_` 子目录的路径即为 Mods 根目录。
-/// 若向上 5 级仍未找到，返回 `start_path` 的父目录作为兜底。
+/// 从 `start_path` 开始逐级向上，定位路径中第一个名为 `_MANAGED_` 的目录，
+/// 并返回其父目录作为 Mods 根目录。
+/// 这样 `DISABLED_MANAGED_REMOVED` 一定与 `_MANAGED_` 同级（即 Mods 根目录），
+/// 不会误创建到 `Mods/_MANAGED_/` 之下。
+///
+/// 若路径中不含 `_MANAGED_` 组件，则兜底向上查找「包含 `_MANAGED_` 子目录」的祖先；
+/// 仍找不到时返回 `start_path` 的父目录作为最后兜底。
 fn locate_mods_root(start_path: &Path) -> Result<PathBuf> {
-    let mut current = start_path.parent();
-    for _ in 0..5 {
-        if let Some(dir) = current {
+    // 确定性定位：找到路径中第一个名为 _MANAGED_ 的目录，取父目录
+    let mut current = Some(start_path);
+    for _ in 0..8 {
+        let dir = match current {
+            Some(d) => d,
+            None => break,
+        };
+        if dir.file_name() == Some(constants::MANAGED_FOLDER.as_ref()) {
+            if let Some(parent) = dir.parent() {
+                return Ok(parent.to_path_buf());
+            }
+        }
+        current = dir.parent();
+    }
+
+    // 兜底：向上查找包含 _MANAGED_ 子目录的祖先（兼容旧路径结构）
+    let mut ancestor = start_path.parent();
+    for _ in 0..8 {
+        if let Some(dir) = ancestor {
             if dir.join(constants::MANAGED_FOLDER).exists() {
                 return Ok(dir.to_path_buf());
             }
-            current = dir.parent();
+            ancestor = dir.parent();
         } else {
             break;
         }
     }
-    // 兜底：使用 start_path 的父目录
+
+    // 最终兜底：使用 start_path 的父目录
     start_path
         .parent()
         .map(|p| p.to_path_buf())
@@ -2073,25 +2095,63 @@ fn get_available_folder_name(base_name: &str, base_dir: &Path) -> PathBuf {
 }
 
 
+/// 底层移动：将目录移动到目标删除目录（仅负责移动，不做任何业务判断）
+///
+/// 单一职责：仅接受「源目录」与「目标删除目录」，执行目录移动。
+/// - 若目标删除目录不存在，先创建
+/// - 目标名冲突时追加 `_1`、`_2`… 后缀
+/// - 不关心源目录从何而来、为何移动，也不负责定位 Mods 根目录
+///
+/// # 参数
+/// - `src`: 待移动的源目录路径
+/// - `removed_dir`: 目标删除目录（模组/分组将被移动到此目录下）
+///
+/// # 返回值
+/// 返回移动后的实际路径（冲突时含后缀）
+///
+/// # 错误
+/// - 创建目标删除目录失败
+/// - 目录移动失败（如跨卷、权限不足）
+pub fn move_dir_to_removed(src: &Path, removed_dir: &Path) -> Result<PathBuf> {
+    if !removed_dir.exists() {
+        fs::create_dir_all(removed_dir)
+            .with_context(|| format!("Failed to create removed dir: {:?}", removed_dir))?;
+    }
+
+    let name = src.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let target = get_available_folder_name(&name, removed_dir);
+
+    fs::rename(src, &target)
+        .with_context(|| format!("Failed to move {:?} to {:?}", src, target))?;
+
+    Ok(target)
+}
+
 /// 移除分组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED 目录，非group先移子分组再移除）
+///
+/// 本函数为「编排层」，仅决定哪些目录移动到哪里，具体移动操作委托给底层 `move_dir_to_removed`。
+/// Mods 根目录由调用方（顶层命令）从设置数据传入，本函数不做路径推导。
 ///
 /// # 参数
 /// - `group_path`: 要移除的分组目录路径
 /// - `is_group_xx`: true = group_1/group_2 等普通分组，false = mutexGroup 非group目录
+/// - `mods_root`: Mods 根目录（与 `_MANAGED_` 同级），由调用方从设置数据获取
 ///
 /// # 对于 group_xx：
-/// 1. 定位 mods_path（group_path 的父目录，即 _MANAGED_ 的父目录）
-/// 2. 确保 `Mods/DISABLED_MANAGED_REMOVED` 目录存在
-/// 3. 将整个分组目录移至 `DISABLED_MANAGED_REMOVED/原名`，名称冲突追加 `_1`、`_2`…
+/// 1. 将整个分组目录移至 `mods_root/DISABLED_MANAGED_REMOVED/原名`
+///    - 名称冲突追加 `_1`、`_2`…
 ///
 /// # 对于非group：
-/// 1. 先将分组下的**一级子目录且不含 .ini 的目录**（即子分组目录）移至父级目录
-///    - 子分组目录重名时追加 `_` 后缀
-/// 2. 然后将被清空的分组目录按 group_xx 规则移至 `DISABLED_MANAGED_REMOVED/`
+/// 1. 先将分组下的**一级子目录且不含 .ini 的目录**（即子分组目录）移至 `mods_root`
+///    - 子分组目录重名时追加 `_1`、`_2`… 后缀
+/// 2. 然后将被清空的分组目录移至 `mods_root/DISABLED_MANAGED_REMOVED/`
 ///
 /// # 错误
 /// 路径不存在或目录移动失败时返回错误
-pub fn remove_group_ex(group_path: &Path, is_group_xx: bool) -> Result<()> {
+pub fn remove_group_ex(group_path: &Path, is_group_xx: bool, mods_root: &Path) -> Result<()> {
     if !group_path.exists() {
         return Err(anyhow::anyhow!("Group path does not exist: {:?}", group_path));
     }
@@ -2099,24 +2159,16 @@ pub fn remove_group_ex(group_path: &Path, is_group_xx: bool) -> Result<()> {
         return Err(anyhow::anyhow!("Group path is not a directory: {:?}", group_path));
     }
 
-    let group_name = group_path.file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    let parent_dir = group_path.parent()
-        .with_context(|| format!("Invalid group path (no parent): {:?}", group_path))?;
-
-    // ========== 非group：先将一级子分组（无 .ini 的子目录）移至父级 ==========
+    // ========== 非group：先将一级子分组（无 .ini 的子目录）移至 mods_root ==========
     if !is_group_xx {
-        // 收集所有一级子分组（子目录且含子目录结构/不含 .ini 的目录）
+        // 收集所有一级子分组（子目录且不含 .ini 的目录）
         let entries = match fs::read_dir(group_path) {
             Ok(e) => e,
             Err(_) => return Err(anyhow::anyhow!("Failed to read group directory: {:?}", group_path)),
         };
 
         // 先收集再处理（避免在迭代期间修改目录）
-        let mut to_move: Vec<(PathBuf, String)> = Vec::new();
+        let mut to_move: Vec<PathBuf> = Vec::new();
         for entry in entries.flatten() {
             let child_path = entry.path();
             if !child_path.is_dir() {
@@ -2134,67 +2186,18 @@ pub fn remove_group_ex(group_path: &Path, is_group_xx: bool) -> Result<()> {
             if has_ini {
                 continue;
             }
-            // 不含 .ini 的目录 → 子分组目录，需移至父级
-            to_move.push((child_path, child_name));
+            // 不含 .ini 的目录 → 子分组目录，需移至 mods_root
+            to_move.push(child_path);
         }
 
-        for (src, child_name) in to_move {
-            let target = parent_dir.join(&child_name);
-            if target.exists() {
-                // 重名处理：追加 _ 直到不存在
-                let mut i = 1u32;
-                let base = child_name.clone();
-                let mut resolved = parent_dir.join(format!("{}_{}", base, i));
-                while resolved.exists() {
-                    i += 1;
-                    resolved = parent_dir.join(format!("{}_{}", base, i));
-                }
-                fs::rename(&src, &resolved)
-                    .with_context(|| format!("Failed to move subgroup {:?} to parent", src))?;
-            } else {
-                fs::rename(&src, &target)
-                    .with_context(|| format!("Failed to move subgroup {:?} to parent", src))?;
-            }
+        for src in to_move {
+            move_dir_to_removed(&src, mods_root)?;
         }
     }
 
-    // ========== 定位 DISABLED_MANAGED_REMOVED 目录 ==========
-    // 规则：DISABLED_MANAGED_REMOVED 位于 Mods 根目录（与 _MANAGED_ 同级）
-    // 如果 group_path 是 _MANAGED_/group_1，则 mods_root = parent(_MANAGED_)
-    // 如果 group_path 是 Mods/#NonGroup，则 mods_root = parent(#NonGroup)（即 Mods）
-    let mut mods_root = parent_dir;
-    let parent_name = mods_root.file_name().map(|n| n.to_string_lossy().to_string());
-    if parent_name.as_deref() == Some(constants::MANAGED_FOLDER) {
-        // group 目录在 _MANAGED_ 下，DISABLED_MANAGED_REMOVED 应在其上级目录（Mods）
-        if let Some(grand_parent) = mods_root.parent() {
-            mods_root = grand_parent;
-        }
-    }
-
+    // ========== 将分组目录移至 DISABLED_MANAGED_REMOVED ==========
     let removed_folder = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
-    if !removed_folder.exists() {
-        fs::create_dir_all(&removed_folder)
-            .with_context(|| format!("Failed to create {}: {:?}", constants::MANAGED_REMOVED_FOLDER, removed_folder))?;
-    }
-
-    // 构造目标路径，冲突追加 _
-    let mut target = removed_folder.join(&group_name);
-    if target.exists() {
-        let mut i = 1u32;
-        let base = group_name.clone();
-        loop {
-            let resolved = removed_folder.join(format!("{}_{}", base, i));
-            if !resolved.exists() {
-                target = resolved;
-                break;
-            }
-            i += 1;
-        }
-    }
-
-    // 移动分组至 DISABLED_MANAGED_REMOVED
-    fs::rename(group_path, &target)
-        .with_context(|| format!("Failed to move group {:?} to {:?}", group_path, target))?;
+    move_dir_to_removed(group_path, &removed_folder)?;
 
     Ok(())
 }
@@ -2791,6 +2794,39 @@ mod tests_remove_group_ex {
         dir
     }
 
+    /// 底层移动：正常移动目录到目标删除目录
+    #[test]
+    fn test_move_dir_to_removed_basic() {
+        let tmp = TempDir::new().unwrap();
+        let removed_dir = tmp.path().join("removed");
+        let src = tmp.path().join("MyItem");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("a.txt"), "x").unwrap();
+
+        let moved = move_dir_to_removed(&src, &removed_dir).unwrap();
+
+        assert!(!src.exists(), "源目录应被移除");
+        assert!(removed_dir.exists(), "目标删除目录应被创建");
+        assert_eq!(moved, removed_dir.join("MyItem"));
+        assert!(moved.join("a.txt").exists(), "内容应随目录移动");
+    }
+
+    /// 底层移动：目标名冲突时追加 _1 后缀
+    #[test]
+    fn test_move_dir_to_removed_conflict() {
+        let tmp = TempDir::new().unwrap();
+        let removed_dir = tmp.path().join("removed");
+        fs::create_dir_all(&removed_dir).unwrap();
+        fs::create_dir_all(removed_dir.join("MyItem")).unwrap();
+
+        let src = tmp.path().join("MyItem");
+        fs::create_dir_all(&src).unwrap();
+
+        let moved = move_dir_to_removed(&src, &removed_dir).unwrap();
+
+        assert_eq!(moved, removed_dir.join("MyItem_1"), "冲突应追加 _1 后缀");
+    }
+
     /// group_xx 场景：移至 DISABLED_MANAGED_REMOVED 目录
     #[test]
     fn test_remove_group_xx() {
@@ -2801,7 +2837,7 @@ mod tests_remove_group_ex {
         fs::create_dir_all(&group).unwrap();
         create_mod_dir(&group, "ModA");
 
-        remove_group_ex(&group, true).unwrap();
+        remove_group_ex(&group, true, mods_root).unwrap();
 
         // 原分组应不存在
         assert!(!group.exists(), "原 group_1 应被移除");
@@ -2829,7 +2865,7 @@ mod tests_remove_group_ex {
         let subgroup2 = non_group.join("SubGroup2");
         fs::create_dir_all(&subgroup2).unwrap();
 
-        remove_group_ex(&non_group, false).unwrap();
+        remove_group_ex(&non_group, false, mods_root).unwrap();
 
         // 原分组应不存在
         assert!(!non_group.exists());
@@ -2856,11 +2892,97 @@ mod tests_remove_group_ex {
         // 已存在的已删除组
         fs::create_dir_all(removed_root.join("group_1")).unwrap();
 
-        remove_group_ex(&group, true).unwrap();
+        remove_group_ex(&group, true, mods_root).unwrap();
 
         assert!(!group.exists());
         assert!(removed_root.join("group_1").exists(), "原冲突项保留");
         assert!(removed_root.join("group_1_1").exists(), "新移除项追加 _1 后缀");
+    }
+}
+
+#[cfg(test)]
+mod tests_remove_mod {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// locate_mods_root：模组位于 _MANAGED_/group_X 下时，应返回 _MANAGED_ 的父目录（Mods 根目录）
+    #[test]
+    fn test_locate_mods_root_from_managed_group() {
+        let tmp = TempDir::new().unwrap();
+        let mods_root = tmp.path();
+        let managed = mods_root.join("_MANAGED_");
+        let group = managed.join("group_1");
+        let mod_path = group.join("MyMod");
+        fs::create_dir_all(&mod_path).unwrap();
+
+        let root = locate_mods_root(&mod_path).unwrap();
+        assert_eq!(root, mods_root, "应返回 Mods 根目录（_MANAGED_ 的父目录）");
+    }
+
+    /// locate_mods_root：模组位于 _MANAGED_/#MutexGroup 下时，同样返回 Mods 根目录
+    #[test]
+    fn test_locate_mods_root_from_mutex_group() {
+        let tmp = TempDir::new().unwrap();
+        let mods_root = tmp.path();
+        let managed = mods_root.join("_MANAGED_");
+        let mutex_group = managed.join("#MutexGroup");
+        let mod_path = mutex_group.join("MyMod");
+        fs::create_dir_all(&mod_path).unwrap();
+
+        let root = locate_mods_root(&mod_path).unwrap();
+        assert_eq!(root, mods_root);
+    }
+
+    /// remove_mod：移除的模组必须位于 Mods/DISABLED_MANAGED_REMOVED 下，
+    /// 而非 Mods/_MANAGED_/DISABLED_MANAGED_REMOVED 下（用户报告的关键场景）
+    #[test]
+    fn test_remove_mod_moved_to_mods_root_removed_folder() {
+        let tmp = TempDir::new().unwrap();
+        let mods_root = tmp.path();
+        let managed = mods_root.join("_MANAGED_");
+        let group = managed.join("group_1");
+        let mod_path = group.join("MyMod");
+        fs::create_dir_all(&mod_path).unwrap();
+        fs::write(mod_path.join("MyMod.ini"), "[ShaderOverride]").unwrap();
+
+        let result = remove_mod(&mod_path).unwrap();
+
+        // 原模组路径应不存在
+        assert!(!mod_path.exists(), "原模组路径应被移除");
+
+        // 目标必须位于 Mods/DISABLED_MANAGED_REMOVED（与 _MANAGED_ 同级）
+        let expected = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
+        assert!(expected.exists(), "DISABLED_MANAGED_REMOVED 应创建在 Mods 根目录");
+        assert_eq!(result.moved_to.parent(), Some(expected.as_path()));
+
+        // 明确验证：不得创建在 Mods/_MANAGED_ 之下
+        let wrongly_placed = managed.join(constants::MANAGED_REMOVED_FOLDER);
+        assert!(!wrongly_placed.join("MyMod").exists(), "不得创建到 _MANAGED_ 之下");
+        assert!(result.moved_to.join("MyMod.ini").exists(), "模组文件应随目录移动");
+    }
+
+    /// remove_mod：删除多个模组时，DISABLED_MANAGED_REMOVED 始终位于 Mods 根目录，冲突追加 _1
+    #[test]
+    fn test_remove_mod_conflict_appends_suffix() {
+        let tmp = TempDir::new().unwrap();
+        let mods_root = tmp.path();
+        let managed = mods_root.join("_MANAGED_");
+        let group = managed.join("group_1");
+        let mod1 = group.join("MyMod");
+        let mod2 = group.join("MyMod2");
+        fs::create_dir_all(&mod1).unwrap();
+        fs::create_dir_all(&mod2).unwrap();
+        fs::write(mod1.join("MyMod.ini"), "[ShaderOverride]").unwrap();
+        fs::write(mod2.join("MyMod2.ini"), "[ShaderOverride]").unwrap();
+
+        let r1 = remove_mod(&mod1).unwrap();
+        let r2 = remove_mod(&mod2).unwrap();
+
+        let removed_root = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
+        assert_eq!(r1.moved_to, removed_root.join("MyMod"));
+        assert_eq!(r2.moved_to, removed_root.join("MyMod2"));
+        assert!(!managed.join(constants::MANAGED_REMOVED_FOLDER).exists(), "不得创建到 _MANAGED_ 之下");
     }
 }
 
