@@ -12,6 +12,7 @@
 //! - `mod_cache`: 模组数据内存缓存（避免重复文件系统扫描）
 
 pub mod constants;
+pub mod file_logger;
 pub mod file_watcher;
 pub mod ini_handler;
 pub mod mod_manager;

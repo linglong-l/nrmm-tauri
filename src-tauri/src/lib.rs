@@ -78,13 +78,19 @@ pub fn run() {
     log::info!("[BOOT] ===== NRMM 启动开始 at {} =====", boot_ts);
 
     #[cfg(debug_assertions)]
-    env_logger::builder()
+    env_logger::Builder::new()
         .filter_level(log::LevelFilter::Debug)
+        .target(env_logger::Target::Pipe(Box::new(
+            crate::core::file_logger::DualWriter::new(),
+        )))
         .init();
 
     #[cfg(not(debug_assertions))]
-    env_logger::builder()
+    env_logger::Builder::new()
         .filter_level(log::LevelFilter::Info)
+        .target(env_logger::Target::Pipe(Box::new(
+            crate::core::file_logger::DualWriter::new(),
+        )))
         .init();
     log::info!("[BOOT] T+{:>6}ms - 日志系统初始化完成", boot_start.elapsed().as_millis());
 

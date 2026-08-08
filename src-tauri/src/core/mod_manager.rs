@@ -22,7 +22,7 @@
 
 use anyhow::{Result, Context};
 use std::path::{Path, PathBuf};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fs;
 use crate::core::constants;
 use crate::core::ini_handler::IniFile;
@@ -525,6 +525,14 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         }
     }
 
+    // 步骤3.1: 收集 # 目录（MutexGroup）中的库定义，补充 known_libraries
+    // 深度扫描仅处理 group_xx NormalGroup，会遗漏 MutexGroup 目录中的库定义，
+    // 导致 detect_errors 产生大量假阳性。此处用非递归 BFS 补充收集。
+    let mutex_libs = collect_mutex_group_libraries(&managed_folder);
+    log::debug!("[mod_manager] [update_mod_data] step=collect_mutex_libs done count={}", mutex_libs.len());
+    known_libraries.extend(mutex_libs);
+    log::debug!("[mod_manager] [update_mod_data] step=collect_libraries done total_known_libraries={}", known_libraries.len());
+
     // 步骤3.5: ORFix/TexFx 检测（在 INI 修改之前，使用原始 INI 内容）
     let orfix_detection = detect_orfix_texfx(&enabled_mods);
     log::debug!("[mod_manager] [update_mod_data] step=detect_orfix_texfx done has_detection={}", orfix_detection.has_detection);
@@ -566,8 +574,8 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
                         namespace_handler::expand_ini_variables(&mut ini, &ns);
                     }
 
-                    // 注入槽位条件
-                    ini.inject_slot_conditions(group_id);
+                    // 注入槽位条件（含 $managed_slot_id 赋值）
+                    ini.inject_slot_conditions(group_id, mod_data.mod_index);
 
                     // 注释崩溃行
                     let crash_lines = ini.comment_crash_lines();
@@ -604,23 +612,44 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     // 步骤6: 为每个 group 创建 ModFolder.ini
     let mut group_ini_paths: Vec<PathBuf> = Vec::new();
     for (group_id, ini_paths) in &group_mod_inis {
+        log::debug!("[mod_manager] [update_mod_data] step=create_group_ini group_id={} mod_ini_count={}", group_id, ini_paths.len());
         let group_dir = managed_folder.join(format!("group_{}", group_id));
         let group_ini_path = create_group_ini(&group_dir, *group_id, ini_paths, game_mods_path)?;
         if let Some(p) = group_ini_path {
             group_ini_paths.push(p);
         }
     }
+    log::debug!("[mod_manager] [update_mod_data] step=create_group_ini done total_groups={}", group_ini_paths.len());
 
     // 步骤7: 生成 nrmm_include.ini
     let nrmm_include_path = managed_folder.join(constants::INCLUDE_FILENAME);
     create_nrmm_include_ini(&nrmm_include_path, &managed_folder, &group_ini_paths, game_mods_path)?;
+    log::debug!("[mod_manager] [update_mod_data] step=create_nrmm_include done group_ini_count={}", group_ini_paths.len());
 
-    // 步骤8: 不再向 d3dx.ini 注入 include（对齐 NRMM 原版）
-    // NRMM 原版依赖标准 XXMI 的 include_recursive = Mods 自动加载 _MANAGED_ 下的 .ini 文件。
-    // 之前的实现将 include 放入 [Constants] 段，3Dmigoto 不处理此位置的 include 指令，
-    // 导致 nrmm_keypress.txt / manager_group.ini / group_N.ini 未被加载。
-    // 现仅保留清理旧注入内容（main_ini_content 已通过 strip_nrmm_injected_content 清理）。
-    let final_content = main_ini_content;
+    // 步骤8: 检测 include_recursive，缺失时自动注入 include 指令
+    // 标准 XXMI 环境通过 [Include] 段的 include_recursive = Mods 自动加载 _MANAGED_ 下的 .ini 文件。
+    // 若用户的 d3dx.ini 缺少此配置，则直接在文件末尾追加 include = _MANAGED_/nrmm_include.ini
+    // 确保 manager_group.ini / group_N.ini 等管理文件被 3Dmigoto 加载。
+    let has_include_recursive = detect_include_recursive(&main_ini_path, game_mods_path);
+    let mut final_content = main_ini_content;
+
+    if !has_include_recursive {
+        log::warn!(
+            "[mod_manager] [update_mod_data] d3dx.ini 缺少 include_recursive 配置，自动注入 include 指令"
+        );
+        // 在主 INI 末尾追加 NRMM 管理段（include 指令需在段外，3Dmigoto 仅处理顶层的 include）
+        if let Ok(rel_path) = nrmm_include_path.strip_prefix(game_mods_path) {
+            let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+            final_content.push_str("\n;NRMM_INI_START\n");
+            final_content.push_str("; No-Reload Mod Manager managed section\n");
+            final_content.push_str("; Do not edit this section manually\n");
+            final_content.push_str("[Constants]\n");
+            final_content.push_str("global $managed_slot_id = 0\n\n");
+            final_content.push_str(&format!("include = {}\n", rel_str));
+            final_content.push_str(";NRMM_INI_END\n");
+        }
+        need_reload_manual = true;
+    }
 
     // 原子写入主 INI
     let tmp_path = main_ini_path.with_extension("ini.tmp");
@@ -629,17 +658,6 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     fs::rename(&tmp_path, &main_ini_path)
         .with_context(|| format!("Failed to rename temp main INI to: {:?}", main_ini_path))?;
     log::debug!("[mod_manager] [update_mod_data] step=write_main_ini done path={:?}", main_ini_path);
-
-    // 检测 d3dx.ini 是否配置了 include_recursive
-    // 若缺失，_MANAGED_ 下的管理文件不会被 3Dmigoto 加载，按键模拟将无效
-    let has_include_recursive = detect_include_recursive(&main_ini_path, game_mods_path);
-    if !has_include_recursive {
-        log::warn!(
-            "[mod_manager] [update_mod_data] d3dx.ini 缺少 include_recursive 配置，模组可能无法在游戏内切换。\
-             请确保 d3dx.ini 包含 [Include] 段及 include_recursive = Mods 指令"
-        );
-        need_reload_manual = true;
-    }
 
     // 步骤9: 检测标准 XXMI/3DMigoto 环境
     let is_standard_xxmi = detect_standard_xxmi(game_mods_path, main_ini_name);
@@ -658,6 +676,124 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     };
     log::debug!("[core::mod_manager] [update_mod_data] done | elapsed={:?}ms | processed={} errors={}", _s.elapsed().as_millis(), result.processed_mods, result.errors.len());
     Ok(result)
+}
+
+/// 非递归 BFS 收集 `_MANAGED_` 下 MutexGroup（非 `group_xx`）目录中所有 INI 的库定义
+///
+/// 深度扫描仅处理 `group_xx` NormalGroup 目录，会遗漏 `#` 等 MutexGroup 目录中的库定义，
+/// 导致 `detect_errors` 产生大量 `error_type=1` 假阳性（引用了未收集的库）。
+/// 本函数补充收集 MutexGroup 目录下的库定义，消除假阳性。
+///
+/// # 算法
+/// 使用 `VecDeque` 队列进行广度优先搜索，`HashSet` 存储已访问的规范化路径防止循环：
+/// 1. 遍历 `_MANAGED_` 一级子目录，筛选非 `group_xx` 目录（即 MutexGroup）
+/// 2. 对每个 MutexGroup 根目录，使用 BFS 遍历所有子目录
+/// 3. 每个目录中收集 `.ini` 文件（跳过 `desktop.ini`）
+/// 4. 对每个 INI 调用 `IniFile::parse` + `defined_libraries`，收集到 `HashSet`
+///
+/// # 参数
+/// - `managed_folder`: `_MANAGED_` 目录路径
+///
+/// # 返回
+/// 库定义名称集合（`HashSet<String>`），解析失败的 INI 会被跳过并记录警告
+fn collect_mutex_group_libraries(managed_folder: &Path) -> HashSet<String> {
+    let mut libraries = HashSet::new();
+
+    // 步骤1: 遍历 _MANAGED_ 一级子目录，筛选 MutexGroup（非 group_xx）
+    let first_level = match fs::read_dir(managed_folder) {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("[mod_manager] collect_mutex_group_libraries: 读取 _MANAGED_ 目录失败: {}", e);
+            return libraries;
+        }
+    };
+
+    for entry in first_level {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let ft = match entry.file_type() {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        if !ft.is_dir() {
+            continue;
+        }
+        let dir_name = entry.file_name().to_string_lossy().to_string();
+        // 跳过 group_xx NormalGroup 目录（深度扫描已处理）
+        if mod_scanner::is_normal_group_dir(&dir_name).is_some() {
+            continue;
+        }
+        // 跳过 DISABLED_MANAGED_REMOVED 等特殊目录
+        if dir_name.starts_with('.') || dir_name.to_uppercase().starts_with("DISABLED") {
+            continue;
+        }
+
+        // 步骤2: 对每个 MutexGroup 根目录进行 BFS 遍历
+        let mutex_root = entry.path();
+        let mut queue = VecDeque::new();
+        queue.push_back(mutex_root.clone());
+
+        let mut visited: HashSet<PathBuf> = HashSet::new();
+        let canon_root = mutex_root.canonicalize().unwrap_or_else(|_| mutex_root.clone());
+        visited.insert(canon_root);
+
+        while let Some(current_dir) = queue.pop_front() {
+            // 步骤3: 收集当前目录中的 .ini 文件
+            let entries = match fs::read_dir(&current_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            for sub_entry in entries {
+                let sub_entry = match sub_entry {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                let sub_ft = match sub_entry.file_type() {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+
+                if sub_ft.is_file() {
+                    let sub_path = sub_entry.path();
+                    // 跳过 desktop.ini
+                    if constants::is_desktop_ini(&sub_path) {
+                        continue;
+                    }
+                    // 仅处理 .ini 文件
+                    if sub_path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("ini")).unwrap_or(false) {
+                        // 步骤4: 解析 INI 并收集库定义
+                        match IniFile::parse(&sub_path) {
+                            Ok(ini) => {
+                                for lib in ini.defined_libraries() {
+                                    libraries.insert(lib);
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!("[mod_manager] collect_mutex_group_libraries: 解析 INI 失败 {:?}: {}", sub_path, e);
+                            }
+                        }
+                    }
+                } else if sub_ft.is_dir() || sub_ft.is_symlink() {
+                    let sub_path = sub_entry.path();
+                    let sub_name = sub_entry.file_name().to_string_lossy().to_string();
+                    if sub_name.starts_with('.') {
+                        continue;
+                    }
+                    let canon = sub_path.canonicalize().unwrap_or_else(|_| sub_path.clone());
+                    if !visited.contains(&canon) {
+                        visited.insert(canon);
+                        queue.push_back(sub_path);
+                    }
+                }
+            }
+        }
+    }
+
+    log::debug!("[mod_manager] collect_mutex_group_libraries: 收集到 {} 个 MutexGroup 库定义", libraries.len());
+    libraries
 }
 
 /// 准备 _MANAGED_ 目录，创建 NRMM 所需的模板 INI 文件
@@ -697,6 +833,14 @@ fn prepare_managed_folder(managed_path: &Path, _game: TargetGame) -> Result<bool
     // 创建 manager_group.ini - 全局管理组
     let manager_template = String::from_utf8_lossy(crate::resources::TEMPLATE_MANAGER_GROUP);
     atomic_write_file(&manager_group_path, manager_template.as_bytes())?;
+
+    // 创建根级 selectedindex 文件（若不存在）
+    // NRMM 在 _MANAGED_ 第一层维护 selectedindex 记录全局选中槽位，默认值 "0"
+    let root_selectedindex = managed_path.join(constants::SELECTED_INDEX_FILE);
+    if !root_selectedindex.exists() {
+        atomic_write_file(&root_selectedindex, b"0")?;
+        log::debug!("[mod_manager] prepare_managed_folder: 创建根级 selectedindex 文件 {:?}", root_selectedindex);
+    }
 
     Ok(need_reload_manual)
 }
@@ -764,6 +908,13 @@ fn create_group_ini(
     mod_ini_paths: &[PathBuf],
     game_mods_path: &Path,
 ) -> Result<Option<PathBuf>> {
+    // 跳过空分组：无启用模组时不生成 group_X.ini，
+    // 避免 nrmm_include.ini 引用空文件导致 3Dmigoto 加载警告
+    if mod_ini_paths.is_empty() {
+        log::debug!("[mod_manager] create_group_ini: 跳过空分组 group_{}", group_index);
+        return Ok(None);
+    }
+
     // 确保分组目录存在
     if !group_dir.exists() {
         fs::create_dir_all(group_dir)?;
@@ -2251,7 +2402,11 @@ mod tests {
 
     fn create_main_ini(base: &Path, game: TargetGame) {
         let ini_name = game.d3dx_ini_name();
-        fs::write(base.join(ini_name), "; original main ini\n").unwrap();
+        // 包含 [Include] 段的 include_recursive，对齐标准 XXMI 环境
+        // 使用实际目录名确保 detect_include_recursive 返回 true，不注入 ;NRMM_INI_START 块
+        let dir_name = base.file_name().and_then(|n| n.to_str()).unwrap_or("Mods");
+        let content = format!("; original main ini\n[Include]\ninclude_recursive = {}\n", dir_name);
+        fs::write(base.join(ini_name), content).unwrap();
     }
 
     #[test]
@@ -2431,6 +2586,83 @@ y = 2
         assert!(content.contains("$group_id = 1"));
         assert!(content.contains("include = _MANAGED_/group_1/Mod1/mod.ini"));
         assert!(content.contains("include = _MANAGED_/group_1/Mod2/config.ini"));
+    }
+
+    /// 测试：create_group_ini 对空分组返回 None，不生成 group_X.ini
+    #[test]
+    fn test_create_group_ini_skips_empty() {
+        let dir = TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        let group_dir = managed.join("group_84");
+        fs::create_dir_all(&group_dir).unwrap();
+
+        let ini_paths: Vec<PathBuf> = vec![];
+        let result = create_group_ini(&group_dir, 84, &ini_paths, dir.path()).unwrap();
+        assert!(result.is_none(), "空分组应返回 None");
+
+        // 验证未生成 group_84.ini 文件
+        let group_ini = group_dir.join("group_84.ini");
+        assert!(!group_ini.exists(), "空分组不应生成 group_X.ini 文件");
+    }
+
+    /// 测试：collect_mutex_group_libraries 正确收集 # 目录（MutexGroup）中的库定义
+    ///
+    /// 创建 _MANAGED_/#MyMutex/MyMod/lib.ini，其中含 [ResourceMyLib] 段，
+    /// 验证 collect_mutex_group_libraries 返回的集合包含 "ResourceMyLib"。
+    /// 同时验证 group_xx 目录中的库定义不被收集（应由深度扫描处理）。
+    #[test]
+    fn test_collect_mutex_group_libraries() {
+        let dir = TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+
+        // 在 # MutexGroup 目录下创建含库定义的 INI
+        let mutex_mod_dir = managed.join("#MyMutex").join("MyMod");
+        fs::create_dir_all(&mutex_mod_dir).unwrap();
+        let mutex_ini = mutex_mod_dir.join("lib.ini");
+        fs::write(&mutex_ini, "[ResourceMyLib]\nhash = abc123\n").unwrap();
+
+        // 在 group_1 NormalGroup 目录下创建含库定义的 INI（不应被收集）
+        let group_mod_dir = managed.join("group_1").join("MyMod");
+        fs::create_dir_all(&group_mod_dir).unwrap();
+        let group_ini = group_mod_dir.join("lib.ini");
+        fs::write(&group_ini, "[CommandListNormal]\nx = 1\n").unwrap();
+
+        // 在 _MANAGED_ 根目录创建 desktop.ini（应被跳过）
+        fs::write(managed.join("desktop.ini"), "[ResourceSkip]\n").unwrap();
+
+        let libs = collect_mutex_group_libraries(&managed);
+
+        // 验证收集了 MutexGroup 中的库定义
+        assert!(libs.contains("ResourceMyLib"), "应收集 MutexGroup 中的 ResourceMyLib");
+        // 验证未收集 NormalGroup 中的库定义（由深度扫描处理）
+        assert!(!libs.contains("CommandListNormal"), "不应收集 NormalGroup 中的库定义");
+        // 验证 desktop.ini 被跳过
+        assert!(!libs.contains("ResourceSkip"), "应跳过 desktop.ini");
+    }
+
+    /// 测试：prepare_managed_folder 正确创建根级 selectedindex 文件
+    #[test]
+    fn test_prepare_managed_folder_creates_root_selectedindex() {
+        let dir = TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+
+        let root_selectedindex = managed.join(constants::SELECTED_INDEX_FILE);
+        assert!(!root_selectedindex.exists());
+
+        prepare_managed_folder(&managed, TargetGame::GenshinImpact).unwrap();
+
+        // 验证根级 selectedindex 已创建
+        assert!(root_selectedindex.exists(), "根级 selectedindex 文件应被创建");
+        let content = fs::read_to_string(&root_selectedindex).unwrap();
+        assert_eq!(content, "0", "根级 selectedindex 默认值应为 0");
+
+        // 再次调用不应覆盖已有内容
+        fs::write(&root_selectedindex, "5").unwrap();
+        prepare_managed_folder(&managed, TargetGame::GenshinImpact).unwrap();
+        let content2 = fs::read_to_string(&root_selectedindex).unwrap();
+        assert_eq!(content2, "5", "已有 selectedindex 不应被覆盖");
     }
 
     #[test]

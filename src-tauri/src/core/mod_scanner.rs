@@ -1182,11 +1182,19 @@ fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: Grou
     visited_dirs.insert(dir_path.to_path_buf());
 
     while let Some(current_path) = queue.pop_front() {
-        let (has_ini, has_icon, icon_path, ini_files) = check_directory_for_mod_deep(&current_path)?;
+        // 跳过分组根目录本身的模组检测：分组根目录可能包含 NRMM 生成的
+        // group_XX.ini 管理文件，不应将其视为模组。仅扫描子目录作为模组。
+        let is_group_root = current_path == dir_path;
+
+        let (has_ini, has_icon, icon_path, ini_files) = if is_group_root {
+            (false, false, None, Vec::with_capacity(0))
+        } else {
+            check_directory_for_mod_deep(&current_path)?
+        };
 
         if has_ini || has_icon {
             let parent_groups: Vec<String> = Vec::with_capacity(4);
-            let mod_data = build_mod_data_deep(&current_path, group_name, &parent_groups, ini_files, icon_path)?;
+            let mod_data = build_mod_data_deep(&current_path, dir_path, group_name, &parent_groups, ini_files, icon_path)?;
             mods.push(mod_data);
         } else {
             let sub_entries = match fs::read_dir(&current_path) {
@@ -1360,6 +1368,7 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
 /// 所有统计信息累加到最终 `ModData` 中，供前端展示和 apply 注入使用。
 fn build_mod_data_deep(
     dir: &Path,
+    group_root: &Path,
     _group_name: &str,
     _parent_groups: &[String],
     ini_files: Vec<PathBuf>,
@@ -1370,7 +1379,9 @@ fn build_mod_data_deep(
         .to_string_lossy()
         .to_string();
 
-    let disabled = dir_name.to_uppercase().starts_with("DISABLED");
+    // 检查从分组根目录到当前目录的完整路径中是否有任意段以 DISABLED 开头。
+    // 修复此前仅检查叶子目录名导致的 DISABLED_xxx/sub/mod.ini 误判为启用的问题。
+    let disabled = constants::contains_disabled_segment(dir, group_root);
 
     // NRMM 逻辑：优先使用 modname 文件内容作为展示名；不存在则回退文件夹名（深度扫描不创建，由轻量扫描负责创建）
     let display_name = if disabled {

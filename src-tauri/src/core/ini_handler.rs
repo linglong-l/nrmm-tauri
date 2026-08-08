@@ -491,11 +491,47 @@ impl IniFile {
         None
     }
 
-    pub fn inject_slot_conditions(&mut self, group_id: u32) {
+    pub fn inject_slot_conditions(&mut self, group_id: u32, mod_index: u32) {
         let condition_var = format!(
             "$managed_slot_id == $\\modmanageragl\\group_{}\\active_slot",
             group_id
         );
+
+        // 注入 $managed_slot_id 赋值：每个模组的 [Constants] 段需设置自身的槽位 ID，
+        // 使 3Dmigoto 在解析 if/endif 条件时能正确匹配 $active_slot。
+        // 对齐 NRMM 原版：在模组 INI 的 [Constants] 段注入 global $managed_slot_id = <mod_index>
+        let has_constants = self.sections.iter().any(|s| s.name.eq_ignore_ascii_case("Constants"));
+        if has_constants {
+            for section in &mut self.sections {
+                if section.name.eq_ignore_ascii_case("Constants") {
+                    // 移除旧的 $managed_slot_id 赋值（避免重复）
+                    section.lines.retain(|line| {
+                        !matches!(line, IniLine::KeyValue { key, .. } if key.trim().eq_ignore_ascii_case("$managed_slot_id"))
+                    });
+                    // 在段首插入赋值
+                    section.lines.insert(0, IniLine::KeyValue {
+                        key: "global $managed_slot_id".to_string(),
+                        value: mod_index.to_string(),
+                        disabled: false,
+                        comment: None,
+                    });
+                    break;
+                }
+            }
+        } else {
+            // 模组 INI 无 [Constants] 段，创建一个并插入到文件开头
+            let constants_section = IniSection {
+                name: "Constants".to_string(),
+                lines: vec![IniLine::KeyValue {
+                    key: "global $managed_slot_id".to_string(),
+                    value: mod_index.to_string(),
+                    disabled: false,
+                    comment: None,
+                }],
+                is_conditional: false,
+            };
+            self.sections.insert(0, constants_section);
+        }
 
         for section in &mut self.sections {
             // Key 段：与 NRMM 一致，使用 condition 追加方式注入槽位条件，
@@ -1161,7 +1197,7 @@ key = value
         let ini_content = "[Constants]\n$active = 0\n$other = hello\n\n[TextureOverrideTest]\nhash = 0x123\nps-t0 = Res\ndrawindexed\n\n[Present]\nx = 1\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
-        ini.inject_slot_conditions(1);
+        ini.inject_slot_conditions(1, 2);
 
         // TextureOverride 段：match_priority=0 在 if 之前，无 allow_duplicate_hash
         let to_lines = &ini.sections[1].lines;
@@ -1170,8 +1206,9 @@ key = value
         assert!(to_lines.iter().any(|l| matches!(l, IniLine::EndIf { .. })));
         assert!(!to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, .. } if key == "allow_duplicate_hash")));
 
-        // Constants 段：NRMM 不包裹，变量原样保留
+        // Constants 段：注入了 $managed_slot_id = 2，且 NRMM 不包裹
         let constants_lines = &ini.sections[0].lines;
+        assert!(constants_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, ref value, .. } if key.contains("$managed_slot_id") && value == "2")));
         assert!(!constants_lines.iter().any(|l| matches!(l, IniLine::IfStart { .. })));
         assert!(!constants_lines.iter().any(|l| matches!(l, IniLine::EndIf { .. })));
     }
@@ -1182,9 +1219,10 @@ key = value
         let ini_content = "[KeyDefault]\nkey = a\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
-        ini.inject_slot_conditions(1);
+        ini.inject_slot_conditions(1, 0);
 
-        let lines = &ini.sections[0].lines;
+        // 注入 [Constants] 段在 index 0，Key 段被推到 index 1
+        let lines = &ini.sections[1].lines;
         assert!(matches!(lines[0], IniLine::KeyValue { ref key, ref value, .. }
             if key.eq_ignore_ascii_case("condition") && value.contains("$managed_slot_id")));
         // 不应产生 if 包裹
@@ -1197,9 +1235,10 @@ key = value
         let ini_content = "[KeyDefault]\ncondition = $Key1 == 1\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
-        ini.inject_slot_conditions(1);
+        ini.inject_slot_conditions(1, 0);
 
-        let lines = &ini.sections[0].lines;
+        // 注入 [Constants] 段在 index 0，Key 段被推到 index 1
+        let lines = &ini.sections[1].lines;
         let cond = lines.iter().find_map(|l| match l {
             IniLine::KeyValue { key, value, .. } if key.eq_ignore_ascii_case("condition") => Some(value.clone()),
             _ => None,
@@ -1216,11 +1255,12 @@ key = value
         let ini_content = "[KeyDefault]\ncondition = $Key1 == 1\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
-        ini.inject_slot_conditions(1);
-        ini.inject_slot_conditions(1);
-        ini.inject_slot_conditions(1);
+        ini.inject_slot_conditions(1, 0);
+        ini.inject_slot_conditions(1, 0);
+        ini.inject_slot_conditions(1, 0);
 
-        let lines = &ini.sections[0].lines;
+        // 注入 [Constants] 段在 index 0，Key 段被推到 index 1
+        let lines = &ini.sections[1].lines;
         let cond = lines.iter().find_map(|l| match l {
             IniLine::KeyValue { key, value, .. } if key.eq_ignore_ascii_case("condition") => Some(value.clone()),
             _ => None,

@@ -290,6 +290,15 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
                     e
                 );
             }
+
+            // 发送 F10 触发 3Dmigoto 热重载：
+            // 3Dmigoto 的 if/endif 条件在解析时求值，$active_slot 通过 persist 跨重载保持。
+            // 按键模拟设置 $active_slot 后，需 F10 触发重载使 if/endif 重新求值，
+            // 从而激活目标模组的 section（$managed_slot_id == $active_slot 匹配）。
+            log::debug!("[commands::mod_commands] [select_mod] sending F10 to trigger 3Dmigoto reload");
+            if let Err(e) = simulator.simulate_f10() {
+                log::warn!("select_mod: simulate_f10 failed: {}", e);
+            }
         }
 
         let managed_path = mods_path.join(constants::MANAGED_FOLDER);
