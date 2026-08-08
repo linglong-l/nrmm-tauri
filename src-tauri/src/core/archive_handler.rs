@@ -11,7 +11,7 @@
 //! - 支持指定分组导入和自动选择分组导入（扫描 `group_1`, `group_2`... 找到第一个存在的分组）
 //! - 支持直接导入已解压的模组目录（同盘移动 / 跨盘复制 + trash 回收站）
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, Context};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::fs;
@@ -196,57 +196,89 @@ pub fn is_supported_archive(path: &Path) -> bool {
     )
 }
 
-/// 查找 7-Zip 可执行文件路径
+/// 查找系统 PATH 中的 7-Zip 可执行文件路径
 ///
-/// 搜索优先级（内置 > 系统 PATH）：
-/// 1. 应用程序所在目录下的 `constants::SEVEN_Z_BUILTIN_PATH`
-/// 2. 应用程序所在目录 `resources/` 下的 `SEVEN_Z_BUILTIN_PATH`
+/// 仅搜索系统 PATH，不检查内置打包的 7z 二进制。
+/// 用于三级回退链的第一级：用户自行安装的 7z 版本更新、性能更好。
+///
+/// 搜索顺序：
+/// 1. 平台标准 7z 命令（`SEVEN_Z_EXECUTABLE`）
+/// 2. 备选名称：`7za`, `7zr`, `7zz`, `7z`
+///
+/// # 返回
+/// `Some(PathBuf)` 表示找到可用的系统 7z，`None` 表示未找到
+fn get_system_7z_path() -> Option<PathBuf> {
+    let system_candidates: &[&str] = &[
+        crate::core::constants::SEVEN_Z_EXECUTABLE,
+        "7za",
+        "7zr",
+        "7zz",
+        "7z",
+    ];
+    for cmd in system_candidates {
+        if let Ok(output) = Command::new(cmd).arg("--help").output() {
+            if output.status.success() {
+                log::debug!("get_system_7z_path: found system 7z at '{}'", cmd);
+                return Some(PathBuf::from(cmd));
+            }
+        }
+    }
+    log::debug!("get_system_7z_path: no system 7z found in PATH");
+    None
+}
+
+/// 查找内置打包的 7-Zip 可执行文件路径
+///
+/// 仅搜索应用 bundle 内的 7z 二进制，不检查系统 PATH。
+/// 用于三级回退链的第二级：打包在应用中的 7z CLI 作为备用方案。
+///
+/// 搜索位置：
+/// 1. 应用程序 `resources/` 目录下的 `SEVEN_Z_BUILTIN_PATH`
+/// 2. 应用程序目录下的 `SEVEN_Z_BUILTIN_PATH`
 /// 3. macOS 的 `../Resources` 目录下的 `SEVEN_Z_BUILTIN_PATH`
-/// 4. 系统 PATH 中的 `7z` 命令（`SEVEN_Z_EXECUTABLE`）
-/// 5. 备选名称依次尝试：`7za`, `7zr`, `7zz`, `7z.exe`, `7z`
+///
+/// # 返回
+/// `Some(PathBuf)` 表示找到内置 7z，`None` 表示未找到
+fn get_bundled_7z_path() -> Option<PathBuf> {
+    let builtin = crate::core::constants::SEVEN_Z_BUILTIN_PATH;
+    if let Ok(exe_dir) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_dir.parent() {
+            let candidates = [
+                exe_dir.join("resources").join(builtin),
+                exe_dir.join(builtin),
+                exe_dir.join("../Resources").join(builtin),
+            ];
+            for candidate in &candidates {
+                if candidate.exists() {
+                    log::debug!("get_bundled_7z_path: found builtin 7z at {:?}", candidate);
+                    return Some(candidate.clone());
+                }
+            }
+        }
+    }
+    log::debug!("get_bundled_7z_path: no builtin 7z found");
+    None
+}
+
+/// 查找 7-Zip 可执行文件路径（系统优先 + 内置回退）
+///
+/// 组合 `get_system_7z_path` 和 `get_bundled_7z_path`，系统 7z 优先。
+/// 保留此函数用于向后兼容和不需要分级回退的场景。
 ///
 /// # 返回
 /// 找到的第一个可用 7z 可执行文件路径
 ///
 /// # Errors
 /// - 所有搜索位置均未找到 7z 可执行文件，返回 `anyhow!("7z CLI not found...")`
+#[allow(dead_code)]
 fn get_7z_path() -> Result<PathBuf> {
-    let builtin = crate::core::constants::SEVEN_Z_BUILTIN_PATH;
-    let seven_z_exe = crate::core::constants::SEVEN_Z_EXECUTABLE;
-
-    // 优先查找应用程序目录下的内置 7z 路径
-    if let Ok(exe_dir) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_dir.parent() {
-            let candidates = [
-                exe_dir.join(builtin),
-                exe_dir.join("resources").join(builtin),
-                exe_dir.join("../Resources").join(builtin),
-            ];
-            for candidate in &candidates {
-                if candidate.exists() {
-                    log::debug!("get_7z_path: found builtin 7z at {:?}", candidate);
-                    return Ok(candidate.clone());
-                }
-            }
-        }
+    if let Some(path) = get_system_7z_path() {
+        return Ok(path);
     }
-
-    // 检查系统 PATH 中的 7z
-    let which = seven_z_exe;
-    if let Ok(output) = Command::new(which).arg("--help").output() {
-        if output.status.success() {
-            return Ok(PathBuf::from(which));
-        }
+    if let Some(path) = get_bundled_7z_path() {
+        return Ok(path);
     }
-
-    // 尝试其他常见的 7z 可执行文件名
-    for cmd in &["7za", "7zr", "7zz", "7z.exe", "7z"] {
-        if Command::new(cmd).arg("--help").output().is_ok() {
-            return Ok(PathBuf::from(cmd));
-        }
-    }
-
-    Err(anyhow!("7z CLI not found. Please install 7-Zip or ensure 7z binary is in the application directory."))
+    Err(anyhow!("7z CLI not found in system PATH or application bundle."))
 }
 
 /// 判断两个路径是否在同一磁盘（卷）上
@@ -308,61 +340,39 @@ pub fn paths_on_same_disk(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// 解压压缩包到目标目录
+/// 使用 7z CLI 解压压缩包到临时目录
 ///
-/// # 实现流程
-/// 1. **检测压缩包格式**：使用 `detect_archive_type_robust`（魔数优先 + 扩展名回退）
-/// 2. **查找 7z**：调用 `get_7z_path`（内置优先，系统 PATH 备选）
-/// 3. **创建临时目录**：`target_dir/.extract_tmp_{uuid}` 避免并发解压冲突
-/// 4. **调用 7z x 命令**：`-y` 自动确认，`-p{password}` 或 `-p`（空密码尝试）
-/// 5. **检测密码错误**：匹配 stdout/stderr 中的 "password"/"Wrong password"/"Encrypted"
-/// 6. **扁平化单层目录**：`flatten_single_directory` 处理压缩包内单根目录情况
-/// 7. **统计文件数 & 检查 INI**：`visit_files` 递归遍历
-/// 8. **移动到最终位置**：`unique_path` 处理重名，`move_directory_contents` 合并移动
-/// 9. **清理临时目录**：`remove_dir_all`
+/// 提取 `extract_archive` 中 7z CLI 调用逻辑为独立函数，供三级回退链复用。
+/// 仅负责调用 7z 命令并返回临时目录路径，不执行后续的扁平化、统计、移动等操作。
 ///
 /// # 参数
+/// - `seven_zip_path`: 7z 可执行文件路径（系统 PATH 中的命令名或内置二进制完整路径）
 /// - `archive_path`: 压缩包路径
-/// - `target_dir`: 目标父目录（解压后在此目录下创建模组目录）
+/// - `target_dir`: 目标父目录（临时目录将创建在此目录下）
 /// - `password`: 可选压缩包密码，`None` 表示尝试无密码解压
 ///
 /// # 返回
-/// `ExtractResult` 枚举，包含成功或各类失败详情
-///
-/// # Panics
-/// 不会 panic
+/// 成功时返回临时目录 `PathBuf`，失败时返回错误
 ///
 /// # Errors
-/// - 7z 可执行文件未找到（`get_7z_path` 失败）
-/// - 临时目录创建失败（IO 错误）
-/// - 7z 命令执行失败（非密码错误的其他原因）
-pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<&str>) -> Result<ExtractResult> {
-    let archive_type = detect_archive_type_robust(archive_path);
-
-    if let ArchiveType::Unsupported(ext) = archive_type {
-        return Ok(ExtractResult::UnsupportedFormat {
-            ext,
-            message: "Unsupported archive format. Please manually extract .zip/.rar/.7z files.".to_string(),
-        });
-    }
-
-    let seven_zip = get_7z_path()?;
-
-    // 创建唯一临时目录，避免并发解压冲突
+/// - 临时目录创建失败
+/// - 7z 命令执行失败（密码错误返回 `PasswordRequired` 变体错误消息）
+/// - 7z 命令返回非零退出码
+fn extract_with_7z_cli(
+    seven_zip_path: &Path,
+    archive_path: &Path,
+    target_dir: &Path,
+    password: Option<&str>,
+) -> Result<PathBuf> {
     let temp_dir = target_dir.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)?;
 
-    let mut cmd = Command::new(&seven_zip);
+    let mut cmd = Command::new(seven_zip_path);
     cmd.arg("x")
        .arg("-y")
        .arg(format!("-o{}", temp_dir.to_string_lossy()));
 
     if let Some(pw) = password {
-        // 安全说明：Command::new 使用 CreateProcess/exec 传递参数数组，不经 shell 解释，
-        // 传统 shell 注入（; rm -rf /）不适用。7z 的 -p 参数将密码直接附加在 -p 后面，
-        // 不会将密码解析为独立选项。
-        // 但密码中的控制字符（换行符 \n、回车 \r、空字符 \0）可能导致 7z 解析异常，
-        // 在此过滤以确保密码仅包含可打印字符。
         let sanitized: String = pw.chars().filter(|c| !c.is_control()).collect();
         if sanitized.is_empty() {
             cmd.arg("-p");
@@ -376,32 +386,304 @@ pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<
     cmd.arg(archive_path.to_string_lossy().to_string());
 
     let output = cmd.output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{}{}", stdout, stderr);
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        let combined = format!("{}{}", stdout, stderr);
-        // 检测是否密码错误
         if combined.contains("password") || combined.contains("Wrong password") || combined.contains("Encrypted") {
             let _ = fs::remove_dir_all(&temp_dir);
-            return Ok(ExtractResult::PasswordRequired {
-                archive_path: archive_path.to_path_buf(),
-            });
+            return Err(anyhow!("PASSWORD_REQUIRED"));
         }
-
         let _ = fs::remove_dir_all(&temp_dir);
-        return Ok(ExtractResult::ExtractFailed {
-            message: format!("7z extraction failed: {}", combined),
+        return Err(anyhow!("7z CLI extraction failed: {}", combined));
+    }
+
+    Ok(temp_dir)
+}
+
+/// 使用 `sevenz-rust` crate 自实现解压 7z 压缩包到临时目录
+///
+/// 三级回退链的第三级（7z 格式）：纯 Rust 实现的 7z 解压，不依赖外部 CLI。
+/// 支持密码保护的压缩包。
+///
+/// # 参数
+/// - `archive_path`: 7z 压缩包路径
+/// - `target_dir`: 目标父目录（临时目录将创建在此目录下）
+/// - `password`: 可选压缩包密码
+///
+/// # 返回
+/// 成功时返回临时目录 `PathBuf`
+///
+/// # Errors
+/// - 临时目录创建失败
+/// - `sevenz_rust::decompress_file` 解压失败
+fn extract_7z_internal(
+    archive_path: &Path,
+    target_dir: &Path,
+    password: Option<&str>,
+) -> Result<PathBuf> {
+    let temp_dir = target_dir.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir)?;
+
+    log::info!(
+        "extract_7z_internal: falling back to sevenz-rust for {:?}",
+        archive_path
+    );
+
+    if password.is_some() {
+        // sevenz-rust 0.6 不直接支持密码解压，密码保护的 7z 应在前两级 7z CLI 中处理
+        return Err(anyhow!("Password-protected 7z not supported by internal extractor"));
+    }
+
+    sevenz_rust::decompress_file(archive_path, &temp_dir)
+        .context("sevenz-rust decompress_file failed")?;
+
+    Ok(temp_dir)
+}
+
+/// 使用 `zip` crate 自实现解压 ZIP 压缩包到临时目录
+///
+/// 三级回退链的第三级（ZIP 格式）：纯 Rust 实现的 ZIP 解压，不依赖外部 CLI。
+/// 注意：自实现 ZIP 解压不支持密码保护（密码保护的 ZIP 应在前两级 7z CLI 中处理）。
+///
+/// # 参数
+/// - `archive_path`: ZIP 压缩包路径
+/// - `target_dir`: 目标父目录（临时目录将创建在此目录下）
+///
+/// # 返回
+/// 成功时返回临时目录 `PathBuf`
+///
+/// # Errors
+/// - 临时目录创建失败
+/// - 文件打开失败
+/// - `zip::ZipArchive::extract` 解压失败
+fn extract_zip_internal(
+    archive_path: &Path,
+    target_dir: &Path,
+) -> Result<PathBuf> {
+    let temp_dir = target_dir.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir)?;
+
+    log::info!(
+        "extract_zip_internal: falling back to zip crate for {:?}",
+        archive_path
+    );
+
+    let file = fs::File::open(archive_path)
+        .context("extract_zip_internal: failed to open archive")?;
+    let mut archive = zip::ZipArchive::new(file)
+        .context("extract_zip_internal: failed to read ZIP archive")?;
+    archive.extract(&temp_dir)
+        .context("extract_zip_internal: ZIP extraction failed")?;
+
+    Ok(temp_dir)
+}
+
+/// 使用 `unrar` crate 自实现解压 RAR 压缩包到临时目录
+///
+/// 三级回退链的第三级（RAR 格式）：基于 UnRAR C 库的 RAR 解压，不依赖外部 CLI。
+/// 注意：`unrar` crate 仅支持解压，不支持创建 RAR 压缩包。
+///
+/// # 参数
+/// - `archive_path`: RAR 压缩包路径
+/// - `target_dir`: 目标父目录（临时目录将创建在此目录下）
+/// - `password`: 可选压缩包密码
+///
+/// # 返回
+/// 成功时返回临时目录 `PathBuf`
+///
+/// # Errors
+/// - 临时目录创建失败
+/// - `unrar::Archive` 打开或解压失败
+fn extract_rar_internal(
+    archive_path: &Path,
+    target_dir: &Path,
+    password: Option<&str>,
+) -> Result<PathBuf> {
+    let temp_dir = target_dir.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir)?;
+
+    log::info!(
+        "extract_rar_internal: falling back to unrar crate for {:?}",
+        archive_path
+    );
+
+    let mut archive = if let Some(pw) = password {
+        unrar::Archive::with_password(archive_path, pw)
+            .open_for_processing()
+            .context("extract_rar_internal: failed to open RAR archive with password")?
+    } else {
+        unrar::Archive::new(archive_path)
+            .open_for_processing()
+            .context("extract_rar_internal: failed to open RAR archive")?
+    };
+
+    // 使用状态机模式逐文件解压
+    while let Some(header) = archive.read_header()
+        .context("extract_rar_internal: failed to read RAR header")?
+    {
+        archive = if header.entry().is_file() {
+            header.extract_with_base(&temp_dir)
+                .context("extract_rar_internal: failed to extract RAR entry")?
+        } else {
+            header.skip()
+                .context("extract_rar_internal: failed to skip RAR entry")?
+        };
+    }
+
+    Ok(temp_dir)
+}
+
+/// 解压压缩包到目标目录（三级回退链）
+///
+/// # 三级回退链设计
+///
+/// 按优先级依次尝试以下解压方式，任一成功即返回：
+///
+/// **第一级：系统 7z CLI**（最高优先级）
+/// - 搜索系统 PATH 中的 7z 命令（`7z.exe`/`7zz`/`7za`/`7zr`/`7z`）
+/// - 用户自行安装的 7z 版本更新、性能更好
+///
+/// **第二级：内置打包 7z CLI**（中级回退）
+/// - 使用应用 bundle 内打包的 7z 二进制（`resources/7z/...`）
+/// - 当用户系统无 7z 或版本过低导致解压失败时使用
+///
+/// **第三级：自实现解压**（最终回退）
+/// - 7z 格式 → `sevenz-rust` crate（纯 Rust 实现）
+/// - ZIP 格式 → `zip` crate（纯 Rust 实现）
+/// - RAR 格式 → `unrar` crate（基于 UnRAR C 库，仅解压）
+///
+/// # 解压后处理
+///
+/// 无论使用哪一级解压，成功后均执行以下步骤：
+/// 1. **扁平化单层目录**：`flatten_single_directory` 处理压缩包内单根目录情况
+/// 2. **统计文件数 & 检查 INI**：`visit_files` 递归遍历
+/// 3. **移动到最终位置**：`unique_path` 处理重名，`move_directory_contents` 合并移动
+/// 4. **清理临时目录**：`remove_dir_all`
+///
+/// # 参数
+/// - `archive_path`: 压缩包路径
+/// - `target_dir`: 目标父目录（解压后在此目录下创建模组目录）
+/// - `password`: 可选压缩包密码，`None` 表示尝试无密码解压
+///
+/// # 返回
+/// `ExtractResult` 枚举，包含成功或各类失败详情
+///
+/// # Panics
+/// 不会 panic
+///
+/// # Errors
+/// - 所有三级解压均失败时返回 `ExtractFailed`
+/// - 密码错误时返回 `PasswordRequired`
+pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<&str>) -> Result<ExtractResult> {
+    let archive_type = detect_archive_type_robust(archive_path);
+
+    if let ArchiveType::Unsupported(ext) = archive_type {
+        return Ok(ExtractResult::UnsupportedFormat {
+            ext,
+            message: "Unsupported archive format. Please manually extract .zip/.rar/.7z files.".to_string(),
         });
     }
 
+    let mut last_error: Option<String> = None;
+
+    // --- 第一级：系统 7z CLI ---
+    if let Some(sys_7z) = get_system_7z_path() {
+        match extract_with_7z_cli(&sys_7z, archive_path, target_dir, password) {
+            Ok(temp_dir) => {
+                log::info!("extract_archive: system 7z succeeded for {:?}", archive_path);
+                return finalize_extraction(archive_path, target_dir, &temp_dir);
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("PASSWORD_REQUIRED") {
+                    return Ok(ExtractResult::PasswordRequired {
+                        archive_path: archive_path.to_path_buf(),
+                    });
+                }
+                log::warn!("extract_archive: system 7z failed: {}", msg);
+                last_error = Some(format!("system 7z: {}", msg));
+            }
+        }
+    }
+
+    // --- 第二级：内置打包 7z CLI ---
+    if let Some(bundled_7z) = get_bundled_7z_path() {
+        match extract_with_7z_cli(&bundled_7z, archive_path, target_dir, password) {
+            Ok(temp_dir) => {
+                log::info!("extract_archive: bundled 7z succeeded for {:?}", archive_path);
+                return finalize_extraction(archive_path, target_dir, &temp_dir);
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("PASSWORD_REQUIRED") {
+                    return Ok(ExtractResult::PasswordRequired {
+                        archive_path: archive_path.to_path_buf(),
+                    });
+                }
+                log::warn!("extract_archive: bundled 7z failed: {}", msg);
+                last_error = Some(format!("bundled 7z: {}", msg));
+            }
+        }
+    }
+
+    // --- 第三级：自实现解压（按格式分派） ---
+    let internal_result = match archive_type {
+        ArchiveType::SevenZip => extract_7z_internal(archive_path, target_dir, password),
+        ArchiveType::Zip => {
+            if password.is_some() {
+                // 自实现 ZIP 不支持密码，直接返回错误
+                Err(anyhow!("ZIP password not supported by internal extractor"))
+            } else {
+                extract_zip_internal(archive_path, target_dir)
+            }
+        }
+        ArchiveType::Rar => extract_rar_internal(archive_path, target_dir, password),
+        _ => unreachable!(),
+    };
+
+    match internal_result {
+        Ok(temp_dir) => {
+            log::info!("extract_archive: internal extractor succeeded for {:?}", archive_path);
+            finalize_extraction(archive_path, target_dir, &temp_dir)
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            log::error!("extract_archive: all tiers failed for {:?}: {}", archive_path, msg);
+            let combined = if let Some(prev) = last_error {
+                format!("{}; internal: {}", prev, msg)
+            } else {
+                format!("internal: {}", msg)
+            };
+            Ok(ExtractResult::ExtractFailed {
+                message: format!("All extraction methods failed: {}", combined),
+            })
+        }
+    }
+}
+
+/// 解压后处理：扁平化、统计、移动、清理
+///
+/// 将 `extract_with_7z_cli` 或 internal 函数返回的临时目录内容处理后移动到最终位置。
+///
+/// # 参数
+/// - `archive_path`: 原始压缩包路径（用于提取模组名称）
+/// - `target_dir`: 目标父目录
+/// - `temp_dir`: 解压后的临时目录
+///
+/// # 返回
+/// `ExtractResult::Success` 包含最终安装路径、模组名称、INI 检查结果和文件数
+fn finalize_extraction(
+    archive_path: &Path,
+    target_dir: &Path,
+    temp_dir: &Path,
+) -> Result<ExtractResult> {
     // 扁平化：如果临时目录内只有一个子目录，将其内容提升一级
-    let final_dir = flatten_single_directory(&temp_dir)?;
+    let final_dir = flatten_single_directory(temp_dir)?;
 
     let mut has_ini = false;
     let mut file_count = 0usize;
-    // 遍历文件统计数量并检查 INI
     let mut counter = |path: &Path| {
         file_count += 1;
         if let Some(ext) = path.extension() {
@@ -412,7 +694,6 @@ pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<
     };
     visit_files(&final_dir, &mut counter)?;
 
-    // 使用压缩包文件名（不含扩展名）作为模组名
     let mod_name = archive_path
         .file_stem()
         .unwrap_or_default()
@@ -420,14 +701,12 @@ pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<
         .to_string();
 
     let target_mod_path = target_dir.join(&mod_name);
-    // 处理重名：如果已存在则追加 _1, _2 等后缀
     let target_mod_path = unique_path(&target_mod_path);
 
-    // 将临时目录内容移动到最终位置
     move_directory_contents(&final_dir, &target_mod_path)?;
 
     // 清理临时目录
-    let _ = fs::remove_dir_all(&temp_dir);
+    let _ = fs::remove_dir_all(temp_dir);
 
     Ok(ExtractResult::Success {
         mod_path: target_mod_path,

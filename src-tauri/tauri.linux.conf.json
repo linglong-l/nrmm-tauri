@@ -36,6 +36,10 @@
   "bundle": {
     "active": true,
     "targets": ["deb", "rpm", "appimage"],
+    "resources": {
+      "binaries/7z/7z2602-linux-x64/7zz": "7z/7z2602-linux-x64/7zz",
+      "binaries/7z/7z2602-linux-x64/7zzs": "7z/7z2602-linux-x64/7zzs"
+    },
     "linux": {
       "deb": {},
       "rpm": {},
