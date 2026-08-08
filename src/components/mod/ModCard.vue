@@ -83,6 +83,7 @@
         class="context-menu"
         :style="{ top: contextMenuY + 'px', left: contextMenuX + 'px' }"
         @click.stop
+        @mouseleave="closeContextMenu"
       >
         <div v-if="mod" class="menu-item" @click="handleToggleEnabled">
           <el-icon><Switch /></el-icon>
@@ -488,6 +489,24 @@ function handleClickOutside() {
 }
 
 /**
+ * 全局捕获阶段右键关闭
+ * 在卡片自身的 @contextmenu 处理器触发之前执行，确保同一时刻只有一个菜单：
+ * - 右键落在非菜单区域（如另一张卡片）→ 关闭所有已打开的菜单
+ * - 右键落在某个 .context-menu 内 → 保留（用户正操作菜单）
+ * 解决"右键卡片一后再右键卡片二触发两个菜单叠加"的问题
+ */
+function handleGlobalContextMenu(e: MouseEvent) {
+  const target = e.target as HTMLElement | null
+  if (target && target.closest('.context-menu')) return
+  closeContextMenu()
+}
+
+/** 拖拽时关闭右键菜单 */
+function handleGlobalDragStart() {
+  closeContextMenu()
+}
+
+/**
  * 监听 modIndex 变化，重新触发懒加载
  *
  * 背景：Vue 通过 :key="mod.modPath" 复用组件时，modIndex 可能变化（如删除
@@ -507,6 +526,8 @@ watch(() => props.modIndex, (newIdx, oldIdx) => {
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
+  document.addEventListener('contextmenu', handleGlobalContextMenu, true)
+  document.addEventListener('dragstart', handleGlobalDragStart)
   // 挂载时观察图片容器，触发懒加载
   if (imageContainerRef.value && iconUrl.value) {
     imageLazyLoad.observeElement(props.modIndex, imageContainerRef.value)
@@ -515,6 +536,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
+  document.removeEventListener('contextmenu', handleGlobalContextMenu, true)
+  document.removeEventListener('dragstart', handleGlobalDragStart)
   // 卸载时取消观察图片容器
   if (imageContainerRef.value) {
     imageLazyLoad.unobserveElement(imageContainerRef.value)
