@@ -116,7 +116,8 @@ const {
   endIndex: virtualEndIndex,
   spacerTop,
   spacerBottom,
-  enabled: virtualEnabled
+  enabled: virtualEnabled,
+  recalculate: virtualRecalculate
 } = useVirtualGrid(totalCount, gridContentRef, { columnCount })
 
 /** 虚拟行起始行号 */
@@ -324,7 +325,13 @@ function ensureSelectedCardVisible() {
 
   const cardEl = modRefs.value[idx] as HTMLElement | undefined
   if (!cardEl) {
-    // DOM 尚未渲染（常见于刚切换分组或刚加载完），稍后重试一次
+    // 虚拟滚动模式下，选中模组卡片可能尚未渲染（不在当前可见行内）。
+    // 此时无法 scrollIntoView，需先将容器滚动到目标行触发虚拟行渲染，再精确定位。
+    if (virtualEnabled.value) {
+      scrollToSelectedRow(idx)
+      return
+    }
+    // 全量渲染下 DOM 尚未渲染（常见于刚切换分组或刚加载完），稍后重试一次
     nextTick(() => {
       const el = modRefs.value[idx] as HTMLElement | undefined
       if (el && gridContentRef.value) {
@@ -334,6 +341,32 @@ function ensureSelectedCardVisible() {
     return
   }
   scrollIntoViewIfNeeded(cardEl, gridContentRef.value)
+}
+
+/**
+ * 虚拟滚动模式下，将容器滚动到选中模组所在行，触发虚拟行渲染出该卡片
+ * 行高与顶部偏移需与 useVirtualGrid 默认值保持一致（252px / 8px）
+ * @param idx 选中模组索引
+ */
+function scrollToSelectedRow(idx: number) {
+  if (!gridContentRef.value) return
+  const rowHeight = 252
+  const topOffset = 8
+  const targetRow = Math.floor(idx / columnCount.value)
+  const targetTop = topOffset + targetRow * rowHeight
+  const containerHeight = gridContentRef.value.clientHeight
+  // 目标行垂直居中于视口
+  const targetScrollTop = Math.max(0, targetTop - (containerHeight - rowHeight) / 2)
+  gridContentRef.value.scrollTop = targetScrollTop
+  // 同步刷新虚拟网格可见范围，触发虚拟行按新 scrollTop 重渲染
+  virtualRecalculate()
+  // 等待虚拟行渲染完成后，若卡片已渲染则精确定位到居中
+  nextTick(() => {
+    const el = modRefs.value[idx] as HTMLElement | undefined
+    if (el && gridContentRef.value) {
+      scrollIntoViewIfNeeded(el, gridContentRef.value)
+    }
+  })
 }
 
 /**

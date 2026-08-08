@@ -135,7 +135,7 @@
  * - 虚线边框：空槽位（用于网格对齐）
  * 支持：单击选中、双击确认启用、右键菜单
  */
-import { ref, computed, onMounted, onUnmounted, inject } from 'vue'
+import { ref, computed, onMounted, onUnmounted, inject, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus, Setting } from '@element-plus/icons-vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -486,6 +486,24 @@ async function handleRemoved() {
 function handleClickOutside() {
   closeContextMenu()
 }
+
+/**
+ * 监听 modIndex 变化，重新触发懒加载
+ *
+ * 背景：Vue 通过 :key="mod.modPath" 复用组件时，modIndex 可能变化（如删除
+ * 模组后列表重排），但 onMounted 不会重新触发，且 IntersectionObserver 已
+ * 取消观察该元素。若旧索引的图片已加载成功，直接转移状态避免骨架屏闪烁；否则
+ * 重新调用 observeElement 触发懒加载流程。
+ */
+watch(() => props.modIndex, (newIdx, oldIdx) => {
+  if (newIdx === oldIdx || !imageContainerRef.value || !iconUrl.value) return
+  const oldState = imageLazyLoad.states.value.get(oldIdx!)
+  if (oldState === 'loaded') {
+    imageLazyLoad.markLoaded(newIdx)
+    return
+  }
+  imageLazyLoad.observeElement(newIdx, imageContainerRef.value)
+})
 
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
