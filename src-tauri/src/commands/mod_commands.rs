@@ -316,7 +316,14 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             mod_manager::switch_mod(game_enum, &mods_path, &settings, group_index, mod_index).map_err(|e| e.to_string())
         })
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| {
+            log::error!("[select_mod] spawn_blocking join error: {}", e);
+            format!("switch task failed: {}", e)
+        })?
+        .map_err(|e| {
+            log::error!("[select_mod] switch_mod error: {}", e);
+            e
+        })?;
         log::debug!("[commands::mod_commands] [select_mod] switch_result={:?}", result);
 
         {

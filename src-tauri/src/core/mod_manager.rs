@@ -1379,17 +1379,21 @@ pub fn switch_mod(
     // 注意：group 分组下选择模组不使用互斥逻辑，不得自动禁用/启用同组其他模组。
     // 各模组的启用/禁用状态仅由用户通过开关显式抉择，选择模组只更新选中状态。
 
+    // mod_index 安全转换：扫描器使用 1-based 索引（idx + 1），$managed_slot_id 也是 1-based。
+    // 若前端传入 0（旧版 0-based 兼容），转为 1 以匹配 $managed_slot_id。
+    let safe_mod_index = if mod_index == 0 { 1 } else { mod_index };
+
     // 将选中的 mod_index 写入该分组的 selectedindex 文件，使 is_active 状态持久化
-    let sel_idx_i32 = mod_index as i32;
+    let sel_idx_i32 = safe_mod_index as i32;
     if let Some(g_dir) = group_dir {
         let selectedindex_path = g_dir.join(constants::SELECTED_INDEX_FILE);
-        if let Err(e) = fs::write(&selectedindex_path, mod_index.to_string()) {
+        if let Err(e) = fs::write(&selectedindex_path, safe_mod_index.to_string()) {
             log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
         } else {
             log::debug!(
                 "[core::mod_manager] [switch_mod] wrote selectedindex file | path={} content={}",
                 selectedindex_path.display(),
-                mod_index
+                safe_mod_index
             );
         }
     } else {
