@@ -396,6 +396,13 @@ impl IniFile {
             "; Errored conditional blocks (if/else/elif/endif) are handled correctly (newer syntax may require further testing), including namespaced variables.",
             "; If certain syntax is only available in newer XXMI versions, make sure to use the latest XXMI.",
         ];
+        // 幂等：若 preamble 已以首行头部注释开头，则不再重复插入（避免多次 update 后头部倍增）
+        let already_has = self.preamble.iter().take(1).any(|l| {
+            matches!(l, IniLine::Comment(text) if text == header_lines[0])
+        });
+        if already_has {
+            return;
+        }
         for line in header_lines.iter().rev() {
             self.preamble.insert(0, IniLine::Comment(line.to_string()));
         }
@@ -419,7 +426,15 @@ impl IniFile {
             first_section = false;
 
             writeln!(writer, "[{}]", section.name)?;
-            for line in &section.lines {
+            // 跳过段尾的 Empty 行，避免段间出现多余空行（对齐原版 NRMM 输出）
+            let lines: Vec<&IniLine> = section.lines.iter()
+                .rev()
+                .skip_while(|l| matches!(l, IniLine::Empty))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            for line in &lines {
                 writeln!(writer, "{}", line)?;
             }
         }
@@ -483,6 +498,9 @@ impl IniFile {
             || lower == "match_index_count"
             || lower == "filter"
             || lower == "type"
+            || lower == "override_vertex_count"
+            || lower == "override_byte_stride"
+            || lower == "uav_byte_stride"
     }
 
     fn first_command_line_index(lines: &[IniLine]) -> Option<usize> {
