@@ -109,7 +109,10 @@ pub struct SaveCustomizationsResult {
 /// - `false`: 未检测到或检测过程发生错误
 pub fn detect_standard_xxmi(game_mods_path: &Path, main_ini_name: &str) -> bool {
     let _start = std::time::Instant::now();
-    let main_ini_path = game_mods_path.join(main_ini_name);
+    let main_ini_path = game_mods_path
+        .parent()
+        .map(|p| p.join(main_ini_name))
+        .unwrap_or_else(|| game_mods_path.join(main_ini_name));
 
     // 1. 读取主 INI 文件
     let content = match fs::read_to_string(&main_ini_path) {
@@ -491,21 +494,37 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     log::debug!("[mod_manager] [update_mod_data] step=scan_mods done total_mods={} total_groups={}", scan_result.total_mods_count, scan_result.groups.len());
 
     let main_ini_name = game.d3dx_ini_name();
-    let main_ini_path = game_mods_path.join(main_ini_name);
+    // d3dx.ini 位于游戏根目录（Mods 的父目录），而非 Mods/ 内。
+    // 原版 NRMM 不会在 Mods/ 下创建 d3dx.ini；d3dx.ini 是 XXMI/3Dmigoto 安装时就存在的。
+    let main_ini_path = game_mods_path
+        .parent()
+        .map(|p| p.join(main_ini_name))
+        .unwrap_or_else(|| game_mods_path.join(main_ini_name));
 
-    if !main_ini_path.exists() {
-        create_default_main_ini(&main_ini_path, main_ini_name)?;
+    // 若 d3dx.ini 不存在于游戏根（非标准 XXMI 环境），跳过主 INI 修改，
+    // 不在 Mods/ 内创建默认 d3dx.ini（对齐原版 NRMM 行为）。
+    let main_ini_existed = main_ini_path.exists();
+    if !main_ini_existed {
+        log::warn!(
+            "[mod_manager] [update_mod_data] d3dx.ini 不存在于 {:?}（非标准 XXMI 环境），跳过主 INI 处理",
+            main_ini_path
+        );
+    } else {
+        // 备份主 INI
+        let backup_path = main_ini_path.with_extension(constants::BACKUP_EXTENSION);
+        if !backup_path.exists() {
+            fs::copy(&main_ini_path, &backup_path)
+                .with_context(|| format!("Failed to backup main INI: {:?}", main_ini_path))?;
+        }
     }
 
-    // 备份主 INI
-    let backup_path = main_ini_path.with_extension(constants::BACKUP_EXTENSION);
-    if !backup_path.exists() {
-        fs::copy(&main_ini_path, &backup_path)
-            .with_context(|| format!("Failed to backup main INI: {:?}", main_ini_path))?;
-    }
-
-    let main_ini_content = IniFile::force_read_as_utf8(&main_ini_path)?;
-    let main_ini_content = strip_nrmm_injected_content(&main_ini_content);
+    // 读取主 INI 内容（d3dx.ini 不存在时为空字符串，跳过后续主 INI 修改）
+    let main_ini_content = if main_ini_existed {
+        let c = IniFile::force_read_as_utf8(&main_ini_path)?;
+        strip_nrmm_injected_content(&c)
+    } else {
+        String::new()
+    };
 
     // 步骤3: 收集启用模组和已知库
     let enabled_mods: Vec<&ModData> = scan_result.mods.iter()
@@ -663,34 +682,39 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     // 标准 XXMI 环境通过 [Include] 段的 include_recursive = Mods 自动加载 _MANAGED_ 下的 .ini 文件。
     // 若用户的 d3dx.ini 缺少此配置，则直接在文件末尾追加 include = _MANAGED_/nrmm_include.ini
     // 确保 manager_group.ini / group_N.ini 等管理文件被 3Dmigoto 加载。
-    let has_include_recursive = detect_include_recursive(&main_ini_path, game_mods_path);
+    // d3dx.ini 不存在（非标准环境）时跳过主 INI 修改。
     let mut final_content = main_ini_content;
+    if main_ini_existed {
+        let has_include_recursive = detect_include_recursive(&main_ini_path, game_mods_path);
 
-    if !has_include_recursive {
-        log::warn!(
-            "[mod_manager] [update_mod_data] d3dx.ini 缺少 include_recursive 配置，自动注入 include 指令"
-        );
-        // 在主 INI 末尾追加 NRMM 管理段（include 指令需在段外，3Dmigoto 仅处理顶层的 include）
-        if let Ok(rel_path) = nrmm_include_path.strip_prefix(game_mods_path) {
-            let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-            final_content.push_str("\n;NRMM_INI_START\n");
-            final_content.push_str("; No-Reload Mod Manager managed section\n");
-            final_content.push_str("; Do not edit this section manually\n");
-            final_content.push_str("[Constants]\n");
-            final_content.push_str("global $managed_slot_id = 0\n\n");
-            final_content.push_str(&format!("include = {}\n", rel_str));
-            final_content.push_str(";NRMM_INI_END\n");
+        if !has_include_recursive {
+            log::warn!(
+                "[mod_manager] [update_mod_data] d3dx.ini 缺少 include_recursive 配置，自动注入 include 指令"
+            );
+            // 在主 INI 末尾追加 NRMM 管理段（include 指令需在段外，3Dmigoto 仅处理顶层的 include）
+            if let Ok(rel_path) = nrmm_include_path.strip_prefix(game_mods_path) {
+                let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+                final_content.push_str("\n;NRMM_INI_START\n");
+                final_content.push_str("; No-Reload Mod Manager managed section\n");
+                final_content.push_str("; Do not edit this section manually\n");
+                final_content.push_str("[Constants]\n");
+                final_content.push_str("global $managed_slot_id = 0\n\n");
+                final_content.push_str(&format!("include = {}\n", rel_str));
+                final_content.push_str(";NRMM_INI_END\n");
+            }
+            need_reload_manual = true;
         }
-        need_reload_manual = true;
-    }
 
-    // 原子写入主 INI
-    let tmp_path = main_ini_path.with_extension("ini.tmp");
-    fs::write(&tmp_path, &final_content)
-        .with_context(|| format!("Failed to write temp main INI: {:?}", tmp_path))?;
-    fs::rename(&tmp_path, &main_ini_path)
-        .with_context(|| format!("Failed to rename temp main INI to: {:?}", main_ini_path))?;
-    log::debug!("[mod_manager] [update_mod_data] step=write_main_ini done path={:?}", main_ini_path);
+        // 原子写入主 INI
+        let tmp_path = main_ini_path.with_extension("ini.tmp");
+        fs::write(&tmp_path, &final_content)
+            .with_context(|| format!("Failed to write temp main INI: {:?}", tmp_path))?;
+        fs::rename(&tmp_path, &main_ini_path)
+            .with_context(|| format!("Failed to rename temp main INI to: {:?}", main_ini_path))?;
+        log::debug!("[mod_manager] [update_mod_data] step=write_main_ini done path={:?}", main_ini_path);
+    } else {
+        log::debug!("[mod_manager] [update_mod_data] step=write_main_ini skipped (d3dx.ini 不存在)");
+    }
 
     // 步骤9: 检测标准 XXMI/3DMigoto 环境
     let is_standard_xxmi = detect_standard_xxmi(game_mods_path, main_ini_name);
@@ -1295,8 +1319,10 @@ global $managed_slot_id = 0
 /// - NRMM 不会修改或覆盖 d3dx_user.ini 中的内容
 pub fn save_customizations(game_mods_path: &Path, game: TargetGame) -> Result<SaveCustomizationsResult> {
     let main_ini_name = game.d3dx_ini_name();
-    let main_ini_path = game_mods_path.join(main_ini_name);
-    let user_ini_path = game_mods_path.join("d3dx_user.ini");
+    // d3dx.ini 和 d3dx_user.ini 位于游戏根目录（Mods 的父目录），不在 Mods/ 内
+    let game_root = game_mods_path.parent().unwrap_or(game_mods_path);
+    let main_ini_path = game_root.join(main_ini_name);
+    let user_ini_path = game_root.join("d3dx_user.ini");
 
     if !main_ini_path.exists() {
         return Ok(SaveCustomizationsResult {
@@ -1922,8 +1948,10 @@ pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
     let mut restored = 0u32;
     let mut failed = 0u32;
 
+    // d3dx.ini / RatioShot.ini 位于游戏根（Mods 父目录），不在 Mods/ 内
+    let game_root = game_mods_path.parent().unwrap_or(game_mods_path);
     for &ini_name in &["d3dx.ini", "RatioShot.ini"] {
-        let ini_path = game_mods_path.join(ini_name);
+        let ini_path = game_root.join(ini_name);
         let backup_path = ini_path.with_extension(constants::BACKUP_EXTENSION);
         if backup_path.exists() {
             match fs::copy(&backup_path, &ini_path) {
@@ -2996,26 +3024,34 @@ y = 2
 
     #[test]
     fn test_restore_all_inis() {
-        let dir = setup_test_env();
+        // d3dx.ini 在游戏根（Mods 父目录）；_MANAGED_ 在 Mods/ 下
+        let dir = tempfile::TempDir::new().unwrap();
+        let mods_path = dir.path().join("Mods");
+        let managed = mods_path.join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
         create_main_ini(dir.path(), TargetGame::GenshinImpact);
+        // 覆盖 include_recursive 值为 "Mods"，使 detect_include_recursive 匹配
+        fs::write(dir.path().join("d3dx.ini"), "; original main ini\n[Include]\ninclude_recursive = Mods\n").unwrap();
         let settings = AppSettings::default();
 
-        let group_path = create_group_dir(dir.path(), "group_1");
-        let _mod_path = create_mod_with_ini(
-            &group_path,
-            "RestoreMod",
-            "[TextureOverrideTest]\nhash = 0x1\n"
-        );
+        let group_path = managed.join("group_1");
+        fs::create_dir_all(&group_path).unwrap();
+        let _mod_path = {
+            let p = group_path.join("RestoreMod");
+            fs::create_dir_all(&p).unwrap();
+            fs::write(p.join("mod.ini"), "[TextureOverrideTest]\nhash = 0x1\n").unwrap();
+            p
+        };
 
-        update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+        update_mod_data(TargetGame::GenshinImpact, &mods_path, &settings).unwrap();
 
         let main_ini_path = dir.path().join("d3dx.ini");
         let modified_content = fs::read_to_string(&main_ini_path).unwrap();
-        // 对齐 NRMM 原版：d3dx.ini 不再注入 include 标记，依赖 include_recursive 自动加载
+        // 对齐 NRMM 原版：d3dx.ini 有 include_recursive=Mods 时不注入 ;NRMM_INI_START 块
         assert!(!modified_content.contains(";NRMM_INI_START"));
 
-        let result = restore_all_inis(dir.path()).unwrap();
-        assert!(result.restored >= 2);
+        let result = restore_all_inis(&mods_path).unwrap();
+        assert!(result.restored >= 1);
         assert_eq!(result.failed, 0);
 
         let restored_content = fs::read_to_string(&main_ini_path).unwrap();
@@ -3025,7 +3061,6 @@ y = 2
         assert!(!backup_path.exists());
 
         // 验证管理文件已清理
-        let managed = dir.path().join("_MANAGED_");
         assert!(!managed.join("nrmm_include.ini").exists());
     }
 
@@ -3075,23 +3110,27 @@ y = 2
 
     #[test]
     fn test_update_mod_data_creates_default_ini() {
+        // 对齐原版 NRMM：d3dx.ini 不在 Mods/ 内创建，位于游戏根目录（Mods 父目录）。
+        // 无 d3dx.ini 时 update_mod_data 应优雅跳过主 INI 处理，不报错、不在 Mods/ 创建。
         let dir = setup_test_env();
         let settings = AppSettings::default();
 
         assert!(!dir.path().join("d3dx.ini").exists());
         let result = update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
         assert_eq!(result.total_mods, 0);
-        assert!(dir.path().join("d3dx.ini").exists());
+        // d3dx.ini 不应在 Mods 目录内被创建
+        assert!(!dir.path().join("d3dx.ini").exists());
     }
 
     #[test]
     fn test_update_mod_data_hsr_ini() {
+        // HSR 同理：RatioShot.ini 不在 Mods/ 内创建
         let dir = setup_test_env();
         let settings = AppSettings::default();
 
         let result = update_mod_data(TargetGame::HonkaiStarRail, dir.path(), &settings).unwrap();
         assert_eq!(result.total_mods, 0);
-        assert!(dir.path().join("RatioShot.ini").exists());
+        assert!(!dir.path().join("RatioShot.ini").exists());
     }
 
     #[test]
@@ -3224,15 +3263,18 @@ y = 2
 
     #[test]
     fn test_save_customizations() {
-        let dir = setup_test_env();
+        // d3dx.ini 在游戏根（Mods 父目录）
+        let dir = tempfile::TempDir::new().unwrap();
+        let mods_path = dir.path().join("Mods");
+        fs::create_dir_all(mods_path.join("_MANAGED_")).unwrap();
         create_main_ini(dir.path(), TargetGame::GenshinImpact);
         let settings = AppSettings::default();
 
         // 先执行一次 update_mod_data 添加 NRMM 管理段
-        update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+        update_mod_data(TargetGame::GenshinImpact, &mods_path, &settings).unwrap();
 
         // 保存自定义设置
-        let result = save_customizations(dir.path(), TargetGame::GenshinImpact).unwrap();
+        let result = save_customizations(&mods_path, TargetGame::GenshinImpact).unwrap();
         assert!(result.success);
 
         let user_ini = dir.path().join("d3dx_user.ini");

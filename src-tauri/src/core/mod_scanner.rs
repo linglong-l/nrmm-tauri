@@ -144,7 +144,11 @@ pub fn check_mods_path(game: TargetGame, mods_path: &Path) -> ModsPathStatus {
         return ModsPathStatus::ManagedFolderNotFound;
     }
     let d3dx_name = game.d3dx_ini_name();
-    let d3dx_path = mods_path.join(d3dx_name);
+    // d3dx.ini 位于游戏根目录（Mods 的父目录），不在 Mods/ 内
+    let d3dx_path = mods_path
+        .parent()
+        .map(|p| p.join(d3dx_name))
+        .unwrap_or_else(|| mods_path.join(d3dx_name));
     if !d3dx_path.exists() {
         return ModsPathStatus::D3dxIniNotFound;
     }
@@ -1855,9 +1859,12 @@ mod tests {
     /// 测试：`check_mods_path` 对有效路径返回 `Valid`
     #[test]
     fn test_check_mods_path_valid() {
+        // d3dx.ini 位于游戏根（Mods 父目录），不在 Mods/ 内
         let dir = setup_test_dir();
+        let mods_path = dir.path().join("Mods");
+        fs::create_dir_all(mods_path.join("_MANAGED_")).unwrap();
         create_d3dx_ini(dir.path());
-        let status = check_mods_path(TargetGame::GenshinImpact, dir.path());
+        let status = check_mods_path(TargetGame::GenshinImpact, &mods_path);
         assert_eq!(status, ModsPathStatus::Valid);
     }
 
