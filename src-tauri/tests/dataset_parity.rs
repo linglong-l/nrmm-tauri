@@ -97,24 +97,41 @@ fn normalize_ini_content(s: &str) -> String {
 #[test]
 fn test_dataset_parity_update_mod_data() {
     let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
-    let work_dir = temp_dir.path();
+    // 架构约定：game_mods_path 必须以 "Mods" 结尾。
+    // 将数据集复制到 temp/Mods/ 下，使所有文件（d3dx.ini, _MANAGED_, Core/...）位于 Mods/ 内。
+    let mods_dir = temp_dir.path().join("Mods");
+    fs::create_dir_all(&mods_dir).expect("创建 Mods 目录失败");
 
-    // 复制数据集
-    println!("[parity] 复制数据集: {:?} -> {:?}", input_dir(), work_dir);
-    copy_dir(&input_dir(), work_dir).expect("复制 NRMM-Rust-test 失败");
-
-    // Rust 移植版架构：_MANAGED_ 在根级。移动 Mods/_MANAGED_ 到根级。
-    let mods_managed = work_dir.join("Mods").join("_MANAGED_");
-    let root_managed = work_dir.join("_MANAGED_");
-    if mods_managed.exists() && !root_managed.exists() {
-        fs::rename(&mods_managed, &root_managed).expect("移动 _MANAGED_ 到根级失败");
-        println!("[parity] _MANAGED_ 已从 Mods/ 移动到根级");
+    // 复制数据集内容到 Mods/ 目录下。数据集中存储了原版 NRMM 的完整目录结构，
+    // 其中包含 Mods/_MANAGED_/ 子目录。为避免双重嵌套（Mods/Mods/_MANAGED_），
+    // 跳过数据集中的 Mods/ 目录，将其 _MANAGED_ 内容放到目标 Mods/_MANAGED_。
+    let src_root = input_dir();
+    for entry in std::fs::read_dir(&src_root).expect("读取数据集失败") {
+        let e = entry.expect("读取目录项失败");
+        let name = e.file_name();
+        let src = e.path();
+        let dst = mods_dir.join(&name);
+        if name == "Mods" {
+            // 将数据集 Mods/_MANAGED_/* 复制到目标 Mods/_MANAGED_/
+            let src_managed = src.join("_MANAGED_");
+            if src_managed.exists() {
+                let dst_managed = mods_dir.join("_MANAGED_");
+                copy_dir(&src_managed, &dst_managed).expect("复制 _MANAGED_ 失败");
+            }
+        } else if src.is_dir() {
+            copy_dir(&src, &dst).expect("复制目录失败");
+        } else {
+            fs::copy(&src, &dst).expect("复制文件失败");
+        }
     }
 
+    // game_mods_path = <temp>/Mods（末尾目录名为 Mods）
+    let game_mods_path = mods_dir;
+
     // 运行 update_mod_data
-    println!("[parity] 执行 update_mod_data(GenshinImpact, {:?})", work_dir);
+    println!("[parity] 执行 update_mod_data(GenshinImpact, {:?})", game_mods_path);
     let settings = AppSettings::default();
-    let result = match mod_manager::update_mod_data(TargetGame::GenshinImpact, work_dir, &settings) {
+    let result = match mod_manager::update_mod_data(TargetGame::GenshinImpact, &game_mods_path, &settings) {
         Ok(r) => r,
         Err(e) => panic!("update_mod_data 失败: {:#}", e),
     };
@@ -128,17 +145,21 @@ fn test_dataset_parity_update_mod_data() {
         println!("[parity] 警告: 没有模组被处理。可能扫描未识别到模组。");
     }
 
-    // 比对管理文件（Rust 输出在 _MANAGED_/，基准在 Mods/_MANAGED_/）
-    compare_managed_files(&root_managed, &baseline_dir().join("Mods").join("_MANAGED_"));
+    // 比对管理文件（Rust 输出在 game_mods_path/_MANAGED_/ = Mods/_MANAGED_/）
+    let rust_managed = game_mods_path.join("_MANAGED_");
+    let base_managed = baseline_dir().join("Mods").join("_MANAGED_");
+    compare_managed_files(&rust_managed, &base_managed);
 
     // 比对模组 INI
-    compare_mod_inis(&root_managed, &baseline_dir().join("Mods").join("_MANAGED_"));
+    compare_mod_inis(&rust_managed, &base_managed);
 
-    // 比对 d3dx.ini
-    compare_d3dx(work_dir, &baseline_dir());
+    // 比对 d3dx.ini（Rust 输出在 Mods/d3dx.ini，基准在根级 d3dx.ini）
+    let rust_d3dx = game_mods_path.join("d3dx.ini");
+    let base_d3dx = baseline_dir().join("d3dx.ini");
+    compare_d3dx_files(&rust_d3dx, &base_d3dx);
 
     // 比对备份文件
-    compare_backups(&root_managed, &baseline_dir().join("Mods").join("_MANAGED_"));
+    compare_backups(&rust_managed, &base_managed);
 
     println!("[parity] === 比对完成 ===");
 }
@@ -223,9 +244,7 @@ fn recurse_compare_mod_inis(dir: &Path, _base_dir: &Path, root_a: &Path, root_b:
     }
 }
 
-fn compare_d3dx(work_dir: &Path, baseline: &Path) {
-    let actual_p = work_dir.join("d3dx.ini");
-    let expect_p = baseline.join("d3dx.ini");
+fn compare_d3dx_files(actual_p: &Path, expect_p: &Path) {
     let na = normalize_paths(&read_file_lossy(&actual_p));
     let ne = normalize_paths(&read_file_lossy(&expect_p));
 

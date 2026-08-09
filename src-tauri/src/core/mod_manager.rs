@@ -538,6 +538,16 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     auto_modify_duplicate_namespace(&enabled_mods);
     log::debug!("[mod_manager] [update_mod_data] step=auto_modify_duplicate_namespace done");
 
+    // 步骤3.7: 校验现有 group_X.ini 的一致性（group_id 与目录名是否匹配）
+    // 对齐原版 NRMM：若 INI 中 `global $group_id = X` 与目录 `group_X` 不一致，则跳过处理。
+    let mismatched_groups = validate_group_ini_consistency(&managed_folder, &enabled_mods);
+    if !mismatched_groups.is_empty() {
+        log::warn!(
+            "[mod_manager] [update_mod_data] group_X.ini 不一致，跳过组: {:?}",
+            mismatched_groups
+        );
+    }
+
     // 步骤3.5: ORFix/TexFx 检测（在 INI 修改之前，使用原始 INI 内容）
     let orfix_detection = detect_orfix_texfx(&enabled_mods);
     log::debug!("[mod_manager] [update_mod_data] step=detect_orfix_texfx done has_detection={}", orfix_detection.has_detection);
@@ -559,6 +569,14 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         if mod_scanner::is_normal_group_dir(&format!("group_{}", group_id)).is_none() {
             log::warn!(
                 "[mod_manager] [update_mod_data] 跳过非标准分组标识 group_{}，不进行注入/改写",
+                group_id
+            );
+            continue;
+        }
+        // 跳过 group_X.ini 不一致的分组（global $group_id 与目录名不匹配）
+        if mismatched_groups.contains(&group_id) {
+            log::warn!(
+                "[mod_manager] [update_mod_data] 跳过 group_{}（group_id 不一致）",
                 group_id
             );
             continue;
@@ -956,6 +974,58 @@ fn prepare_managed_folder(managed_path: &Path, _game: TargetGame) -> Result<bool
     }
 
     Ok(need_reload_manual)
+}
+
+/// 校验现有 group_X.ini 中 `global $group_id` 是否与目录名 `group_X` 一致。
+///
+/// 对齐原版 NRMM：读取每个活跃 group 目录下的 group_X.ini，提取 `global $group_id = Y`
+/// 并与目录名 `group_X` 中的 X 比对。不一致的 group id 将被跳过（不处理）。
+///
+/// 返回不一致的 group_id 列表（空表示全部一致）。
+fn validate_group_ini_consistency(managed_path: &Path, enabled_mods: &[&ModData]) -> Vec<u32> {
+    // 收集所有活跃的 group_id
+    let mut active_groups: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for m in enabled_mods {
+        active_groups.insert(m.group_index);
+    }
+
+    let mut mismatched: Vec<u32> = Vec::new();
+    for gid in &active_groups {
+        let group_dir = managed_path.join(format!("group_{}", gid));
+        let group_ini = group_dir.join(format!("group_{}.ini", gid));
+        if !group_ini.exists() {
+            continue; // 首次更新，无旧 INI，无需校验
+        }
+        let content = match IniFile::force_read_as_utf8(&group_ini) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        // 查找 global $group_id = <N>
+        let mut found_id: Option<u32> = None;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            let lower = trimmed.to_lowercase();
+            if lower.starts_with("global $group_id") {
+                if let Some(eq) = trimmed.find('=') {
+                    let val = trimmed[eq + 1..].trim();
+                    if let Ok(n) = val.parse::<u32>() {
+                        found_id = Some(n);
+                    }
+                }
+                break;
+            }
+        }
+        if let Some(ini_group_id) = found_id {
+            if ini_group_id != *gid {
+                log::warn!(
+                    "[mod_manager] group_{}.ini 中 group_id={} 与目录 group_{} 不一致，跳过",
+                    gid, ini_group_id, gid
+                );
+                mismatched.push(*gid);
+            }
+        }
+    }
+    mismatched
 }
 
 /// 清理 _MANAGED_ 目录下旧的 group_*.ini 文件
@@ -4010,5 +4080,31 @@ mod tests_non_group_isolation {
             .find(|e| e.mod_name == "ModB")
             .expect("应存在 ModB 的 entry");
         assert_eq!(mod_b_entry.ini_vec.len(), 1, "ModB 的 ini_vec 应有 1 个元素");
+    }
+
+    #[test]
+    fn test_validate_group_ini_consistency() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+        // 创建 group_1 分组目录和模组
+        let group_path = dir.path().join("_MANAGED_").join("group_1");
+        fs::create_dir_all(&group_path).unwrap();
+        create_mod_with_ini(&group_path, "TestMod", "[Constants]\nx=1\n");
+
+        // 创建一致的 group_1.ini：global $group_id = 1（与目录 group_1 匹配）
+        let good_ini = "[Constants]\nglobal $group_id = 1\n";
+        fs::write(group_path.join("group_1.ini"), good_ini).unwrap();
+
+        let scan = mod_scanner::scan_mods_deep(dir.path()).unwrap();
+        let enabled: Vec<&ModData> = scan.mods.iter().filter(|m| !m.disabled).collect();
+        let managed = dir.path().join("_MANAGED_");
+        let mismatched = validate_group_ini_consistency(&managed, &enabled);
+        assert!(mismatched.is_empty(), "一致的 group_ini 不应报错");
+
+        // 创建不一致的 group_1.ini：global $group_id = 99（与目录 group_1 不匹配）
+        let bad_ini = "[Constants]\nglobal $group_id = 99\n";
+        fs::write(group_path.join("group_1.ini"), bad_ini).unwrap();
+        let mismatched = validate_group_ini_consistency(&managed, &enabled);
+        assert_eq!(mismatched, vec![1], "不一致的 group_ini 应返回 gid=1");
     }
 }
