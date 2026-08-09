@@ -29,6 +29,9 @@ dist-ssr
 # TRAE IDE
 .trae/
 
+# Work Buddy
+.workbuddy/
+
 # Environment variables
 .env
 .env.local

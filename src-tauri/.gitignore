@@ -6,3 +6,5 @@
 # will have schema files for capabilities auto-completion
 /gen/schemas
 /tmp/
+/tests/NRMM-Rust-test/
+/tests/NRMM-test/

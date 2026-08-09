@@ -12,7 +12,7 @@ pub enum IniLine {
     Empty,
     Comment(String),
     DisabledKeyValue { key: String, value: String, comment: Option<String> },
-    KeyValue { key: String, value: String, disabled: bool, comment: Option<String> },
+    KeyValue { key: String, value: String, disabled: bool, comment: Option<String>, indent: usize },
     IfStart { condition: String, indent: usize },
     Elif { condition: String, indent: usize },
     Else { indent: usize },
@@ -198,11 +198,11 @@ impl std::fmt::Display for IniLine {
                 }
                 Ok(())
             }
-            IniLine::KeyValue { key, value, disabled, comment } => {
+            IniLine::KeyValue { key, value, disabled, comment, indent } => {
                 if *disabled {
                     write!(f, ";-;")?;
                 }
-                write!(f, "{} = {}", key, value)?;
+                write!(f, "{}{} = {}", " ".repeat(*indent), key, value)?;
                 if let Some(c) = comment {
                     write!(f, " ; {}", c)?;
                 }
@@ -357,7 +357,7 @@ impl IniFile {
                                 None => preamble.push(l),
                             }
                         } else {
-                            let l = IniLine::KeyValue { key, value, disabled: false, comment };
+                            let l = IniLine::KeyValue { key, value, disabled: false, comment, indent: 0 };
                             match current_section {
                                 Some(idx) => sections[idx].lines.push(l),
                                 None => preamble.push(IniLine::PreambleLine(l.to_string())),
@@ -471,10 +471,25 @@ impl IniFile {
         }
     }
 
+    /// 段属性键（3Dmigoto 元数据），应始终放在 `if` 守卫之前。
+    /// 这类键决定段如何与 draw call 匹配，不参与条件逻辑的主体执行。
+    fn is_section_attribute_key(key: &str) -> bool {
+        let lower = key.to_lowercase();
+        lower == "hash"
+            || lower == "match_priority"
+            || lower == "match_first_index"
+            || lower == "match_type"
+            || lower == "allow_duplicate_hash"
+            || lower == "match_index_count"
+            || lower == "filter"
+            || lower == "type"
+    }
+
     fn first_command_line_index(lines: &[IniLine]) -> Option<usize> {
         for (i, line) in lines.iter().enumerate() {
             match line {
                 IniLine::Empty | IniLine::Comment(_) => continue,
+                IniLine::KeyValue { key, .. } if Self::is_section_attribute_key(key) => continue,
                 _ => return Some(i),
             }
         }
@@ -514,6 +529,7 @@ impl IniFile {
                         value: mod_index.to_string(),
                         disabled: false,
                         comment: None,
+                        indent: 0,
                     });
                     break;
                 }
@@ -527,6 +543,7 @@ impl IniFile {
                     value: mod_index.to_string(),
                     disabled: false,
                     comment: None,
+                    indent: 0,
                 }],
                 is_conditional: false,
             };
@@ -560,20 +577,14 @@ impl IniFile {
                 let last_idx = Self::last_command_line_index(&section.lines);
 
                 if let (Some(first), Some(last)) = (first_idx, last_idx) {
-                    // NRMM 对齐：先插入 if，再插入 match_priority=0（match_priority 在 if 之前）
+                    // NRMM 对齐：在首个命令行之前插入 if 守卫（match_priority 默认即为 0，无需显式插入）
                     section.lines.insert(first, IniLine::IfStart {
                         condition: condition_var.clone(),
                         indent: 0,
                     });
-                    section.lines.insert(first, IniLine::KeyValue {
-                        key: "match_priority".to_string(),
-                        value: "0".to_string(),
-                        disabled: false,
-                        comment: None,
-                    });
 
-                    // 2 个元素插入在 last 之前，last 偏移 +2，endif 在 last+3
-                    let insert_end = last + 3;
+                    // 1 个元素（if）插入在 last 之前，末尾内容偏移 +1，endif 置于 last+2
+                    let insert_end = last + 2;
                     section.lines.insert(insert_end.min(section.lines.len()), IniLine::EndIf { indent: 0 });
                 }
             }
@@ -625,6 +636,7 @@ impl IniFile {
                 value: condition_var.to_string(),
                 disabled: false,
                 comment: None,
+                indent: 0,
             });
         } else {
             // 有 condition 行，逐条追加（清理后为空则直接替换为管理器表达式）
@@ -642,6 +654,7 @@ impl IniFile {
                     value: new_value,
                     disabled: cond.disabled,
                     comment: None,
+                    indent: 0,
                 };
             }
         }
@@ -679,7 +692,7 @@ impl IniFile {
     }
 
     pub fn apply_indentation(&mut self) {
-        let indent_size = 2;
+        let indent_size = 4;
         for section in &mut self.sections {
             let mut current_indent = 0usize;
             let mut result: Vec<IniLine> = Vec::new();
@@ -709,6 +722,16 @@ impl IniFile {
                         result.push(IniLine::EndIf {
                             indent: current_indent * indent_size,
                         });
+                    }
+                    IniLine::KeyValue { key, value, disabled, comment, .. } => {
+                        let mut n = IniLine::KeyValue {
+                            key: key.clone(),
+                            value: value.clone(),
+                            disabled: *disabled,
+                            comment: comment.clone(),
+                            indent: current_indent * indent_size,
+                        };
+                        result.push(n);
                     }
                     other => result.push(other.clone()),
                 }
@@ -763,7 +786,7 @@ impl IniFile {
                             new_lines.push(line.clone());
                         }
                     }
-                    IniLine::KeyValue { key, value, disabled: false, comment } => {
+                    IniLine::KeyValue { key, value, disabled: false, comment, .. } => {
                         let lower_key = key.to_lowercase();
                         let should_comment = if in_texture_override || in_conditional_block > 0 {
                             false
@@ -807,11 +830,7 @@ impl IniFile {
 
         for section in &self.sections {
             line_num += 1;
-            let name_lower = section.name.to_lowercase();
-            if name_lower.starts_with("resource")
-                || name_lower.starts_with("commandlist")
-                || name_lower.starts_with("shaderoverride")
-            {
+            if Self::is_defined_library_section(&section.name) {
                 defined_libs.insert(section.name.clone());
                 lib_sections.entry(section.name.clone()).or_default().push(line_num - 1);
             }
@@ -871,16 +890,18 @@ impl IniFile {
                             || lower_key.starts_with("vs-t")
                             || lower_key.starts_with("ps-")
                             || lower_key.starts_with("vs-")
-                            || lower_key.starts_with("cs-")
-                            || (lower_key.starts_with('o') && lower_key.len() >= 2)
-                            || (lower_key.starts_with('u') && lower_key.len() >= 2);
+                            || lower_key.starts_with("cs-");
 
-                        if is_ref_key && !value.is_empty() {
+                        // 引用值解析：纯数值值（如 `ps-t0 = 48`）或 3Dmigoto 内建命令列表
+                        // （`BuiltInCommandList*` 由引擎自动提供，始终可用）不应触发缺失库误报。
+                        if is_ref_key && !value.is_empty() && !Self::is_numeric_value(value) {
                             let ref_name = value.trim();
+                            let ref_lower = ref_name.to_lowercase();
                             if !ref_name.is_empty()
                                 && !known_libraries.contains(ref_name)
                                 && !defined_libs.contains(ref_name)
                                 && !ref_name.starts_with("Resource")
+                                && !ref_lower.starts_with("builtincommandlist")
                                 && !ref_name.is_empty()
                             {
                                 errors.push(ErroredLines {
@@ -927,15 +948,46 @@ impl IniFile {
     pub fn defined_libraries(&self) -> std::collections::HashSet<String> {
         let mut libs = std::collections::HashSet::new();
         for section in &self.sections {
-            let name_lower = section.name.to_lowercase();
-            if name_lower.starts_with("resource")
-                || name_lower.starts_with("commandlist")
-                || name_lower.starts_with("shaderoverride")
-            {
+            if Self::is_defined_library_section(&section.name) {
                 libs.insert(section.name.clone());
             }
         }
         libs
+    }
+
+    /// 判断段名是否为「库定义段」（其名称可被其它段通过 `run` / `vb*` / `ib` / `ps-*` / `vs-*` / `cs-*` 等键引用）。
+    ///
+    /// 对齐 NRMM C++ 引擎的库识别：`resource` / `commandlist` / `shaderoverride` / `customshader` / `builtincommandlist`。
+    /// 原 Rust 实现漏识别 `customshader` / `builtincommandlist`，导致 `run = CustomShaderElement`、
+    /// `run = BuiltInCommandListUnbindAllRenderTargets` 等合法引用被误报为缺失库（error_type=1）。
+    #[inline]
+    fn is_defined_library_section(name: &str) -> bool {
+        let lower = name.to_lowercase();
+        lower.starts_with("resource")
+            || lower.starts_with("commandlist")
+            || lower.starts_with("shaderoverride")
+            || lower.starts_with("customshader")
+            || lower.starts_with("builtincommandlist")
+    }
+
+    /// 判断引用值是否为纯数值（含十六进制 `0x` 与小数），如 `override_byte_stride = 48`、`uav_byte_stride = 12`。
+    /// 此类值并非库/资源引用名，不应触发缺失库误报。
+    #[inline]
+    fn is_numeric_value(v: &str) -> bool {
+        let t = v.trim();
+        if t.is_empty() {
+            return false;
+        }
+        let t = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t);
+        let mut has_digit = false;
+        for c in t.chars() {
+            if c.is_ascii_digit() {
+                has_digit = true;
+            } else if c != '.' {
+                return false;
+            }
+        }
+        has_digit
     }
 
     /// 提取 INI 文件中所有 TextureOverride/ShaderOverride 段的活跃 hash 值
@@ -1183,6 +1235,7 @@ key = value
             value: "new".to_string(),
             disabled: false,
             comment: None,
+            indent: 0,
         });
         ini.write_atomic(f.path()).unwrap();
         assert_ne!(IniFile::force_read_as_utf8(f.path()).unwrap(), orig);
@@ -1199,12 +1252,15 @@ key = value
         let mut ini = IniFile::parse(f.path()).unwrap();
         ini.inject_slot_conditions(1, 2);
 
-        // TextureOverride 段：match_priority=0 在 if 之前，无 allow_duplicate_hash
+        // TextureOverride 段：hash 等段属性键应位于 if 守卫之前（3Dmigoto 语义要求）；
+        // if 守卫位置在 hash / match_priority 之后、首个 body 行之前。
         let to_lines = &ini.sections[1].lines;
-        assert!(matches!(to_lines[0], IniLine::KeyValue { ref key, ref value, .. } if key == "match_priority" && value == "0"));
-        assert!(matches!(to_lines[1], IniLine::IfStart { ref condition, .. } if condition.contains("active_slot")));
+        assert!(to_lines.iter().any(|l| matches!(l, IniLine::IfStart { ref condition, .. } if condition.contains("active_slot"))));
         assert!(to_lines.iter().any(|l| matches!(l, IniLine::EndIf { .. })));
+        assert!(!to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, .. } if key == "match_priority")));
         assert!(!to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, .. } if key == "allow_duplicate_hash")));
+        // hash 段属性键应保留在段首
+        assert!(matches!(to_lines[0], IniLine::KeyValue { ref key, .. } if key == "hash"));
 
         // Constants 段：注入了 $managed_slot_id = 2，且 NRMM 不包裹
         let constants_lines = &ini.sections[0].lines;
@@ -1335,6 +1391,54 @@ key = value
         let errors = ini.detect_errors(f.path().parent().unwrap(), &known);
         assert!(errors.iter().any(|e| e.error_type == 1));
     }
+
+    // ========== P0-1：合法引用不应误报 missing-library (error_type=1) ==========
+    #[test]
+    fn test_p0_customshader_run_reference_not_flagged() {
+        // `run = CustomShaderElement` 引用 [CustomShaderElement]，应被正确识别为已定义库
+        let ini_content = "[CustomShaderElement]\nhlsl = test.fx\n\n[TextureOverrideX]\nrun = CustomShaderElement\n";
+        let f = write_temp_ini(ini_content);
+        let ini = IniFile::parse(f.path()).unwrap();
+        let known = std::collections::HashSet::new();
+        let errors = ini.detect_errors(f.path().parent().unwrap(), &known);
+        assert!(
+            !errors.iter().any(|e| e.error_type == 1),
+            "CustomShader 引用被误报为缺失库: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_p0_builtincommandlist_run_reference_not_flagged() {
+        let ini_content =
+            "[BuiltInCommandListUnbindAllRenderTargets]\n\n[TextureOverrideX]\nrun = BuiltInCommandListUnbindAllRenderTargets\n";
+        let f = write_temp_ini(ini_content);
+        let ini = IniFile::parse(f.path()).unwrap();
+        let known = std::collections::HashSet::new();
+        let errors = ini.detect_errors(f.path().parent().unwrap(), &known);
+        assert!(
+            !errors.iter().any(|e| e.error_type == 1),
+            "BuiltInCommandList 引用被误报为缺失库: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_p0_numeric_stride_not_flagged() {
+        // override_byte_stride / uav_byte_stride 的纯数值值不是库引用
+        let ini_content =
+            "[TextureOverrideX]\nhash = deadbeef\noverride_byte_stride = 48\nuav_byte_stride = 12\n";
+        let f = write_temp_ini(ini_content);
+        let ini = IniFile::parse(f.path()).unwrap();
+        let known = std::collections::HashSet::new();
+        let errors = ini.detect_errors(f.path().parent().unwrap(), &known);
+        assert!(
+            !errors.iter().any(|e| e.error_type == 1),
+            "数值 stride 被误报为缺失库: {:?}",
+            errors
+        );
+    }
+
 
     #[test]
     fn test_force_read_utf8_bom() {

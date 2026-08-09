@@ -533,6 +533,11 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     known_libraries.extend(mutex_libs);
     log::debug!("[mod_manager] [update_mod_data] step=collect_libraries done total_known_libraries={}", known_libraries.len());
 
+    // 步骤3.6: 跨模组 namespace 去重（引入原版语义：_autoModifyDuplicateNamespaceInManagedMod）
+    // 必须在每-ini 注入循环之前调用，使改名后的 namespace= 声明能被 expand_ini_variables 展开。
+    auto_modify_duplicate_namespace(&enabled_mods);
+    log::debug!("[mod_manager] [update_mod_data] step=auto_modify_duplicate_namespace done");
+
     // 步骤3.5: ORFix/TexFx 检测（在 INI 修改之前，使用原始 INI 内容）
     let orfix_detection = detect_orfix_texfx(&enabled_mods);
     log::debug!("[mod_manager] [update_mod_data] step=detect_orfix_texfx done has_detection={}", orfix_detection.has_detection);
@@ -548,6 +553,16 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
     for mod_data in enabled_mods.iter() {
         let group_id = mod_data.group_index;
+        // 防御性守卫：仅处理严格 group_<int> 分组，跳过任何非标准标识
+        // （scan_mods 已天然排除 MutexGroup / # 目录，此处为双保险，
+        //  确保 update_mod_data 绝不注入或改写非 group_int 目录下的文件）
+        if mod_scanner::is_normal_group_dir(&format!("group_{}", group_id)).is_none() {
+            log::warn!(
+                "[mod_manager] [update_mod_data] 跳过非标准分组标识 group_{}，不进行注入/改写",
+                group_id
+            );
+            continue;
+        }
         let mut mod_inis: Vec<PathBuf> = Vec::new();
 
         for ini_data in &mod_data.mod_ini_data {
@@ -678,6 +693,102 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     Ok(result)
 }
 
+/// 跨模组 namespace 去重（引入原版语义：忠实移植 `_autoModifyDuplicateNamespaceInManagedMod`）。
+///
+/// 遍历每个 NormalGroup 内的启用模组，收集各模组声明的 namespace；若某 namespace 与
+/// 同组或全局已提交集合冲突（且不是已知 modding 库 namespace），则按下划线后缀 `_N`
+/// 重命名为唯一值（`unique_namespace`，幂等），并写入 `modnamespaced` 标记。
+///
+/// 与原版一致的关键语义：
+/// - 已知库 namespace（`KNOWN_MODDING_LIBRARY_NAMESPACES`）绝不重命名（由 xxmi ini handler 处理）。
+/// - 重命名采用文本级三阶段原子提交（`replace_namespace_in_mod`，含 `.baknamespace` 备份与回滚）。
+/// - 幂等：依赖 `unique_namespace` 基于当前磁盘状态推导，重跑结果一致。
+/// - 仅作用于扫描得到的托管模组（`enabled_mods`），不触碰 MutexGroup/非托管目录。
+///
+/// 必须在 `update_mod_data` 的每-ini 注入循环**之前**调用，使改名后的 `namespace=` 声明
+/// 能被 `expand_ini_variables` 正确展开。
+pub fn auto_modify_duplicate_namespace(enabled_mods: &[&ModData]) {
+    // 已知库 namespace（小写），用于排除
+    let known_lib_ns: HashSet<String> = constants::KNOWN_MODDING_LIBRARY_NAMESPACES
+        .iter()
+        .map(|s| s.to_lowercase())
+        .collect();
+
+    // 按 group_index 分组（与原版 groupAndModsPair 对齐）
+    let mut groups: std::collections::HashMap<u32, Vec<&ModData>> =
+        std::collections::HashMap::new();
+    for m in enabled_mods {
+        groups.entry(m.group_index).or_default().push(*m);
+    }
+
+    let mut namespaces_in_managed: HashSet<String> = HashSet::new();
+
+    for (_gid, mods) in &groups {
+        let mut namespaces_in_group: HashSet<String> = HashSet::new();
+        for m in mods {
+            // 收集本模组的 namespace 与各 ini 路径
+            let mut namespaces_in_mod: HashSet<String> = HashSet::new();
+            let mut ini_paths: Vec<PathBuf> = Vec::new();
+            for ini_data in &m.mod_ini_data {
+                let p = PathBuf::from(&ini_data.ini_path);
+                ini_paths.push(p.clone());
+                if let Ok(ini) = IniFile::parse(&p) {
+                    if let Some(ns) = namespace_handler::extract_namespace(&ini) {
+                        namespaces_in_mod.insert(ns);
+                    }
+                }
+            }
+
+            // 规划重命名：基于 occupied（future ∪ 同组 ∪ 全局）求唯一后缀，保证跨模组唯一
+            let mut planned: Vec<(String, String)> = Vec::new();
+            let mut future: HashSet<String> = namespaces_in_mod.clone();
+            for ns in &namespaces_in_mod {
+                let ns_lower = ns.to_lowercase();
+                let collides =
+                    namespaces_in_group.contains(ns) || namespaces_in_managed.contains(ns);
+                if collides && !known_lib_ns.contains(&ns_lower) {
+                    let mut occupied = future.clone();
+                    occupied.extend(namespaces_in_group.iter().cloned());
+                    occupied.extend(namespaces_in_managed.iter().cloned());
+                    let new_ns = namespace_handler::unique_namespace(ns, &occupied);
+                    planned.push((ns.clone(), new_ns.clone()));
+                    future.remove(ns);
+                    future.insert(new_ns);
+                }
+            }
+
+            // 应用重命名
+            for (old_ns, new_ns) in planned {
+                match namespace_handler::replace_namespace_in_mod(&ini_paths, &old_ns, &new_ns) {
+                    Ok(true) => {
+                        log::info!(
+                            "[mod_manager] [auto_modify_duplicate_namespace] 重命名 namespace {} -> {} 于模组 {}",
+                            old_ns, new_ns, m.mod_path
+                        );
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        log::error!(
+                            "[mod_manager] [auto_modify_duplicate_namespace] 模组 {} 重命名失败: {}",
+                            m.mod_path, e
+                        );
+                    }
+                }
+            }
+
+            // 提交本模组 namespace 到组状态；写 modnamespaced 标记
+            namespaces_in_group.extend(future.iter().cloned());
+            if !namespaces_in_mod.is_empty() {
+                let marker = PathBuf::from(&m.mod_path).join(constants::NAMESPACED_MARKER);
+                if let Err(e) = fs::write(&marker, "") {
+                    log::warn!("写入 namespaced 标记失败 {:?}: {}", marker, e);
+                }
+            }
+        }
+        namespaces_in_managed.extend(namespaces_in_group.iter().cloned());
+    }
+}
+
 /// 非递归 BFS 收集 `_MANAGED_` 下 MutexGroup（非 `group_xx`）目录中所有 INI 的库定义
 ///
 /// 深度扫描仅处理 `group_xx` NormalGroup 目录，会遗漏 `#` 等 MutexGroup 目录中的库定义，
@@ -721,7 +832,9 @@ fn collect_mutex_group_libraries(managed_folder: &Path) -> HashSet<String> {
             continue;
         }
         let dir_name = entry.file_name().to_string_lossy().to_string();
-        // 跳过 group_xx NormalGroup 目录（深度扫描已处理）
+        // 跳过 group_xx NormalGroup 目录（深度扫描已处理）；
+        // 本函数只读收集 # / XX 等 MutexGroup 目录中的库定义，绝不注入或改写任何文件，
+        // 严格保证 update_mod_data 不涉及非 group_int 分组的管理动作。
         if mod_scanner::is_normal_group_dir(&dir_name).is_some() {
             continue;
         }
@@ -859,16 +972,12 @@ fn delete_group_ini_files(managed_path: &Path) -> Result<()> {
             let path = entry.path();
             if path.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    // 匹配 group_X.ini（X 为数字）
-                    let is_group_ini = if let Some(rest) = name.strip_prefix("group_") {
-                        if let Some(num_str) = rest.strip_suffix(".ini") {
-                            num_str.parse::<u32>().is_ok()
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
+                    // 仅清理严格 group_<int>.ini（int 须满足 is_normal_group_dir），
+                    // 避免误删 group_01 / group_0 / groupxx 等非标准目录下的文件。
+                    let is_group_ini = name
+                        .strip_suffix(".ini")
+                        .map(|stem| mod_scanner::is_normal_group_dir(stem).is_some())
+                        .unwrap_or(false);
                     // 也清理 ModFolder.ini（旧版本命名）
                     if is_group_ini || name == "ModFolder.ini" {
                         if let Err(e) = fs::remove_file(&path) {
@@ -877,11 +986,11 @@ fn delete_group_ini_files(managed_path: &Path) -> Result<()> {
                     }
                 }
             } else if path.is_dir() {
-                // 递归清理子目录
+                // 仅递归清理严格 group_<int> 目录；绝不触碰 # / XX / groupxx 等非标准目录
                 let dir_name = path.file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("");
-                if dir_name.starts_with("group_") || dir_name == "_MANAGED_" {
+                if mod_scanner::is_normal_group_dir(dir_name).is_some() {
                     let _ = delete_in_dir(&path);
                 }
             }
@@ -2743,6 +2852,76 @@ y = 2
         let mod_ini_path = group_path.join("TestMod/mod.ini");
         let backup_path = mod_ini_path.with_extension(constants::BACKUP_EXTENSION);
         assert!(backup_path.exists());
+    }
+
+    #[test]
+    fn test_update_mod_data_namespace_dedup() {
+        // 引入原版语义：同组两个模组共享同一 namespace 时，其中一个应被重命名为唯一值
+        let dir = setup_test_env();
+        create_main_ini(dir.path(), TargetGame::GenshinImpact);
+        let settings = AppSettings::default();
+
+        let group_path = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(
+            &group_path,
+            "ModA",
+            "namespace = Shared\n[Constants]\n$v = $Shared$Val\n",
+        );
+        create_mod_with_ini(
+            &group_path,
+            "ModB",
+            "namespace = Shared\n[Constants]\n$w = $Shared$Other\n",
+        );
+
+        let _result =
+            update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+
+        let a_path = group_path.join("ModA/mod.ini");
+        let b_path = group_path.join("ModB/mod.ini");
+        let a = fs::read_to_string(&a_path).unwrap();
+        let b = fs::read_to_string(&b_path).unwrap();
+
+        let ns_of = |content: &str| -> Option<String> {
+            for line in content.lines() {
+                let t = line.trim();
+                if t.to_lowercase().replace(' ', "").starts_with("namespace=") {
+                    if let Some(eq) = t.find('=') {
+                        return Some(t[eq + 1..].trim().to_string());
+                    }
+                }
+            }
+            None
+        };
+        let ns_a = ns_of(&a).unwrap();
+        let ns_b = ns_of(&b).unwrap();
+
+        // 去重后应为 {Shared, Shared_1}（顺序不定）
+        let mut pair = [ns_a, ns_b];
+        pair.sort();
+        assert_eq!(pair, ["Shared", "Shared_1"]);
+
+        // 每个模组内部的 namespace 引用应与自身声明一致（被 expand_ini_variables 展开为 $\ns\ 形式）
+        for (content, ns) in [(&a, &pair[0]), (&b, &pair[1])] {
+            let own_ref = format!("$\\{}\\", ns);
+            let other_ns = if ns == "Shared" { "Shared_1" } else { "Shared" };
+            let other_ref = format!("$\\{}\\", other_ns);
+            assert!(
+                content.contains(&own_ref),
+                "模组 namespace={} 应包含自身引用 {}",
+                ns,
+                own_ref
+            );
+            assert!(
+                !content.contains(&other_ref),
+                "模组 namespace={} 不应残留对方引用 {}",
+                ns,
+                other_ref
+            );
+        }
+
+        // 成功后不应残留 .baknamespace / .tmp
+        assert!(!a_path.with_file_name("mod.ini.baknamespace").exists());
+        assert!(!b_path.with_file_name("mod.ini.baknamespace").exists());
     }
 
     #[test]

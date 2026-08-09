@@ -53,7 +53,14 @@ static ICON_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp", 
 /// 前导零（如 `group_01` vs `group_1`）会导致字符串排序与数值排序不一致，引发解析混乱。
 /// 此正则确保了 `group_index` 的解析既严格又安全。
 // SAFETY: Hardcoded valid regex literal; compilation cannot fail at runtime.
-static GROUP_N_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^group_([1-9][0-9]*)$").unwrap());
+//
+// 约束（对齐用户要求 + 内部 u32 分组索引）：
+// - 禁止前导零（`group_01` 无效）
+// - 禁止 `group_0`（零值）
+// - 数值位数 ≤ 9（`[1-9][0-9]{0,8}`）：`group_1`..`group_999999999` 合法；
+//   `group_1000000000`（10 位）被拒，避免超出安全范围的超大索引。
+// - 不重新引入原版 1–500 上限，数值大小不受限。
+static GROUP_N_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^group_([1-9][0-9]{0,8})$").unwrap());
 
 /// DISABLED 前缀正则（不区分大小写）
 ///
@@ -1272,7 +1279,7 @@ fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: Grou
 
     for (idx, mod_data) in mods.iter_mut().enumerate() {
         mod_data.group_index = group_index;
-        mod_data.mod_index = idx as u32;
+        mod_data.mod_index = idx as u32 + 1;  // 1-based，对齐原版 NRMM
         mod_data.mod_path = mod_data.full_path.to_string_lossy().to_string();
         mod_data.mod_name = mod_data.name.clone();
         mod_data.mod_disabled = mod_data.disabled;
@@ -1352,8 +1359,67 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
         icon_path = first_image;
     }
 
+    // 若目录已被识别为模组（有 icon 或直接 INI），则 DFS 遍历整个子树
+    // 收集所有 .ini 文件，对齐原版 NRMM 的递归 INI 发现行为。
+    // group_int/ 一级子目录 = 模组根，模组内所有 INI 均属该模组。
+    if has_ini || has_icon {
+        collect_ini_files_dfs(dir, &mut ini_files);
+        if !ini_files.is_empty() {
+            has_ini = true;
+        }
+    }
+
     ini_files.sort();
     Ok((has_ini, has_icon, icon_path, ini_files))
+}
+
+/// DFS 遍历模组目录子树，收集所有 .ini 文件。
+///
+/// 从 `root` 的**子目录**开始遍历（跳过 root 本身——其文件已由调用方收集），
+/// 跳过 `.` 前缀和 `DISABLED` 前缀的目录，将找到的 .ini 追加到 `ini_files`。
+fn collect_ini_files_dfs(root: &Path, ini_files: &mut Vec<PathBuf>) {
+    let mut stack: Vec<PathBuf> = Vec::new();
+    // 从 root 的直接子目录开始遍历，避免重复收集已被 check_directory_for_mod_deep
+    // 在第一层扫描中已经发现的 INI 文件。
+    if let Ok(entries) = fs::read_dir(root) {
+        for e in entries.flatten() {
+            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !name.starts_with('.') && !name.starts_with("DISABLED") {
+                    stack.push(e.path());
+                }
+            }
+        }
+    }
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let ft = match entry.file_type() {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if ft.is_dir() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') || name.starts_with("DISABLED") {
+                    continue;
+                }
+                stack.push(path);
+            } else if ft.is_file() || ft.is_symlink() {
+                if path.extension()
+                    .map(|e| e.to_string_lossy().to_lowercase() == "ini")
+                    .unwrap_or(false)
+                {
+                    if !constants::is_desktop_ini(&path) {
+                        ini_files.push(path);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// 深度扫描：构建完整 ModData（解析所有 INI 文件）
@@ -1952,6 +2018,8 @@ filename = test.dds
         assert_eq!(is_normal_group_dir("group_12"), Some(12));
         assert_eq!(is_normal_group_dir("group_123"), Some(123));
         assert_eq!(is_normal_group_dir("group_999"), Some(999));
+        // 9 位合法上限
+        assert_eq!(is_normal_group_dir("group_999999999"), Some(999_999_999));
 
         // 拒绝前导零
         assert_eq!(is_normal_group_dir("group_0"), None);
@@ -1965,6 +2033,15 @@ filename = test.dds
         assert_eq!(is_normal_group_dir("group"), None);
         assert_eq!(is_normal_group_dir("#MutexMods"), None);
         assert_eq!(is_normal_group_dir("OtherFolder"), None);
+
+        // 拒绝非严格 group_int 命名（避免误删/误管）
+        assert_eq!(is_normal_group_dir("groupxx"), None);
+        assert_eq!(is_normal_group_dir("groupsxx"), None);
+        assert_eq!(is_normal_group_dir("XX"), None);
+
+        // 拒绝 10 位及以上（超出安全索引范围）
+        assert_eq!(is_normal_group_dir("group_1000000000"), None);
+        assert_eq!(is_normal_group_dir("group_4294967295"), None);
     }
 
     /// 测试：`natural_compare` 的自然排序功能

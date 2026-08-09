@@ -30,6 +30,38 @@ pub const FAV_MARKER: &str = "fav";
 /// 命名空间标记文件名：存在表示模组使用了 namespace
 pub const NAMESPACED_MARKER: &str = "modnamespaced";
 
+/// 已知 modding 库 namespace 集合（小写），对齐 NRMM 原版 `ConstantVar.knownModdingLibraries`。
+///
+/// 这些 namespace 由 XXMI/3Dmigoto 的库（GIMI、TexFx、ORFix、SRMI、WWMI、ZZMI、SlotFix 等）
+/// 定义，被大量模组引用且由 xxmi ini handler 自行处理。**绝不**对其执行重复 namespace 自动重命名，
+/// 否则会破坏库与引用方之间的 `\ns\` 引用关系（原版 `_autoModifyDuplicateNamespaceInManagedMod`
+/// 以 `!knownModdingLibraries.keys.contains(namespace)` 排除）。
+///
+/// 注意：含反斜杠的成员（如 `global\healthbar`）在 Rust 字符串中需转义为 `global\\healthbar`，
+/// 匹配时统一按小写比较。
+pub const KNOWN_MODDING_LIBRARY_NAMESPACES: &[&str] = &[
+    "rabbitfx",
+    "gimiv8",
+    "gimi",
+    "global\\healthbar",
+    "global\\offset",
+    "global\\orfix",
+    "global\\region",
+    "global\\tracking",
+    "texfx",
+    "srmi",
+    "srmiv1",
+    "wwmiv1",
+    "zzmiv1",
+    "zzmi",
+    "slotfix",
+    "healthbar",
+    "efmiv1",
+];
+
+/// namespace 重命名时的备份文件后缀（三阶段原子提交的备份标识），成功后删除、不残留。
+pub const NAMESPACE_BACKUP_SUFFIX: &str = "baknamespace";
+
 /// 强制启用标记文件名：存在表示模组强制启用（跳过崩溃行检查）
 pub const MODFORCED_MARKER: &str = "modforced";
 
@@ -153,34 +185,24 @@ pub const FOREGROUND_POLL_INTERVAL_MS: u64 = 1000;
 pub const DESKTOP_INI_NAME: &str = "desktop.ini";
 
 /// INI 段名白名单：完全匹配项（大小写不敏感）
-/// 对齐 NRMM SectionConfig.InjectableSections 精确列表
+/// 对齐原版 NRMM `_isWhitelistedSection` 精确列表（EXACT）
 pub const INJECTABLE_SECTION_EXACT: &[&str] = &[
     "present",
     "clearrendertargetview",
-    "scissorrect",
-    "viewport",
-    "draw",
-    "drawindexed",
-    "drawinstanced",
-    "drawindexedinstanced",
-    "copyresource",
-    "copytextureregion",
-    "dispatch",
-    "blendfactor",
-    "predication",
-    "stencilref",
+    "cleardepthstencilview",
+    "clearunorderedaccessviewuint",
+    "clearunorderedaccessviewfloat",
 ];
 
 /// INI 段名白名单：前缀匹配项（大小写不敏感）
-/// 对齐 NRMM SectionConfig.InjectableSections 前缀列表
+/// 对齐原版 NRMM `_isWhitelistedSection` 前缀列表（含 `builtincommandlist`，不含 resource/inputlayout）
 pub const INJECTABLE_SECTION_PREFIXES: &[&str] = &[
     "builtincustomshader",
     "customshader",
-    "textureoverride",
-    "shaderoverride",
+    "builtincommandlist",
     "commandlist",
-    "resource",
-    "inputlayout",
+    "shaderoverride",
+    "textureoverride",
 ];
 
 /// 判断路径文件名是否为 desktop.ini（大小写不敏感）
@@ -252,6 +274,10 @@ where
 pub fn is_injectable_section(section_name: &str) -> bool {
     let lower = section_name.to_lowercase();
     if INJECTABLE_SECTION_EXACT.contains(&lower.as_str()) {
+        return true;
+    }
+    // 对齐原版 `_isShaderRegexMainSection`：shaderregex 段（不含点号）可注入
+    if lower.starts_with("shaderregex") && !lower.contains('.') {
         return true;
     }
     INJECTABLE_SECTION_PREFIXES
@@ -337,7 +363,7 @@ mod tests {
             assert!(is_injectable_section(&upper), "missing exact case: {}", upper);
         }
         assert!(is_injectable_section("Present"));
-        assert!(is_injectable_section("DrawIndexed"));
+        assert!(is_injectable_section("ClearDepthStencilView"));
     }
 
     #[test]
@@ -348,8 +374,10 @@ mod tests {
         }
         assert!(is_injectable_section("TextureOverride_Ningguang_Dress"));
         assert!(is_injectable_section("CustomShaderTest01"));
-        assert!(is_injectable_section("resource_something"));
-        assert!(is_injectable_section("InputLayout_skin"));
+        assert!(is_injectable_section("BuiltInCommandListFoo"));
+        // shaderregex（无点）应可注入；含点号的不应
+        assert!(is_injectable_section("ShaderRegexHash"));
+        assert!(!is_injectable_section("ShaderRegex.hash"));
     }
 
     #[test]
@@ -359,6 +387,11 @@ mod tests {
         assert!(!is_injectable_section("String"));
         assert!(!is_injectable_section("KeyPress"));
         assert!(!is_injectable_section("Key1"));
+        // 原版不包裹 resource / inputlayout / draw / dispatch 段
+        assert!(!is_injectable_section("ResourceSomething"));
+        assert!(!is_injectable_section("InputLayoutSkin"));
+        assert!(!is_injectable_section("DrawIndexed"));
+        assert!(!is_injectable_section("Dispatch"));
         assert!(!is_injectable_section(""));
     }
 }
