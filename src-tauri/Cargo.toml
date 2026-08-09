@@ -12,14 +12,6 @@ crate-type = ["cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
-[profile.release]
-debug = false
-strip = true
-lto = true
-panic = "abort"
-opt-level = "z"
-codegen-units = 1
-
 [dependencies]
 tauri = { version = "2", features = ["rustls-tls", "protocol-asset", "tray-icon"] }
 tauri-plugin-shell = "2"

@@ -724,7 +724,7 @@ impl IniFile {
                         });
                     }
                     IniLine::KeyValue { key, value, disabled, comment, .. } => {
-                        let mut n = IniLine::KeyValue {
+                        let n = IniLine::KeyValue {
                             key: key.clone(),
                             value: value.clone(),
                             disabled: *disabled,

@@ -741,7 +741,7 @@ pub fn auto_modify_duplicate_namespace(enabled_mods: &[&ModData]) {
 
     let mut namespaces_in_managed: HashSet<String> = HashSet::new();
 
-    for (_gid, mods) in &groups {
+    for mods in groups.values() {
         let mut namespaces_in_group: HashSet<String> = HashSet::new();
         for m in mods {
             // 收集本模组的 namespace 与各 ini 路径

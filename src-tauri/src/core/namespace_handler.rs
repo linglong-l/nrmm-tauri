@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 use std::fs;
-use regex::{Regex, RegexBuilder};
+use regex::RegexBuilder;
 use crate::core::ini_handler::{IniFile, IniLine};
 use crate::core::constants;
 
@@ -264,7 +264,7 @@ pub fn rewrite_namespace_references(content: &str, old_ns: &str, new_ns: &str) -
         let new_line: String = re
             .replace_all(line, |_: &regex::Captures| replacement.clone())
             .into_owned();
-        if &new_line != line {
+        if new_line != line {
             changed = true;
         }
         out.push_str(&new_line);
@@ -538,7 +538,7 @@ endif\n";
         fs::write(&ini, original).unwrap();
 
         let changed =
-            replace_namespace_in_mod(&[ini.clone()], "Shared", "Shared_1").unwrap();
+            replace_namespace_in_mod(std::slice::from_ref(&ini), "Shared", "Shared_1").unwrap();
         assert!(changed);
         let after = fs::read_to_string(&ini).unwrap();
         assert!(after.contains("namespace = Shared_1"));
@@ -549,7 +549,7 @@ endif\n";
 
         // 幂等：再次重命名（Shared 已不存在）应无改动
         let changed2 =
-            replace_namespace_in_mod(&[ini.clone()], "Shared", "Shared_1").unwrap();
+            replace_namespace_in_mod(std::slice::from_ref(&ini), "Shared", "Shared_1").unwrap();
         assert!(!changed2);
     }
 
@@ -559,7 +559,7 @@ endif\n";
         let ini = dir.path().join("mod.ini");
         fs::write(&ini, "namespace = Other\n[Constants]\n$x = 1\n").unwrap();
         let changed =
-            replace_namespace_in_mod(&[ini.clone()], "Shared", "Shared_1").unwrap();
+            replace_namespace_in_mod(std::slice::from_ref(&ini), "Shared", "Shared_1").unwrap();
         assert!(!changed);
     }
 }

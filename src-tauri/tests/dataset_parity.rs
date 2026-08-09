@@ -8,6 +8,7 @@
 //! 架构差异说明：
 //! - 原版 NRMM：_MANAGED_ 在 Mods/_MANAGED_（由 include_recursive=Mods 自动加载）
 //! - Rust 移植版：_MANAGED_ 在 game_mods_path/_MANAGED_（根级，由 d3dx.ini 末尾 include 注入）
+//!
 //! 本测试默认接受此架构差异，将两者映射比较。
 
 use std::fs;
@@ -245,8 +246,8 @@ fn recurse_compare_mod_inis(dir: &Path, _base_dir: &Path, root_a: &Path, root_b:
 }
 
 fn compare_d3dx_files(actual_p: &Path, expect_p: &Path) {
-    let na = normalize_paths(&read_file_lossy(&actual_p));
-    let ne = normalize_paths(&read_file_lossy(&expect_p));
+    let na = normalize_paths(&read_file_lossy(actual_p));
+    let ne = normalize_paths(&read_file_lossy(expect_p));
 
     if na == ne {
         println!("[OK] d3dx.ini 一致");
@@ -274,7 +275,7 @@ fn compare_d3dx_files(actual_p: &Path, expect_p: &Path) {
     let nrmm_block = ";NRMM_INI_START";
     let is_nrmm_injection = a_lines.iter().any(|l| l.contains(nrmm_block));
 
-    if is_nrmm_injection && diff_at > e_lines.len() as usize {
+    if is_nrmm_injection && diff_at > e_lines.len() {
         println!(
             "[INFO] d3dx.ini 末尾有 NRMM_INI 注入 ({} 行差异)。",
             a_lines.len() as isize - e_lines.len() as isize

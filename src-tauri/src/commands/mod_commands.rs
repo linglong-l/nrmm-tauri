@@ -978,7 +978,7 @@ pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<()
     log::debug!("[remove_group_ex] mods_root={:?}", mods_root);
 
     let path_for_log = path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         crate::core::mod_manager::remove_group_ex(&path, is_group_xx, &mods_root)
             .map_err(|e| e.to_string())
     })
@@ -991,5 +991,5 @@ pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<()
     }
 
     log::info!("[remove_group_ex] completed | group_path={:?}", path_for_log);
-    Ok(result)
+    Ok(())
 }

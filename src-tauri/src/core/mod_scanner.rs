@@ -1408,15 +1408,13 @@ fn collect_ini_files_dfs(root: &Path, ini_files: &mut Vec<PathBuf>) {
                     continue;
                 }
                 stack.push(path);
-            } else if ft.is_file() || ft.is_symlink() {
-                if path.extension()
+            } else if (ft.is_file() || ft.is_symlink())
+                && path.extension()
                     .map(|e| e.to_string_lossy().to_lowercase() == "ini")
                     .unwrap_or(false)
-                {
-                    if !constants::is_desktop_ini(&path) {
-                        ini_files.push(path);
-                    }
-                }
+                && !constants::is_desktop_ini(&path)
+            {
+                ini_files.push(path);
             }
         }
     }
