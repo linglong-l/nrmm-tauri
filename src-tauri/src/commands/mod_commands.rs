@@ -151,16 +151,25 @@ pub async fn update_mod_data(game: String, mods_path: String) -> Result<mod_mana
     let start = std::time::Instant::now();
 
     let update_path = mods_path.clone();
+    // spawn_blocking 内部若 panic，JoinError 会被转为 String 错误返回，不会导致应用崩溃
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
         mod_manager::update_mod_data(game, &update_path, &settings).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| {
+        log::error!("[update_mod_data] spawn_blocking join error: {}", e);
+        format!("update task failed: {}", e)
+    })?
+    .map_err(|e| {
+        log::error!("[update_mod_data] inner error: {}", e);
+        e
+    })?;
 
     let elapsed = start.elapsed();
     log::info!("Heavy update completed in {}ms, processed {} mods",
         elapsed.as_millis(), result.processed_mods);
 
+    // 缓存失效
     {
         let mut cache = crate::core::mod_cache::MOD_CACHE.write();
         cache.invalidate_by_prefix(&managed_path);
@@ -726,8 +735,17 @@ pub async fn batch_toggle_mods(mod_paths: Vec<String>, enable: bool, is_mutex: b
 /// 与 NRMM 的 simulateKeyF10() 对齐，用于 update_mod_data 完成后
 /// 需要手动重载 3Dmigoto 时向游戏发送 F10 按键。
 /// 若传入 game 参数则尝试定向发送到目标游戏窗口，否则全局发送。
+///
+/// 若用户在设置中关闭了 `simulate_key_on_selection`（触发选择功能），
+/// 则跳过 F10 发送，避免关闭后仍触发刷新的异常。
 #[tauri::command]
 pub async fn simulate_f10(game: Option<String>) -> Result<(), String> {
+    let settings = settings_store::get_settings();
+    if !settings.simulate_key_on_selection {
+        log::debug!("[simulate_f10] simulate_key_on_selection=false, 跳过 F10 发送");
+        return Ok(());
+    }
+
     let mut simulator = crate::platform::get_key_simulator();
     if let Some(game_str) = game {
         if let Ok(game_enum) = parse_game(&game_str) {
