@@ -591,11 +591,33 @@ impl IniFile {
                     continue;
                 }
 
+                // 补缺省 match_priority = 0（对齐原版 NRMM）：仅对 TextureOverride 段且
+                // 段内无任何 match_* 键时插入（如已有 match_first_index 等则不插入），
+                // 位置在段属性之后。全属性段（如 Draw）也补，插入到末尾。
+                // 幂等：无 match_* 键才补，重复更新不会叠加。
+                let is_texture_override = section.name.to_lowercase().starts_with("textureoverride");
+                if is_texture_override {
+                    let has_match_key = section.lines.iter().any(|l| {
+                        matches!(l, IniLine::KeyValue { key, .. } if key.to_lowercase().starts_with("match_"))
+                    });
+                    if !has_match_key {
+                        let insert_at = Self::first_command_line_index(&section.lines)
+                            .unwrap_or(section.lines.len());
+                        section.lines.insert(insert_at, IniLine::KeyValue {
+                            key: "match_priority".to_string(),
+                            value: "0".to_string(),
+                            disabled: false,
+                            comment: None,
+                            indent: 0,
+                        });
+                    }
+                }
+
                 let first_idx = Self::first_command_line_index(&section.lines);
                 let last_idx = Self::last_command_line_index(&section.lines);
 
                 if let (Some(first), Some(last)) = (first_idx, last_idx) {
-                    // NRMM 对齐：在首个命令行之前插入 if 守卫（match_priority 默认即为 0，无需显式插入）
+                    // NRMM 对齐：在首个命令行之前插入 if 守卫
                     section.lines.insert(first, IniLine::IfStart {
                         condition: condition_var.clone(),
                         indent: 0,
@@ -1275,7 +1297,8 @@ key = value
         let to_lines = &ini.sections[1].lines;
         assert!(to_lines.iter().any(|l| matches!(l, IniLine::IfStart { ref condition, .. } if condition.contains("active_slot"))));
         assert!(to_lines.iter().any(|l| matches!(l, IniLine::EndIf { .. })));
-        assert!(!to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, .. } if key == "match_priority")));
+        // 对齐原版 NRMM：TextureOverride 段无 match_* 键时补 match_priority = 0
+        assert!(to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, ref value, .. } if key == "match_priority" && value == "0")));
         assert!(!to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, .. } if key == "allow_duplicate_hash")));
         // hash 段属性键应保留在段首
         assert!(matches!(to_lines[0], IniLine::KeyValue { ref key, .. } if key == "hash"));
@@ -1285,6 +1308,37 @@ key = value
         assert!(constants_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, ref value, .. } if key.contains("$managed_slot_id") && value == "2")));
         assert!(!constants_lines.iter().any(|l| matches!(l, IniLine::IfStart { .. })));
         assert!(!constants_lines.iter().any(|l| matches!(l, IniLine::EndIf { .. })));
+    }
+
+    #[test]
+    fn test_inject_slot_conditions_match_first_index_skips_match_priority() {
+        // TextureOverride 段已含 match_first_index 时，不应再插入 match_priority
+        let ini_content = "[TextureOverrideHasMatch]\nhash = 0x1\nmatch_first_index = 0\nib = ResourceIB\n";
+        let f = write_temp_ini(ini_content);
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.inject_slot_conditions(1, 0);
+
+        // 无 [Constants] 段时，注入逻辑会在 index 0 创建；TextureOverride 段被推到 index 1
+        let to_lines = &ini.sections[1].lines;
+        assert!(to_lines.iter().any(|l| matches!(l, IniLine::IfStart { ref condition, .. } if condition.contains("active_slot"))));
+        assert!(!to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, .. } if key == "match_priority")),
+            "已有 match_first_index 时不应插入 match_priority");
+    }
+
+    #[test]
+    fn test_inject_slot_conditions_all_attribute_section_gets_match_priority() {
+        // 全属性段（如 Draw：override_vertex_count 等）不包裹 if，但仍补 match_priority = 0
+        let ini_content = "[TextureOverrideDraw]\nhash = 0x1\noverride_vertex_count = 100\noverride_byte_stride = 56\nuav_byte_stride = 4\n";
+        let f = write_temp_ini(ini_content);
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.inject_slot_conditions(1, 0);
+
+        // 无 [Constants] → index 0 创建，段推到 index 1
+        let to_lines = &ini.sections[1].lines;
+        // 不产生 if 包裹（全属性段无 body 行）
+        assert!(!to_lines.iter().any(|l| matches!(l, IniLine::IfStart { .. })));
+        // 补 match_priority = 0
+        assert!(to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, ref value, .. } if key == "match_priority" && value == "0")));
     }
 
     #[test]
