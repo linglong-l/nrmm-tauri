@@ -24,7 +24,9 @@ use anyhow::{Result, Context};
 use std::path::{Path, PathBuf};
 use std::collections::{HashSet, VecDeque};
 use std::fs;
+use std::sync::atomic::Ordering;
 use crate::core::constants;
+use crate::core::file_watcher::WATCHER_PAUSED;
 use crate::core::ini_handler::IniFile;
 use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::namespace_handler;
@@ -33,6 +35,27 @@ use crate::models::enums::TargetGame;
 use crate::models::mod_data::{ModData, ModGroupData, ErroredLines, HashConflict, HashConflictEntry, LibInMod, DuplicateLib, NonExistentLib};
 use crate::models::enums::GroupType;
 use crate::models::settings::AppSettings;
+
+/// 文件监听器暂停守卫
+///
+/// 创建时设置 `WATCHER_PAUSED = true`，Drop 时恢复为 `false`。
+/// 确保函数即使中途出错（返回 `Err`）也能恢复监听器状态。
+/// 对齐 NRMM `DynamicDirectoryWatcher.stop()` / `watch()` 的停止/重启模式。
+struct WatcherGuard;
+
+impl WatcherGuard {
+    /// 创建守卫并暂停文件监听器
+    fn new() -> Self {
+        WATCHER_PAUSED.store(true, Ordering::SeqCst);
+        WatcherGuard
+    }
+}
+
+impl Drop for WatcherGuard {
+    fn drop(&mut self) {
+        WATCHER_PAUSED.store(false, Ordering::SeqCst);
+    }
+}
 
 // 重导出供 commands 层使用（避免 commands 直接依赖 models 模块）
 // 同时供本模块内部使用（pub use 也会将名称引入当前作用域）
@@ -1384,9 +1407,12 @@ pub fn switch_mod(
     let safe_mod_index = if mod_index == 0 { 1 } else { mod_index };
 
     // 将选中的 mod_index 写入该分组的 selectedindex 文件，使 is_active 状态持久化
+    // 对齐 NRMM：写 selectedindex 前暂停文件监听器，写完后恢复，防止触发增量更新竞态
     let sel_idx_i32 = safe_mod_index as i32;
     if let Some(g_dir) = group_dir {
         let selectedindex_path = g_dir.join(constants::SELECTED_INDEX_FILE);
+        // 暂停文件监听器，防止 selectedindex 写入触发缓存增量更新竞态
+        WATCHER_PAUSED.store(true, Ordering::SeqCst);
         if let Err(e) = fs::write(&selectedindex_path, safe_mod_index.to_string()) {
             log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
         } else {
@@ -1396,6 +1422,8 @@ pub fn switch_mod(
                 safe_mod_index
             );
         }
+        // 恢复文件监听器
+        WATCHER_PAUSED.store(false, Ordering::SeqCst);
     } else {
         log::warn!(
             "[core::mod_manager] [switch_mod] group not found by group_index={} (no selectedindex written)",
@@ -1501,6 +1529,10 @@ pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
 /// - 没有.ini的目录（分组节点/子分组）不处理
 /// - 重命名保持幂等，检查目标路径是否存在避免覆盖
 pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
+    // 暂停文件监听器，防止目录重命名触发增量更新竞态
+    // WatcherGuard 在函数退出时（无论成功或出错）自动恢复监听器
+    let _guard = WatcherGuard::new();
+
     let parent_dir = mod_path.parent()
         .with_context(|| format!("Failed to get parent directory of: {:?}", mod_path))?;
 
@@ -1738,6 +1770,8 @@ pub fn deselect_group_mods(
     if let Some(g_dir) = group_dir {
         let selectedindex_path = g_dir.join(constants::SELECTED_INDEX_FILE);
         // 写入 0 表示选择 None 槽位（取消选择）
+        // 对齐 NRMM：写 selectedindex 前暂停文件监听器，写完后恢复，防止触发增量更新竞态
+        WATCHER_PAUSED.store(true, Ordering::SeqCst);
         if let Err(e) = fs::write(&selectedindex_path, "0") {
             log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
         } else {
@@ -1746,6 +1780,7 @@ pub fn deselect_group_mods(
                 selectedindex_path.display()
             );
         }
+        WATCHER_PAUSED.store(false, Ordering::SeqCst);
     } else {
         log::warn!(
             "[core::mod_manager] [deselect_group_mods] NormalGroup not found by group_index={}",

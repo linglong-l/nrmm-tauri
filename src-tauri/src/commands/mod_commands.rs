@@ -252,6 +252,9 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             ..Default::default()
         })
     } else {
+        // === NormalGroup 分支 ===
+        // 执行顺序对齐用户要求："先持久化再按键模拟"
+        // 1. 防抖检查
         {
             let mut debounce_map = SELECTION_DEBOUNCE.lock().map_err(|_| "debounce lock poisoned")?;
             if let Some(last_time) = debounce_map.get(&group_path) {
@@ -261,14 +264,42 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             }
             debounce_map.insert(group_path.clone(), Instant::now());
         }
-        // 检查设置是否允许按键模拟
+
+        // 2. 先持久化：写 selectedindex（switch_mod 内部有 WATCHER_PAUSED 保护，防止文件监听器竞态）
         let settings = settings_store::get_settings();
         let simulate_enabled = settings.simulate_key_on_selection;
-        log::debug!("[commands::mod_commands] [select_mod] simulate_key_on_selection={} mutex={}", simulate_enabled, is_mutex);
+        let managed_path = mods_path.join(constants::MANAGED_FOLDER);
+        // TargetGame 是 Copy，提前复制用于后续按键模拟
+        let game_enum_for_sim = game_enum;
 
+        let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
+            mod_manager::switch_mod(game_enum, &mods_path, &settings, group_index, mod_index).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| {
+            log::error!("[select_mod] spawn_blocking join error: {}", e);
+            format!("switch task failed: {}", e)
+        })?
+        .map_err(|e| {
+            log::error!("[select_mod] switch_mod error: {}", e);
+            e
+        })?;
+        log::debug!("[commands::mod_commands] [select_mod] switch_result={:?}", result);
+
+        // 3. 清缓存（持久化完成后立即失效，确保下次 get_mods 全量扫描）
+        {
+            let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+            cache.invalidate_by_prefix(&managed_path);
+        }
+        log::debug!("[commands::mod_commands] [select_mod] cache invalidated | prefix={:?}", managed_path);
+
+        // 4. 再按键模拟（确保文件状态已就绪）
+        // 对齐 NRMM：选择后不发送 F10，$active_slot 通过 persist 跨重载保持，
+        // 3Dmigoto 会在下次自然重载时重新求值 if/endif 条件
+        log::debug!("[commands::mod_commands] [select_mod] simulate_key_on_selection={} (after persist)", simulate_enabled);
         if simulate_enabled {
             let mut simulator = crate::platform::get_key_simulator();
-            let process_names = game_enum.process_names();
+            let process_names = game_enum_for_sim.process_names();
             for pn in process_names {
                 if simulator.set_target_process(pn).is_ok() {
                     break;
@@ -299,38 +330,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
                     e
                 );
             }
-
-            // 发送 F10 触发 3Dmigoto 热重载：
-            // 3Dmigoto 的 if/endif 条件在解析时求值，$active_slot 通过 persist 跨重载保持。
-            // 按键模拟设置 $active_slot 后，需 F10 触发重载使 if/endif 重新求值，
-            // 从而激活目标模组的 section（$managed_slot_id == $active_slot 匹配）。
-            log::debug!("[commands::mod_commands] [select_mod] sending F10 to trigger 3Dmigoto reload");
-            if let Err(e) = simulator.simulate_f10() {
-                log::warn!("select_mod: simulate_f10 failed: {}", e);
-            }
         }
-
-        let managed_path = mods_path.join(constants::MANAGED_FOLDER);
-
-        let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
-            mod_manager::switch_mod(game_enum, &mods_path, &settings, group_index, mod_index).map_err(|e| e.to_string())
-        })
-        .await
-        .map_err(|e| {
-            log::error!("[select_mod] spawn_blocking join error: {}", e);
-            format!("switch task failed: {}", e)
-        })?
-        .map_err(|e| {
-            log::error!("[select_mod] switch_mod error: {}", e);
-            e
-        })?;
-        log::debug!("[commands::mod_commands] [select_mod] switch_result={:?}", result);
-
-        {
-            let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-            cache.invalidate_by_prefix(&managed_path);
-        }
-        log::debug!("[commands::mod_commands] [select_mod] cache invalidated | prefix={:?}", managed_path);
 
         log::debug!("[commands::mod_commands] [select_mod] completed | elapsed={:?}ms | selected_mod_index={:?}", _start.elapsed().as_millis(), result.selected_mod_index);
         Ok(result)

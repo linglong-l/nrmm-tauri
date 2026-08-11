@@ -112,7 +112,9 @@ impl super::KeySimulator for WindowsKeySimulator {
     }
 
     fn simulate_f10(&mut self) -> Result<()> {
-        self.dispatch_key(VK_F10)?;
+        // 对齐 NRMM：F10 使用 SendInput（全局输入队列），
+        // 不使用 PostMessage —— 3Dmigoto 的底层键盘钩子不捕获 PostMessage 合成的按键
+        send_key(VK_F10)?;
         Ok(())
     }
 

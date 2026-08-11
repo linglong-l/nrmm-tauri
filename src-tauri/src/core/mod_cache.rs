@@ -180,11 +180,20 @@ impl ModCache {
             Err(_) => managed_path.to_string_lossy().to_string(),
         };
         let prefix_lower = prefix.to_lowercase();
+
+        // 先收集受影响的游戏（路径包含前缀的条目），再移除条目
+        // 避免误标所有剩余游戏为失效
+        let affected_games: HashSet<TargetGame> = self.cache
+            .keys()
+            .filter(|(_, path_str)| path_str.to_lowercase().contains(&prefix_lower))
+            .map(|(g, _)| *g)
+            .collect();
+
         self.cache.retain(|(_, path_str), _| {
             !path_str.to_lowercase().contains(&prefix_lower)
         });
-        let all_games: HashSet<TargetGame> = self.cache.keys().map(|(g, _)| *g).collect();
-        for g in all_games {
+
+        for g in affected_games {
             self.invalidated_games.insert(g);
         }
     }
@@ -296,8 +305,9 @@ impl ModCache {
         let existing = match self.cache.get_mut(&key) {
             Some(e) => e,
             None => {
-                // 没有现有缓存条目，直接插入新条目
-                self.set(game, mods_path, partial_result);
+                // 缓存未命中时跳过：partial_result 仅包含变更的 groups/mods，
+                // 直接创建缓存条目会导致残缺数据。下次 get_mods 会全量扫描填充完整缓存。
+                log::debug!("[mod_cache] subtree_replace: cache miss for {:?}, skipping (will full-scan on next get_mods)", game);
                 return;
             }
         };
