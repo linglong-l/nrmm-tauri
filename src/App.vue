@@ -448,8 +448,8 @@ onBeforeUnmount(() => {
   background-color: transparent;
   color-scheme: dark;
   --app-radius: 12px;
-  --text-primary: rgb(255 255 255);
-  --text-secondary: rgba(255, 255, 255, 0.70);
+  --text-primary: rgb(255 255 255 / 1);
+  --text-secondary: rgba(255, 255, 255, 0.9);
   --text-muted: rgba(255, 255, 255, 0.45);
   --accent-primary: #4a9eff;
   --accent-success: #28c840;

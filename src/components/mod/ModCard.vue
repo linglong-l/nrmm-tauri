@@ -85,6 +85,11 @@
         @click.stop
         @mouseleave="closeContextMenu"
       >
+        <div v-if="mod && !isNoneSlot" class="menu-item" @click="handleSelectMod">
+          <el-icon><Check /></el-icon>
+          {{ t('Select Mod') }}
+        </div>
+        <div v-if="mod" class="menu-divider"></div>
         <div v-if="mod" class="menu-item" @click="handleToggleEnabled">
           <el-icon><Switch /></el-icon>
           {{ mod.modDisabled ? t('Enable mod') : t('Disable mod completely') }}
@@ -138,7 +143,7 @@
  */
 import { ref, computed, onMounted, onUnmounted, inject, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus, Setting } from '@element-plus/icons-vue'
+import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus, Setting, Check } from '@element-plus/icons-vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModData } from '@/types'
 import { toggleModDisabled, toggleFavorite, renameMod, openModFolder, handlePathNotFoundError } from '@/utils/tauri'
@@ -356,6 +361,17 @@ async function handleDoubleClick() {
   }
   // 注意：双击的模组必定在当前选中分组内，无需额外切换分组
   // 双击直接触发启用（activate）= 右键菜单中的「启用」效果
+  emit('activate', props.modIndex)
+}
+
+/**
+ * 选择模组（右键菜单第一项）
+ * 与双击激活走相同的 emit('activate') 路径，
+ * 触发后端 select_mod 命令完成 selectedindex 持久化 + 按键模拟
+ */
+function handleSelectMod() {
+  if (!mod.value || isNoneSlot.value) return
+  closeContextMenu()
   emit('activate', props.modIndex)
 }
 

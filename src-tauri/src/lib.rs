@@ -15,6 +15,7 @@
 pub mod commands;
 pub mod config;
 pub mod core;
+pub mod debug;
 pub mod hotkey;
 pub mod models;
 pub mod platform;

@@ -21,6 +21,7 @@ use std::time::Duration;
 use windows::Win32::System::Threading::*;
 use windows::core::PWSTR;
 use std::sync::Mutex;
+use crate::sel_dbg;
 
 static ENUM_WINDOWS_STATE: Mutex<Option<(String, Option<isize>)>> = Mutex::new(None);
 
@@ -120,24 +121,52 @@ impl super::KeySimulator for WindowsKeySimulator {
 
     fn simulate_select_full(&mut self, group_idx: u32, mod_idx: u32) -> Result<()> {
         let start = std::time::Instant::now();
-        log::debug!("[platform::windows] [simulate_select_full] target_hwnd exists: {:?} | group={} mod={}", self.target_hwnd.is_some(), group_idx, mod_idx);
-        self.dispatch_key_down_only(VK_CLEAR)?;
-        thread::sleep(Duration::from_millis(10));
-
+        // 注意：NRMM 约定 x = 模组索引(mod_idx)，y = 分组索引(group_idx)
         let x = mod_idx as i32;
         let y = group_idx as i32;
+        sel_dbg!(
+            "platform::windows",
+            "simulate_select_full",
+            "调用链末端(最终执行函数) | 入口 | target_hwnd={:?} 分组索引={} 模组索引={} 映射光标坐标 x(模组)={} y(分组)={}",
+            self.target_hwnd.is_some(),
+            group_idx,
+            mod_idx,
+            x,
+            y
+        );
+        log::debug!("[platform::windows] [simulate_select_full] target_hwnd exists: {:?} | group={} mod={}", self.target_hwnd.is_some(), group_idx, mod_idx);
+        sel_dbg!("platform::windows", "simulate_select_full", "阶段=按下 VK_CLEAR（组合键起始，保持按住）");
+        self.dispatch_key_down_only(VK_CLEAR)?;
+        thread::sleep(Duration::from_millis(10));
 
         let r1 = self.dispatch_simulate_key_with_cursor(VK_SPACE, x, y);
         if let Err(e) = &r1 {
             log::warn!("simulate_select_full SPACE phase failed: {}", e);
         }
+        sel_dbg!(
+            "platform::windows",
+            "simulate_select_full",
+            "阶段=发送 SPACE + 移动光标到 ({}, {})（选择分组）结果={:?}",
+            x,
+            y,
+            r1.is_ok()
+        );
         thread::sleep(Duration::from_millis(30));
 
         let r2 = self.dispatch_simulate_key_with_cursor(VK_RETURN, x, y);
         if let Err(e) = &r2 {
             log::warn!("simulate_select_full RETURN phase failed: {}", e);
         }
+        sel_dbg!(
+            "platform::windows",
+            "simulate_select_full",
+            "阶段=发送 RETURN + 移动光标到 ({}, {})（选择模组）结果={:?}",
+            x,
+            y,
+            r2.is_ok()
+        );
 
+        sel_dbg!("platform::windows", "simulate_select_full", "阶段=抬起 VK_CLEAR（组合键结束，松开）");
         self.dispatch_key_up_only(VK_CLEAR)?;
 
         let result = r1.and(r2);
@@ -145,6 +174,13 @@ impl super::KeySimulator for WindowsKeySimulator {
         log::debug!(
             "[platform::windows] [simulate_select_full] completed | elapsed={}ms result={:?}",
             elapsed, result
+        );
+        sel_dbg!(
+            "platform::windows",
+            "simulate_select_full",
+            "调用链完成 | 耗时={}ms 最终结果={:?}",
+            elapsed,
+            result
         );
         result
     }
@@ -365,8 +401,26 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
     unsafe {
         let mut initial_pos = POINT { x: 0, y: 0 };
         let has_initial = GetCursorPos(&mut initial_pos).is_ok();
+        sel_dbg!(
+            "platform::windows",
+            "simulate_key_with_cursor_window",
+            "移动鼠标前光标坐标=({},{}) | 即将移动到目标=({},{})（vk={:04x}）",
+            if has_initial { initial_pos.x } else { 0 },
+            if has_initial { initial_pos.y } else { 0 },
+            x,
+            y,
+            vk.0
+        );
 
         let set_cursor_result = SetCursorPos(x, y).is_ok();
+        sel_dbg!(
+            "platform::windows",
+            "simulate_key_with_cursor_window",
+            "移动鼠标后光标坐标=({},{})（SetCursorPos 结果={}）",
+            x,
+            y,
+            set_cursor_result
+        );
         if !set_cursor_result {
             log::warn!("[simulate_key_with_cursor_window] fallback_triggered=true reason=SetCursorPos failed | vk={:04x} target=({}, {})", vk.0, x, y);
             return send_key(vk);
@@ -393,6 +447,15 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
         } else {
             false
         };
+        sel_dbg!(
+            "platform::windows",
+            "simulate_key_with_cursor_window",
+            "光标已还原至原位置=({},{}) 还原结果={}（clip 恢复结果={}）",
+            if has_initial { initial_pos.x } else { 0 },
+            if has_initial { initial_pos.y } else { 0 },
+            restore_result,
+            clip_restore_result
+        );
 
         log::debug!(
             "[simulate_key_with_cursor_window] vk={:04x} target=({}, {}) set_cursor_result={} clip_result={} clip_restore_result={} restore_result={}",
@@ -407,8 +470,26 @@ fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
     unsafe {
         let mut initial_pos = POINT { x: 0, y: 0 };
         let has_initial = GetCursorPos(&mut initial_pos).is_ok();
+        sel_dbg!(
+            "platform::windows",
+            "simulate_key_with_cursor",
+            "移动鼠标前光标坐标=({},{}) | 即将移动到目标=({},{})（vk={:04x}）",
+            if has_initial { initial_pos.x } else { 0 },
+            if has_initial { initial_pos.y } else { 0 },
+            x,
+            y,
+            vk.0
+        );
 
         let set_cursor_result = SetCursorPos(x, y).is_ok();
+        sel_dbg!(
+            "platform::windows",
+            "simulate_key_with_cursor",
+            "移动鼠标后光标坐标=({},{})（SetCursorPos 结果={}）",
+            x,
+            y,
+            set_cursor_result
+        );
         if !set_cursor_result {
             log::warn!("[simulate_key_with_cursor] fallback_triggered=true reason=SetCursorPos failed | vk={:04x} target=({}, {})", vk.0, x, y);
             return send_key(vk);
@@ -433,6 +514,15 @@ fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
         } else {
             false
         };
+        sel_dbg!(
+            "platform::windows",
+            "simulate_key_with_cursor",
+            "光标已还原至原位置=({},{}) 还原结果={}（clip 恢复结果={}）",
+            if has_initial { initial_pos.x } else { 0 },
+            if has_initial { initial_pos.y } else { 0 },
+            restore_result,
+            clip_restore_result
+        );
 
         log::debug!(
             "[simulate_key_with_cursor] vk={:04x} target=({}, {}) set_cursor_result={} clip_result={} clip_restore_result={} restore_result={}",

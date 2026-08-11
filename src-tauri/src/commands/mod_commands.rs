@@ -32,6 +32,7 @@ use std::fs;
 use std::sync::{Mutex, LazyLock};
 use std::collections::HashMap;
 use std::time::{Instant, Duration};
+use crate::sel_dbg;
 
 static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -216,11 +217,33 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         cursor_x,
         cursor_y,
     } = args;
+    // 提取模组名称与分组名称，便于在调试日志中直接定位所属模组
+    let mod_name = Path::new(&mod_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let group_name = Path::new(&group_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    sel_dbg!(
+        "mod_commands",
+        "select_mod",
+        "入口 | 所属模组名称={} 所属分组名称={} game={} 分组索引={} 模组索引={} 是否互斥组={} 传入光标坐标=({:?},{:?}) 模组路径={} 分组路径={}",
+        mod_name, group_name, game, group_index, mod_index, is_mutex, cursor_x, cursor_y, mod_path, group_path
+    );
     log::debug!("[commands::mod_commands] [select_mod] game={} group={} mod={} mutex={}", game, group_index, mod_index, is_mutex);
     let _start = std::time::Instant::now();
     let game_enum = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
+    sel_dbg!(
+        "mod_commands",
+        "select_mod",
+        "分支判定 | is_mutex={} → 进入 {} 分支",
+        is_mutex,
+        if is_mutex { "互斥组(enable_mutex_mod，无按键模拟)" } else { "普通组(switch_mod 持久化 + 按键模拟)" }
+    );
     if is_mutex {
         // Mutex 分支防抖（与非 Mutex 分支一致，防止快速重复点击触发多次互斥切换）
         {
@@ -233,8 +256,15 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             debounce_map.insert(group_path.clone(), Instant::now());
         }
 
-        let mod_path_buf = PathBuf::from(mod_path);
+        let mod_path_buf = PathBuf::from(mod_path.clone());
         let managed_path = mods_path.join(constants::MANAGED_FOLDER);
+        sel_dbg!(
+            "mod_commands",
+            "select_mod",
+            "互斥组分支 | 准备调用 enable_mutex_mod | 模组名称={} 模组路径={}",
+            mod_name,
+            mod_path
+        );
 
         tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
             mod_manager::enable_mutex_mod(&mod_path_buf).map_err(|e| e.to_string())
@@ -297,6 +327,15 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         // 对齐 NRMM：选择后不发送 F10，$active_slot 通过 persist 跨重载保持，
         // 3Dmigoto 会在下次自然重载时重新求值 if/endif 条件
         log::debug!("[commands::mod_commands] [select_mod] simulate_key_on_selection={} (after persist)", simulate_enabled);
+        // 选择逻辑(按键模拟)触发前：记录当前光标位置（屏幕坐标），用于对比模拟前后变化
+        let cursor_before = crate::platform::get_foreground_detector().get_cursor_position().ok();
+        sel_dbg!(
+            "mod_commands",
+            "select_mod",
+            "选择逻辑(按键模拟)触发前光标位置={:?}（屏幕坐标，simulate_key_on_selection={}）",
+            cursor_before,
+            simulate_enabled
+        );
         if simulate_enabled {
             let mut simulator = crate::platform::get_key_simulator();
             let process_names = game_enum_for_sim.process_names();
@@ -309,18 +348,26 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             // 否则 fallback 到 (mod_index, group_index) 作为虚拟坐标（3Dmigoto/xxmi 据此识别）。
             // 注意：NRMM 将 x=realModIndex y=realGroupIndex 直接传入 SetCursorPos，
             // 因此当未传像素坐标时，索引值本身即作为坐标输入。
-            let result: Result<(), String> = match (cursor_x, cursor_y) {
+            let (sim_g, sim_m) = match (cursor_x, cursor_y) {
                 (Some(px), Some(py)) => {
                     let g = u32::try_from(py.max(0)).unwrap_or(group_index);
                     let m = u32::try_from(px.max(0)).unwrap_or(mod_index);
-                    simulator
-                        .simulate_select_full(g, m)
-                        .map_err(|e| e.to_string())
+                    (g, m)
                 }
-                _ => simulator
-                    .simulate_select_full(group_index, mod_index)
-                    .map_err(|e| e.to_string()),
+                _ => (group_index, mod_index),
             };
+            sel_dbg!(
+                "mod_commands",
+                "select_mod",
+                "准备调用 simulate_select_full | 坐标模式={} g(分组索引)={} m(模组索引)={} 模组名称={}",
+                if cursor_x.is_some() && cursor_y.is_some() { "屏幕像素坐标" } else { "索引虚拟坐标" },
+                sim_g,
+                sim_m,
+                mod_name
+            );
+            let result: Result<(), String> = simulator
+                .simulate_select_full(sim_g, sim_m)
+                .map_err(|e| e.to_string());
             log::debug!("[commands::mod_commands] [select_mod] simulate_result={:?}", result);
             if let Err(e) = result {
                 log::warn!(
@@ -331,6 +378,17 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
                 );
             }
         }
+
+        // 选择逻辑(按键模拟)触发后：再次记录光标位置，与触发前对比，验证光标是否被正确还原
+        let cursor_after = crate::platform::get_foreground_detector().get_cursor_position().ok();
+        sel_dbg!(
+            "mod_commands",
+            "select_mod",
+            "选择逻辑(按键模拟)触发后光标位置={:?}（屏幕坐标）| 触发前={:?} 是否一致={}",
+            cursor_after,
+            cursor_before,
+            cursor_before == cursor_after
+        );
 
         log::debug!("[commands::mod_commands] [select_mod] completed | elapsed={:?}ms | selected_mod_index={:?}", _start.elapsed().as_millis(), result.selected_mod_index);
         Ok(result)
@@ -748,10 +806,19 @@ pub async fn batch_toggle_mods(mod_paths: Vec<String>, enable: bool, is_mutex: b
 #[tauri::command]
 pub async fn simulate_f10(game: Option<String>) -> Result<(), String> {
     let settings = settings_store::get_settings();
+    sel_dbg!(
+        "mod_commands",
+        "simulate_f10",
+        "入口 | game={:?} simulate_key_on_selection={}",
+        game,
+        settings.simulate_key_on_selection
+    );
     if !settings.simulate_key_on_selection {
         log::debug!("[simulate_f10] simulate_key_on_selection=false, 跳过 F10 发送");
+        sel_dbg!("mod_commands", "simulate_f10", "已跳过 F10 发送（simulate_key_on_selection=false）");
         return Ok(());
     }
+    let game_for_log = game.clone();
 
     let mut simulator = crate::platform::get_key_simulator();
     if let Some(game_str) = game {
@@ -764,7 +831,9 @@ pub async fn simulate_f10(game: Option<String>) -> Result<(), String> {
     }
     simulator
         .simulate_f10()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    sel_dbg!("mod_commands", "simulate_f10", "已发送 F10 重载按键（目标游戏={:?}）", game_for_log);
+    Ok(())
 }
 
 fn parse_game(game: &str) -> Result<TargetGame, String> {

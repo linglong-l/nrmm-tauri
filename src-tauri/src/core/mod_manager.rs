@@ -35,6 +35,7 @@ use crate::models::enums::TargetGame;
 use crate::models::mod_data::{ModData, ModGroupData, ErroredLines, HashConflict, HashConflictEntry, LibInMod, DuplicateLib, NonExistentLib};
 use crate::models::enums::GroupType;
 use crate::models::settings::AppSettings;
+use crate::sel_dbg;
 
 /// 文件监听器暂停守卫
 ///
@@ -1376,12 +1377,27 @@ pub fn switch_mod(
     group_index: u32,
     mod_index: u32,
 ) -> Result<UpdateResult> {
+    sel_dbg!(
+        "mod_manager",
+        "switch_mod",
+        "调用链: select_mod → switch_mod | 入口 | 分组索引={} 模组索引={} 路径={:?}",
+        group_index,
+        mod_index,
+        game_mods_path
+    );
     log::debug!("[core::mod_manager] [switch_mod] Starting | group={} mod={} path={:?}", group_index, mod_index, game_mods_path);
     let _s = std::time::Instant::now();
     // 使用轻量扫描以匹配前端索引（None 在 mod_index=0，真实模组从 1 开始）
     let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
     log::debug!(
         "[core::mod_manager] [switch_mod] scan completed | total_groups={} total_mods={}",
+        scan_result.groups.len(),
+        scan_result.mods.len()
+    );
+    sel_dbg!(
+        "mod_manager",
+        "switch_mod",
+        "步骤=扫描完成 | 分组数={} 模组数={}",
         scan_result.groups.len(),
         scan_result.mods.len()
     );
@@ -1398,6 +1414,13 @@ pub fn switch_mod(
         group_index,
         group_dir.is_some()
     );
+    sel_dbg!(
+        "mod_manager",
+        "switch_mod",
+        "步骤=定位 NormalGroup | 分组索引={} 找到分组目录={:?}",
+        group_index,
+        group_dir
+    );
 
     // 注意：group 分组下选择模组不使用互斥逻辑，不得自动禁用/启用同组其他模组。
     // 各模组的启用/禁用状态仅由用户通过开关显式抉择，选择模组只更新选中状态。
@@ -1405,6 +1428,13 @@ pub fn switch_mod(
     // mod_index 安全转换：扫描器使用 1-based 索引（idx + 1），$managed_slot_id 也是 1-based。
     // 若前端传入 0（旧版 0-based 兼容），转为 1 以匹配 $managed_slot_id。
     let safe_mod_index = if mod_index == 0 { 1 } else { mod_index };
+    sel_dbg!(
+        "mod_manager",
+        "switch_mod",
+        "步骤=模组索引安全转换 | 原始={} → 安全值={}（mod_index==0 时按 1 处理以匹配 $managed_slot_id）",
+        mod_index,
+        safe_mod_index
+    );
 
     // 将选中的 mod_index 写入该分组的 selectedindex 文件，使 is_active 状态持久化
     // 对齐 NRMM：写 selectedindex 前暂停文件监听器，写完后恢复，防止触发增量更新竞态
@@ -1418,6 +1448,13 @@ pub fn switch_mod(
         } else {
             log::debug!(
                 "[core::mod_manager] [switch_mod] wrote selectedindex file | path={} content={}",
+                selectedindex_path.display(),
+                safe_mod_index
+            );
+            sel_dbg!(
+                "mod_manager",
+                "switch_mod",
+                "步骤=写入 selectedindex | 路径={} 内容={}",
                 selectedindex_path.display(),
                 safe_mod_index
             );
@@ -1436,6 +1473,13 @@ pub fn switch_mod(
         ..Default::default()
     };
     log::debug!("[core::mod_manager] [switch_mod] done | elapsed={:?}ms | selected={:?}", _s.elapsed().as_millis(), result.selected_mod_index);
+    sel_dbg!(
+        "mod_manager",
+        "switch_mod",
+        "调用链: select_mod → switch_mod → 完成(返回 select_mod 继续按键模拟) | 选中模组索引={:?} 耗时={:?}ms",
+        result.selected_mod_index,
+        _s.elapsed().as_millis()
+    );
     Ok(result)
 }
 
@@ -1532,6 +1576,13 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
     // 暂停文件监听器，防止目录重命名触发增量更新竞态
     // WatcherGuard 在函数退出时（无论成功或出错）自动恢复监听器
     let _guard = WatcherGuard::new();
+    sel_dbg!(
+        "mod_manager",
+        "enable_mutex_mod",
+        "调用链: select_mod(互斥) → enable_mutex_mod | 入口 | 模组路径={:?} 模组名称={}",
+        mod_path,
+        mod_path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+    );
 
     let parent_dir = mod_path.parent()
         .with_context(|| format!("Failed to get parent directory of: {:?}", mod_path))?;
@@ -1572,6 +1623,13 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
                     if new_path.exists() {
                         log::warn!("Target path already exists, skipping enable: {:?}", new_path);
                     } else {
+                        sel_dbg!(
+                            "mod_manager",
+                            "enable_mutex_mod",
+                            "步骤=启用目标模组(移除 DISABLED 前缀) | {:?} → {:?}",
+                            path,
+                            new_path
+                        );
                         fs::rename(&path, &new_path)
                             .with_context(|| format!("Failed to enable mod: {:?}", path))?;
                     }
