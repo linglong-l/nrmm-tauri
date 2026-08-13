@@ -11,7 +11,7 @@
         :selected-group-path="selectedGroupPath"
         :default-expanded="isGroupExpanded(group.groupPath)"
         :search-query="modsStore.searchQuery"
-        :is-group-hit="modsStore.isGroupMatch(group.groupPath)"
+        :is-group-hit="groupHitMap.get(group.groupPath)"
         @select="handleSelectGroup"
         @context-menu="handleContextMenu"
       />
@@ -149,6 +149,15 @@ const groupedTree = computed<ModGroupData[]>(() => {
     result.push(g)
   }
   return result
+})
+
+/** 各顶层分组的搜索命中状态（computed 仅在 groupedTree / 搜索词变化时重算，避免模板每帧调用 isGroupMatch） */
+const groupHitMap = computed(() => {
+  const map = new Map<string, boolean>()
+  for (const g of groupedTree.value) {
+    map.set(g.groupPath, modsStore.isGroupMatch(g.groupPath))
+  }
+  return map
 })
 
 /**

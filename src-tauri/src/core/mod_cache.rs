@@ -340,10 +340,16 @@ impl ModCache {
 
         // 重算计数
         existing.result.total_mods_count = existing.result.mods.len();
-        existing.result.enabled_mods_count =
-            existing.result.mods.iter().filter(|m| m.is_active).count();
-        existing.result.disabled_mods_count =
-            existing.result.mods.iter().filter(|m| !m.is_active).count();
+        let (mut enabled, mut disabled) = (0usize, 0usize);
+        for m in &existing.result.mods {
+            if m.is_active {
+                enabled += 1;
+            } else {
+                disabled += 1;
+            }
+        }
+        existing.result.enabled_mods_count = enabled;
+        existing.result.disabled_mods_count = disabled;
     }
 }
 

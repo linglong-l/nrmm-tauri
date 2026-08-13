@@ -93,13 +93,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onBeforeUnmount } from 'vue'
+import { ref } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { simulateF10 } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
-
-type OverlayState = 'loading' | 'completed' | 'error'
+import type { OverlayState } from '@/types'
+import { useLoadingDots } from '@/composables/useLoadingDots'
 
 const visible = ref(false)
 const state = ref<OverlayState>('loading')
@@ -107,18 +107,7 @@ const result = ref<any>(null)
 const errorMessage = ref('')
 const durationSec = ref(-1)
 
-const dotsCount = ref(1)
-let dotsTimer: ReturnType<typeof setInterval> | null = null
-
-function startDots() {
-  stopDots()
-  dotsTimer = setInterval(() => {
-    dotsCount.value = (dotsCount.value % 6) + 1
-  }, 300)
-}
-function stopDots() {
-  if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null }
-}
+const { dotsCount, startDots, stopDots } = useLoadingDots()
 
 function show(s: OverlayState, data?: { result?: any; error?: string; durationMs?: number }) {
   state.value = s
@@ -156,8 +145,6 @@ async function handleCloseAndReload() {
   }
 }
 function hideOverlay() { hide() }
-
-onBeforeUnmount(() => stopDots())
 </script>
 
 <style scoped>

@@ -532,7 +532,7 @@ function handleGlobalDragStart() {
  */
 watch(() => props.modIndex, (newIdx, oldIdx) => {
   if (newIdx === oldIdx || !imageContainerRef.value || !iconUrl.value) return
-  const oldState = imageLazyLoad.states.value.get(oldIdx!)
+  const oldState = imageLazyLoad.states.value.get(oldIdx)
   if (oldState === 'loaded') {
     imageLazyLoad.markLoaded(newIdx)
     return

@@ -32,6 +32,9 @@ pub struct ErroredLines {
     /// 错误消息
     #[serde(default)]
     pub error_message: String,
+    /// 面向非专业人员的友好提示（由 error_normalizer 规范化，不含技术细节）
+    #[serde(default)]
+    pub friendly_message: String,
     /// 相关行号列表
     #[serde(default)]
     pub line_numbers: Vec<u32>,

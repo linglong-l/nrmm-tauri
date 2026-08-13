@@ -125,6 +125,23 @@ impl TargetGame {
             TargetGame::ArknightsEndfield => "Arknights: Endfield",
         }
     }
+
+    /// 获取 NRMM 原版 `targetGame.name` 标识串。
+    ///
+    /// 用于 keypress 模板 `{game}` 占位符替换，必须与 NRMM(Dart) 严格一致：
+    /// NRMM 的 `template.replaceAll("{game}", targetGame.name)` 即使用此标识。
+    /// 注意与 `as_str()`（内部路径/缓存 key）和 `display_name()`（UI 文案）不同，
+    /// NRMM 的 `TargetGame` 枚举值名带下划线（如 `Zenless_Zone_Zero`、`Genshin_Impact`）。
+    pub fn nrmm_name(&self) -> &'static str {
+        match self {
+            TargetGame::GenshinImpact => "Genshin_Impact",
+            TargetGame::HonkaiStarRail => "Honkai_Star_Rail",
+            TargetGame::Wuwa => "Wuthering_Waves",
+            TargetGame::ZZZ => "Zenless_Zone_Zero",
+            TargetGame::HonkaiImpact3rd => "HonkaiImpact3rd",
+            TargetGame::ArknightsEndfield => "Arknights_Endfield",
+        }
+    }
     
     /// 获取游戏进程名列表（用于前台检测）
     pub fn process_names(&self) -> &[&str] {

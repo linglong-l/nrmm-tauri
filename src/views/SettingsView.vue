@@ -98,13 +98,13 @@
         <div class="section-block">
           <div class="block-row">
             <span class="row-label">{{ t('settings.overallScale') }}</span>
-            <span class="slider-value">{{ (settingsStore.settings.interfaceScale ?? 1.0).toFixed(1) }}</span>
+            <span class="slider-value">{{ interfaceScaleText }}</span>
           </div>
           <el-slider
             v-model="settingsStore.settings.interfaceScale"
-            :min="0.6"
-            :max="2.0"
-            :step="0.1"
+            :min="SCALE_MIN"
+            :max="SCALE_MAX"
+            :step="SCALE_STEP"
             show-stops
             @input="onSettingChange"
           />
@@ -114,13 +114,13 @@
         <div class="section-block">
           <div class="block-row">
             <span class="row-label">{{ t('settings.backgroundTransparency') }}</span>
-            <span class="slider-value">{{ (settingsStore.settings.bgTransparency ?? 0.3).toFixed(1) }}</span>
+            <span class="slider-value">{{ bgTransparencyText }}</span>
           </div>
           <el-slider
             v-model="settingsStore.settings.bgTransparency"
-            :min="0"
-            :max="1"
-            :step="0.1"
+            :min="ALPHA_MIN"
+            :max="ALPHA_MAX"
+            :step="ALPHA_STEP"
             show-stops
             @input="onSettingChange"
           />
@@ -251,15 +251,31 @@ import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { usePlatform } from '@/stores/platform'
 import { selectFolder, checkForUpdates, getAppVersion, updateModData, restoreManagedFolder } from '@/utils/tauri'
-import type { RestoreManagedResult } from '@/types'
+import type { RestoreManagedResult, OverlayController } from '@/types'
 import { logger } from '@/utils/logger'
+import { DRAG_THRESHOLD_PX } from '@/utils/constants'
 
 const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
 const modsStore = useModsStore()
 const { platformInfo } = usePlatform()
-const updateOverlay: any = inject('updateOverlay')
+const updateOverlay = inject<OverlayController>('updateOverlay')
 const hashConflictOverlay: any = inject('hashConflictOverlay')
+
+/** 界面缩放滑块边界（须与后端 AppSettings.interfaceScale 取值范围一致） */
+const SCALE_MIN = 0.6
+const SCALE_MAX = 2.0
+const SCALE_STEP = 0.1
+const SCALE_DEFAULT = 1.0
+/** 背景透明度滑块边界（须与后端 AppSettings.bgTransparency 取值范围一致） */
+const ALPHA_MIN = 0
+const ALPHA_MAX = 1
+const ALPHA_STEP = 0.1
+const ALPHA_DEFAULT = 0.3
+
+/** 滑块当前值文本（带默认值兜底，提取为 computed 保持模板干净） */
+const interfaceScaleText = computed(() => (settingsStore.settings.interfaceScale ?? SCALE_DEFAULT).toFixed(1))
+const bgTransparencyText = computed(() => (settingsStore.settings.bgTransparency ?? ALPHA_DEFAULT).toFixed(1))
 
 /**
  * 判断路径是否为合法的Mods目录（最后一级目录名必须为"Mods"，大小写不敏感）
@@ -326,7 +342,7 @@ function onPointerMove(e: PointerEvent) {
   if (!el) return
   const dX = e.clientX - dragState.startX
   const dY = e.clientY - dragState.startY
-  if (!dragState.dragStarted && (Math.abs(dX) > 3 || Math.abs(dY) > 3)) {
+  if (!dragState.dragStarted && (Math.abs(dX) > DRAG_THRESHOLD_PX || Math.abs(dY) > DRAG_THRESHOLD_PX)) {
     dragState.dragStarted = true
   }
   if (dragState.dragStarted) {

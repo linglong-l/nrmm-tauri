@@ -9,7 +9,7 @@
  */
 
 // 使用HTML中更早的时间戳作为全局统一计时起点（HTML解析开始时间）
-const HTML_BOOT_START: number = (window as any).__HTML_BOOT_START__ ?? performance.now()
+const HTML_BOOT_START = window.__HTML_BOOT_START__ ?? performance.now()
 const mainBootTs = new Date().toISOString().substring(11, 23)
 // 记录main.ts模块被解析执行的时间点（import语句执行前）
 console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - main.ts 开始执行 at ${mainBootTs}`)
@@ -99,4 +99,4 @@ app.mount('#app')
 console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - app.mount 调用完成（等待Vue组件渲染）`)
 
 // 将HTML启动时间暴露到全局，供App.vue对齐计时起点
-;(window as any).__NRMM_FE_BOOT_START__ = HTML_BOOT_START
+window.__NRMM_FE_BOOT_START__ = HTML_BOOT_START

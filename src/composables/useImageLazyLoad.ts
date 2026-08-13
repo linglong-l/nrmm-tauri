@@ -112,7 +112,8 @@ export function useImageLazyLoad(
     }
     // 按索引升序排序（索引小 = DOM 上方，先加载）
     pendingQueue.sort((a, b) => a.index - b.index)
-    const item = pendingQueue.shift()!
+    const item = pendingQueue.shift()
+    if (!item) return
     if (getState(item.index) === 'idle') {
       markLoading(item.index)
     }

@@ -176,9 +176,19 @@ fn collect_namespaces_recursive(_base: &Path, dir: &Path, namespaces: &mut HashS
             collect_namespaces_recursive(_base, &path, namespaces)?;
         } else if let Some(ext) = path.extension() {
             if ext.eq_ignore_ascii_case("ini") {
-                if let Ok(ini) = IniFile::parse(&path) {
-                    if let Some(ns) = extract_namespace(&ini) {
-                        namespaces.insert(ns);
+                match crate::core::mod_ini_cache::get_or_parse_ini(&path) {
+                    Ok(ini) => {
+                        if let Some(ns) = extract_namespace(&ini) {
+                            namespaces.insert(ns);
+                        }
+                    }
+                    Err(e) => {
+                        // 解析失败不再静默吞掉：记录日志，跳过该文件但保留目录其余收集结果
+                        log::warn!(
+                            "[namespace_handler] 解析 INI 失败，跳过该文件命名空间收集: {:?}: {}",
+                            path,
+                            e
+                        );
                     }
                 }
             }

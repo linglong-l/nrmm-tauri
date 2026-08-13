@@ -15,6 +15,14 @@ pub const MANAGED_FOLDER: &str = "_MANAGED_";
 /// 对齐 NRMM 原版常量 `managedRemovedFolderName = "DISABLED_MANAGED_REMOVED"`
 pub const MANAGED_REMOVED_FOLDER: &str = "DISABLED_MANAGED_REMOVED";
 
+/// 旧版（V1.3.x）托管目录名，首次运行时应重命名为 `_MANAGED_`
+/// 对齐 NRMM 原版常量 `oldManagedFolderName = "V1_3_x_MANAGED-DO_NOT_EDIT_COPY_MOVE_CUT"`
+pub const OLD_MANAGED_FOLDER_V1: &str = "V1_3_x_MANAGED-DO_NOT_EDIT_COPY_MOVE_CUT";
+
+/// 更早版本遗留的托管目录名，作为 `OLD_MANAGED_FOLDER_V1` 之后的回退候选
+/// 对齐 NRMM 原版常量 `anotherOldManagedFolderName = "MANAGED-DO_NOT_EDIT_COPY_MOVE_CUT"`
+pub const OLD_MANAGED_FOLDER_LEGACY: &str = "MANAGED-DO_NOT_EDIT_COPY_MOVE_CUT";
+
 /// 按键监听文件名（用于游戏内按键检测）
 pub const KEYPRESS_FILENAME: &str = "nrmm_keypress.txt";
 

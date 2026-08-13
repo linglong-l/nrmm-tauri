@@ -27,14 +27,11 @@
         >
           <ModCard
             v-for="colIdx in columnCount"
-            :key="'card-' + ((virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1)"
+            :key="'card-' + virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1)"
             :mod="getModAtRowCol(virtualStartRow + rowIdx - 1, colIdx - 1)"
-            :mod-index="(virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1"
-            :class="{
-              'search-highlight': isModHighlightedByIndex((virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1) === 'active',
-              'search-hit': isModHighlightedByIndex((virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1) === 'hit'
-            }"
-            :ref="el => setModRef(el, (virtualStartRow + rowIdx - 1) * columnCount + colIdx - 1)"
+            :mod-index="virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1)"
+            :class="virtualCardClasses(virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1))"
+            :ref="el => setModRef(el, virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1))"
             @select="handleHighlightMod"
             @activate="handleActivateMod"
           />
@@ -68,7 +65,7 @@
  * - 收藏过滤
  */
 import { ref, computed, onMounted, onUnmounted, nextTick, watch, inject } from 'vue'
-import type { Ref } from 'vue'
+import type { Ref, ComponentPublicInstance } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FolderOpened } from '@element-plus/icons-vue'
 import ModCard from './ModCard.vue'
@@ -98,15 +95,21 @@ useDragScroll(gridContentRef)
  * 卡片宽度 160px，间距 12px
  * 公式：cols = floor((width + gap) / (cardWidth + gap))
  */
+/** 卡片尺寸与网格间距（需与 CSS .mod-card 宽度及网格 gap 保持一致） */
+const CARD_WIDTH = 160
+const CARD_GAP = 12
+const MIN_COLUMNS = 1
+const MAX_COLUMNS = 6
+/** 虚拟行高度与顶部偏移（需与 useVirtualGrid 默认 rowHeight=252 / topOffset=8 保持一致） */
+const VIRTUAL_ROW_HEIGHT = 252
+const VIRTUAL_TOP_OFFSET = 8
 const columnCount = ref(5)
 
 function updateColumnCount() {
   if (!gridContentRef.value) return
   const width = gridContentRef.value.clientWidth
-  const cardWidth = 160
-  const gap = 12
-  const cols = Math.floor((width + gap) / (cardWidth + gap))
-  columnCount.value = Math.max(1, Math.min(6, cols))
+  const cols = Math.floor((width + CARD_GAP) / (CARD_WIDTH + CARD_GAP))
+  columnCount.value = Math.max(MIN_COLUMNS, Math.min(MAX_COLUMNS, cols))
 }
 
 /** 虚拟行渲染 */
@@ -227,21 +230,42 @@ function isModHighlighted(_mod: ModData, index: number): 'active' | 'hit' | fals
 }
 
 /**
+ * 虚拟行渲染模式下，根据已减 1 的 0-based 行列基址计算 displayMods 扁平索引
+ * 提取自模板中重复 4+ 次的索引表达式，集中维护避免错位
+ */
+function virtualCardIndex(rowBase: number, colBase: number): number {
+  return rowBase * columnCount.value + colBase
+}
+
+/**
+ * 虚拟行渲染模式下单个卡片的搜索高亮 class（'active' 强高亮 / 'hit' 淡色）
+ * 仅调用一次 isModHighlightedByIndex（内部 .some() 一次），替代模板内 2 次独立调用
+ */
+function virtualCardClasses(idx: number): Record<string, boolean> {
+  const status = isModHighlightedByIndex(idx)
+  return {
+    'search-highlight': status === 'active',
+    'search-hit': status === 'hit',
+  }
+}
+
+/**
  * 设置模组卡片DOM引用
  * 虚拟行渲染模式下 ref 可能稀疏，故使用 el.$el 安全获取 DOM 元素
  * @param el 组件实例
  * @param index 索引
  */
-function setModRef(el: any, index: number) {
-  if (el) {
-    modRefs.value[index] = el.$el || el
-  }
+function setModRef(el: Element | ComponentPublicInstance | null, index: number) {
+  if (!el) return
+  // 组件实例取其根 DOM（$el），原生元素直接使用；统一收窄为 HTMLElement
+  const domEl: HTMLElement = '$el' in el ? (el.$el as HTMLElement) : (el as HTMLElement)
+  modRefs.value[index] = domEl
 }
 
 function scrollToMatch() {
   const info = modsStore.getCurrentMatchInfo()
-  if (info.isGroup) {
-    modsStore.selectGroupByPath(info.groupPath!)
+  if (info.isGroup && info.groupPath) {
+    modsStore.selectGroupByPath(info.groupPath)
     if (gridContentRef.value) gridContentRef.value.scrollTop = 0
     return
   }
@@ -350,8 +374,8 @@ function ensureSelectedCardVisible() {
  */
 function scrollToSelectedRow(idx: number) {
   if (!gridContentRef.value) return
-  const rowHeight = 252
-  const topOffset = 8
+  const rowHeight = VIRTUAL_ROW_HEIGHT
+  const topOffset = VIRTUAL_TOP_OFFSET
   const targetRow = Math.floor(idx / columnCount.value)
   const targetTop = topOffset + targetRow * rowHeight
   const containerHeight = gridContentRef.value.clientHeight

@@ -15,11 +15,14 @@ use anyhow::{Result, anyhow, Context};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::fs;
+use std::io::Write;
 use serde::{Serialize, Deserialize};
 use infer;
-use fs_extra::dir::{CopyOptions, move_dir, copy};
 use trash::delete;
 use std::sync::{Arc, Mutex};
+use rayon::prelude::*;
+use walkdir::WalkDir;
+use crate::core::resolution::{compute_limits, ResolutionLimits};
 use tauri::State;
 use crate::core::file_watcher::FileWatcher;
 use crate::core::file_watcher::WATCHER_PAUSED;
@@ -557,7 +560,7 @@ fn extract_rar_internal(
 /// # 解压后处理
 ///
 /// 无论使用哪一级解压，成功后均执行以下步骤：
-/// 1. **扁平化单层目录**：`flatten_single_directory` 处理压缩包内单根目录情况
+/// 1. **展平单层包裹目录**：`unwrap_single_folder_nesting` 处理压缩包内单根目录情况（循环展平 + 排除元数据文件）
 /// 2. **统计文件数 & 检查 INI**：`visit_files` 递归遍历
 /// 3. **移动到最终位置**：`unique_path` 处理重名，`move_directory_contents` 合并移动
 /// 4. **清理临时目录**：`remove_dir_all`
@@ -679,8 +682,8 @@ fn finalize_extraction(
     target_dir: &Path,
     temp_dir: &Path,
 ) -> Result<ExtractResult> {
-    // 扁平化：如果临时目录内只有一个子目录，将其内容提升一级
-    let final_dir = flatten_single_directory(temp_dir)?;
+    // 展平在最终模组目录上执行（见下方 unwrap_single_folder_nesting），此处直接使用临时目录
+    let final_dir = temp_dir.to_path_buf();
 
     let mut has_ini = false;
     let mut file_count = 0usize;
@@ -705,6 +708,12 @@ fn finalize_extraction(
 
     move_directory_contents(&final_dir, &target_mod_path)?;
 
+    // 展平单层包裹目录（对齐 Dart unwrapSingleFolderNesting）：压缩包内若仅包裹单一根目录，
+    // 将其内容提升为模组目录直接内容
+    if let Err(e) = unwrap_single_folder_nesting(&target_mod_path) {
+        log::warn!("finalize_extraction: 展平单层目录失败 {:?}: {}", target_mod_path, e);
+    }
+
     // 清理临时目录
     let _ = fs::remove_dir_all(temp_dir);
 
@@ -716,49 +725,122 @@ fn finalize_extraction(
     })
 }
 
-/// 扁平化单层目录
+/// 展平单层包裹目录（对齐 Dart `unwrapSingleFolderNesting`）
 ///
-/// 如果目录内只有一个子目录且没有直接文件，返回该子目录路径。
-/// 用于处理压缩包内所有内容都在一个根目录下的常见情况（例如 `mod.zip` 解压后得到 `mod/` → 实际上是 `mod/content`）。
-/// 扁平化后将 `mod/content` 提升为 `mod/` 的直接内容。
+/// 反复检查 `dir`：若其「相关条目」（排除特定元数据/图标/缓存文件后）恰好只有一个，
+/// 且该条目为目录，则将该子目录的内容上移到 `dir` 自身，并删除已清空的包裹目录。
+/// 循环执行直到无法继续展平。
+///
+/// 排除的文件名（与 Dart 一致）：`modname` / `modforced` / `modsyntaxerrorremoved` /
+/// `modunoptimized` / `modnamespaced` / `modlink` / `fav` / `.nahidamd` / 图标文件 /
+/// `jasm_*` / `.jasm*` / `.imm*` / `*.txt` / `*.json`。
+///
+/// 子目录上移时使用 `unique_path` 处理命名冲突（对齐 Dart `getSafeTarget`），
+/// 同盘优先 rename，跨盘回退 copy + 删除。
 ///
 /// # 参数
-/// - `dir`: 待检查的目录路径
-///
-/// # 返回
-/// 扁平化后的目录路径（可能是原目录，也可能是其唯一的子目录）
+/// - `dir`: 待展平的目录路径（通常是解压/导入后的最终模组目录）
 ///
 /// # Errors
-/// - `read_dir` 失败时返回 IO 错误
-fn flatten_single_directory(dir: &Path) -> Result<PathBuf> {
-    let entries = fs::read_dir(dir)?;
-    let mut first_entry = None;
-    let mut has_files = false;
+/// - `read_dir` 或条目移动失败时返回 IO 错误
+pub fn unwrap_single_folder_nesting(dir: &Path) -> Result<()> {
+    loop {
+        let entries: Vec<_> = match fs::read_dir(dir) {
+            Ok(rd) => rd.filter_map(Result::ok).collect(),
+            Err(_) => break,
+        };
 
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_file() {
-            has_files = true;
+        // 过滤掉 Dart 约定的排除项
+        let relevant: Vec<_> = entries
+            .iter()
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                !is_excluded_for_unwrap(&name)
+            })
+            .collect();
+
+        // 多于 1 个相关条目，或没有 → 停止展平
+        if relevant.len() != 1 {
             break;
         }
-        if first_entry.is_none() {
-            first_entry = Some(path);
+
+        let single = &relevant[0];
+        let single_path = single.path();
+        // 单个相关条目是文件（非目录）→ 停止
+        if !single_path.is_dir() {
+            break;
+        }
+
+        // 将子目录内容逐一上移到 dir 自身
+        let children: Vec<_> = match fs::read_dir(&single_path) {
+            Ok(rd) => rd.filter_map(Result::ok).collect(),
+            Err(_) => break,
+        };
+        for child in children {
+            let child_path = child.path();
+            let target = dir.join(child.file_name());
+            let target = unique_path(&target);
+            move_entry_up(&child_path, &target)?;
+        }
+
+        // 删除已清空的包裹目录
+        let _ = fs::remove_dir(&single_path);
+    }
+    Ok(())
+}
+
+/// 将条目移动到目标：同盘优先 `rename`，跨盘回退 `copy` + 删除源。
+/// 目标由调用方保证不冲突（`unique_path`），此处仅做防御性清理。
+fn move_entry_up(src: &Path, dst: &Path) -> Result<()> {
+    if dst.exists() {
+        if dst.is_dir() {
+            fs::remove_dir_all(dst)?;
         } else {
-            has_files = true;
-            break;
+            fs::remove_file(dst)?;
         }
     }
-
-    if !has_files {
-        if let Some(only_dir) = first_entry {
-            if only_dir.is_dir() {
-                return Ok(only_dir);
-            }
+    if paths_on_same_disk(src, dst)
+        && fs::rename(src, dst).is_ok() {
+            return Ok(());
         }
+    // 跨盘回退：复制后删除源
+    if src.is_dir() {
+        copy_dir_deep(src, dst)?;
+        let _ = fs::remove_dir_all(src);
+    } else {
+        fs::copy(src, dst)?;
+        let _ = fs::remove_file(src);
     }
+    Ok(())
+}
 
-    Ok(dir.to_path_buf())
+/// 判断文件名是否应在展平时忽略（对齐 Dart `unwrapSingleFolderNesting` 的排除集）
+fn is_excluded_for_unwrap(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    const EXACT: &[&str] = &[
+        "modname",
+        "modforced",
+        "modsyntaxerrorremoved",
+        "modunoptimized",
+        "modnamespaced",
+        "modlink",
+        "fav",
+        ".nahidamd",
+    ];
+    if EXACT.contains(&lower.as_str()) {
+        return true;
+    }
+    if lower.starts_with("jasm_") || lower.starts_with(".jasm") || lower.starts_with(".imm") {
+        return true;
+    }
+    if lower.ends_with(".txt") || lower.ends_with(".json") {
+        return true;
+    }
+    // 图标文件（对应 Dart ConstantVar.modIconFilenames）
+    if crate::core::constants::ICON_EXTENSIONS.iter().any(|ext| lower.ends_with(*ext)) {
+        return true;
+    }
+    false
 }
 
 /// 递归遍历目录下所有文件，对每个文件调用回调
@@ -855,14 +937,18 @@ fn move_directory_contents(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 导入目录（已解压的模组目录）到分组
+/// 导入目录（已解压的模组目录）到分组——深层遍历复制（对齐 NRMM 多层文件夹导入）
 ///
 /// # 行为
-/// - 非目录 → `Err(anyhow!("import_directory: src is not a directory"))`
-/// - `dir_name` = 目录名，使用 `unique_path` 避免重名
-/// - `same_disk` = `paths_on_same_disk(src, target)`
-///   - 同盘：`fs_extra::dir::move_dir`（overwrite + copy_inside）
-///   - 跨盘：`fs_extra::dir::copy` 后 `trash::delete(src)`（trash 失败仅 warn，不中断流程）
+/// - `dir_name` = 源目录名，使用 `unique_path` 避免重名（对齐 Dart `getSafeTarget` 的 `_N` 后缀）
+/// - 获取源目录相对路径，在 `target_group_dir/dir_name` 下重建完整目录结构
+/// - 逐文件流式复制：同盘优先 `fs::rename`（快速路径），失败回退 `fs::copy`
+///   （注：为保证「任意文件复制失败 → 仅删除复制目录、保留原目录」的回滚不变式，
+///   跨盘场景始终为复制；同盘场景优先 rename 以获得最佳性能，失败时仅删除目标目录）
+/// - 符号链接：直接复制链接本体（文件链接拷贝目标内容、目录链接重建链接），
+///   不解析、不递归，避免死循环遍历
+/// - 任意文件复制失败 → 返回错误并删除已复制的目标目录（取消本次导入）
+/// - 全部成功 → 通过回收站回收（trash）原目录
 ///
 /// # 参数
 /// - `src`: 源目录路径
@@ -871,14 +957,11 @@ fn move_directory_contents(src: &Path, dst: &Path) -> Result<()> {
 /// # 返回
 /// 最终安装到的 `PathBuf`（已处理重名）
 ///
-/// # Panics
-/// 不会 panic
-///
 /// # Errors
 /// - 源不存在或不是目录
 /// - 目录名为空
 /// - 目标目录创建失败
-/// - 移动/复制操作失败（权限不足、磁盘空间不足等）
+/// - 复制操作失败（权限不足、磁盘空间不足等）
 pub fn import_directory(src: &Path, target_group_dir: &Path) -> Result<PathBuf> {
     if !src.is_dir() {
         return Err(anyhow!("import_directory: src is not a directory: {:?}", src));
@@ -893,47 +976,141 @@ pub fn import_directory(src: &Path, target_group_dir: &Path) -> Result<PathBuf> 
         return Err(anyhow!("import_directory: src directory name is empty: {:?}", src));
     }
 
-    let target = target_group_dir.join(&dir_name);
-    let target = unique_path(&target);
     fs::create_dir_all(target_group_dir)?;
 
-    let same_disk = paths_on_same_disk(src, &target);
-    log::debug!(
-        "import_directory: same_disk={} src={:?} target={:?}",
-        same_disk, src, target
-    );
+    let target = target_group_dir.join(&dir_name);
+    let target = unique_path(&target);
 
-    let mut options = CopyOptions::new();
-    options.overwrite = true;
-    options.copy_inside = true;
-
-    if same_disk {
-        move_dir(src, target.parent().unwrap_or(target_group_dir), &options)
-            .map_err(|e| anyhow!("import_directory move_dir failed: {}", e))?;
-    } else {
-        copy(src, target.parent().unwrap_or(target_group_dir), &options)
-            .map_err(|e| anyhow!("import_directory copy failed: {}", e))?;
-        match delete(src) {
-            Ok(_) => {}
-            Err(e) => log::warn!(
-                "import_directory: trash delete failed for {:?}: {}, leaving source intact",
-                src, e
-            ),
-        }
+    // 深层遍历复制；失败则回滚（删除已复制目录），原目录保持不变
+    if let Err(e) = copy_dir_deep(src, &target) {
+        let _ = fs::remove_dir_all(&target);
+        return Err(anyhow!("import_directory: 复制失败已回滚: {}", e));
     }
 
-    // 如果源目录名和目标唯一路径名不同（存在重名追加后缀），需要重命名
-    let final_path = target_group_dir.join(&dir_name);
-    if final_path != target && final_path.exists() {
-        // unique_path 已经返回目标路径，但 copy_inside=true 可能会把 src
-        // 按原名放到目标目录下。若存在重名则需要把刚复制过来的目录名改为 target
-        let src_after_copy = target_group_dir.join(&dir_name);
-        if src_after_copy.exists() && src_after_copy != target {
-            fs::rename(&src_after_copy, &target)?;
-        }
+    // 展平单层包裹目录（对齐 Dart unwrapSingleFolderNesting）
+    if let Err(e) = unwrap_single_folder_nesting(&target) {
+        log::warn!("import_directory: 展平单层目录失败 {:?}: {}", target, e);
+    }
+
+    // 成功：回收站回收原目录（不阻断流程，失败仅告警）
+    match delete(src) {
+        Ok(_) => {}
+        Err(e) => log::warn!(
+            "import_directory: 回收原目录失败 {:?}: {}，原目录保留",
+            src, e
+        ),
     }
 
     Ok(target)
+}
+
+/// 深层遍历复制目录树：在 `dst` 下重建与 `src` 相同的目录结构并流式复制每个文件。
+///
+/// - 同盘文件优先 `fs::rename`（快速路径），否则 `fs::copy`
+/// - 符号链接直接复制（不解析、不递归）
+/// - 任一股文件复制失败立即返回 `Err`（调用方负责删除 `dst`）
+fn copy_dir_deep(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+
+    let mut jobs: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for entry in WalkDir::new(src).follow_links(false).min_depth(1) {
+        let entry = entry?;
+        let path = entry.path();
+        let rel = match path.strip_prefix(src) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        jobs.push((path.to_path_buf(), dst.join(rel)));
+    }
+
+    // 并行复制（std::fs + rayon 线程池回退）
+    let failures: Vec<String> = jobs
+        .par_iter()
+        .filter_map(|(s, d)| match copy_one(s, d) {
+            Ok(_) => None,
+            Err(e) => Some(format!("{}: {}", s.display(), e)),
+        })
+        .collect();
+
+    if !failures.is_empty() {
+        return Err(anyhow!(
+            "copy_dir_deep: {} 个文件复制失败\n{}",
+            failures.len(),
+            failures.join("\n")
+        ));
+    }
+    Ok(())
+}
+
+/// 复制单个条目（文件/目录/符号链接）到目标。
+fn copy_one(src: &Path, dst: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(src)?;
+
+    // 目录：仅创建（内容由其子项 jobs 处理）
+    if meta.is_dir() {
+        fs::create_dir_all(dst)?;
+        return Ok(());
+    }
+
+    // 确保父目录存在
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // 符号链接：直接复制本体，不解析、不递归（避免死循环）
+    if meta.is_symlink() {
+        let _ = fs::remove_file(dst);
+        copy_symlink_as_is(src, dst)?;
+        return Ok(());
+    }
+
+    // 普通文件：同盘优先 rename，否则 copy
+    let _ = fs::remove_file(dst);
+    if paths_on_same_disk(src, dst)
+        && fs::rename(src, dst).is_ok() {
+            return Ok(());
+        }
+    fs::copy(src, dst).map(|_| ())?;
+    Ok(())
+}
+
+/// 复制符号链接本体。
+///
+/// - 文件符号链接：`fs::copy` 复制其指向的文件内容（安全，不递归）
+/// - 目录符号链接：跨平台重建一个指向相同目标的符号链接（保留结构、不遍历）
+fn copy_symlink_as_is(src: &Path, dst: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{read_link, symlink};
+        match read_link(src) {
+            Ok(target) => {
+                let _ = fs::remove_file(dst);
+                symlink(&target, dst)?;
+                Ok(())
+            }
+            Err(_) => {
+                fs::copy(src, dst).map(|_| ())?;
+                Ok(())
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        match fs::copy(src, dst) {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                use std::os::windows::fs::symlink_dir;
+                match fs::read_link(src) {
+                    Ok(target) => {
+                        let _ = fs::remove_file(dst);
+                        symlink_dir(&target, dst)?;
+                        Ok(())
+                    }
+                    Err(_) => Err(anyhow!("copy_symlink_as_is: 无法复制符号链接 {:?}", src)),
+                }
+            }
+        }
+    }
 }
 
 /// 导入模组到指定分组：统一入口，支持目录和压缩包
@@ -1043,6 +1220,7 @@ pub fn import_mod_auto(archive_path: &Path, mods_path: &Path, password: Option<&
         fs::create_dir_all(&managed_dir)?;
     }
 
+    let limits = compute_limits();
     let mut group_num = 1u32;
     let group_dir = loop {
         let name = format!("group_{}", group_num);
@@ -1051,7 +1229,7 @@ pub fn import_mod_auto(archive_path: &Path, mods_path: &Path, password: Option<&
             break path;
         }
         group_num += 1;
-        if group_num > 100 {
+        if group_num > limits.max_groups {
             let path = managed_dir.join("group_1");
             fs::create_dir_all(&path)?;
             break path;
@@ -1059,6 +1237,129 @@ pub fn import_mod_auto(archive_path: &Path, mods_path: &Path, password: Option<&
     };
 
     import_mod(archive_path, &group_dir, password)
+}
+
+/// 导出模组目录为压缩包（三级回退：用户 7z CLI → 打包 7z CLI → 自维护压缩）
+///
+/// 对齐用户要求：优先调用用户级 7z CLI 进行压缩，其次打包的 7z CLI，
+/// 最后采用自维护压缩逻辑（`.zip` 用 `zip` crate，`.7z` 用 `sevenz-rust`）。
+///
+/// 归档内容以模组目录自身为根（解压后得到 `mod_name/`），与导入时的
+/// `unwrap_single_folder_nesting` 展平逻辑形成对称闭环。
+///
+/// # 参数
+/// - `mod_dir`: 待导出的模组目录
+/// - `archive_path`: 目标压缩包路径（扩展名决定格式：`.7z` / `.zip`，其余交给 7z CLI）
+///
+/// # Errors
+/// - 源不是目录
+/// - 三级压缩全部失败
+pub fn export_mod(mod_dir: &Path, archive_path: &Path) -> Result<()> {
+    if !mod_dir.is_dir() {
+        return Err(anyhow!("export_mod: 源不是目录: {:?}", mod_dir));
+    }
+    let ext = archive_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+
+    // --- 第一级：用户级 7z CLI ---
+    if let Some(sys) = get_system_7z_path() {
+        if run_7z_add(&sys, archive_path, mod_dir, &ext).is_ok() {
+            log::info!("export_mod: 用户 7z CLI 压缩成功 {:?}", archive_path);
+            return Ok(());
+        }
+    }
+
+    // --- 第二级：打包的 7z CLI ---
+    if let Some(bundled) = get_bundled_7z_path() {
+        if run_7z_add(&bundled, archive_path, mod_dir, &ext).is_ok() {
+            log::info!("export_mod: 打包 7z CLI 压缩成功 {:?}", archive_path);
+            return Ok(());
+        }
+    }
+
+    // --- 第三级：自维护压缩逻辑 ---
+    log::info!("export_mod: 回退到自维护压缩 {:?}", archive_path);
+    export_internal(mod_dir, archive_path, &ext)
+}
+
+/// 调用 7z CLI 执行 `a`（添加/压缩）命令
+///
+/// `7z a -y [-t<fmt>] <archive> <mod_dir>`，将模组目录整体归档。
+/// `.7z` 为 7z 默认格式无需 `-t`；其余格式显式指定（`zip`/`tar`/`gzip` 等）。
+fn run_7z_add(seven_zip: &Path, archive: &Path, mod_dir: &Path, fmt: &str) -> Result<()> {
+    if let Some(parent) = archive.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut cmd = Command::new(seven_zip);
+    cmd.arg("a").arg("-y");
+    if fmt != "7z" && !fmt.is_empty() {
+        cmd.arg(format!("-t{}", fmt));
+    }
+    cmd.arg(archive).arg(mod_dir);
+
+    let output = cmd.output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(anyhow!("7z CLI 压缩失败: {}{}", stdout, stderr))
+    }
+}
+
+/// 自维护压缩（第三级回退）
+///
+/// - `.zip`：使用 `zip` crate 创建 ZIP 归档
+/// - `.7z`：使用 `sevenz-rust` 创建 7z 归档
+/// - 其他格式：返回错误，提示安装 7z CLI
+fn export_internal(mod_dir: &Path, archive_path: &Path, ext: &str) -> Result<()> {
+    match ext {
+        "zip" => zip_directory(mod_dir, archive_path),
+        "7z" => sevenz_rust::compress_to_path(mod_dir, archive_path)
+            .map(|_| ())
+            .map_err(|e| anyhow!("sevenz-rust 自维护压缩失败: {:?}", e)),
+        _ => Err(anyhow!(
+            "自维护压缩仅支持 .zip / .7z；导出 .{} 格式请安装 7z CLI",
+            ext
+        )),
+    }
+}
+
+/// 使用 `zip` crate 将目录压缩为 ZIP 归档（自维护压缩，第三级回退之一）
+///
+/// 归档内以模组目录名（`dir_name/`）为根，保留目录结构。
+fn zip_directory(dir: &Path, archive_path: &Path) -> Result<()> {
+    if let Some(parent) = archive_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = fs::File::create(archive_path)?;
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    // 以 dir 的父目录为根，使归档内包含 `dir_name/...`
+    let root = dir.parent().unwrap_or(dir);
+    for entry in WalkDir::new(dir).follow_links(false).min_depth(1) {
+        let entry = entry?;
+        let path = entry.path();
+        let rel = match path.strip_prefix(root) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        if entry.file_type().is_dir() {
+            writer.add_directory(rel_str, options)?;
+        } else {
+            writer.start_file(rel_str, options)?;
+            let data = fs::read(path)?;
+            writer.write_all(&data)?;
+        }
+    }
+    writer.finish()?;
+    Ok(())
 }
 
 /// Tauri 命令：检查路径是否为支持的压缩包格式
@@ -1163,4 +1464,188 @@ pub async fn import_item_cmd(
     }
 
     result
+}
+
+/// Tauri 命令：获取当前屏幕分辨率推导出的分组/模组上限及选用整数宽度。
+///
+/// 前端可据此限制「新建分组 / 添加模组」的 UI 上限，对齐 NRMM 的 `group_int` 绑定 xy 轴语义。
+#[tauri::command]
+pub fn get_resolution_limits_cmd() -> ResolutionLimits {
+    compute_limits()
+}
+
+/// Tauri 命令：导出模组目录为压缩包
+///
+/// 前端调用 `exportMod` 触发。三级回退：用户 7z CLI → 打包 7z CLI → 自维护压缩。
+///
+/// # Errors
+/// - 压缩失败（源非目录、7z 未找到、自维护压缩不支持该格式等）
+#[tauri::command]
+pub async fn export_mod_cmd(mod_dir: String, archive_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        export_mod(Path::new(&mod_dir), Path::new(&archive_path)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Read;
+    use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
+
+    /// 在 `root` 下建一个基础模组目录（含嵌套文件与子目录）
+    fn make_mod_dir(root: &Path) -> PathBuf {
+        let mod_dir = root.join("MyMod");
+        fs::create_dir_all(mod_dir.join("Textures")).unwrap();
+        fs::write(mod_dir.join("mod.ini"), "[Section]\nhandled = 1\n").unwrap();
+        fs::write(mod_dir.join("Textures").join("tex1.png"), b"PNGDATA").unwrap();
+        fs::write(mod_dir.join("Textures").join("tex2.png"), b"PNGDATA2").unwrap();
+        mod_dir
+    }
+
+    // ---------------- unwrap_single_folder_nesting ----------------
+
+    #[test]
+    fn unwrap_single_wrapper_flattens_into_target() {
+        let tmp = TempDir::new().unwrap();
+        let top = tmp.path().join("mod_top");
+        fs::create_dir_all(top.join("MyArchive")).unwrap();
+        fs::write(top.join("MyArchive").join("mod.ini"), b"[x]").unwrap();
+        fs::write(top.join("MyArchive").join("tex.png"), b"PNG").unwrap();
+
+        unwrap_single_folder_nesting(&top).unwrap();
+
+        // 包裹目录应被展平，文件上移到 top
+        assert!(top.join("mod.ini").exists());
+        assert!(top.join("tex.png").exists());
+        assert!(!top.join("MyArchive").exists());
+    }
+
+    #[test]
+    fn unwrap_excluded_metadata_does_not_block_flatten() {
+        let tmp = TempDir::new().unwrap();
+        let top = tmp.path().join("mod_top");
+        fs::create_dir_all(top.join("MyArchive")).unwrap();
+        fs::write(top.join("MyArchive").join("sub.txt"), b"hello").unwrap();
+        // modname 是排除项：与其共存时，唯一“相关”条目仍是 MyArchive，应继续展平
+        fs::write(top.join("modname"), b"My Mod Name").unwrap();
+
+        unwrap_single_folder_nesting(&top).unwrap();
+
+        assert!(top.join("sub.txt").exists());
+        assert!(top.join("modname").exists());
+        assert!(!top.join("MyArchive").exists());
+    }
+
+    #[test]
+    fn unwrap_loops_through_nested_single_wrappers() {
+        let tmp = TempDir::new().unwrap();
+        let top = tmp.path().join("mod_top");
+        fs::create_dir_all(top.join("A").join("B").join("C")).unwrap();
+        fs::write(top.join("A").join("B").join("C").join("deep.txt"), b"x").unwrap();
+
+        unwrap_single_folder_nesting(&top).unwrap();
+
+        // 三层嵌套单层包裹应被循环展平到顶层
+        assert!(top.join("deep.txt").exists());
+        assert!(!top.join("A").exists());
+    }
+
+    #[test]
+    fn unwrap_no_flatten_when_multiple_relevant_entries() {
+        let tmp = TempDir::new().unwrap();
+        let top = tmp.path().join("mod_top");
+        fs::create_dir_all(top.join("FolderA")).unwrap();
+        fs::create_dir_all(top.join("FolderB")).unwrap();
+        fs::write(top.join("FolderA").join("a.txt"), b"a").unwrap();
+        fs::write(top.join("FolderB").join("b.txt"), b"b").unwrap();
+
+        unwrap_single_folder_nesting(&top).unwrap();
+
+        // 两个相关目录 → 不展平
+        assert!(top.join("FolderA").join("a.txt").exists());
+        assert!(top.join("FolderB").join("b.txt").exists());
+    }
+
+    #[test]
+    fn unwrap_no_flatten_when_single_entry_is_file() {
+        let tmp = TempDir::new().unwrap();
+        let top = tmp.path().join("mod_top");
+        fs::create_dir_all(&top).unwrap();
+        // 非排除项的单个文件（非目录）→ 停止，不“展平”
+        fs::write(top.join("game.exe"), b"BINARY").unwrap();
+
+        unwrap_single_folder_nesting(&top).unwrap();
+
+        assert!(top.join("game.exe").exists());
+    }
+
+    // ---------------- export_internal（第三级回退，确定性） ----------------
+
+    #[test]
+    fn export_internal_zip_creates_valid_zip() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = make_mod_dir(tmp.path());
+        let zip_path = tmp.path().join("MyMod.zip");
+
+        export_internal(&mod_dir, &zip_path, "zip").unwrap();
+
+        assert!(zip_path.exists());
+        let mut ar = zip::ZipArchive::new(fs::File::open(&zip_path).unwrap()).unwrap();
+        let names: Vec<String> = (0..ar.len())
+            .map(|i| ar.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.iter().any(|n| n.starts_with("MyMod/mod.ini")), "names={:?}", names);
+        assert!(names.iter().any(|n| n.contains("Textures/tex1.png")), "names={:?}", names);
+
+        // 验证文件内容可读
+        let mut f = ar.by_name("MyMod/mod.ini").unwrap();
+        let mut buf = String::new();
+        f.read_to_string(&mut buf).unwrap();
+        assert!(buf.contains("handled = 1"));
+    }
+
+    #[test]
+    fn export_internal_7z_creates_valid_7z() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = make_mod_dir(tmp.path());
+        let sevenz_path = tmp.path().join("MyMod.7z");
+
+        export_internal(&mod_dir, &sevenz_path, "7z").unwrap();
+
+        assert!(sevenz_path.exists());
+        // 7z 文件签名：37 7A BC AF 27 1C
+        let mut fd = fs::File::open(&sevenz_path).unwrap();
+        let mut sig = [0u8; 6];
+        fd.read_exact(&mut sig).unwrap();
+        assert_eq!(&sig, &[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C], "非法的 7z 签名");
+    }
+
+    #[test]
+    fn export_internal_unsupported_format_errors() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = make_mod_dir(tmp.path());
+        let rar_path = tmp.path().join("MyMod.rar");
+
+        let res = export_internal(&mod_dir, &rar_path, "rar");
+        assert!(res.is_err());
+    }
+
+    // ---------------- export_mod（端到端契约，不依赖具体层级） ----------------
+
+    #[test]
+    fn export_mod_produces_non_empty_archive() {
+        let tmp = TempDir::new().unwrap();
+        let mod_dir = make_mod_dir(tmp.path());
+        let out = tmp.path().join("Exported.zip");
+
+        export_mod(&mod_dir, &out).unwrap();
+
+        let meta = fs::metadata(&out).unwrap();
+        assert!(meta.len() > 0, "导出归档不应为空");
+    }
 }

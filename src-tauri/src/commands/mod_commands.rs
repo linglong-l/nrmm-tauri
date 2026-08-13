@@ -20,21 +20,23 @@
 //! - apply 操作用深度扫描（完整 INI 解析，可能几秒）
 //! - 所有 IO 操作使用 spawn_blocking 避免阻塞 UI
 
-use crate::core::mod_manager;
-use crate::core::mod_scanner;
+use crate::config::settings_store;
 use crate::core::constants;
 use crate::core::mod_cache;
+use crate::core::mod_manager;
+use crate::core::mod_scanner;
+use crate::core::resolution;
 use crate::models::enums::TargetGame;
-use crate::config::settings_store;
-use anyhow::Result;
-use std::path::{Path, PathBuf};
-use std::fs;
-use std::sync::{Mutex, LazyLock};
-use std::collections::HashMap;
-use std::time::{Instant, Duration};
 use crate::sel_dbg;
+use anyhow::Result;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
-static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 选择模组命令的参数结构体
 ///
@@ -70,7 +72,11 @@ pub struct SelectModArgs {
 /// 这是 UI 初始化和列表展示的主要入口。
 #[tauri::command]
 pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::ScanResult, String> {
-    log::debug!("[commands::mod_commands] [get_mods] game={} mods_path={}", game, mods_path);
+    log::debug!(
+        "[commands::mod_commands] [get_mods] game={} mods_path={}",
+        game,
+        mods_path
+    );
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
@@ -86,15 +92,24 @@ pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::Sc
     let start = std::time::Instant::now();
 
     let scan_path = mods_path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_scanner::ScanResult, String> {
-        mod_scanner::scan_mods_light(&scan_path).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> Result<mod_scanner::ScanResult, String> {
+            mod_scanner::scan_mods_light(&scan_path)
+                .map_err(crate::core::error_normalizer::err_to_ui)
+        })
+        .await
+        .map_err(|e| {
+            log::error!("[get_mods] spawn_blocking join error: {}", e);
+            crate::core::error_normalizer::join_error_to_ui()
+        })??;
 
     let elapsed = start.elapsed();
-    log::info!("Light scan completed in {}ms, {} mods, {} groups",
-        elapsed.as_millis(), result.total_mods_count, result.groups.len());
+    log::info!(
+        "Light scan completed in {}ms, {} mods, {} groups",
+        elapsed.as_millis(),
+        result.total_mods_count,
+        result.groups.len()
+    );
 
     {
         let mut cache = crate::core::mod_cache::MOD_CACHE.write();
@@ -105,7 +120,10 @@ pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::Sc
 }
 
 #[tauri::command]
-pub fn check_mods_path_status(game: String, mods_path: String) -> Result<crate::models::enums::ModsPathStatus, String> {
+pub fn check_mods_path_status(
+    game: String,
+    mods_path: String,
+) -> Result<crate::models::enums::ModsPathStatus, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
     Ok(mod_scanner::check_mods_path(game, &mods_path))
@@ -113,7 +131,10 @@ pub fn check_mods_path_status(game: String, mods_path: String) -> Result<crate::
 
 /// 刷新模组列表（轻量扫描，更新缓存）
 #[tauri::command]
-pub async fn refresh_mods(game: String, mods_path: String) -> Result<mod_scanner::ScanResult, String> {
+pub async fn refresh_mods(
+    game: String,
+    mods_path: String,
+) -> Result<mod_scanner::ScanResult, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
@@ -121,15 +142,24 @@ pub async fn refresh_mods(game: String, mods_path: String) -> Result<mod_scanner
     let start = std::time::Instant::now();
 
     let scan_path = mods_path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_scanner::ScanResult, String> {
-        mod_scanner::scan_mods_light(&scan_path).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> Result<mod_scanner::ScanResult, String> {
+            mod_scanner::scan_mods_light(&scan_path)
+                .map_err(crate::core::error_normalizer::err_to_ui)
+        })
+        .await
+        .map_err(|e| {
+            log::error!("[refresh_mods] spawn_blocking join error: {}", e);
+            crate::core::error_normalizer::join_error_to_ui()
+        })??;
 
     let elapsed = start.elapsed();
-    log::info!("Light refresh completed in {}ms, {} mods, {} groups",
-        elapsed.as_millis(), result.total_mods_count, result.groups.len());
+    log::info!(
+        "Light refresh completed in {}ms, {} mods, {} groups",
+        elapsed.as_millis(),
+        result.total_mods_count,
+        result.groups.len()
+    );
 
     {
         let mut cache = crate::core::mod_cache::MOD_CACHE.write();
@@ -141,8 +171,15 @@ pub async fn refresh_mods(game: String, mods_path: String) -> Result<mod_scanner
 
 /// 重量级更新模组数据（仅用户按钮触发）
 #[tauri::command]
-pub async fn update_mod_data(game: String, mods_path: String) -> Result<mod_manager::UpdateResult, String> {
-    log::debug!("[commands::mod_commands] [update_mod_data] game={} mods_path={}", game, mods_path);
+pub async fn update_mod_data(
+    game: String,
+    mods_path: String,
+) -> Result<mod_manager::UpdateResult, String> {
+    log::debug!(
+        "[commands::mod_commands] [update_mod_data] game={} mods_path={}",
+        game,
+        mods_path
+    );
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
     let settings = settings_store::get_settings();
@@ -153,13 +190,16 @@ pub async fn update_mod_data(game: String, mods_path: String) -> Result<mod_mana
 
     let update_path = mods_path.clone();
     // spawn_blocking 内部若 panic，JoinError 会被转为 String 错误返回，不会导致应用崩溃
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
-        mod_manager::update_mod_data(game, &update_path, &settings).map_err(|e| e.to_string())
-    })
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<mod_manager::UpdateResult, String> {
+            mod_manager::update_mod_data(game, &update_path, &settings)
+                .map_err(crate::core::error_normalizer::err_to_ui)
+        },
+    )
     .await
     .map_err(|e| {
         log::error!("[update_mod_data] spawn_blocking join error: {}", e);
-        format!("update task failed: {}", e)
+        crate::core::error_normalizer::join_error_to_ui()
     })?
     .map_err(|e| {
         log::error!("[update_mod_data] inner error: {}", e);
@@ -167,8 +207,11 @@ pub async fn update_mod_data(game: String, mods_path: String) -> Result<mod_mana
     })?;
 
     let elapsed = start.elapsed();
-    log::info!("Heavy update completed in {}ms, processed {} mods",
-        elapsed.as_millis(), result.processed_mods);
+    log::info!(
+        "Heavy update completed in {}ms, processed {} mods",
+        elapsed.as_millis(),
+        result.processed_mods
+    );
 
     // 缓存失效
     {
@@ -186,20 +229,34 @@ pub async fn update_mod_data(game: String, mods_path: String) -> Result<mod_mana
 /// - NormalGroup（group_xx）：仅扫描当前选中模组
 /// - MutexGroup（非 group_xx）：扫描所有启用模组
 #[tauri::command]
-pub async fn detect_hash_conflicts(mods_path: String) -> Result<mod_manager::HashConflictResult, String> {
+pub async fn detect_hash_conflicts(
+    mods_path: String,
+) -> Result<mod_manager::HashConflictResult, String> {
     let mods_path = PathBuf::from(mods_path);
-    log::info!("[detect_hash_conflicts] Starting full hash conflict scan: {}", mods_path.display());
+    log::info!(
+        "[detect_hash_conflicts] Starting full hash conflict scan: {}",
+        mods_path.display()
+    );
     let start = std::time::Instant::now();
 
     let scan_path = mods_path.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::HashConflictResult, String> {
-        mod_manager::detect_hash_conflicts(&scan_path).map_err(|e| e.to_string())
-    })
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<mod_manager::HashConflictResult, String> {
+            mod_manager::detect_hash_conflicts(&scan_path)
+                .map_err(crate::core::error_normalizer::err_to_ui)
+        },
+    )
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| {
+        log::error!("[detect_hash_conflicts] spawn_blocking join error: {}", e);
+        crate::core::error_normalizer::join_error_to_ui()
+    })??;
 
-    log::info!("[detect_hash_conflicts] Completed in {}ms, found {} conflicts",
-        start.elapsed().as_millis(), result.conflicts.len());
+    log::info!(
+        "[detect_hash_conflicts] Completed in {}ms, found {} conflicts",
+        start.elapsed().as_millis(),
+        result.conflicts.len()
+    );
     Ok(result)
 }
 
@@ -232,7 +289,13 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         "入口 | 所属模组名称={} 所属分组名称={} game={} 分组索引={} 模组索引={} 是否互斥组={} 传入光标坐标=({:?},{:?}) 模组路径={} 分组路径={}",
         mod_name, group_name, game, group_index, mod_index, is_mutex, cursor_x, cursor_y, mod_path, group_path
     );
-    log::debug!("[commands::mod_commands] [select_mod] game={} group={} mod={} mutex={}", game, group_index, mod_index, is_mutex);
+    log::debug!(
+        "[commands::mod_commands] [select_mod] game={} group={} mod={} mutex={}",
+        game,
+        group_index,
+        mod_index,
+        is_mutex
+    );
     let _start = std::time::Instant::now();
     let game_enum = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
@@ -242,12 +305,18 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         "select_mod",
         "分支判定 | is_mutex={} → 进入 {} 分支",
         is_mutex,
-        if is_mutex { "互斥组(enable_mutex_mod，无按键模拟)" } else { "普通组(switch_mod 持久化 + 按键模拟)" }
+        if is_mutex {
+            "互斥组(enable_mutex_mod，无按键模拟)"
+        } else {
+            "普通组(switch_mod 持久化 + 按键模拟)"
+        }
     );
     if is_mutex {
         // Mutex 分支防抖（与非 Mutex 分支一致，防止快速重复点击触发多次互斥切换）
         {
-            let mut debounce_map = SELECTION_DEBOUNCE.lock().map_err(|_| "debounce lock poisoned")?;
+            let mut debounce_map = SELECTION_DEBOUNCE
+                .lock()
+                .map_err(|_| "debounce lock poisoned")?;
             if let Some(last_time) = debounce_map.get(&group_path) {
                 if Instant::now() - *last_time < Duration::from_millis(500) {
                     return Err("debounced".to_string());
@@ -286,7 +355,9 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         // 执行顺序对齐用户要求："先持久化再按键模拟"
         // 1. 防抖检查
         {
-            let mut debounce_map = SELECTION_DEBOUNCE.lock().map_err(|_| "debounce lock poisoned")?;
+            let mut debounce_map = SELECTION_DEBOUNCE
+                .lock()
+                .map_err(|_| "debounce lock poisoned")?;
             if let Some(last_time) = debounce_map.get(&group_path) {
                 if Instant::now() - *last_time < Duration::from_millis(500) {
                     return Err("debounced".to_string());
@@ -302,9 +373,12 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         // TargetGame 是 Copy，提前复制用于后续按键模拟
         let game_enum_for_sim = game_enum;
 
-        let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
-            mod_manager::switch_mod(game_enum, &mods_path, &settings, group_index, mod_index).map_err(|e| e.to_string())
-        })
+        let result = tauri::async_runtime::spawn_blocking(
+            move || -> Result<mod_manager::UpdateResult, String> {
+                mod_manager::switch_mod(game_enum, &mods_path, &settings, group_index, mod_index)
+                    .map_err(|e| e.to_string())
+            },
+        )
         .await
         .map_err(|e| {
             log::error!("[select_mod] spawn_blocking join error: {}", e);
@@ -314,21 +388,32 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             log::error!("[select_mod] switch_mod error: {}", e);
             e
         })?;
-        log::debug!("[commands::mod_commands] [select_mod] switch_result={:?}", result);
+        log::debug!(
+            "[commands::mod_commands] [select_mod] switch_result={:?}",
+            result
+        );
 
         // 3. 清缓存（持久化完成后立即失效，确保下次 get_mods 全量扫描）
         {
             let mut cache = crate::core::mod_cache::MOD_CACHE.write();
             cache.invalidate_by_prefix(&managed_path);
         }
-        log::debug!("[commands::mod_commands] [select_mod] cache invalidated | prefix={:?}", managed_path);
+        log::debug!(
+            "[commands::mod_commands] [select_mod] cache invalidated | prefix={:?}",
+            managed_path
+        );
 
         // 4. 再按键模拟（确保文件状态已就绪）
         // 对齐 NRMM：选择后不发送 F10，$active_slot 通过 persist 跨重载保持，
         // 3Dmigoto 会在下次自然重载时重新求值 if/endif 条件
-        log::debug!("[commands::mod_commands] [select_mod] simulate_key_on_selection={} (after persist)", simulate_enabled);
+        log::debug!(
+            "[commands::mod_commands] [select_mod] simulate_key_on_selection={} (after persist)",
+            simulate_enabled
+        );
         // 选择逻辑(按键模拟)触发前：记录当前光标位置（屏幕坐标），用于对比模拟前后变化
-        let cursor_before = crate::platform::get_foreground_detector().get_cursor_position().ok();
+        let cursor_before = crate::platform::get_foreground_detector()
+            .get_cursor_position()
+            .ok();
         sel_dbg!(
             "mod_commands",
             "select_mod",
@@ -368,7 +453,10 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             let result: Result<(), String> = simulator
                 .simulate_select_full(sim_g, sim_m)
                 .map_err(|e| e.to_string());
-            log::debug!("[commands::mod_commands] [select_mod] simulate_result={:?}", result);
+            log::debug!(
+                "[commands::mod_commands] [select_mod] simulate_result={:?}",
+                result
+            );
             if let Err(e) = result {
                 log::warn!(
                     "select_mod: simulate_select_full failed (g={}, m={}): {}",
@@ -380,7 +468,9 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         }
 
         // 选择逻辑(按键模拟)触发后：再次记录光标位置，与触发前对比，验证光标是否被正确还原
-        let cursor_after = crate::platform::get_foreground_detector().get_cursor_position().ok();
+        let cursor_after = crate::platform::get_foreground_detector()
+            .get_cursor_position()
+            .ok();
         sel_dbg!(
             "mod_commands",
             "select_mod",
@@ -397,15 +487,22 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
 
 /// 取消选中分组内模组
 #[tauri::command]
-pub async fn deselect_group_mod(game: String, mods_path: String, group_index: u32) -> Result<mod_manager::UpdateResult, String> {
+pub async fn deselect_group_mod(
+    game: String,
+    mods_path: String,
+    group_index: u32,
+) -> Result<mod_manager::UpdateResult, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
     let settings = settings_store::get_settings();
     let managed_path = mods_path.join(constants::MANAGED_FOLDER);
 
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
-        mod_manager::deselect_group_mods(game, &mods_path, &settings, group_index).map_err(|e| e.to_string())
-    })
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<mod_manager::UpdateResult, String> {
+            mod_manager::deselect_group_mods(game, &mods_path, &settings, group_index)
+                .map_err(|e| e.to_string())
+        },
+    )
     .await
     .map_err(|e| e.to_string())??;
 
@@ -419,60 +516,77 @@ pub async fn deselect_group_mod(game: String, mods_path: String, group_index: u3
 
 /// 添加分组
 #[tauri::command]
-pub async fn add_group(game: String, mods_path: String, group_name: Option<String>) -> Result<mod_manager::UpdateResult, String> {
+pub async fn add_group(
+    game: String,
+    mods_path: String,
+    group_name: Option<String>,
+) -> Result<mod_manager::UpdateResult, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::UpdateResult, String> {
-        let managed_folder = mods_path.join(constants::MANAGED_FOLDER);
-        if !managed_folder.exists() {
-            fs::create_dir_all(&managed_folder).map_err(|e| e.to_string())?;
-        }
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<mod_manager::UpdateResult, String> {
+            let managed_folder = mods_path.join(constants::MANAGED_FOLDER);
+            if !managed_folder.exists() {
+                fs::create_dir_all(&managed_folder).map_err(|e| e.to_string())?;
+            }
 
-        let mut used_numbers: Vec<u32> = Vec::new();
-        if let Ok(entries) = fs::read_dir(&managed_folder) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if let Some(rest) = name.strip_prefix("group_") {
-                    if let Ok(num) = rest.parse::<u32>() {
-                        used_numbers.push(num);
+            let mut used_numbers: Vec<u32> = Vec::new();
+            if let Ok(entries) = fs::read_dir(&managed_folder) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if let Some(rest) = name.strip_prefix("group_") {
+                        if let Ok(num) = rest.parse::<u32>() {
+                            used_numbers.push(num);
+                        }
                     }
                 }
             }
-        }
-        used_numbers.sort();
-        let mut group_num = 1u32;
-        for used in &used_numbers {
-            if *used == group_num {
-                group_num += 1;
-            } else if *used > group_num {
-                break;
-            }
-        }
-
-        let dir_name = format!("group_{}", group_num);
-        let group_path = managed_folder.join(&dir_name);
-        fs::create_dir(&group_path).map_err(|e| e.to_string())?;
-
-        let template_str = String::from_utf8_lossy(crate::resources::TEMPLATE_GROUP);
-        let ini_content = template_str
-            .replace("{group_x}", &dir_name)
-            .replace("{x}", &group_num.to_string());
-        let ini_path = group_path.join("ModFolder.ini");
-        fs::write(&ini_path, ini_content).map_err(|e| e.to_string())?;
-
-        if let Some(custom_name) = group_name {
-            let trimmed = custom_name.trim();
-            if !trimmed.is_empty() && trimmed != dir_name {
-                let new_group_path = managed_folder.join(trimmed);
-                if !new_group_path.exists() {
-                    fs::rename(&group_path, &new_group_path).map_err(|e| e.to_string())?;
+            used_numbers.sort();
+            let mut group_num = 1u32;
+            for used in &used_numbers {
+                if *used == group_num {
+                    group_num += 1;
+                } else if *used > group_num {
+                    break;
                 }
             }
-        }
 
-        Ok(mod_manager::UpdateResult::default())
-    })
+            // 对齐 NRMM 约定：分组上限 = 屏幕 Y 轴（高度）上限，由动态分辨率上限决定。
+            // Dart 以 500 作为硬编码安全上限；NRMM 实际约定为基于主屏幕分辨率的动态上限
+            // （group=y / mod=x），故此处采用 resolution::compute_limits().max_groups 作为权威上限。
+            let max_groups = resolution::compute_limits().max_groups;
+            if group_num > max_groups {
+                return Err(format!(
+                    "分组数量已达动态上限（{}，基于屏幕分辨率 Y 轴）",
+                    max_groups
+                ));
+            }
+
+            let dir_name = format!("group_{}", group_num);
+            let group_path = managed_folder.join(&dir_name);
+            fs::create_dir(&group_path).map_err(|e| e.to_string())?;
+
+            let template_str = String::from_utf8_lossy(crate::resources::TEMPLATE_GROUP);
+            let ini_content = template_str
+                .replace("{group_x}", &dir_name)
+                .replace("{x}", &group_num.to_string());
+            let ini_path = group_path.join("ModFolder.ini");
+            fs::write(&ini_path, ini_content).map_err(|e| e.to_string())?;
+
+            if let Some(custom_name) = group_name {
+                let trimmed = custom_name.trim();
+                if !trimmed.is_empty() && trimmed != dir_name {
+                    let new_group_path = managed_folder.join(trimmed);
+                    if !new_group_path.exists() {
+                        fs::rename(&group_path, &new_group_path).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+
+            Ok(mod_manager::UpdateResult::default())
+        },
+    )
     .await
     .map_err(|e| e.to_string())??;
 
@@ -516,12 +630,16 @@ pub async fn remove_group(group_path: String) -> Result<(), String> {
 ///
 /// 返回 `RemoveModResult`，包含移动后路径、INI 还原状态等信息
 #[tauri::command]
-pub async fn remove_mod(mod_path: String) -> Result<crate::core::mod_manager::RemoveModResult, String> {
+pub async fn remove_mod(
+    mod_path: String,
+) -> Result<crate::core::mod_manager::RemoveModResult, String> {
     let path = PathBuf::from(mod_path);
 
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<crate::core::mod_manager::RemoveModResult, String> {
-        crate::core::mod_manager::remove_mod(&path).map_err(|e| e.to_string())
-    })
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<crate::core::mod_manager::RemoveModResult, String> {
+            crate::core::mod_manager::remove_mod(&path).map_err(|e| e.to_string())
+        },
+    )
     .await
     .map_err(|e| e.to_string())??;
 
@@ -542,8 +660,14 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
         if !path.exists() {
             return Err("Mod path does not exist".to_string());
         }
-        let parent = path.parent().ok_or_else(|| "Invalid mod path".to_string())?;
-        let parent_name = parent.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let parent = path
+            .parent()
+            .ok_or_else(|| "Invalid mod path".to_string())?;
+        let parent_name = parent
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
 
         // NRMM 逻辑：group_xx 普通分组下的模组，重命名仅修改 modname 标记文件（展示名），文件夹名保持不变
         if mod_scanner::is_group_xx_dir(&parent_name) {
@@ -554,7 +678,11 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
         }
 
         // 其余情况（互斥组等）：重命名文件夹
-        let dir_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let dir_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
         let final_name = if is_disabled {
             format!("{}{}", constants::DISABLED_PREFIX, new_name)
@@ -584,7 +712,11 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
 ///
 /// 路径不存在时返回异常
 #[tauri::command]
-pub async fn rename_group(group_path: String, new_name: String, is_group_xx: bool) -> Result<PathBuf, String> {
+pub async fn rename_group(
+    group_path: String,
+    new_name: String,
+    is_group_xx: bool,
+) -> Result<PathBuf, String> {
     let path = PathBuf::from(&group_path);
 
     let new_path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf, String> {
@@ -598,10 +730,15 @@ pub async fn rename_group(group_path: String, new_name: String, is_group_xx: boo
                 .map_err(|e| format!("Failed to write groupname file: {}", e))?;
             Ok(groupname_path)
         } else {
-            let parent = path.parent().ok_or_else(|| "Invalid group path".to_string())?;
+            let parent = path
+                .parent()
+                .ok_or_else(|| "Invalid group path".to_string())?;
             let target = parent.join(&new_name);
             if target.exists() {
-                return Err(format!("Target directory already exists: {}", target.display()));
+                return Err(format!(
+                    "Target directory already exists: {}",
+                    target.display()
+                ));
             }
             fs::rename(&path, &target).map_err(|e| e.to_string())?;
             Ok(target)
@@ -620,7 +757,11 @@ pub async fn rename_group(group_path: String, new_name: String, is_group_xx: boo
 
 /// 切换模组启用/禁用状态（支持互斥组）
 #[tauri::command]
-pub async fn toggle_mod_disabled(mod_path: String, enable: bool, is_mutex: bool) -> Result<(), String> {
+pub async fn toggle_mod_disabled(
+    mod_path: String,
+    enable: bool,
+    is_mutex: bool,
+) -> Result<(), String> {
     let path = PathBuf::from(&mod_path);
 
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
@@ -688,7 +829,10 @@ pub fn open_mod_folder(mod_path: String) -> Result<(), String> {
         cache.invalidate_all();
         drop(cache);
         log::warn!("Open mod folder: path not found, invalidated cache and requesting frontend refresh: {:?}", path);
-        return Err(format!("{}{}", ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"));
+        return Err(format!(
+            "{}{}",
+            ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"
+        ));
     }
     open_path_in_explorer(&path).map_err(|e| e.to_string())
 }
@@ -702,7 +846,10 @@ pub fn open_group_folder(group_path: String) -> Result<(), String> {
         cache.invalidate_all();
         drop(cache);
         log::warn!("Open group folder: path not found, invalidated cache and requesting frontend refresh: {:?}", path);
-        return Err(format!("{}{}", ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"));
+        return Err(format!(
+            "{}{}",
+            ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"
+        ));
     }
     open_path_in_explorer(&path).map_err(|e| e.to_string())
 }
@@ -712,9 +859,11 @@ pub fn open_group_folder(group_path: String) -> Result<(), String> {
 pub async fn restore_all_inis(mods_path: String) -> Result<mod_manager::RestoredCount, String> {
     let path = PathBuf::from(&mods_path);
 
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::RestoredCount, String> {
-        mod_manager::restore_all_inis(&path).map_err(|e| e.to_string())
-    })
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<mod_manager::RestoredCount, String> {
+            mod_manager::restore_all_inis(&path).map_err(|e| e.to_string())
+        },
+    )
     .await
     .map_err(|e| e.to_string())??;
 
@@ -740,11 +889,16 @@ pub async fn restore_all_inis(mods_path: String) -> Result<mod_manager::Restored
 /// # 错误
 /// - 路径不存在（带 `[PATH_NOT_FOUND]` 前缀，供前端识别）
 #[tauri::command]
-pub async fn restore_managed_folder(path: String) -> Result<mod_manager::RestoreManagedResult, String> {
+pub async fn restore_managed_folder(
+    path: String,
+) -> Result<mod_manager::RestoreManagedResult, String> {
     let path_buf = PathBuf::from(&path);
     if !path_buf.exists() {
         log::warn!("Restore managed folder: path not found: {:?}", path_buf);
-        return Err(format!("{}{}", ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"));
+        return Err(format!(
+            "{}{}",
+            ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"
+        ));
     }
 
     let result =
@@ -765,13 +919,18 @@ pub async fn restore_managed_folder(path: String) -> Result<mod_manager::Restore
 
 /// Save Mod Customizations：保存用户自定义INI设置到d3dx_user.ini
 #[tauri::command]
-pub async fn save_customizations(game: String, mods_path: String) -> Result<mod_manager::SaveCustomizationsResult, String> {
+pub async fn save_customizations(
+    game: String,
+    mods_path: String,
+) -> Result<mod_manager::SaveCustomizationsResult, String> {
     let game = parse_game(&game)?;
     let path = PathBuf::from(&mods_path);
 
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<mod_manager::SaveCustomizationsResult, String> {
-        mod_manager::save_customizations(&path, game).map_err(|e| e.to_string())
-    })
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<mod_manager::SaveCustomizationsResult, String> {
+            mod_manager::save_customizations(&path, game).map_err(|e| e.to_string())
+        },
+    )
     .await
     .map_err(|e| e.to_string())??;
 
@@ -780,7 +939,11 @@ pub async fn save_customizations(game: String, mods_path: String) -> Result<mod_
 
 /// 批量切换模组启用/禁用状态
 #[tauri::command]
-pub async fn batch_toggle_mods(mod_paths: Vec<String>, enable: bool, is_mutex: bool) -> Result<u32, String> {
+pub async fn batch_toggle_mods(
+    mod_paths: Vec<String>,
+    enable: bool,
+    is_mutex: bool,
+) -> Result<u32, String> {
     let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
         mod_manager::batch_toggle_mods(&mod_paths, enable, is_mutex).map_err(|e| e.to_string())
     })
@@ -815,7 +978,11 @@ pub async fn simulate_f10(game: Option<String>) -> Result<(), String> {
     );
     if !settings.simulate_key_on_selection {
         log::debug!("[simulate_f10] simulate_key_on_selection=false, 跳过 F10 发送");
-        sel_dbg!("mod_commands", "simulate_f10", "已跳过 F10 发送（simulate_key_on_selection=false）");
+        sel_dbg!(
+            "mod_commands",
+            "simulate_f10",
+            "已跳过 F10 发送（simulate_key_on_selection=false）"
+        );
         return Ok(());
     }
     let game_for_log = game.clone();
@@ -829,10 +996,13 @@ pub async fn simulate_f10(game: Option<String>) -> Result<(), String> {
             }
         }
     }
-    simulator
-        .simulate_f10()
-        .map_err(|e| e.to_string())?;
-    sel_dbg!("mod_commands", "simulate_f10", "已发送 F10 重载按键（目标游戏={:?}）", game_for_log);
+    simulator.simulate_f10().map_err(|e| e.to_string())?;
+    sel_dbg!(
+        "mod_commands",
+        "simulate_f10",
+        "已发送 F10 重载按键（目标游戏={:?}）",
+        game_for_log
+    );
     Ok(())
 }
 
@@ -843,7 +1013,9 @@ fn parse_game(game: &str) -> Result<TargetGame, String> {
         "wuwa" | "wutheringwaves" | "wuthering waves" => Ok(TargetGame::Wuwa),
         "zzz" | "zenlesszonezero" => Ok(TargetGame::ZZZ),
         "honkaiimpact3rd" | "honkaiimpact3" | "hi3" => Ok(TargetGame::HonkaiImpact3rd),
-        "arknightsendfield" | "endfield" | "af" | "arknights endfield" => Ok(TargetGame::ArknightsEndfield),
+        "arknightsendfield" | "endfield" | "af" | "arknights endfield" => {
+            Ok(TargetGame::ArknightsEndfield)
+        }
         _ => Err(format!("Unknown game: {}", game)),
     }
 }
@@ -852,7 +1024,10 @@ fn trash_delete(path: &Path) -> Result<()> {
     match trash::delete(path) {
         Ok(_) => Ok(()),
         Err(e) => {
-            log::warn!("Failed to move to trash: {}, falling back to permanent delete", e);
+            log::warn!(
+                "Failed to move to trash: {}, falling back to permanent delete",
+                e
+            );
             if path.is_dir() {
                 fs::remove_dir_all(path)?;
             } else {
@@ -878,7 +1053,10 @@ fn open_path_in_explorer(path: &Path) -> Result<()> {
 /// - Ok((sanitized_name, false)): 名称不合法，sanitized_name为清理后名称，附带错误信息
 /// - Err: 校验过程出错
 #[tauri::command]
-pub fn validate_subfolder_name(parent_path: String, folder_name: String) -> Result<(String, bool, String), String> {
+pub fn validate_subfolder_name(
+    parent_path: String,
+    folder_name: String,
+) -> Result<(String, bool, String), String> {
     let parent = PathBuf::from(&parent_path);
 
     // 1. 清理名称：trim首尾空白
@@ -891,7 +1069,11 @@ pub fn validate_subfolder_name(parent_path: String, folder_name: String) -> Resu
 
     // 3. 通用禁止名称：. 和 ..
     if sanitized == "." || sanitized == ".." {
-        return Ok((sanitized, false, "文件夹名称不能为 \".\" 或 \"..\"".to_string()));
+        return Ok((
+            sanitized,
+            false,
+            "文件夹名称不能为 \".\" 或 \"..\"".to_string(),
+        ));
     }
 
     // 4. 平台非法字符检查
@@ -913,24 +1095,35 @@ pub fn validate_subfolder_name(parent_path: String, folder_name: String) -> Resu
         }
         if !found_chars.is_empty() {
             let chars_str: String = found_chars.iter().collect();
-            return Ok((sanitized, false, format!("目录名包含非法字符: {}", chars_str)));
+            return Ok((
+                sanitized,
+                false,
+                format!("目录名包含非法字符: {}", chars_str),
+            ));
         }
 
         // Windows: 末尾不能是点或空格
         if sanitized.ends_with('.') || sanitized.ends_with(' ') {
-            return Ok((sanitized.trim_end_matches(&['.', ' '][..]).to_string(), false, "文件夹名称末尾不能是点或空格".to_string()));
+            return Ok((
+                sanitized.trim_end_matches(&['.', ' '][..]).to_string(),
+                false,
+                "文件夹名称末尾不能是点或空格".to_string(),
+            ));
         }
 
         // Windows保留名称检查（不区分大小写）
         let upper_name = sanitized.to_uppercase();
         let reserved_names = [
-            "CON", "PRN", "AUX", "NUL",
-            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+            "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
         ];
         for name in &reserved_names {
             if upper_name == *name {
-                return Ok((sanitized, false, "该名称为系统保留名称，请换一个名称".to_string()));
+                return Ok((
+                    sanitized,
+                    false,
+                    "该名称为系统保留名称，请换一个名称".to_string(),
+                ));
             }
         }
     }
@@ -950,7 +1143,11 @@ pub fn validate_subfolder_name(parent_path: String, folder_name: String) -> Resu
     // 6. 目标路径是否已存在
     let target_path = parent.join(&sanitized);
     if target_path.exists() {
-        return Ok((sanitized, false, "该名称的文件夹已存在，请换一个名称".to_string()));
+        return Ok((
+            sanitized,
+            false,
+            "该名称的文件夹已存在，请换一个名称".to_string(),
+        ));
     }
 
     // 7. 路径长度检查（Windows MAX_PATH 限制约260字符）
@@ -991,8 +1188,12 @@ pub fn create_subfolder(parent_path: String, folder_name: String) -> Result<(), 
         Ok(_) => Ok(()),
         Err(e) => {
             let err_msg = match e.kind() {
-                std::io::ErrorKind::PermissionDenied => "没有权限在此位置创建文件夹，请检查权限设置".to_string(),
-                std::io::ErrorKind::AlreadyExists => "该名称的文件夹已存在，请换一个名称".to_string(),
+                std::io::ErrorKind::PermissionDenied => {
+                    "没有权限在此位置创建文件夹，请检查权限设置".to_string()
+                }
+                std::io::ErrorKind::AlreadyExists => {
+                    "该名称的文件夹已存在，请换一个名称".to_string()
+                }
                 std::io::ErrorKind::InvalidFilename => "文件夹名称包含不允许的字符".to_string(),
                 _ => "创建文件夹失败，请检查路径是否可访问".to_string(),
             };
@@ -1008,8 +1209,7 @@ pub async fn disable_all_mods_in_group(group_path: String) -> Result<u32, String
     let path = PathBuf::from(group_path);
 
     let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
-        crate::core::mod_manager::disable_all_mods_in_group(&path)
-            .map_err(|e| e.to_string())
+        crate::core::mod_manager::disable_all_mods_in_group(&path).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1028,8 +1228,7 @@ pub async fn enable_all_mods_in_group(group_path: String) -> Result<u32, String>
     let path = PathBuf::from(group_path);
 
     let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
-        crate::core::mod_manager::enable_all_mods_in_group(&path)
-            .map_err(|e| e.to_string())
+        crate::core::mod_manager::enable_all_mods_in_group(&path).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1084,6 +1283,414 @@ pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<()
         cache.invalidate_all();
     }
 
-    log::info!("[remove_group_ex] completed | group_path={:?}", path_for_log);
+    log::info!(
+        "[remove_group_ex] completed | group_path={:?}",
+        path_for_log
+    );
     Ok(())
+}
+
+// =========================================================================
+// 单元测试：update_mod_data 逻辑整合于此（项目内测试）
+//
+// 设计要点：
+// - 修复原外部集成测试（tests/update_mod_data_test.rs）的两个缺陷：
+//   1) 使用 tempfile::TempDir 自动销毁 → 测试后磁盘无残留，无法观测"目录是否变化"；
+//   2) 基线映射颠倒（input=NRMM-test 已处理产物，baseline=NRMM-Rust-test 原始输入）
+//      → 实际上从不验证 update_mod_data 是否真正生成了 managed 文件。
+// - 本模块使用【持久化运行时目录】tests/update_mod_data_runtime/，测试执行后可直接在
+//   磁盘查看 _MANAGED_ 产物，验证目录确实发生变化。
+// - 数据集映射保持正确：NRMM-Rust-test = 输入（原始），NRMM-test = 预期输出基线。
+// - 若测试中发现异常（目录未变化 / 与基线不一致），应直接修正项目源码
+//   （mod_manager.rs / ini_handler.rs 等），而非仅修改此处测试脚手架。
+// =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use crate::core::constants;
+    use crate::core::mod_manager;
+    use crate::models::enums::TargetGame;
+    use crate::models::settings::AppSettings;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// 持久化运行时目录：cargo test 后可直接在磁盘查看产物，验证目录确实变化
+    const RUNTIME_DIR: &str = "tests/update_mod_data_runtime";
+
+    /// 输入数据集（原始，未经 update_mod_data 处理）
+    fn input_dataset() -> PathBuf {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("NRMM-Rust-test");
+        if !manifest_dir.exists() {
+            panic!(
+                "Input dataset directory does not exist: {}",
+                manifest_dir.display()
+            );
+        }
+        manifest_dir
+    }
+
+    /// 预期输出基线（Dart 原版 NRMM 实测产物）
+    fn baseline_managed() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("NRMM-test")
+            .join("Mods")
+            .join("_MANAGED_")
+    }
+
+    fn read_file(p: &Path) -> String {
+        fs::read_to_string(p).unwrap_or_default()
+    }
+
+    fn normalize_paths(s: &str) -> String {
+        s.replace('\\', "/")
+    }
+
+    /// 规范化 INI 内容，忽略绝对路径 / 注释噪声 / $managed_slot_id 值，保留结构
+    fn normalize_ini_content(s: &str) -> String {
+        let mut out = String::new();
+        for line in s.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let lower = trimmed.to_lowercase();
+            if lower.starts_with("ini_path_absolute") {
+                continue;
+            }
+            if lower.starts_with("global $managed_slot_id") {
+                out.push_str("global $managed_slot_id = <SLOT>\n");
+                continue;
+            }
+            if trimmed.starts_with(';') {
+                if trimmed.contains("NRMM")
+                    || trimmed.contains("DISABLED")
+                    || trimmed.starts_with("; \"")
+                {
+                    out.push_str(line.trim_end());
+                    out.push('\n');
+                }
+                continue;
+            }
+            out.push_str(line.trim_end());
+            out.push('\n');
+        }
+        out.replace("\r\n", "\n")
+    }
+
+    /// 递归复制目录
+    fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+        // 确保源目录存在且为目录
+        if !src.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("{} is not a directory", src.display()),
+            ));
+        }
+
+        for entry in walkdir::WalkDir::new(src).follow_links(false) {
+            let entry =
+                entry.map_err(|e| std::io::Error::other(e.to_string()))?;
+
+            // ✅ 核心：计算相对于源根的路径
+            let relative: PathBuf = entry
+                .path()
+                .strip_prefix(src)
+                .map_err(std::io::Error::other)?
+                .to_path_buf();
+
+            // 跳过根目录本身（relative == ""）
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
+
+            let target = dst.join(&relative);
+
+            if entry.file_type().is_dir() {
+                fs::create_dir_all(&target)?;
+            } else if entry.file_type().is_symlink() {
+                // 符号链接：读取原始目标并重建
+                #[cfg(unix)]
+                {
+                    let link_target = fs::read_link(entry.path())?;
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    let _ = fs::remove_file(&target);
+                    std::os::unix::fs::symlink(link_target, &target)?;
+                }
+                #[cfg(windows)]
+                {
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::copy(entry.path(), &target)?;
+                }
+            } else {
+                // 普通文件：确保父目录存在后复制
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(entry.path(), &target)?;
+            }
+
+            // println!("copied: {}", relative.display());
+        }
+
+        Ok(())
+    }
+
+    /// 将输入数据集还原到持久化运行时目录。
+    /// 路径约定（与原版 NRMM / 集成测试一致）：
+    /// - d3dx.ini → <runtime>/d3dx.ini（游戏根目录）
+    /// - Mods/_MANAGED_ → <runtime>/Mods/_MANAGED_/
+    /// - 其余目录/文件 → <runtime>/Mods/<name>
+    ///
+    /// 返回 game_mods_path（必须以 "Mods" 结尾）
+    fn restore_dataset_to(runtime: &Path) -> PathBuf {
+        let _ = fs::remove_dir_all(runtime);
+        fs::create_dir_all(runtime).expect("创建运行时根目录失败");
+
+        let src_root = input_dataset();
+        copy_dir(&src_root, runtime).unwrap_or_else(|_| panic!("复制 {:?} 失败", src_root));
+
+        runtime.join("Mods")
+    }
+
+    /// 验证测试目录确实发生变化：运行后必须生成以下文件（运行前不存在），
+    /// 且关键文件与 NRMM-test 基线语义一致。
+    fn assert_managed_outputs(managed: &Path) {
+        // 1) 目录变化验证：以下文件在运行前不存在，运行后必须存在且非空
+        for f in [
+            "manager_group.ini",
+            "nrmm_include.ini",
+            "nrmm_keypress.txt",
+            "selectedindex",
+        ] {
+            let p = managed.join(f);
+            assert!(p.exists(), "[目录变化] 缺失生成文件: {}", f);
+            let c = read_file(&p);
+            assert!(!c.trim().is_empty(), "[目录变化] 生成文件为空: {}", f);
+        }
+        // group_1 下由 update_mod_data 生成的分组文件
+        let g1_ini = managed.join("group_1").join("group_1.ini");
+        let g1_sel = managed.join("group_1").join("selectedindex");
+        assert!(g1_ini.exists(), "[目录变化] group_1.ini 应被生成");
+        assert!(g1_sel.exists(), "[目录变化] group_1/selectedindex 应被生成");
+
+        // 2) 与 NRMM-test 基线语义比对（已知对齐项）
+        let base = baseline_managed();
+        for f in ["nrmm_include.ini", "nrmm_keypress.txt"] {
+            let a = normalize_ini_content(&normalize_paths(&read_file(&managed.join(f))));
+            let e = normalize_ini_content(&normalize_paths(&read_file(&base.join(f))));
+            assert_eq!(a, e, "[基线比对] {} 与 NRMM-test 不一致", f);
+        }
+        let g1 = normalize_ini_content(&normalize_paths(&read_file(&g1_ini)));
+        let g1b = normalize_ini_content(&normalize_paths(&read_file(
+            &base.join("group_1").join("group_1.ini"),
+        )));
+        assert_eq!(g1, g1b, "[基线比对] group_1.ini 与 NRMM-test 不一致");
+
+        let sel = read_file(&managed.join("selectedindex")).trim().to_string();
+        assert_eq!(sel, "0", "[基线比对] 根 selectedindex 应为 0");
+    }
+
+    /// 主测试：构造参数 → 调用 update_mod_data → 验证目录变化 + 基线一致
+    ///
+    /// 使用持久化运行时目录，测试执行后可直接在磁盘检查
+    /// `src-tauri/tests/update_mod_data_runtime/` 下的 _MANAGED_ 产物。
+    #[test]
+    fn update_mod_data_test() {
+        println!("\n=== update_mod_data_test（集成到 mod_commands.rs）===");
+        let runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(RUNTIME_DIR);
+        let game_mods_path = restore_dataset_to(&runtime);
+        let managed = game_mods_path.join(constants::MANAGED_FOLDER);
+
+        // 运行前快照：输入数据集仅有 group_1 目录，尚无生成文件
+        assert!(
+            !managed.join("manager_group.ini").exists(),
+            "运行前不应存在 manager_group.ini"
+        );
+        assert!(
+            !managed.join("nrmm_include.ini").exists(),
+            "运行前不应存在 nrmm_include.ini"
+        );
+
+        // 构造参数并调用 update_mod_data（核心函数，命令层仅为其异步包装）
+        let settings = AppSettings::default();
+        // 注意：NRMM-test 基线由 NRMM 以 Zenless（nrmm_name = "Zenless_Zone_Zero"）生成，
+        // keypress 模板 `{game}` 替换依赖游戏标识，故此处必须用同款游戏以保证 parity 比对一致。
+        let result =
+            mod_manager::update_mod_data(TargetGame::ZZZ, &game_mods_path, &settings)
+                .expect("update_mod_data 执行失败");
+
+        println!(
+            "  [result] enabled={} disabled={} processed={} errors={} groups={}",
+            result.enabled_mods,
+            result.disabled_mods,
+            result.processed_mods,
+            result.errors.len(),
+            result.total_groups
+        );
+
+        // 验证返回结果合理
+        assert!(
+            result.processed_mods >= 1,
+            "至少应处理 1 个模组，实际 {}",
+            result.processed_mods
+        );
+
+        // 验证测试目录确实发生变化（生成产物存在且与基线一致）
+        assert_managed_outputs(&managed);
+
+        println!("  [PASS] update_mod_data_test");
+        println!("  运行时产物目录: {:?}", runtime);
+        println!("=== update_mod_data_test 完成 ===\n");
+    }
+
+    /// 场景：空 Mods 目录（无模组）
+    #[test]
+    fn update_mod_data_test_empty_mods() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mods = tmp.path().join("Mods");
+        fs::create_dir_all(&mods).unwrap();
+        let managed = mods.join(constants::MANAGED_FOLDER);
+        fs::create_dir_all(&managed).unwrap();
+
+        let settings = AppSettings::default();
+        let result = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+            .expect("update_mod_data 失败");
+        assert_eq!(result.processed_mods, 0, "空目录不应处理任何模组");
+        // 仍应生成 managed 基础文件（目录发生变化）
+        assert!(managed.join("nrmm_include.ini").exists());
+        assert!(managed.join("nrmm_keypress.txt").exists());
+        assert!(managed.join("manager_group.ini").exists());
+        assert!(managed.join("selectedindex").exists());
+        println!("[PASS] update_mod_data_test_empty_mods");
+    }
+
+    /// 场景：DISABLED 模组被跳过
+    #[test]
+    fn update_mod_data_test_disabled_mod_skipped() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mods = tmp.path().join("Mods");
+        fs::create_dir_all(&mods).unwrap();
+        let managed = mods.join(constants::MANAGED_FOLDER);
+        fs::create_dir_all(&managed).unwrap();
+
+        let group_dir = managed.join("group_1");
+        fs::create_dir_all(&group_dir).unwrap();
+        fs::write(
+            group_dir.join("group_1.ini"),
+            ";template\n[Constants]\nglobal $group_id = 1\n",
+        )
+        .unwrap();
+
+        // 启用模组
+        let enabled = group_dir.join("EnabledMod");
+        fs::create_dir_all(&enabled).unwrap();
+        fs::write(
+            enabled.join("mod.ini"),
+            "[TextureOverride]\nhash = 0xAAAA\n",
+        )
+        .unwrap();
+
+        // 禁用模组（DISABLED 前缀）
+        let disabled = group_dir.join("DISABLED_TestMod");
+        fs::create_dir_all(&disabled).unwrap();
+        fs::write(
+            disabled.join("mod.ini"),
+            "[TextureOverride]\nhash = 0xBBBB\n",
+        )
+        .unwrap();
+
+        let settings = AppSettings::default();
+        let result = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+            .expect("update_mod_data 失败");
+        assert_eq!(result.enabled_mods, 1, "应只有 1 个启用模组");
+        assert_eq!(result.disabled_mods, 1, "应有 1 个禁用模组");
+        assert_eq!(result.processed_mods, 1, "应仅处理启用的模组");
+        println!("[PASS] update_mod_data_test_disabled_mod_skipped");
+    }
+
+    /// 场景：多分组更新
+    #[test]
+    fn update_mod_data_test_multiple_groups() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mods = tmp.path().join("Mods");
+        fs::create_dir_all(&mods).unwrap();
+        let managed = mods.join(constants::MANAGED_FOLDER);
+        fs::create_dir_all(&managed).unwrap();
+
+        for g in 1..=2u32 {
+            let gd = managed.join(format!("group_{}", g));
+            fs::create_dir_all(&gd).unwrap();
+            fs::write(
+                gd.join(format!("group_{}.ini", g)),
+                format!(";t\n[Constants]\nglobal $group_id = {}\n", g),
+            )
+            .unwrap();
+            for m in 1..=2u32 {
+                let md = gd.join(format!("Mod_{}", m));
+                fs::create_dir_all(&md).unwrap();
+                fs::write(
+                    md.join("mod.ini"),
+                    format!(
+                        "[TextureOverride_G{}_M{}]\nhash = 0x{:08X}\n",
+                        g,
+                        m,
+                        0x12345678 + g * 256 + m * 16
+                    ),
+                )
+                .unwrap();
+            }
+        }
+
+        let settings = AppSettings::default();
+        let result = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+            .expect("update_mod_data 失败");
+        assert!(result.total_groups >= 2, "应检测到至少 2 个分组");
+        assert!(result.processed_mods >= 4, "应处理至少 4 个模组");
+        assert!(managed.join("group_1/group_1.ini").exists());
+        assert!(managed.join("group_2/group_2.ini").exists());
+        println!("[PASS] update_mod_data_test_multiple_groups");
+    }
+
+    /// 场景：幂等性（连续两次更新结果一致）
+    #[test]
+    fn update_mod_data_test_idempotent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mods = tmp.path().join("Mods");
+        fs::create_dir_all(&mods).unwrap();
+        let managed = mods.join(constants::MANAGED_FOLDER);
+        fs::create_dir_all(&managed).unwrap();
+
+        let group_dir = managed.join("group_1");
+        fs::create_dir_all(&group_dir).unwrap();
+        fs::write(
+            group_dir.join("group_1.ini"),
+            ";template\n[Constants]\nglobal $group_id = 1\n",
+        )
+        .unwrap();
+        let en = group_dir.join("EnabledMod");
+        fs::create_dir_all(&en).unwrap();
+        fs::write(en.join("mod.ini"), "[TextureOverride]\nhash = 0xAAAA\n").unwrap();
+
+        let settings = AppSettings::default();
+        let r1 = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+            .expect("第一次 update_mod_data 失败");
+        let r2 = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+            .expect("第二次 update_mod_data 失败");
+        assert_eq!(
+            r1.processed_mods, r2.processed_mods,
+            "两次更新 processed_mods 应一致"
+        );
+        assert_eq!(
+            r1.enabled_mods, r2.enabled_mods,
+            "两次更新 enabled_mods 应一致"
+        );
+        println!("[PASS] update_mod_data_test_idempotent");
+    }
 }

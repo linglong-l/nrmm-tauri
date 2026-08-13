@@ -45,7 +45,7 @@
           :depth="depth + 1"
           :selected-group-path="selectedGroupPath"
           :search-query="props.searchQuery"
-          :is-group-hit="modsStore.isGroupMatch(child.groupPath)"
+          :is-group-hit="groupHit"
           @select="$emit('select', $event)"
           @context-menu="$emit('context-menu', $event)"
         />
@@ -116,8 +116,8 @@ const expanded = ref(props.defaultExpanded ?? isVirtualRoot.value)
  */
 watch(
   () => [props.searchQuery, props.defaultExpanded, props.group.groupPath, isVirtualRoot.value] as const,
-  ([, newDefaultExpanded, , vRoot], [oldQuery] ,) => {
-    const queryToggled = !!props.searchQuery?.trim() !== !!oldQuery?.trim()
+  ([, newDefaultExpanded, , vRoot], [oldSearchQuery]) => {
+    const queryToggled = !!props.searchQuery?.trim() !== !!oldSearchQuery?.trim()
     // 搜索激活或defaultExpanded变为true → 强制展开
     if (newDefaultExpanded === true && !expanded.value) {
       expanded.value = true
@@ -130,6 +130,9 @@ watch(
 
 /** 当前分组是否被选中 */
 const isSelected = computed(() => !isVirtualRoot.value && props.selectedGroupPath === props.group.groupPath)
+
+/** 当前分组是否为搜索命中项（节点级 computed，避免模板/递归中每帧重复计算 isGroupMatch） */
+const groupHit = computed(() => modsStore.isGroupMatch(props.group.groupPath))
 
 /** 分组显示名称（优先使用name字段，去掉DISABLED_前缀后的名称） */
 const displayName = computed(() => props.group.name || props.group.groupName)
@@ -178,7 +181,7 @@ const shouldShow = computed(() => {
   // 关键修复：全局无任何命中 → 保持分组可见，避免导航栏视觉清空
   if (modsStore.globalNoHit) return true
   // 当前分组匹配搜索词
-  if (props.isGroupHit) return true
+  if (groupHit.value) return true
   // 当前分组的子分组中有匹配的
   if (hasChildren.value) {
     return hasMatchingDescendant(props.group)

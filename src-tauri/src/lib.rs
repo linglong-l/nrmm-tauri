@@ -263,6 +263,8 @@ pub fn run() {
             core::archive_handler::import_mod_cmd,
             core::archive_handler::import_mod_auto_cmd,
             core::archive_handler::import_item_cmd,
+            core::archive_handler::export_mod_cmd,
+            core::archive_handler::get_resolution_limits_cmd,
             core::cloud_data::refresh_cloud_data,
             core::cloud_data::refresh_all_cloud_data,
             updater::check_for_updates,

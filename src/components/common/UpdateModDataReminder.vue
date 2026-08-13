@@ -25,6 +25,7 @@
  * - 点击"更新模组数据"成功后自动隐藏
  */
 import { inject } from 'vue'
+import type { OverlayController } from '@/types'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
 import { useSettingsStore } from '@/stores/settings'
@@ -35,7 +36,7 @@ const { t } = useI18n()
 const settingsStore = useSettingsStore()
 const modsStore = useModsStore()
 /** 复用 App.vue 提供的更新遮罩控制（与设置页 handleUpdateModData 相同的遮罩） */
-const updateOverlay: any = inject('updateOverlay')
+const updateOverlay = inject<OverlayController>('updateOverlay')
 
 /**
  * 点击"更新模组数据"按钮

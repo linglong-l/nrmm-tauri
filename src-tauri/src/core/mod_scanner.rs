@@ -29,7 +29,7 @@ use regex::Regex;
 use once_cell::sync::Lazy;
 use crate::core::constants;
 use crate::core::file_watcher::WATCHER_PAUSED;
-use crate::core::ini_handler::IniFile;
+use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::namespace_handler;
 use crate::models::enums::{GroupType, TargetGame, ModsPathStatus};
 use crate::models::mod_data::{ModData, ModGroupData, ModIniData, ErroredLines};
@@ -202,7 +202,7 @@ pub fn dir_has_ini_file(dir_path: &Path) -> Result<bool> {
                 continue;
             }
             if let Some(ext) = path.extension() {
-                if ext.to_string_lossy().to_lowercase() == "ini" {
+                if ext.to_string_lossy().eq_ignore_ascii_case("ini") {
                     return Ok(true);
                 }
             }
@@ -265,8 +265,7 @@ pub fn find_icon_path(dir_path: &Path) -> Result<Option<PathBuf>> {
         if ft.is_file() || ft.is_symlink() {
             let path = entry.path();
             if let Some(ext) = path.extension() {
-                let ext_lower = ext.to_string_lossy().to_lowercase();
-                if ICON_EXTENSIONS.contains(&ext_lower.as_str()) {
+                if ICON_EXTENSIONS.iter().any(|e| ext.to_string_lossy().eq_ignore_ascii_case(e)) {
                     files.push(path);
                 }
             }
@@ -277,7 +276,7 @@ pub fn find_icon_path(dir_path: &Path) -> Result<Option<PathBuf>> {
     for priority_name in constants::ICON_NAME_PRIORITY {
         for file in &files {
             if let Some(fname) = file.file_name() {
-                if fname.to_string_lossy().to_lowercase() == *priority_name {
+                if fname.to_string_lossy().eq_ignore_ascii_case(priority_name) {
                     return Ok(Some(file.clone()));
                 }
             }
@@ -494,9 +493,18 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     // 按 group_index 排序
     groups.sort_by_key(|g| g.group_index());
 
-    let enabled = all_mods.iter().filter(|m| !m.disabled && !m.mod_disabled && m.name != "None").count();
-    let disabled = all_mods.iter().filter(|m| (m.disabled || m.mod_disabled) && m.name != "None").count();
-    let total = all_mods.iter().filter(|m| m.name != "None").count();
+    let (mut total, mut enabled, mut disabled) = (0usize, 0usize, 0usize);
+    for m in &all_mods {
+        if m.name == "None" {
+            continue;
+        }
+        total += 1;
+        if !m.disabled && !m.mod_disabled {
+            enabled += 1;
+        } else {
+            disabled += 1;
+        }
+    }
 
     let elapsed = start.elapsed().as_millis();
     log::info!("Light scan completed in {}ms, {} mods, {} groups", elapsed, total, groups.len());
@@ -1140,7 +1148,7 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
 
         for mod_data in &mods {
             for ini_data in &mod_data.mod_ini_data {
-                if let Ok(ini) = IniFile::parse(&PathBuf::from(&ini_data.ini_path)) {
+                if let Ok(ini) = get_or_parse_ini(std::path::Path::new(ini_data.ini_path.as_str())) {
                     let libs = ini.defined_libraries();
                     known_libraries.extend(libs);
                 }
@@ -1332,15 +1340,15 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
         if ft.is_file() || ft.is_symlink() {
             let path = entry.path();
             if let Some(ext) = path.extension() {
-                let ext_lower = ext.to_string_lossy().to_lowercase();
-                if ext_lower == "ini" {
+                let ext_cow = ext.to_string_lossy();
+                if ext_cow.eq_ignore_ascii_case("ini") {
                     // NRMM 对齐：显式跳过桌面配置文件（系统 INI，不参与模组 INI 注入/统计）
                     if constants::is_desktop_ini(&path) {
                         continue;
                     }
                     has_ini = true;
                     ini_files.push(path);
-                } else if ICON_EXTENSIONS.contains(&ext_lower.as_str()) {
+                } else if ICON_EXTENSIONS.iter().any(|e| ext_cow.eq_ignore_ascii_case(e)) {
                     has_icon = true;
                     let stem = path.file_stem()
                         .unwrap_or_default()
@@ -1414,7 +1422,7 @@ fn collect_ini_files_dfs(root: &Path, ini_files: &mut Vec<PathBuf>) {
                 stack.push(path);
             } else if (ft.is_file() || ft.is_symlink())
                 && path.extension()
-                    .map(|e| e.to_string_lossy().to_lowercase() == "ini")
+                    .map(|e| e.to_string_lossy().eq_ignore_ascii_case("ini"))
                     .unwrap_or(false)
                 && !constants::is_desktop_ini(&path)
             {
@@ -1480,7 +1488,7 @@ fn build_mod_data_deep(
     let mut defined_libraries = HashSet::with_capacity(32);                 // 预分配 32 个库，覆盖大多数模组
 
     for ini_path in &ini_files {
-        match IniFile::parse(ini_path) {
+        match get_or_parse_ini(ini_path) {
             Ok(ini) => {
                 let mut keys = 0usize;
                 let mut textures = 0usize;
@@ -1627,9 +1635,18 @@ pub fn scan_partial_path(mods_path: &Path, target_subpath: &Path) -> Result<Scan
         if let Some(group_index) = is_normal_group_dir(&dir_name) {
             // 仅扫描该 NormalGroup
             let (g, ms) = scan_normal_group_light(&first_dir, &dir_name, group_index)?;
-            let total = ms.iter().filter(|m| m.name != "None").count();
-            let enabled = ms.iter().filter(|m| !m.disabled && !m.mod_disabled && m.name != "None").count();
-            let disabled = ms.iter().filter(|m| (m.disabled || m.mod_disabled) && m.name != "None").count();
+            let (mut total, mut enabled, mut disabled) = (0usize, 0usize, 0usize);
+            for m in &ms {
+                if m.name == "None" {
+                    continue;
+                }
+                total += 1;
+                if !m.disabled && !m.mod_disabled {
+                    enabled += 1;
+                } else {
+                    disabled += 1;
+                }
+            }
             return Ok(ScanResult {
                 groups: vec![g],
                 mods: ms,

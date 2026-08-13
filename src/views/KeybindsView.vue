@@ -80,6 +80,7 @@ import { checkKeypressSupport, getAppVersion } from '@/utils/tauri'
 import { usePlatform } from '@/stores/platform'
 import { useModsStore } from '@/stores/mods'
 import { logger } from '@/utils/logger'
+import { DRAG_THRESHOLD_PX } from '@/utils/constants'
 import type { KeybindData } from '@/types'
 
 const { t } = useI18n()
@@ -126,7 +127,7 @@ function onPointerMove(e: PointerEvent) {
   if (!el) return
   const dX = e.clientX - dragState.startX
   const dY = e.clientY - dragState.startY
-  if (!dragState.dragStarted && (Math.abs(dX) > 3 || Math.abs(dY) > 3)) {
+  if (!dragState.dragStarted && (Math.abs(dX) > DRAG_THRESHOLD_PX || Math.abs(dY) > DRAG_THRESHOLD_PX)) {
     dragState.dragStarted = true
   }
   if (dragState.dragStarted) {

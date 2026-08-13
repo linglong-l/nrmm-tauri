@@ -91,6 +91,7 @@ import { ref, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { removeMod } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
+import { useLoadingDots } from '@/composables/useLoadingDots'
 
 type DialogState = 'confirm' | 'loading' | 'success' | 'error'
 
@@ -117,9 +118,8 @@ const { t } = useI18n()
 const state = ref<DialogState>('confirm')
 /** 错误信息（error 态显示） */
 const errorMessage = ref('')
-/** 加载中省略号数量（动画） */
-const dotsCount = ref(1)
-let dotsTimer: ReturnType<typeof setInterval> | null = null
+/** 加载中省略号数量（动画，复用统一 composable） */
+const { dotsCount, startDots, stopDots } = useLoadingDots()
 
 /** 对外暴露的 visible 计算属性，与 v-model 同步 */
 const visible = ref(false)
@@ -142,20 +142,6 @@ watch(visible, (v) => {
     emit('update:modelValue', v)
   }
 })
-
-function startDots() {
-  stopDots()
-  dotsTimer = setInterval(() => {
-    dotsCount.value = (dotsCount.value % 6) + 1
-  }, 300)
-}
-
-function stopDots() {
-  if (dotsTimer) {
-    clearInterval(dotsTimer)
-    dotsTimer = null
-  }
-}
 
 /** UI1 取消按钮：仅关闭对话框，不触发任何逻辑 */
 function handleCancel() {

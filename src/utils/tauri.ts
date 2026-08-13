@@ -10,7 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult } from '../types'
+import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame } from '../types'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from './logger'
@@ -31,7 +31,9 @@ export const ERR_PREFIX_PATH_NOT_FOUND = '[PATH_NOT_FOUND]'
 export async function handlePathNotFoundError(error: unknown): Promise<boolean> {
   const msg = typeof error === 'string'
     ? error
-    : (error as any)?.message ?? String(error ?? '')
+    : error && typeof error === 'object' && 'message' in error
+      ? String((error as { message: unknown }).message)
+      : String(error)
 
   if (!msg.includes(ERR_PREFIX_PATH_NOT_FOUND)) {
     return false
@@ -112,7 +114,7 @@ export async function selectFolder(defaultPath?: string): Promise<string | null>
  * 后端命令：get_settings
  * @returns 应用设置对象
  */
-export async function getSettings(): Promise<any> {
+export async function getSettings(): Promise<AppSettings> {
   return safeInvoke('get_settings')
 }
 
@@ -121,7 +123,7 @@ export async function getSettings(): Promise<any> {
  * 后端命令：save_settings
  * @param settings 要保存的设置对象
  */
-export async function saveSettings(settings: any): Promise<void> {
+export async function saveSettings(settings: Partial<AppSettings>): Promise<void> {
   return safeInvoke('save_settings', { settings })
 }
 
@@ -219,8 +221,8 @@ export async function deselectGroupMod(game: string, modsPath: string, groupInde
  * @param game 目标游戏类型
  * @param groupName 分组名称（可选，默认自动生成）
  */
-export async function addGroup(modsPath: string, game: string, groupName?: string): Promise<any> {
-  return safeInvoke('add_group', { modsPath, game, groupName })
+export async function addGroup(modsPath: string, game: string, groupName?: string): Promise<UpdateResult> {
+  return safeInvoke<UpdateResult>('add_group', { modsPath, game, groupName })
 }
 
 /**
@@ -588,6 +590,12 @@ export interface ImportItemRequest {
   password?: string
 }
 
+export interface ImportItemResult {
+  mod_path?: string
+  message?: string
+  ExtractFailed?: boolean
+}
+
 /**
  * 批量导入模组（支持压缩包 zip/rar/7z 或已解压的目录混合导入）
  * 后端命令：import_item_cmd
@@ -596,8 +604,19 @@ export interface ImportItemRequest {
  * @param req 导入请求：items=文件/目录路径列表，targetGroupDir=目标分组目录，password=可选压缩包密码
  * @returns 每项的导入结果数组
  */
-export async function importItems(req: ImportItemRequest): Promise<any[]> {
+export async function importItems(req: ImportItemRequest): Promise<ImportItemResult[]> {
   return safeInvoke('import_item_cmd', { req })
+}
+
+/**
+ * 更新信息（与 Rust `updater::UpdateInfo` 字段对齐）
+ */
+export interface UpdateInfo {
+  version: string
+  download_url: string
+  release_notes: string
+  published_at: string
+  source: string
 }
 
 /**
@@ -605,10 +624,10 @@ export async function importItems(req: ImportItemRequest): Promise<any[]> {
  * 后端命令：check_for_updates
  *
  * 从Gitee/GitHub Release检查最新版本
- * @returns 更新信息（有新版本时返回版本信息，无则返回null/false）
+ * @returns 有新版本时返回 UpdateInfo 对象，无更新时返回 null（与 Rust `Option<UpdateInfo>` 对齐）
  */
-export async function checkForUpdates(): Promise<any> {
-  return safeInvoke('check_for_updates')
+export async function checkForUpdates(): Promise<UpdateInfo | null> {
+  return safeInvoke<UpdateInfo | null>('check_for_updates')
 }
 
 /**
@@ -658,7 +677,7 @@ export async function resetWindowPosition(windowName = 'main'): Promise<void> {
  * 切换后会触发target-game-switched事件
  * @param game 目标游戏类型
  */
-export async function switchTargetGame(game: any): Promise<void> {
+export async function switchTargetGame(game: TargetGame): Promise<void> {
   return safeInvoke('switch_target_game', { game })
 }
 

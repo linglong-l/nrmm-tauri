@@ -25,12 +25,14 @@ use std::path::{Path, PathBuf};
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::sync::atomic::Ordering;
+use walkdir::WalkDir;
 use crate::core::constants;
 use crate::core::file_watcher::WATCHER_PAUSED;
 use crate::core::ini_handler::IniFile;
 use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::namespace_handler;
 use crate::core::mod_scanner;
+use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::models::enums::TargetGame;
 use crate::models::mod_data::{ModData, ModGroupData, ErroredLines, HashConflict, HashConflictEntry, LibInMod, DuplicateLib, NonExistentLib};
 use crate::models::enums::GroupType;
@@ -313,15 +315,16 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
             // 去重粒度为 (mod_name, ini_path)：
             // 同一模组同一 INI 内多次出现同一 hash 只算一条；
             // 同一模组不同 INI 各保留一条，聚合到该模组的 ini_vec。
+            let mut seen: std::collections::HashSet<(String, PathBuf)> = std::collections::HashSet::new();
             let mut unique_entries: Vec<(String, String, PathBuf)> = Vec::new();
             for (name, path, ini) in mods.into_iter() {
-                if !unique_entries.iter().any(|(n, _, i)| n == &name && i == &ini) {
+                if seen.insert((name.clone(), ini.clone())) {
                     unique_entries.push((name, path, ini));
                 }
             }
             // 仅当涉及 ≥2 个不同模组时才算冲突
             let unique_mod_count = unique_entries.iter()
-                .map(|(n, _, _)| n.clone())
+                .map(|(n, _, _)| n.as_str())
                 .collect::<std::collections::HashSet<_>>()
                 .len();
             if unique_mod_count >= 2 {
@@ -402,8 +405,7 @@ pub fn detect_orfix_texfx(enabled_mods: &[&ModData]) -> OrfixDetection {
         let mod_path = mod_data.mod_path.clone();
 
         for ini_data in &mod_data.mod_ini_data {
-            let ini_path = PathBuf::from(&ini_data.ini_path);
-            if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
+            if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(std::path::Path::new(ini_data.ini_path.as_str())) {
                 // 1. 检测库在模组内（同时记入声明表，用于重复声明检测）
                 let detected = ini.detect_known_lib_declarations(&known_libs);
                 if !detected.is_empty() {
@@ -505,6 +507,14 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     log::debug!("[core::mod_manager] [update_mod_data] Starting heavy update | game={:?} path={:?}", game, game_mods_path);
     let _s = std::time::Instant::now();
     let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);
+
+    // 游戏根目录（d3dx.ini 所在位置）。
+    // 所有 include 路径必须相对于此基准计算，因为 3Dmigoto 将 include 路径相对于 d3dx.ini 目录解析。
+    let game_root = game_mods_path.parent().unwrap_or(game_mods_path);
+
+    // 对齐 Dart `_prepareManagedFolder`：首次运行（`_MANAGED_` 不存在）时，
+    // 先尝试将旧版托管目录名迁移为 `_MANAGED_`；仍不存在才创建。
+    migrate_old_managed_folder(game_mods_path);
     if !managed_folder.exists() {
         fs::create_dir_all(&managed_folder)?;
     }
@@ -559,8 +569,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     let mut known_libraries = HashSet::new();
     for mod_data in &enabled_mods {
         for ini_data in &mod_data.mod_ini_data {
-            let ini_path = PathBuf::from(&ini_data.ini_path);
-            if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
+            if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(std::path::Path::new(ini_data.ini_path.as_str())) {
                 for lib in ini.defined_libraries() {
                     known_libraries.insert(lib);
                 }
@@ -606,10 +615,25 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
     for mod_data in enabled_mods.iter() {
         let group_id = mod_data.group_index;
+
+        // 对齐 NRMM Dart：跳过 mod_index == 0 的模组（对应 Dart 的 "None" 空槽位，realIndex: 0）。
+        // Dart getModsOnGroup 在 modDatas[0] 插入 realIndex=0 的占位符，_manageMod 循环
+        // 通过 j != 0 跳过该条目。Rust 扫描不产生此占位符，但保留守卫以对齐语义。
+        if mod_data.mod_index == 0 {
+            log::debug!(
+                "[mod_manager] [update_mod_data] 跳过 mod_index=0 的空槽位（对齐 Dart None 占位符）"
+            );
+            continue;
+        }
+
         // 防御性守卫：仅处理严格 group_<int> 分组，跳过任何非标准标识
         // （scan_mods 已天然排除 MutexGroup / # 目录，此处为双保险，
         //  确保 update_mod_data 绝不注入或改写非 group_int 目录下的文件）
-        if mod_scanner::is_normal_group_dir(&format!("group_{}", group_id)).is_none() {
+        // 与 mod_scanner::is_normal_group_dir 的正则 ^group_([1-9][0-9]{0,8})$ 等价：
+        // group_id 来自已按同一正则解析的 group_index（u32），成功路径下恒为有效值；
+        // 仅当 group_id == 0 或 > 999_999_999 时判为非标准（防御性守卫）。
+        const MAX_NORMAL_GROUP_ID: u32 = 999_999_999;
+        if group_id == 0 || group_id > MAX_NORMAL_GROUP_ID {
             log::warn!(
                 "[mod_manager] [update_mod_data] 跳过非标准分组标识 group_{}，不进行注入/改写",
                 group_id
@@ -625,6 +649,9 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
             continue;
         }
         let mut mod_inis: Vec<PathBuf> = Vec::new();
+        // 跟踪本模组是否需要写标记文件（对齐 Dart _markAsOldAutoFix / _markAsRemovedSyntaxError）
+        let mut mod_has_crash_lines = false;
+        let mut mod_has_syntax_errors = false;
 
         for ini_data in &mod_data.mod_ini_data {
             let ini_path = PathBuf::from(&ini_data.ini_path);
@@ -642,13 +669,37 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
                     // 错误检测
                     let errors = ini.detect_errors(&ini_path, &known_libraries);
                     if !errors.is_empty() {
+                        // 对齐 Dart _modifyLinesBasedOnError：modsyntaxerrorremoved 标记仅由
+                        // 「非 endif 的崩溃行错误」（crash line=1）触发。
+                        // - 3Dmigoto 容错解析悬空/孤立 endif（flow control=3）、重复库(0)、
+                        //   缺失 endif(2)、缺失库(5)、路径过长(6)，这些错误由 NRMM 自动修复
+                        //   （remove_empty_if_blocks / fix_manager_endif）或仅为 UI 报告项，
+                        //   不会令模组被移除，故不触发 modsyntaxerrorremoved 标记。
+                        // - 仅当模组存在会致 XXMI 崩溃的绘制/缓冲行（crash line=1，如
+                        //   drawindexed/draw/ib 取到非法值且非 auto / 数值 / 资源引用）时，
+                        //   才标记该模组曾被移除（与 Dart 基线行为一致：基线零标记）。
+                        let has_syntax_marker_error =
+                            errors.iter().any(|e| e.error_type == 1);
                         all_errors.extend(errors);
+                        if has_syntax_marker_error {
+                            mod_has_syntax_errors = true;
+                        }
                     }
 
                     // 展开 namespace 变量
                     if let Some(ns) = namespace_handler::extract_namespace(&ini) {
                         namespace_handler::expand_ini_variables(&mut ini, &ns);
                     }
+
+                    // 清理旧的 NRMM managed 内容（对齐 Dart _parseIniSections），
+                    // 防止重复更新时旧注入内容累积（if 守卫/$managed_slot_id/旧注释标记等）
+                    ini.remove_old_managed_content();
+
+                    // 对齐 NRMM _parseIniSections：补齐段级属性键（match_priority/allow_duplicate_hash），插入段末
+                    ini.ensure_section_attribute_keys();
+
+                    // 对齐 NRMM _reorderByIniKeyPriority：按段类型重排已知优先键到段首
+                    ini.reorder_by_ini_key_priority();
 
                     // 注入槽位条件（含 $managed_slot_id 赋值）
                     ini.inject_slot_conditions(group_id, mod_data.mod_index);
@@ -657,6 +708,7 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
                     let crash_lines = ini.comment_crash_lines();
                     if !crash_lines.is_empty() {
                         log::info!("Commented {} crash lines in {}", crash_lines.len(), ini_path.display());
+                        mod_has_crash_lines = true;
                     }
 
                     // 移除空 if 块，应用缩进
@@ -682,15 +734,36 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         }
 
         group_mod_inis.entry(group_id).or_default().extend(mod_inis);
+
+        // 写入标记文件（对齐 Dart _markAsOldAutoFix / _markAsRemovedSyntaxError）
+        let mod_dir = std::path::Path::new(mod_data.mod_path.as_str());
+        if mod_has_crash_lines {
+            let marker = mod_dir.join(constants::MODFORCED_MARKER);
+            if let Err(e) = fs::write(&marker, "") {
+                log::warn!("写入 modforced 标记失败 {:?}: {}", marker, e);
+            }
+        }
+        if mod_has_syntax_errors {
+            let marker = mod_dir.join("modsyntaxerrorremoved");
+            if let Err(e) = fs::write(&marker, "") {
+                log::warn!("写入 modsyntaxerrorremoved 标记失败 {:?}: {}", marker, e);
+            }
+        }
     }
     log::debug!("[mod_manager] [update_mod_data] step=process_mod_inis done processed={} groups={} errors={}", processed_mods, group_mod_inis.len(), all_errors.len());
+
+    // 步骤5.1: 修复非托管模组的崩溃行（对齐 NRMM _fixNonManagedModsCrashLine）
+    // 扫描 Mods 目录下、_MANAGED_ 之外的 .ini 文件，注释其中会导致 XXMI 崩溃的
+    // 绘制/缓冲行（drawindexed / draw / ib= / vb0= 等，位于非 TextureOverride 段且不在 if 块内）。
+    fix_non_managed_crash_lines(game_mods_path, &managed_folder, &known_libraries);
+    log::debug!("[mod_manager] [update_mod_data] step=fix_non_managed_crash_lines done");
 
     // 步骤6: 为每个 group 创建 ModFolder.ini
     let mut group_ini_paths: Vec<PathBuf> = Vec::new();
     for (group_id, ini_paths) in &group_mod_inis {
         log::debug!("[mod_manager] [update_mod_data] step=create_group_ini group_id={} mod_ini_count={}", group_id, ini_paths.len());
         let group_dir = managed_folder.join(format!("group_{}", group_id));
-        let group_ini_path = create_group_ini(&group_dir, *group_id, ini_paths, game_mods_path)?;
+        let group_ini_path = create_group_ini(&group_dir, *group_id, ini_paths)?;
         if let Some(p) = group_ini_path {
             group_ini_paths.push(p);
         }
@@ -704,10 +777,11 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
     // 步骤8: 检测 include_recursive，缺失时自动注入 include 指令
     // 标准 XXMI 环境通过 [Include] 段的 include_recursive = Mods 自动加载 _MANAGED_ 下的 .ini 文件。
-    // 若用户的 d3dx.ini 缺少此配置，则直接在文件末尾追加 include = _MANAGED_/nrmm_include.ini
+    // 若用户的 d3dx.ini 缺少此配置，则直接在文件末尾追加 include = Mods/_MANAGED_/nrmm_include.ini
     // 确保 manager_group.ini / group_N.ini 等管理文件被 3Dmigoto 加载。
     // d3dx.ini 不存在（非标准环境）时跳过主 INI 修改。
     let mut final_content = main_ini_content;
+    let mut d3dx_modified = false;
     if main_ini_existed {
         let has_include_recursive = detect_include_recursive(&main_ini_path, game_mods_path);
 
@@ -716,7 +790,9 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
                 "[mod_manager] [update_mod_data] d3dx.ini 缺少 include_recursive 配置，自动注入 include 指令"
             );
             // 在主 INI 末尾追加 NRMM 管理段（include 指令需在段外，3Dmigoto 仅处理顶层的 include）
-            if let Ok(rel_path) = nrmm_include_path.strip_prefix(game_mods_path) {
+            // 关键：include 路径必须相对于 d3dx.ini 所在目录（game_root），而非 Mods/。
+            // 3Dmigoto 将 include 路径相对于 d3dx.ini 目录解析，因此路径需包含 "Mods/" 前缀。
+            if let Ok(rel_path) = nrmm_include_path.strip_prefix(game_root) {
                 let rel_str = rel_path.to_string_lossy().replace('\\', "/");
                 final_content.push_str("\n;NRMM_INI_START\n");
                 final_content.push_str("; No-Reload Mod Manager managed section\n");
@@ -725,17 +801,22 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
                 final_content.push_str("global $managed_slot_id = 0\n\n");
                 final_content.push_str(&format!("include = {}\n", rel_str));
                 final_content.push_str(";NRMM_INI_END\n");
+                d3dx_modified = true;
             }
             need_reload_manual = true;
+        } else {
+            log::debug!("[mod_manager] [update_mod_data] d3dx.ini 已有 include_recursive=Mods，跳过注入");
         }
 
-        // 原子写入主 INI
-        let tmp_path = main_ini_path.with_extension("ini.tmp");
-        fs::write(&tmp_path, &final_content)
+        // 仅当 d3dx.ini 被实际修改时才写回，避免不必要的编码转换或格式变更
+        if d3dx_modified {
+            let tmp_path = main_ini_path.with_extension("ini.tmp");
+            fs::write(&tmp_path, &final_content)
             .with_context(|| format!("Failed to write temp main INI: {:?}", tmp_path))?;
-        fs::rename(&tmp_path, &main_ini_path)
-            .with_context(|| format!("Failed to rename temp main INI to: {:?}", main_ini_path))?;
-        log::debug!("[mod_manager] [update_mod_data] step=write_main_ini done path={:?}", main_ini_path);
+            fs::rename(&tmp_path, &main_ini_path)
+                .with_context(|| format!("Failed to rename temp main INI to: {:?}", main_ini_path))?;
+            log::debug!("[mod_manager] [update_mod_data] step=write_main_ini done path={:?}", main_ini_path);
+        }
     } else {
         log::debug!("[mod_manager] [update_mod_data] step=write_main_ini skipped (d3dx.ini 不存在)");
     }
@@ -797,12 +878,12 @@ pub fn auto_modify_duplicate_namespace(enabled_mods: &[&ModData]) {
             let mut ini_paths: Vec<PathBuf> = Vec::new();
             for ini_data in &m.mod_ini_data {
                 let p = PathBuf::from(&ini_data.ini_path);
-                ini_paths.push(p.clone());
-                if let Ok(ini) = IniFile::parse(&p) {
+                if let Ok(ini) = get_or_parse_ini(&p) {
                     if let Some(ns) = namespace_handler::extract_namespace(&ini) {
                         namespaces_in_mod.insert(ns);
                     }
                 }
+                ini_paths.push(p);
             }
 
             // 规划重命名：基于 occupied（future ∪ 同组 ∪ 全局）求唯一后缀，保证跨模组唯一
@@ -845,7 +926,7 @@ pub fn auto_modify_duplicate_namespace(enabled_mods: &[&ModData]) {
             // 提交本模组 namespace 到组状态；写 modnamespaced 标记
             namespaces_in_group.extend(future.iter().cloned());
             if !namespaces_in_mod.is_empty() {
-                let marker = PathBuf::from(&m.mod_path).join(constants::NAMESPACED_MARKER);
+                let marker = std::path::Path::new(m.mod_path.as_str()).join(constants::NAMESPACED_MARKER);
                 if let Err(e) = fs::write(&marker, "") {
                     log::warn!("写入 namespaced 标记失败 {:?}: {}", marker, e);
                 }
@@ -858,7 +939,7 @@ pub fn auto_modify_duplicate_namespace(enabled_mods: &[&ModData]) {
 /// 非递归 BFS 收集 `_MANAGED_` 下 MutexGroup（非 `group_xx`）目录中所有 INI 的库定义
 ///
 /// 深度扫描仅处理 `group_xx` NormalGroup 目录，会遗漏 `#` 等 MutexGroup 目录中的库定义，
-/// 导致 `detect_errors` 产生大量 `error_type=1` 假阳性（引用了未收集的库）。
+/// 导致 `detect_errors` 产生大量 NON_EXISTENT_LIB（error_type=5）假阳性（引用了未收集的库）。
 /// 本函数补充收集 MutexGroup 目录下的库定义，消除假阳性。
 ///
 /// # 算法
@@ -944,7 +1025,7 @@ fn collect_mutex_group_libraries(managed_folder: &Path) -> HashSet<String> {
                     // 仅处理 .ini 文件
                     if sub_path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("ini")).unwrap_or(false) {
                         // 步骤4: 解析 INI 并收集库定义
-                        match IniFile::parse(&sub_path) {
+                        match get_or_parse_ini(&sub_path) {
                             Ok(ini) => {
                                 for lib in ini.defined_libraries() {
                                     libraries.insert(lib);
@@ -983,9 +1064,51 @@ fn collect_mutex_group_libraries(managed_folder: &Path) -> HashSet<String> {
 /// 3. 创建 manager_group.ini（全局管理组，定义 active_group_id 等变量）
 ///
 /// # 返回值
+/// 对齐 Dart `_tryRenameOldManagedFolder`：首次运行（`_MANAGED_` 尚不存在）时，
+/// 将旧版托管目录名重命名为当前 `_MANAGED_`。依次尝试两个遗留名：
+/// - `V1_3_x_MANAGED-DO_NOT_EDIT_COPY_MOVE_CUT`（V1.3.x 遗留，优先）
+/// - `MANAGED-DO_NOT_EDIT_COPY_MOVE_CUT`（更早遗留，回退）
+///
+/// 仅当 `_MANAGED_` 不存在且某个遗留目录存在时执行 `rename`（同盘原子操作）。
+/// 全部不存在则不做任何操作，由调用方随后创建 `_MANAGED_`。
+fn migrate_old_managed_folder(mods_path: &Path) {
+    let managed = mods_path.join(constants::MANAGED_FOLDER);
+    if managed.exists() {
+        return;
+    }
+    for old in [
+        constants::OLD_MANAGED_FOLDER_V1,
+        constants::OLD_MANAGED_FOLDER_LEGACY,
+    ] {
+        let old_path = mods_path.join(old);
+        if old_path.is_dir() {
+            match fs::rename(&old_path, &managed) {
+                Ok(()) => {
+                    log::info!(
+                        "[mod_manager] migrate_old_managed_folder: 旧托管目录已迁移为 _MANAGED_：{:?}",
+                        old_path
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[mod_manager] migrate_old_managed_folder: 旧托管目录重命名失败 {:?} -> {:?}: {}",
+                        old_path,
+                        managed,
+                        e
+                    );
+                }
+            }
+            break;
+        }
+    }
+}
+
+/// 准备 `_MANAGED_` 目录：创建 NRMM 所需的模板 INI 文件（keypress / include / manager_group / 根级 selectedindex）。
+///
+/// # 返回
 /// - `true`: 需要用户手动重载（F10）
 /// - `false`: 支持自动重载
-fn prepare_managed_folder(managed_path: &Path, _game: TargetGame) -> Result<bool> {
+fn prepare_managed_folder(managed_path: &Path, game: TargetGame) -> Result<bool> {
     let mut need_reload_manual = false;
 
     // 检查是否已存在必要文件，不存在则需要手动重载
@@ -997,8 +1120,23 @@ fn prepare_managed_folder(managed_path: &Path, _game: TargetGame) -> Result<bool
         need_reload_manual = true;
     }
 
-    // 创建 nrmm_keypress.txt - 默认配置（后台监听按键）
-    let keypress_template = String::from_utf8_lossy(crate::resources::LISTEN_KEYPRESS_EVEN_ON_BACKGROUND);
+    // 对齐 NRMM DLL 能力检测：依据游戏 d3d11.dll 选择按键监听模板。
+    // - NRMM 自定义 XXMI DLL（支持 [Loader] manager）→ listen_keypress_manager.txt
+    // - 支持 additional_foreground_window → listen_keypress_additional_window.txt
+    // - 其他 → listen_keypress_even_on_background.txt（默认）
+    // d3d11.dll 位于 game_root（Mods 的父目录）；缺失时安全回退到默认模板。
+    let game_root = managed_path
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| managed_path.to_path_buf());
+    let dll_path = game_root.join("d3d11.dll");
+    let keypress_bytes = crate::core::dll_capability::select_keypress_template(&dll_path)
+        .template_bytes();
+    let keypress_template = String::from_utf8_lossy(keypress_bytes)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace("{game}", game.nrmm_name());
     atomic_write_file(&keypress_path, keypress_template.as_bytes())?;
 
     // 创建 nrmm_include.ini - 将由后续步骤填充 include 列表
@@ -1011,6 +1149,8 @@ fn prepare_managed_folder(managed_path: &Path, _game: TargetGame) -> Result<bool
 
     // 创建 manager_group.ini - 全局管理组
     let manager_template = String::from_utf8_lossy(crate::resources::TEMPLATE_MANAGER_GROUP);
+    // 对齐 Dart 模板：去掉末尾换行（Dart 生成的 manager_group.ini 末尾无换行符）
+    let manager_template = manager_template.trim_end_matches(['\r', '\n']);
     atomic_write_file(&manager_group_path, manager_template.as_bytes())?;
 
     // 创建根级 selectedindex 文件（若不存在）
@@ -1022,6 +1162,86 @@ fn prepare_managed_folder(managed_path: &Path, _game: TargetGame) -> Result<bool
     }
 
     Ok(need_reload_manual)
+}
+
+/// 对齐 NRMM `_fixNonManagedModsCrashLine`：扫描 `mods_path` 下、位于 `_MANAGED_` 之外的
+/// 所有 .ini 文件，注释会导致 XXMI 崩溃的绘制/缓冲行（前缀 `;-;`）。
+///
+/// 仅处理非托管模组（file_path 不在 managed_path 内）；托管模组由主流程
+/// `inject_slot_conditions` 中的 `comment_crash_lines` 处理，避免重复注释。
+fn fix_non_managed_crash_lines(
+    mods_path: &Path,
+    managed_path: &Path,
+    known_libraries: &HashSet<String>,
+) {
+    for entry in WalkDir::new(mods_path)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("ini") {
+            continue;
+        }
+        // 仅处理非托管（不在 _MANAGED_ 内）的 .ini
+        if path.starts_with(managed_path) {
+            continue;
+        }
+        let ini = match IniFile::parse(path) {
+            Ok(ini) => ini,
+            Err(_) => continue,
+        };
+        let errors = ini.detect_errors(path, known_libraries);
+        let crash_lines: Vec<(u32, String)> = errors
+            .into_iter()
+            .filter(|e| e.error_type == 1)
+            .map(|e| (e.line_number, e.line))
+            .collect();
+        if crash_lines.is_empty() {
+            continue;
+        }
+        if comment_crash_lines_in_file(path, &crash_lines) {
+            log::info!(
+                "修复非托管模组崩溃行 {} 处：{:?}",
+                crash_lines.len(),
+                path
+            );
+        }
+    }
+}
+
+/// 对齐 Dart `_fixNonManagedModsCrashLine`：将指定行号、行内容的崩溃行注释掉。
+///
+/// 规则：行号有效、该行 trim 后小写与记录一致、且尚未以 `;-;` 开头时，
+/// 前缀 `;-;`（`;-;<trimmed>`），其余行保持不变。返回是否发生修改。
+fn comment_crash_lines_in_file(path: &Path, crash_lines: &[(u32, String)]) -> bool {
+    let content = match IniFile::force_read_as_utf8(path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+    let mut changed = false;
+    for (num, text) in crash_lines {
+        let idx = (*num as usize).saturating_sub(1);
+        if idx >= lines.len() {
+            continue;
+        }
+        let trimmed = lines[idx].trim();
+        if trimmed.eq_ignore_ascii_case(text.trim()) && !trimmed.starts_with(";-;") {
+            lines[idx] = format!(";-;{}", trimmed);
+            changed = true;
+        }
+    }
+    if changed {
+        let out = lines.join("\n");
+        if atomic_write_file(path, out.as_bytes()).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 /// 校验现有 group_X.ini 中 `global $group_id` 是否与目录名 `group_X` 一致。
@@ -1133,7 +1353,6 @@ fn create_group_ini(
     group_dir: &Path,
     group_index: u32,
     mod_ini_paths: &[PathBuf],
-    game_mods_path: &Path,
 ) -> Result<Option<PathBuf>> {
     // 跳过空分组：无启用模组时不生成 group_X.ini，
     // 避免 nrmm_include.ini 引用空文件导致 3Dmigoto 加载警告
@@ -1151,55 +1370,48 @@ fn create_group_ini(
     let group_ini_filename = format!("group_{}.ini", group_index);
     let group_ini_path = group_dir.join(&group_ini_filename);
 
-    // 从模板生成基础内容
+    // 从模板生成基础内容（对齐 NRMM：仅包含组模板，不添加显式 include 指令。
+    // 模组 INI 由 d3dx.ini 中的 include_recursive=Mods 自动递归加载。）
     let template_str = String::from_utf8_lossy(crate::resources::TEMPLATE_GROUP);
-    let mut content = template_str
+    let content = template_str
         .replace("{group_x}", &group_folder_name)
         .replace("{x}", &group_index.to_string());
-
-    // 添加该组所有启用模组的 INI include
-    content.push_str("\n; === NRMM Managed Includes ===\n");
-    for ini_path in mod_ini_paths {
-        if let Ok(rel_path) = ini_path.strip_prefix(game_mods_path) {
-            let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-            content.push_str(&format!("include = {}\n", rel_str));
-        }
-    }
+    // 对齐 Dart 模板：去掉模板末尾的换行（Dart 生成的 group_X.ini 末尾无换行符）
+    let content = content.trim_end_matches(['\r', '\n']);
 
     atomic_write_file(&group_ini_path, content.as_bytes())?;
+
+    // 创建分组级 selectedindex 文件（对齐 NRMM getSelectedModInGroup 的惰性创建行为：
+    // 文件不存在时自动创建，默认值 "0" 表示未选中任何模组）
+    let group_selectedindex = group_dir.join(constants::SELECTED_INDEX_FILE);
+    if !group_selectedindex.exists() {
+        atomic_write_file(&group_selectedindex, b"0")?;
+        log::debug!(
+            "[mod_manager] create_group_ini: 创建分组级 selectedindex 文件 {:?}",
+            group_selectedindex
+        );
+    }
+
     Ok(Some(group_ini_path))
 }
 
-/// 创建 nrmm_include.ini：include manager_group.ini 和所有 group_X.ini
+/// 创建 nrmm_include.ini（对齐 NRMM：仅包含 [IncludeKeypress] 段。
 ///
-/// 这是 NRMM 的 include 入口点：
-/// - d3dx.ini include nrmm_include.ini
-/// - nrmm_include.ini include manager_group.ini 和各 group_X/ModFolder.ini
+/// 模组和分组 INI 的加载由 d3dx.ini 中的 include_recursive=Mods 自动处理，
+/// 不在本文件中添加显式 include 指令，避免路径解析问题。）
 fn create_nrmm_include_ini(
     include_path: &Path,
-    managed_path: &Path,
-    group_ini_paths: &[PathBuf],
-    game_mods_path: &Path,
+    _managed_path: &Path,
+    _group_ini_paths: &[PathBuf],
+    _game_mods_path: &Path,
 ) -> Result<()> {
-    let mut content = String::new();
-
-    // Include keypress 配置
-    content.push_str("[IncludeKeypress]\n");
-    content.push_str(&format!("include = {}\n\n", constants::KEYPRESS_FILENAME));
-
-    // Include manager_group.ini
-    if let Ok(rel) = managed_path.join("manager_group.ini").strip_prefix(game_mods_path) {
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-        content.push_str(&format!("include = {}\n", rel_str));
-    }
-
-    // Include 所有 group INI
-    for group_ini in group_ini_paths {
-        if let Ok(rel) = group_ini.strip_prefix(game_mods_path) {
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-            content.push_str(&format!("include = {}\n", rel_str));
-        }
-    }
+    // 对齐 NRMM：nrmm_include.ini 仅包含 IncludeKeypress 段
+    let content = format!(
+        "[IncludeKeypress]\ninclude = {}\n",
+        constants::KEYPRESS_FILENAME
+    );
+    // 对齐 Dart：去掉末尾换行（Dart 生成的 nrmm_include.ini 末尾无换行符）
+    let content = content.trim_end_matches(['\r', '\n']);
 
     atomic_write_file(include_path, content.as_bytes())?;
     Ok(())
@@ -2105,7 +2317,7 @@ fn restore_inis_recursive(dir: &Path, restored: &mut u32, failed: &mut u32) -> R
         if path.is_dir() {
             restore_inis_recursive(&path, restored, failed)?;
         } else if let Some(ext) = path.extension() {
-            if ext.eq_ignore_ascii_case("ini") {
+            if ext.eq_ignore_ascii_case("ini") && !constants::is_desktop_ini(&path) {
                 let backup_path = path.with_extension(constants::BACKUP_EXTENSION);
                 if backup_path.exists() {
                     match fs::copy(&backup_path, &path) {
@@ -2308,10 +2520,10 @@ fn restore_single_ini(ini_path: &Path) -> Result<()> {
         let trimmed_lower = line.trim().to_lowercase();
 
         // 新 section 重置 if 栈
+        // 对齐 Dart _restoreManagedMod：section 头行直接 continue，不调用 _removeFirstFourSpaces，
+        // 因此 section 头（始终位于列 0）的缩进保持原样、绝不被移除。
         if trimmed_lower.starts_with('[') {
             if_stack.clear();
-            // section 头不移除缩进，继续
-            *line = remove_first_four_spaces(line);
             continue;
         }
 
@@ -2854,7 +3066,7 @@ y = 2
         fs::write(&mod2, "").unwrap();
 
         let ini_paths = vec![mod1.clone(), mod2.clone()];
-        let result = create_group_ini(&group_dir, 1, &ini_paths, dir.path()).unwrap();
+        let result = create_group_ini(&group_dir, 1, &ini_paths).unwrap();
         assert!(result.is_some());
 
         let group_ini = result.unwrap();
@@ -2862,8 +3074,8 @@ y = 2
         let content = fs::read_to_string(&group_ini).unwrap();
         assert!(content.contains("group_1"));
         assert!(content.contains("$group_id = 1"));
-        assert!(content.contains("include = _MANAGED_/group_1/Mod1/mod.ini"));
-        assert!(content.contains("include = _MANAGED_/group_1/Mod2/config.ini"));
+        // 对齐 NRMM：group_X.ini 仅包含组模板，不包含显式 include 指令
+        assert!(!content.contains("include = "));
     }
 
     /// 测试：create_group_ini 对空分组返回 None，不生成 group_X.ini
@@ -2875,7 +3087,7 @@ y = 2
         fs::create_dir_all(&group_dir).unwrap();
 
         let ini_paths: Vec<PathBuf> = vec![];
-        let result = create_group_ini(&group_dir, 84, &ini_paths, dir.path()).unwrap();
+        let result = create_group_ini(&group_dir, 84, &ini_paths).unwrap();
         assert!(result.is_none(), "空分组应返回 None");
 
         // 验证未生成 group_84.ini 文件
@@ -3007,16 +3219,21 @@ y = 2
         assert_eq!(result.enabled_mods, 1);
         assert_eq!(result.processed_mods, 1);
 
-        // 验证 group_1.ini 已创建
+        // 验证 group_1.ini 已创建（对齐 NRMM：仅包含组模板，不包含显式 include）
         let group_ini = group_path.join("group_1.ini");
         assert!(group_ini.exists());
         let group_content = fs::read_to_string(&group_ini).unwrap();
-        assert!(group_content.contains("include = _MANAGED_/group_1/TestMod/mod.ini"));
+        assert!(group_content.contains("group_1"));
+        assert!(group_content.contains("$group_id = 1"));
+        // NRMM 不生成显式 include 指令，模组由 include_recursive=Mods 自动加载
+        assert!(!group_content.contains("; === NRMM Managed Includes ==="));
 
-        // 验证 nrmm_include.ini 包含 group_1.ini
+        // 验证 nrmm_include.ini 仅包含 IncludeKeypress（对齐 NRMM）
         let include_content = fs::read_to_string(dir.path().join("_MANAGED_/nrmm_include.ini")).unwrap();
-        assert!(include_content.contains("manager_group.ini"));
-        assert!(include_content.contains("group_1/group_1.ini"));
+        assert!(include_content.contains("[IncludeKeypress]"));
+        assert!(include_content.contains("nrmm_keypress.txt"));
+        assert!(!include_content.contains("manager_group.ini"));
+        assert!(!include_content.contains("group_1/group_1.ini"));
 
         let mod_ini_path = group_path.join("TestMod/mod.ini");
         let backup_path = mod_ini_path.with_extension(constants::BACKUP_EXTENSION);
@@ -3177,6 +3394,159 @@ y = 2
         assert!(!a.contains("no reload mod manager"));
         let b = fs::read_to_string(group_path.join("ModB").join("mod.ini")).unwrap();
         assert!(!b.contains("global $managed_slot_id"));
+    }
+
+    // ============================================================================
+    // 还原逻辑对齐测试（NRMM restoreManagedMod / restoreAllInis）
+    // 验证「备份式还原（Restore All）」无损回放，以及「就地清理式还原（还原区/移除）」
+    // 正确清除管理器注入的所有产物（manager if/endif、global $managed_slot_id、
+    // condition 槽位段、4 空格缩进、管理器头注释），并保留非管理器内容。
+    // ============================================================================
+
+    /// 备份式还原（Restore All）必须是 update_mod_data 的「无损逆操作」：
+    /// 每个被管理的 mod INI 都应从 .ini_managed_backup 精确恢复到更新前字节。
+    #[test]
+    fn test_restore_all_inis_lossless_roundtrip() {
+        // 结构与真实游戏一致：game_root/Mods/_MANAGED_/group_X/Mod/mod.ini
+        // 且 game_root/d3dx.ini 位于 Mods 父目录。
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().join("Mods");
+        let managed = mods_path.join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+        create_main_ini(dir.path(), TargetGame::GenshinImpact);
+        let settings = AppSettings::default();
+
+        let group_path = managed.join("group_1");
+        fs::create_dir_all(&group_path).unwrap();
+        let original = "\
+[TextureOverrideBody]
+hash = 0x1
+drawindexed = auto
+condition = orig_cond
+
+[KeySection]
+condition = (orig_cond) && other
+
+[Resource]
+hash = 0x2
+";
+        let mod_dir = create_mod_with_ini(&group_path, "ModA", original);
+        let mod_ini = mod_dir.join("mod.ini");
+
+        // 更新（注入管理器内容 + 创建备份）
+        let result = update_mod_data(TargetGame::GenshinImpact, &mods_path, &settings).unwrap();
+        assert_eq!(result.processed_mods, 1);
+        // 更新后文件应已被注入（与原始不同）
+        let updated = fs::read_to_string(&mod_ini).unwrap();
+        assert_ne!(updated, original, "更新后应注入管理器内容");
+        // 备份必须存在且为更新前字节
+        let backup = mod_ini.with_extension(constants::BACKUP_EXTENSION);
+        assert!(backup.exists());
+        assert_eq!(fs::read_to_string(&backup).unwrap(), original);
+
+        // 还原（Restore All）
+        let rc = restore_all_inis(&mods_path).unwrap();
+        assert_eq!(rc.failed, 0);
+
+        // 还原后 mod INI 必须精确等于更新前字节（无损回放）
+        let restored = fs::read_to_string(&mod_ini).unwrap();
+        assert_eq!(restored, original, "备份式还原必须无损恢复到更新前状态");
+
+        // 备份应被删除
+        assert!(!backup.exists());
+        // 管理器生成文件应被清理
+        assert!(!managed.join("nrmm_include.ini").exists());
+        assert!(!managed.join("manager_group.ini").exists());
+        assert!(!managed.join("group_1.ini").exists());
+    }
+
+    /// 就地清理式还原：对一份「已经过 update_mod_data」的 INI，验证 restore_managed_mod
+    /// 清除全部管理器注入产物，但保留用户原始内容与合法悬空 endif。
+    #[test]
+    fn test_restore_managed_mod_cleans_injected_artifacts() {
+        let dir = setup_test_env();
+        let ini = dir.path().join("mod.ini");
+        // 模拟 update_mod_data 输出的真实形态（头注释 + Constants 全局 + 包裹段 + 增强 condition + 悬空 endif）
+        let managed = "\
+; \";-;\" are errored conditional lines.
+; \";+;\" are disabled keys.
+; Errored conditional blocks (if/else/elif/endif) are handled correctly (newer syntax may require further testing), including namespaced variables.
+; If certain syntax is only available in newer XXMI versions, make sure to use the latest XXMI.
+[Constants]
+global $managed_slot_id = 0
+[TextureOverrideBody]
+hash = 0x1
+match_priority = 0
+if $managed_slot_id == $\\modmanageragl\\group_1\\active_slot
+    drawindexed = auto
+    ; inner note
+endif
+[KeySection]
+condition = (orig_cond) && $managed_slot_id == $\\modmanageragl\\group_1\\active_slot
+[Resource]
+hash = 0x2
+endif
+";
+        fs::write(&ini, managed).unwrap();
+
+        let (total, failed) = restore_managed_mod(&ini);
+        assert_eq!(total, 1);
+        assert_eq!(failed, 0);
+
+        let out = fs::read_to_string(&ini).unwrap();
+
+        // 1) 管理器头注释被移除
+        assert!(!out.contains("are errored"), "管理器头注释应被移除");
+        assert!(!out.contains("are disabled keys"), "管理器头注释应被移除");
+        // 2) global $managed_slot_id 被移除
+        assert!(!out.contains("global $managed_slot_id"), "global 声明应被移除");
+        // 3) manager if 与该段 endif 被移除，且不含任何管理器残留
+        assert!(!out.contains("managed_slot_id"), "管理器槽位残留应被清除");
+        assert!(!out.contains("active_slot"), "管理器槽位残留应被清除");
+        // 4) 4 空格缩进被移除（段体行去缩进）
+        assert!(out.contains("drawindexed = auto"), "缩进后的命令应去缩进保留");
+        assert!(!out.contains("    drawindexed"), "不应残留 4 空格缩进");
+        // 5) 非管理器注释保留
+        assert!(out.contains("; inner note"), "非管理器注释应保留");
+        // 6) 增强 condition 中管理器段被清除，仅留用户原条件（圆括号为 sanitize 对称解包，详见报告）
+        assert!(out.contains("orig_cond"), "用户原 condition 应保留");
+        // 7) 合法悬空 endif 必须保留（对齐 Dart：不删除 INPUT 遗留悬空 endif）
+        assert!(out.contains("endif"), "合法悬空 endif 应被保留");
+        // 8) match_priority=0 由 update 注入，restore 不移除（非管理器专属标记；
+        //    作为独立 3Dmigoto 指令在脱管后依然合法。此行为是否为 NRMM 严格一致项待 Dart 基线确认。）
+        assert!(out.contains("match_priority = 0"), "match_priority 注入项当前保留（对齐待确认）");
+    }
+
+    /// 真实管线回放：update_mod_data 产出后，对 mod 目录执行 restore_managed_mod，
+    /// 确认管理器 if/endif/global/condition 全部清除。
+    #[test]
+    fn test_restore_managed_mod_after_real_update() {
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().join("Mods");
+        let managed = mods_path.join("_MANAGED_");
+        fs::create_dir_all(&managed).unwrap();
+        create_main_ini(dir.path(), TargetGame::GenshinImpact);
+        let settings = AppSettings::default();
+
+        let group_path = managed.join("group_1");
+        fs::create_dir_all(&group_path).unwrap();
+        let mod_dir = create_mod_with_ini(
+            &group_path,
+            "ModA",
+            "[TextureOverrideBody]\nhash = 0x1\ndrawindexed = auto\n",
+        );
+
+        update_mod_data(TargetGame::GenshinImpact, &mods_path, &settings).unwrap();
+
+        let (total, failed) = restore_managed_mod(&mod_dir);
+        assert_eq!(total, 1);
+        assert_eq!(failed, 0);
+
+        let out = fs::read_to_string(mod_dir.join("mod.ini")).unwrap();
+        assert!(!out.contains("managed_slot_id"), "真实管线还原后不应残留管理器槽位");
+        assert!(!out.contains("active_slot"), "真实管线还原后不应残留管理器槽位");
+        // 段体命令保留且去缩进
+        assert!(out.contains("drawindexed = auto"));
     }
 
     #[test]

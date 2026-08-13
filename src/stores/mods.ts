@@ -415,10 +415,7 @@ export const useModsStore = defineStore('mods', () => {
   function markNeedUpdate(groupIndex?: number) {
     const s = useSettingsStore()
     // 游戏级标记
-    needUpdatePerGame.value = {
-      ...needUpdatePerGame.value,
-      [s.currentGame]: true
-    }
+    needUpdatePerGame.value[s.currentGame] = true
     // 分组级标记（用于增量更新）
     if (groupIndex !== undefined) {
       needUpdatePerGroup.value = {
@@ -434,10 +431,7 @@ export const useModsStore = defineStore('mods', () => {
    */
   function clearNeedUpdate() {
     const s = useSettingsStore()
-    needUpdatePerGame.value = {
-      ...needUpdatePerGame.value,
-      [s.currentGame]: false
-    }
+    needUpdatePerGame.value[s.currentGame] = false
     // 清除所有分组级标记
     needUpdatePerGroup.value = {}
     needReloadManual.value = false
@@ -710,17 +704,10 @@ export const useModsStore = defineStore('mods', () => {
       // 保证下一次点击该分组时，UI 依然显示为后端写入的选中索引
       if (group.groupType !== 'mutexGroup') {
         const groupPathMatch = group.groupPath
-        const found = (function syncRec(list: ModGroupData[]): boolean {
-          for (const g of list) {
-            if (g.groupPath === groupPathMatch) {
-              g.activeModIndex = retSelIdx
-              return true
-            }
-            if (g.children && g.children.length > 0 && syncRec(g.children)) return true
-          }
-          return false
-        })(groups.value)
-        if (!found) {
+        const found = findGroupByPathInList(groups.value, groupPathMatch)
+        if (found) {
+          found.activeModIndex = retSelIdx
+        } else {
           logger.warn('ModsStore', 'activeModIndex sync failed: group not found in tree', {
             groupPath: groupPathMatch,
             retSelIdx,

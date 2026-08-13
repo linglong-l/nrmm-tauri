@@ -13,6 +13,8 @@ pub const TEMPLATE_GROUP: &[u8] = include_bytes!("template_group.txt");
 pub const TEMPLATE_MANAGER_GROUP: &[u8] = include_bytes!("template_manager_group.txt");
 /// 前台按键监听配置
 pub const LISTEN_KEYPRESS_MANAGER: &[u8] = include_bytes!("listen_keypress_manager.txt");
+/// 支持额外前台窗口的按键监听配置（DLL 支持 additional_foreground_window）
+pub const LISTEN_KEYPRESS_ADDITIONAL_WINDOW: &[u8] = include_bytes!("listen_keypress_additional_window.txt");
 /// 后台按键监听配置
 pub const LISTEN_KEYPRESS_EVEN_ON_BACKGROUND: &[u8] = include_bytes!("listen_keypress_even_on_background.txt");
 

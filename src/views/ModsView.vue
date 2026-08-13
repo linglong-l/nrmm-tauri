@@ -48,6 +48,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { importItems, isFileWatcherRunning, currentWatchedPath } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
 import { listen } from '@tauri-apps/api/event'
+import type { ImportItemResult } from '@/utils/tauri'
 
 const { t } = useI18n()
 const modsStore = useModsStore()
@@ -130,7 +131,7 @@ async function handleDrop(e: DragEvent) {
   const paths: string[] = []
   for (let i = 0; i < files.length; i++) {
     const file = files[i]
-    const f = file as any
+    const f = file as File & { path?: string }
     const p = f.path || f.webkitRelativePath
     if (p) paths.push(p)
   }
@@ -140,7 +141,7 @@ async function handleDrop(e: DragEvent) {
     return
   }
 
-  const loading: any = ElMessage({
+  const loading = ElMessage({
     message: t('Loading...'),
     duration: 0,
     type: 'info',
@@ -155,15 +156,16 @@ async function handleDrop(e: DragEvent) {
       targetGroupDir: group.groupPath,
     })
 
-    const hasError = results.some((r: any) => r?.ExtractFailed || (typeof r === 'object' && r.message && !r.mod_path))
+    const hasError = results.some((r: ImportItemResult) => r.ExtractFailed || (r.message && !r.mod_path))
     if (hasError) {
       ElMessage.error(t('Failed to add mods'))
     } else {
       ElMessage.success(t('Mods added successfully'))
     }
-  } catch (err: any) {
+  } catch (err) {
     logger.error('ModsView', 'Import failed', err)
-    ElMessage.error(t('Failed to add mods') + ': ' + (err?.message || String(err)))
+    const msg = err instanceof Error ? err.message : String(err)
+    ElMessage.error(t('Failed to add mods') + ': ' + msg)
   } finally {
     loading.close()
   }

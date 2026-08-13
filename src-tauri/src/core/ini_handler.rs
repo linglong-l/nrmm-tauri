@@ -1,15 +1,46 @@
 use std::path::{Path, PathBuf};
-use std::io::{Write, BufWriter};
+use std::io::{Write, BufWriter, BufReader, Read, BufRead};
+use std::cell::RefCell;
+use std::borrow::Cow;
 use anyhow::{Result, Context, bail};
 use std::fs;
 use regex::Regex;
 
 use crate::core::constants;
 use crate::models::mod_data::ErroredLines;
+use crate::core::error_normalizer::friendly_errored_line;
+
+/// 文件读取缓冲容量：足够覆盖绝大多数 INI 单行，同时避免一次性把整个文件读入内存。
+const READ_BUFFER_CAPACITY: usize = 256 * 1024;
+
+// 线程级缓冲池：跨多次 `IniFile::parse` / `force_read_as_utf8` 复用，
+// 避免每个文件都重新分配 `Vec<u8>` 读取缓冲与逐行解码缓冲（内存复用）。
+thread_local! {
+    static LINE_BUF: RefCell<String> = RefCell::new(String::with_capacity(1024));
+    static DECODED_BUF: RefCell<String> = RefCell::new(String::with_capacity(1024));
+    static READ_BUF: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(64 * 1024));
+}
+
+/// 以「缓冲池 + 大容量 BufReader」读取整个文件字节，复用线程级 `READ_BUF` 避免重复分配。
+///
+/// 语义与 `fs::read` 一致：返回文件原始字节。仅读取方式（缓冲/复用）不同。
+fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
+    let file = fs::File::open(path)
+        .with_context(|| format!("Failed to open file: {:?}", path))?;
+    let mut reader = BufReader::with_capacity(READ_BUFFER_CAPACITY, file);
+    READ_BUF.with(|b| {
+        let mut buf = b.borrow_mut();
+        buf.clear();
+        reader
+            .read_to_end(&mut buf)
+            .with_context(|| format!("Failed to read file: {:?}", path))?;
+        Ok(buf.clone())
+    })
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IniLine {
-    Empty,
+    Empty { indent: usize },
     Comment(String),
     DisabledKeyValue { key: String, value: String, comment: Option<String> },
     KeyValue { key: String, value: String, disabled: bool, comment: Option<String>, indent: usize },
@@ -189,7 +220,7 @@ fn parse_key_value(line: &str) -> Option<(String, String, Option<String>)> {
 impl std::fmt::Display for IniLine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            IniLine::Empty => Ok(()),
+            IniLine::Empty { indent } => write!(f, "{}", " ".repeat(*indent)),
             IniLine::Comment(text) => write!(f, "{}", text),
             IniLine::DisabledKeyValue { key, value, comment } => {
                 write!(f, ";-;{} = {}", key, value)?;
@@ -232,18 +263,54 @@ impl std::fmt::Display for IniLine {
 
 impl IniFile {
     pub fn parse(path: &Path) -> Result<Self> {
-        let content = Self::force_read_as_utf8(path)?;
+        let file = fs::File::open(path)
+            .with_context(|| format!("Failed to open file: {:?}", path))?;
+        let mut reader = BufReader::with_capacity(READ_BUFFER_CAPACITY, file);
+
+        // 从线程级缓冲池取出可复用缓冲区（取出后 RefCell 内留下默认空串，跨调用复用，降低分配开销）
+        let mut line_buf = LINE_BUF.with(|lb| std::mem::take(&mut *lb.borrow_mut()));
+        let mut decoded = DECODED_BUF.with(|db| std::mem::take(&mut *db.borrow_mut()));
+
         let mut preamble: Vec<IniLine> = Vec::new();
         let mut sections: Vec<IniSection> = Vec::new();
         let mut current_section: Option<usize> = None;
+        let mut first_line = true;
 
-        for raw_line in content.lines() {
+        loop {
+            line_buf.clear();
+            let n = reader
+                .read_line(&mut line_buf)
+                .with_context(|| format!("Failed to read file: {:?}", path))?;
+            if n == 0 {
+                break;
+            }
+
+            // 逐行有损解码：等价于整文件 from_utf8_lossy，但避免整文件驻留内存（流式 + 内存复用）
+            decoded.clear();
+            match String::from_utf8_lossy(line_buf.as_bytes()) {
+                Cow::Borrowed(b) => decoded.push_str(b),
+                Cow::Owned(o) => decoded.push_str(&o),
+            }
+            if decoded.ends_with('\n') {
+                decoded.pop();
+            }
+            if decoded.ends_with('\r') {
+                decoded.pop();
+            }
+            if first_line {
+                first_line = false;
+                if decoded.starts_with('\u{feff}') {
+                    decoded.remove(0);
+                }
+            }
+
+            let raw_line = &decoded;
             let line = trim_trailing_whitespace(raw_line);
 
             if line.is_empty() {
                 match current_section {
-                    Some(idx) => sections[idx].lines.push(IniLine::Empty),
-                    None => preamble.push(IniLine::Empty),
+                    Some(idx) => sections[idx].lines.push(IniLine::Empty { indent: 0 }),
+                    None => preamble.push(IniLine::Empty { indent: 0 }),
                 }
                 continue;
             }
@@ -381,6 +448,10 @@ impl IniFile {
             }
         }
 
+        // 归还缓冲区到线程级缓冲池，供后续解析复用
+        LINE_BUF.with(|lb| *lb.borrow_mut() = line_buf);
+        DECODED_BUF.with(|db| *db.borrow_mut() = decoded);
+
         Ok(IniFile {
             path: path.to_path_buf(),
             preamble,
@@ -419,6 +490,7 @@ impl IniFile {
         }
 
         let mut first_section = true;
+        let mut last_section_ends_with_real = false;
         for section in &self.sections {
             if !first_section {
                 writeln!(writer)?;
@@ -426,10 +498,10 @@ impl IniFile {
             first_section = false;
 
             writeln!(writer, "[{}]", section.name)?;
-            // 跳过段尾的 Empty 行，避免段间出现多余空行（对齐原版 NRMM 输出）
+            // 跳过段尾的 Empty 行（对齐 Dart：段尾空行不计入 needsSeparator）
             let lines: Vec<&IniLine> = section.lines.iter()
                 .rev()
-                .skip_while(|l| matches!(l, IniLine::Empty))
+                .skip_while(|l| matches!(l, IniLine::Empty { .. }))
                 .collect::<Vec<_>>()
                 .into_iter()
                 .rev()
@@ -437,6 +509,17 @@ impl IniFile {
             for line in &lines {
                 writeln!(writer, "{}", line)?;
             }
+            // 段末最后一行是否为「真实内容」（非空、非纯 ; 注释；;-; 注释在 Dart 中视为真实内容）。
+            // 仅当最后一段（文件末尾）末行为真实内容时，才在文末追加一个空行，
+            // 对齐 Dart _getLiteralIni 的 needsSeparator（段后/文件末尾空行分隔）。
+            last_section_ends_with_real = lines
+                .last()
+                .is_some_and(|l| Self::is_real_content_line(l));
+        }
+
+        // 文件末尾空行（对齐 Dart 对最后一段的 needsSeparator 处理）
+        if last_section_ends_with_real {
+            writeln!(writer)?;
         }
 
         writer.flush()?;
@@ -446,6 +529,16 @@ impl IniFile {
             .with_context(|| format!("Failed to rename temp file to {:?}", path))?;
 
         Ok(())
+    }
+
+    /// 对齐 Dart _getLiteralIni 的 needsSeparator 判定：
+    /// 空行与纯 `;` 注释不计为真实内容；`;-;` 注释（被注释掉的键/命令）在 Dart 中视为真实内容。
+    fn is_real_content_line(line: &IniLine) -> bool {
+        match line {
+            IniLine::Empty { .. } => false,
+            IniLine::Comment(c) => c.starts_with(";-;"),
+            _ => true,
+        }
     }
 
     pub fn backup(path: &Path) -> Result<PathBuf> {
@@ -471,9 +564,7 @@ impl IniFile {
     }
 
     pub fn force_read_as_utf8(path: &Path) -> Result<String> {
-        let bytes = fs::read(path)
-            .with_context(|| format!("Failed to read file: {:?}", path))?;
-
+        let bytes = read_file_bytes(path)?;
         let bytes = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
             &bytes[3..]
         } else {
@@ -506,7 +597,7 @@ impl IniFile {
     fn first_command_line_index(lines: &[IniLine]) -> Option<usize> {
         for (i, line) in lines.iter().enumerate() {
             match line {
-                IniLine::Empty | IniLine::Comment(_) => continue,
+                IniLine::Empty { .. } | IniLine::Comment(_) => continue,
                 IniLine::KeyValue { key, .. } if Self::is_section_attribute_key(key) => continue,
                 _ => return Some(i),
             }
@@ -514,14 +605,120 @@ impl IniFile {
         None
     }
 
+    #[allow(dead_code)]
     fn last_command_line_index(lines: &[IniLine]) -> Option<usize> {
         for (i, line) in lines.iter().enumerate().rev() {
             match line {
-                IniLine::Empty | IniLine::Comment(_) => continue,
+                IniLine::Empty { .. } | IniLine::Comment(_) => continue,
                 _ => return Some(i),
             }
         }
         None
+    }
+
+    /// 清理旧的 NRMM managed 内容，对齐 Dart `_parseIniSections`。
+    ///
+    /// 重复运行 update_mod_data 时，旧的注入内容（if 守卫、$managed_slot_id、
+    /// NRMM 注释标记等）需要先移除，否则会累积。Dart 在解析阶段即过滤旧内容；
+    /// Rust 由于 IniFile::parse 不做过滤，需在注入前显式调用此方法。
+    ///
+    /// 清理项目：
+    /// 1. 旧 manager if 行 (`if $managed_slot_id == $\modmanageragl\group_X\active_slot`)
+    /// 2. 旧 `$managed_slot_id` 赋值（Constants 段中）
+    /// 3. 旧 NRMM 前置注释（`; No Reload Mod Manager...` 等）
+    /// 4. 旧 condition 表达式中的 manager 部分
+    /// 5. 注释放置的 `;-; DISABLED_BY_NRMM` 标记行
+    pub fn remove_old_managed_content(&mut self) {
+        // 清理 preamble 中的 NRMM 注释标记
+        self.preamble.retain(|line| {
+            if let IniLine::PreambleLine(text) = line {
+                let trimmed = text.trim();
+                if trimmed.is_empty() { return false; }
+                if trimmed.starts_with(';') {
+                    let lower = trimmed.to_lowercase();
+                    return !(lower.contains("no reload mod manager")
+                        || lower.contains("\";-;\" are errored")
+                        || lower.contains("\";+;\" are disabled")
+                        || lower.contains("errored conditional blocks")
+                        || lower.contains("if certain syntax is only"));
+                }
+            }
+            true
+        });
+
+        for section in &mut self.sections {
+            // 1. 移除旧 manager if 行
+            section.lines.retain(|line| {
+                if let IniLine::IfStart { condition, .. } = line {
+                    let cleaned: String = condition
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .collect();
+                    return !cleaned.to_lowercase().contains(
+                        "if$managed_slot_id==$\\modmanageragl\\group_"
+                    );
+                }
+                true
+            });
+
+            // 2. 保留所有 endif 行（含孤立/悬空 endif），对齐 Dart _parseIniSections：
+            //    Dart 在解析阶段只移除 manager if 行与 Constants 段内的 $managed_slot_id，
+            //    但【从不】移除 endif 行——包括原 INPUT 中遗留的悬空 endif 与上一次运行
+            //    残留的 manager endif。悬空的 manager endif 随后由 inject_slot_conditions
+            //    调用 fix_manager_endif 重新配对（find orphan endif as manager_endif）。
+            //    因此此处绝不能按 if/endif 配对删除 if_depth==0 的孤立 endif，否则会误删
+            //    Resource 等未包裹段中 INPUT 原始遗留的悬空 endif（Dart 保留，Rust 原实现误删）。
+
+            // 3. 清理 Constants 段中的旧 $managed_slot_id
+            if section.name.eq_ignore_ascii_case("Constants") {
+                section.lines.retain(|line| {
+                    !matches!(line, IniLine::KeyValue { key, .. }
+                        if key.trim().eq_ignore_ascii_case("$managed_slot_id")
+                        || key.trim().eq_ignore_ascii_case("global $managed_slot_id"))
+                });
+            }
+
+            // 4. 清理 condition 表达式中的旧 manager 部分
+            for line in &mut section.lines {
+                if let IniLine::KeyValue { key, value, .. } = line {
+                    if key.trim().eq_ignore_ascii_case("condition") {
+                        *value = Self::sanitize_condition_for_managed(value);
+                    }
+                }
+                if let IniLine::DisabledKeyValue { key, value, .. } = line {
+                    if key.trim().eq_ignore_ascii_case("condition") {
+                        *value = Self::sanitize_condition_for_managed(value);
+                    }
+                }
+            }
+
+            // 5. 清理 ;-; DISABLED_BY_NRMM 注释标记行
+            section.lines.retain(|line| {
+                if let IniLine::Comment(text) = line {
+                    return !text.contains("DISABLED_BY_NRMM");
+                }
+                true
+            });
+        }
+    }
+
+    /// 清理 condition 表达式中的 manager 部分，对齐 Dart _sanitizeKeyConditionExpressionFromModManager
+    fn sanitize_condition_for_managed(expr: &str) -> String {
+        let managed_prefix = "$managed_slot_id ==";
+        let idx = expr.find(managed_prefix);
+        if let Some(pos) = idx {
+            // 找到 && 管理器表达式开始位置
+            if pos > 0 {
+                let before = &expr[..pos];
+                // 回退到最后一个 &&
+                if let Some(and_pos) = before.rfind("&&") {
+                    return before[..and_pos].trim().to_string();
+                }
+                return before.trim().to_string();
+            }
+            return String::new(); // 整行都是管理器表达式
+        }
+        expr.trim().to_string()
     }
 
     pub fn inject_slot_conditions(&mut self, group_id: u32, mod_index: u32) {
@@ -530,18 +727,15 @@ impl IniFile {
             group_id
         );
 
-        // 注入 $managed_slot_id 赋值：每个模组的 [Constants] 段需设置自身的槽位 ID，
-        // 使 3Dmigoto 在解析 if/endif 条件时能正确匹配 $active_slot。
-        // 对齐 NRMM 原版：在模组 INI 的 [Constants] 段注入 global $managed_slot_id = <mod_index>
+        // === 步骤 1: 注入 $managed_slot_id 到 Constants 段 ===
+        // 对齐 Dart: lines.insert(0, 'global $managed_slot_id = $modIndex')
         let has_constants = self.sections.iter().any(|s| s.name.eq_ignore_ascii_case("Constants"));
         if has_constants {
             for section in &mut self.sections {
                 if section.name.eq_ignore_ascii_case("Constants") {
-                    // 移除旧的 $managed_slot_id 赋值（避免重复）
                     section.lines.retain(|line| {
                         !matches!(line, IniLine::KeyValue { key, .. } if key.trim().eq_ignore_ascii_case("$managed_slot_id"))
                     });
-                    // 在段首插入赋值
                     section.lines.insert(0, IniLine::KeyValue {
                         key: "global $managed_slot_id".to_string(),
                         value: mod_index.to_string(),
@@ -553,7 +747,6 @@ impl IniFile {
                 }
             }
         } else {
-            // 模组 INI 无 [Constants] 段，创建一个并插入到文件开头
             let constants_section = IniSection {
                 name: "Constants".to_string(),
                 lines: vec![IniLine::KeyValue {
@@ -568,17 +761,15 @@ impl IniFile {
             self.sections.insert(0, constants_section);
         }
 
+        // === 步骤 2: 按段逐段处理 ===
         for section in &mut self.sections {
-            // Key 段：与 NRMM 一致，使用 condition 追加方式注入槽位条件，
-            // 并清理旧的管理器表达式，避免重复更新导致嵌套。
+            // Key 段：condition 追加方式（对齐 NRMM）
             if is_key_section(&section.name) {
                 Self::inject_key_condition(section, &condition_var);
                 continue;
             }
 
-            // NRMM 对齐：仅对按键触发段（历史逻辑）+ 注入白名单段（Present/CustomShader/
-            // TextureOverride/ShaderOverride/CommandList/Resource/InputLayout/Draw*/Dispatch 等）
-            // 包裹 VariableGroup 条件；其余段（如 String 等）不做处理。
+            // 白名单段：包裹 if/endif 守卫
             let should_wrap = is_conditional_section(&section.name)
                 || constants::is_injectable_section(&section.name);
 
@@ -591,41 +782,266 @@ impl IniFile {
                     continue;
                 }
 
-                // 补缺省 match_priority = 0（对齐原版 NRMM）：仅对 TextureOverride 段且
-                // 段内无任何 match_* 键时插入（如已有 match_first_index 等则不插入），
-                // 位置在段属性之后。全属性段（如 Draw）也补，插入到末尾。
-                // 幂等：无 match_* 键才补，重复更新不会叠加。
-                let is_texture_override = section.name.to_lowercase().starts_with("textureoverride");
-                if is_texture_override {
-                    let has_match_key = section.lines.iter().any(|l| {
-                        matches!(l, IniLine::KeyValue { key, .. } if key.to_lowercase().starts_with("match_"))
-                    });
-                    if !has_match_key {
-                        let insert_at = Self::first_command_line_index(&section.lines)
-                            .unwrap_or(section.lines.len());
-                        section.lines.insert(insert_at, IniLine::KeyValue {
-                            key: "match_priority".to_string(),
-                            value: "0".to_string(),
-                            disabled: false,
-                            comment: None,
-                            indent: 0,
-                        });
-                    }
-                }
+                // 对齐 Dart _checkAndModifySections / _parseIniSections：
+                // 段级属性行（hash / match_* / allow_duplicate_hash 等）保持在顶层、位于 if 守卫之前；
+                // if $managed_slot_id 守卫插入在属性行之后、段体（首个命令行）之前，仅包裹段体；
+                // 末尾 endif 置于最后一个内容行之后、段尾注释/空行之前。
+                let has_body = Self::first_command_line_index(&section.lines).is_some();
 
-                let first_idx = Self::first_command_line_index(&section.lines);
-                let last_idx = Self::last_command_line_index(&section.lines);
-
-                if let (Some(first), Some(last)) = (first_idx, last_idx) {
-                    // NRMM 对齐：在首个命令行之前插入 if 守卫
-                    section.lines.insert(first, IniLine::IfStart {
+                // 对齐 Dart _checkAndModifySections：白名单段统一在「段首（index 0，顶层）」
+                // 插入管理器 if 守卫，包裹整段（含 hash / match_priority 等段属性），
+                // 使被禁用模组的整段不生效。仅当存在段体（命令行）时才包裹，避免空 if 块。
+                // 注：match_priority / allow_duplicate_hash 由 ensure_section_attribute_keys
+                // 在 reorder_by_ini_key_priority 之前补齐，插入点为段末（段尾注释/空行之前），
+                // 经重排后自然落在优先级位置（hash 之后），与 Dart 一致。
+                if has_body {
+                    section.lines.insert(0, IniLine::IfStart {
                         condition: condition_var.clone(),
                         indent: 0,
                     });
 
-                    // 1 个元素（if）插入在 last 之前，末尾内容偏移 +1，endif 置于 last+2
-                    let insert_end = last + 2;
-                    section.lines.insert(insert_end.min(section.lines.len()), IniLine::EndIf { indent: 0 });
+                    // 对齐 Dart _fixEndifLineAndTrailingFlowControlLine：endif 置于段末内容行之后
+                    Self::fix_manager_endif(section);
+                }
+            }
+        }
+    }
+
+    /// 补齐段级属性键（match_priority / allow_duplicate_hash）
+    ///
+    /// 对齐 Dart `_parseIniSections`：在解析阶段为 TextureOverride / ShaderOverride 段
+    /// 补入缺失的关键属性键。插入点为「段末（段尾注释/空行之前）」，随后由
+    /// `reorder_by_ini_key_priority` 将其移至优先级位置（hash 之后、段体之前）。
+    ///
+    /// - TextureOverride：若不存在任意 `match_*` 键，补 `match_priority = 0`
+    /// - ShaderOverride：若不存在 `allow_duplicate_hash`，补 `allow_duplicate_hash = true`
+    ///
+    /// 必须在 `reorder_by_ini_key_priority` **之前**调用（顺序对齐 Dart 管线）。
+    pub fn ensure_section_attribute_keys(&mut self) {
+        for section in &mut self.sections {
+            let lower = section.name.to_lowercase();
+            if lower.starts_with("textureoverride") {
+                let has_match = section.lines.iter().any(|l| {
+                    matches!(l, IniLine::KeyValue { key, .. } if key.to_lowercase().starts_with("match_"))
+                });
+                if !has_match {
+                    let idx = Self::last_content_index(&section.lines);
+                    section.lines.insert(idx, IniLine::KeyValue {
+                        key: "match_priority".to_string(),
+                        value: "0".to_string(),
+                        disabled: false,
+                        comment: None,
+                        indent: 0,
+                    });
+                }
+            } else if lower.starts_with("shaderoverride") {
+                let has_adh = section.lines.iter().any(|l| {
+                    matches!(l, IniLine::KeyValue { key, .. } if key.to_lowercase().eq_ignore_ascii_case("allow_duplicate_hash"))
+                });
+                if !has_adh {
+                    let idx = Self::last_content_index(&section.lines);
+                    section.lines.insert(idx, IniLine::KeyValue {
+                        key: "allow_duplicate_hash".to_string(),
+                        value: "true".to_string(),
+                        disabled: false,
+                        comment: None,
+                        indent: 0,
+                    });
+                }
+            }
+        }
+    }
+
+    /// 返回段末「最后一个内容行之后」的插入索引，对齐 Dart `_getLastIndexInSection`：
+    /// 自段尾向前跳过空行与常规注释行（以 `;` 开头但非 `;-;`），`;-;` 视为内容行。
+    fn last_content_index(lines: &[IniLine]) -> usize {
+        for (i, line) in lines.iter().enumerate().rev() {
+            match line {
+                IniLine::Empty { .. } => continue,
+                IniLine::Comment(text) => {
+                    let t: Vec<char> = text.trim_start().chars().collect();
+                    // `;-;` 视为内容行（崩溃注释），可紧接其后插入
+                    if t.first() == Some(&';') && t.get(1) == Some(&'-') && t.get(2) == Some(&';') {
+                        return i + 1;
+                    }
+                    // 常规注释行：跳过
+                    continue;
+                }
+                _ => return i + 1,
+            }
+        }
+        lines.len()
+    }
+
+    // ==========================================================================
+    // NRMM 对齐：INI 键优先级重排（_reorderByIniKeyPriority）
+    // ==========================================================================
+
+    /// TextureOverride 段优先键（顺序即输出顺序，对齐 NRMM textureOverrideIniKeys）
+    const TEXTURE_OVERRIDE_INI_KEYS: &[&'static str] = &[
+        "hash", "format", "width", "height", "width_multiply", "height_multiply",
+        "override_byte_stride", "override_vertex_count", "uav_byte_stride", "iteration",
+        "filter_index", "expand_region_copy", "deny_cpu_read", "match_priority",
+        "match_type", "match_usage", "match_bind_flags", "match_cpu_access_flags",
+        "match_misc_flags", "match_byte_width", "match_stride", "match_mips",
+        "match_format", "match_width", "match_height", "match_depth", "match_array",
+        "match_msaa", "match_msaa_quality", "match_first_vertex", "match_first_index",
+        "match_first_instance", "match_vertex_count", "match_index_count",
+        "match_instance_count",
+    ];
+
+    /// CustomShader 段优先键（对齐 NRMM customShaderIniKeys）
+    const CUSTOM_SHADER_INI_KEYS: &[&'static str] = &[
+        "vs", "hs", "ds", "gs", "ps", "cs", "max_executions_per_frame", "flags",
+        "blend", "alpha", "mask", "blend[0]", "blend[1]", "blend[2]", "blend[3]",
+        "blend[4]", "blend[5]", "blend[6]", "blend[7]", "alpha[0]", "alpha[1]",
+        "alpha[2]", "alpha[3]", "alpha[4]", "alpha[5]", "alpha[6]", "alpha[7]",
+        "mask[0]", "mask[1]", "mask[2]", "mask[3]", "mask[4]", "mask[5]", "mask[6]",
+        "mask[7]", "alpha_to_coverage", "sample_mask", "blend_factor[0]",
+        "blend_factor[1]", "blend_factor[2]", "blend_factor[3]", "blend_state_merge",
+        "depth_enable", "depth_write_mask", "depth_func", "stencil_enable",
+        "stencil_read_mask", "stencil_write_mask", "stencil_front", "stencil_back",
+        "stencil_ref", "depth_stencil_state_merge", "fill", "cull", "front",
+        "depth_bias", "depth_bias_clamp", "slope_scaled_depth_bias",
+        "depth_clip_enable", "scissor_enable", "multisample_enable",
+        "antialiased_line_enable", "rasterizer_state_merge", "topology", "sampler",
+    ];
+
+    /// ShaderOverride 段优先键（对齐 NRMM shaderOverrideIniKeys）
+    const SHADER_OVERRIDE_INI_KEYS: &[&'static str] = &[
+        "hash", "allow_duplicate_hash", "depth_filter", "partner", "model",
+        "disable_scissor", "filter_index",
+    ];
+
+    /// ShaderRegex 主段优先键（对齐 NRMM shaderRegexIniKeys）
+    const SHADER_REGEX_INI_KEYS: &[&'static str] = &[
+        "shader_model", "temps", "filter_index",
+    ];
+
+    /// 根据段名返回对应的优先键列表（对齐 NRMM 段类型判定）
+    fn priority_keys_for_section(name: &str) -> Option<&'static [&'static str]> {
+        let lower = name.to_lowercase();
+        if lower.starts_with("textureoverride") {
+            Some(Self::TEXTURE_OVERRIDE_INI_KEYS)
+        } else if lower.starts_with("customshader") || lower.starts_with("builtincustomshader") {
+            Some(Self::CUSTOM_SHADER_INI_KEYS)
+        } else if lower.starts_with("shaderoverride") {
+            Some(Self::SHADER_OVERRIDE_INI_KEYS)
+        } else if lower.starts_with("shaderregex") && !lower.contains('.') {
+            Some(Self::SHADER_REGEX_INI_KEYS)
+        } else {
+            None
+        }
+    }
+
+    /// 对齐 NRMM `_reorderByIniKeyPriority`：按段类型将已知优先键
+    /// （如 hash / match_* / vs / ps ...）重排到段首，其余行保持原有相对顺序。
+    /// 段前的注释/空行跟随其后的首个真实行（与 NRMM 缓冲 pendingComments 行为一致）。
+    pub fn reorder_by_ini_key_priority(&mut self) {
+        for section in &mut self.sections {
+            let Some(keys) = Self::priority_keys_for_section(&section.name) else {
+                continue;
+            };
+            let lower_keys: Vec<String> = keys.iter().map(|k| k.to_lowercase()).collect();
+
+            let mut prioritized: Vec<IniLine> = Vec::new();
+            let mut rest: Vec<IniLine> = Vec::new();
+            let mut pending: Vec<IniLine> = Vec::new();
+
+            for line in section.lines.drain(..) {
+                match &line {
+                    IniLine::Comment(_) | IniLine::Empty { .. } => {
+                        pending.push(line);
+                        continue;
+                    }
+                    _ => {}
+                }
+                let lower_key: Option<String> = match &line {
+                    IniLine::KeyValue { key, .. } => Some(key.to_lowercase()),
+                    IniLine::DisabledKeyValue { key, .. } => Some(key.to_lowercase()),
+                    _ => None,
+                };
+                let matched = lower_key
+                    .as_ref()
+                    .map(|k| lower_keys.iter().any(|pk| k == pk))
+                    .unwrap_or(false);
+                if matched {
+                    prioritized.append(&mut pending);
+                    prioritized.push(line);
+                } else {
+                    rest.append(&mut pending);
+                    rest.push(line);
+                }
+            }
+            rest.append(&mut pending);
+            section.lines = Vec::new();
+            section.lines.extend(prioritized);
+            section.lines.extend(rest);
+        }
+    }
+
+    /// 对齐 Dart `_fixEndifLineAndTrailingFlowControlLine`：
+    /// 1. 移除管理器 if/endif 范围内的意外 else/elif（旧版本残留）
+    /// 2. 确保 endif 位于段末（最后一个有效行之后）
+    fn fix_manager_endif(section: &mut IniSection) {
+        let mut if_stack: Vec<usize> = Vec::new(); // stack of non-manager if indices
+        let mut manager_endif_idx: Option<usize> = None;
+        let mut else_elif_to_comment: Vec<usize> = Vec::new();
+
+        for (i, line) in section.lines.iter().enumerate() {
+            match line {
+                IniLine::IfStart { condition, .. } => {
+                    if !condition.contains("managed_slot_id") {
+                        if_stack.push(i);
+                    }
+                }
+                IniLine::Else { .. } | IniLine::Elif { .. } => {
+                    if if_stack.is_empty() {
+                        // else/elif without matching if → 管理器范围的意外 else/elif，移除
+                        else_elif_to_comment.push(i);
+                    }
+                }
+                IniLine::EndIf { .. } if if_stack.pop().is_none() => {
+                    manager_endif_idx = Some(i);
+                }
+                _ => {}
+            }
+        }
+
+        // 移除意外 else/elif（从后往前删除以保持索引）
+        for &idx in else_elif_to_comment.iter().rev() {
+            section.lines.remove(idx);
+            // 若管理器 endif 在删除行之后，其索引需调整
+            if let Some(ref mut eidx) = manager_endif_idx {
+                if idx < *eidx {
+                    *eidx -= 1;
+                }
+            }
+        }
+
+        // 找到最后一个内容行位置（非空行、非注释行）。管理器 endif 必须置于该内容行之后、
+        // 段尾注释/空行之前，以对齐 Dart（Dart 不会把 endif 推到段尾注释之后）。
+        let last_valid = (0..section.lines.len()).rev().find(|&i| {
+            !matches!(&section.lines[i], IniLine::Comment(_) | IniLine::Empty { .. })
+        });
+
+        match manager_endif_idx {
+            Some(eidx) => {
+                if let Some(last) = last_valid {
+                    // 仅当 endif 不在「最后一个内容行之后紧邻位置」时才移动
+                    if eidx != last + 1 {
+                        let endif_line = section.lines.remove(eidx);
+                        let insert_at = last + 1;
+                        section.lines.insert(insert_at, endif_line);
+                    }
+                }
+            }
+            None => {
+                // 没有 endif → 在最后一个内容行之后插入
+                if let Some(last) = last_valid {
+                    section.lines.insert(last + 1, IniLine::EndIf { indent: 0 });
+                } else {
+                    section.lines.push(IniLine::EndIf { indent: 0 });
                 }
             }
         }
@@ -715,7 +1131,7 @@ impl IniFile {
                         if let Some(start_idx) = stack.pop() {
                             let block_content = &result[start_idx + 1..];
                             let is_empty = block_content.iter().all(|l| {
-                                matches!(l, IniLine::Empty | IniLine::Comment(_))
+                                matches!(l, IniLine::Empty { .. } | IniLine::Comment(_))
                             });
                             if is_empty {
                                 result.truncate(start_idx);
@@ -772,6 +1188,30 @@ impl IniFile {
                             indent: current_indent * indent_size,
                         };
                         result.push(n);
+                    }
+                    // 对齐 Dart _prettyIndentation：if 块内的注释/空行/命令也按当前缩进缩进。
+                    // Dart 对每一行执行 indent(trimmed, currentIndentation)，即先 trim 再按当前层级加空格，
+                    // 因此段内注释与空行在 if 作用域内统一缩进 4 空格（原 INPUT 的缩进被丢弃）。
+                    IniLine::Comment(text) => {
+                        let trimmed = text.trim_start();
+                        result.push(IniLine::Comment(format!(
+                            "{}{}",
+                            " ".repeat(current_indent * indent_size),
+                            trimmed
+                        )));
+                    }
+                    IniLine::Empty { .. } => {
+                        result.push(IniLine::Empty {
+                            indent: current_indent * indent_size,
+                        });
+                    }
+                    IniLine::Command(text) => {
+                        let trimmed = text.trim_start();
+                        result.push(IniLine::Command(format!(
+                            "{}{}",
+                            " ".repeat(current_indent * indent_size),
+                            trimmed
+                        )));
                     }
                     other => result.push(other.clone()),
                 }
@@ -858,6 +1298,19 @@ impl IniFile {
     }
 
     pub fn detect_errors(&self, mod_path: &Path, known_libraries: &std::collections::HashSet<String>) -> Vec<ErroredLines> {
+        // === Error type classification (aligned with C++ FFI GetErroredFlowControlLines) ===
+        // 0: DUPLICATE LIB  - 同一模组中定义了多个同名库段（对应 C++ FFI "DUPLICATE LIB: X"）
+        // 1: CRASH LINE     - 可能导致 XXMI 崩溃的行（drawindexed/ib/vb0 等，对应 "CRASH LINE"）
+        // 2: MISSING ENDIF  - if/else 块缺少匹配的 endif（对应 "Missing \"endif\""）
+        // 3: FLOW CONTROL   - 孤儿 endif 或其他流程控制错误（对应 otherError / otherErrorMissingEndif）
+        // 4: PATH TOO LONG  - INI 路径超过 260 字符限制
+        // 5: NON EXISTENT LIB - 跨模组引用的库命名空间不存在（对应 "NON EXISTENT LIB: X"）
+        const ET_DUPLICATE_LIB: u8 = 0;
+        const ET_CRASH_LINE: u8 = 1;
+        const ET_MISSING_ENDIF: u8 = 2;
+        const ET_FLOW_CONTROL: u8 = 3;
+        const ET_PATH_TOO_LONG: u8 = 6;
+        const ET_NON_EXISTENT_LIB: u8 = 5;
         let mut errors: Vec<ErroredLines> = Vec::new();
 
         let mut defined_libs = std::collections::HashSet::new();
@@ -876,13 +1329,15 @@ impl IniFile {
             }
         }
 
+        // Step 1: 检测重复库段（DUPLICATE LIB）
         for (lib_name, lines) in &lib_sections {
             if lines.len() > 1 {
                 for &ln in lines {
                     errors.push(ErroredLines {
                         line_number: ln,
                         line: format!("[{}]", lib_name),
-                        error_type: 0,
+                        error_type: ET_DUPLICATE_LIB,
+                        error_message: format!("DUPLICATE LIB: {}", lib_name),
                         ..Default::default()
                     });
                 }
@@ -916,25 +1371,50 @@ impl IniFile {
                             errors.push(ErroredLines {
                                 line_number: line_num,
                                 line: "endif".to_string(),
-                                error_type: 3,
+                                error_type: ET_FLOW_CONTROL,
+                                error_message: "FLOW CONTROL: orphan endif".to_string(),
                                 ..Default::default()
                             });
                         }
                     }
                     IniLine::KeyValue { key, value, .. } | IniLine::DisabledKeyValue { key, value, .. } => {
                         let lower_key = key.to_lowercase();
+                        // 崩溃行（CRASH LINE, error_type=1）仅针对 drawindexed / draw：
+                        // 这些键取到非法值（既非 auto / 数值 / 逗号列表，也非资源引用）时
+                        // 会令 XXMI 崩溃。
+                        // `vb*` 与 `ib` 是缓冲/索引缓冲说明符，其合法取值为「资源引用」
+                        // （如 `ib = ResourceXxx`）或 `null` 或数值字节跨度，绝不应判为崩溃行
+                        // —— 这与 `vb*` 的处理保持一致（两者皆为缓冲引用，而非纯绘制调用）。
+                        // 因此 `ib` 必须从崩溃键中剔除（原实现误将 `ib = Resource...` 判为崩溃行，
+                        // 导致 Stelle/Config/Nvzhu 模组被错误打上 modsyntaxerrorremoved 标记）。
+                        let is_crash_key = lower_key == "drawindexed"
+                            || lower_key == "draw";
+
+                        // `ib` / `vb*` 作为缓冲引用，其跨模组引用合法性由引用键检测（NON EXISTENT LIB）
+                        // 覆盖；此处不把它们列入引用键（与 `vb*` 一致），避免把合法的 `ib = Resource...`、
+                        // `ib = null` 误报为缺失库。
                         let is_ref_key = lower_key == "run"
-                            || (lower_key.starts_with("vb") && lower_key.len() >= 3)
-                            || lower_key == "ib"
                             || lower_key.starts_with("ps-t")
                             || lower_key.starts_with("vs-t")
                             || lower_key.starts_with("ps-")
                             || lower_key.starts_with("vs-")
                             || lower_key.starts_with("cs-");
 
-                        // 引用值解析：纯数值值（如 `ps-t0 = 48`）或 3Dmigoto 内建命令列表
-                        // （`BuiltInCommandList*` 由引擎自动提供，始终可用）不应触发缺失库误报。
-                        if is_ref_key && !value.is_empty() && !Self::is_numeric_value(value) {
+                        if is_crash_key && !value.is_empty() {
+                            // Step 2a: 可能导致 XXMI 崩溃的行（CRASH LINE）
+                            // 对应 C++ FFI: reason = "CRASH LINE"
+                            if !Self::is_numeric_value(value) && !lower_key.starts_with("vb") {
+                                errors.push(ErroredLines {
+                                    line_number: line_num,
+                                    line: format!("{} = {}", key, value),
+                                    error_type: ET_CRASH_LINE,
+                                    error_message: "CRASH LINE".to_string(),
+                                    ..Default::default()
+                                });
+                            }
+                        } else if is_ref_key && !value.is_empty() && !Self::is_numeric_value(value) {
+                            // Step 2b: 跨模组库引用检测（NON EXISTENT LIB）
+                            // 对应 C++ FFI: reason = "NON EXISTENT LIB: X"
                             let ref_name = value.trim();
                             let ref_lower = ref_name.to_lowercase();
                             if !ref_name.is_empty()
@@ -942,12 +1422,12 @@ impl IniFile {
                                 && !defined_libs.contains(ref_name)
                                 && !ref_name.starts_with("Resource")
                                 && !ref_lower.starts_with("builtincommandlist")
-                                && !ref_name.is_empty()
                             {
                                 errors.push(ErroredLines {
                                     line_number: line_num,
                                     line: format!("{} = {}", key, value),
-                                    error_type: 1,
+                                    error_type: ET_NON_EXISTENT_LIB,
+                                    error_message: format!("NON EXISTENT LIB: {}", ref_name),
                                     ..Default::default()
                                 });
                             }
@@ -959,11 +1439,13 @@ impl IniFile {
             }
         }
 
+        // Step 3: 检测未闭合的 if 块（MISSING ENDIF）
         for (ln, _) in if_stack {
             errors.push(ErroredLines {
                 line_number: ln,
                 line: "if (missing endif)".to_string(),
-                error_type: 3,
+                error_type: ET_MISSING_ENDIF,
+                error_message: "Missing \"endif\"".to_string(),
                 ..Default::default()
             });
         }
@@ -973,9 +1455,16 @@ impl IniFile {
             errors.push(ErroredLines {
                 line_number: 0,
                 line: format!("Path too long: {} ({} chars)", path_str, path_str.len()),
-                error_type: 4,
+                error_type: ET_PATH_TOO_LONG,
+                error_message: "PATH TOO LONG".to_string(),
                 ..Default::default()
             });
+        }
+
+        // 规范化：把结构化校验错误转换为非专业人员可理解的友好提示（不含技术细节）
+        for e in &mut errors {
+            e.friendly_message =
+                friendly_errored_line(e.error_type, &e.error_message, e.line_number);
         }
 
         errors
@@ -999,7 +1488,7 @@ impl IniFile {
     ///
     /// 对齐 NRMM C++ 引擎的库识别：`resource` / `commandlist` / `shaderoverride` / `customshader` / `builtincommandlist`。
     /// 原 Rust 实现漏识别 `customshader` / `builtincommandlist`，导致 `run = CustomShaderElement`、
-    /// `run = BuiltInCommandListUnbindAllRenderTargets` 等合法引用被误报为缺失库（error_type=1）。
+    /// `run = BuiltInCommandListUnbindAllRenderTargets` 等合法引用被误报为缺失库（error_type=5）。
     #[inline]
     fn is_defined_library_section(name: &str) -> bool {
         let lower = name.to_lowercase();
@@ -1010,13 +1499,37 @@ impl IniFile {
             || lower.starts_with("builtincommandlist")
     }
 
-    /// 判断引用值是否为纯数值（含十六进制 `0x` 与小数），如 `override_byte_stride = 48`、`uav_byte_stride = 12`。
-    /// 此类值并非库/资源引用名，不应触发缺失库误报。
+    /// 判断引用值是否为「非库/资源引用」的安全值，用于避免把合法绘制/缓冲参数误报为
+    /// 崩溃行（CRASH LINE, error_type=1）或缺失库（NON EXISTENT LIB, error_type=5）。
+    ///
+    /// 对齐 3Dmigoto / NRMM C++ FFI 的崩溃行判定——以下均为合法值，不应判为崩溃行：
+    /// 1. 纯数值（含十六进制 `0x` 与小数），如 `override_byte_stride = 48`、`uav_byte_stride = 12`；
+    /// 2. 关键字 `auto`，如 `drawindexed = auto`、`ib = auto`、`vb0 = auto`；
+    /// 3. 逗号分隔的数值列表，如 `drawindexed = 122913, 0, 0`、`drawindexed = 156, 122913, 0`
+    ///    （3Dmigoto 合法绘制调用参数：index, count, baseVertex）。
+    ///
+    /// 若返回 false，则该值可能是库/资源引用名（应走缺失库检测分支），或被如实判为崩溃行。
     #[inline]
     fn is_numeric_value(v: &str) -> bool {
         let t = v.trim();
         if t.is_empty() {
             return false;
+        }
+        // 3Dmigoto 合法关键字（drawindexed/ib/vb* = auto 均合法，不应判为崩溃行）
+        if t.eq_ignore_ascii_case("auto") {
+            return true;
+        }
+        // 逗号分隔的数值列表（如 drawindexed = 122913, 0, 0）——逐项校验为数值
+        if t.contains(',') {
+            return t.split(',')
+                .all(|part| {
+                    let p = part.trim();
+                    if p.is_empty() {
+                        return false;
+                    }
+                    let p = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")).unwrap_or(p);
+                    p.chars().all(|c| c.is_ascii_digit() || c == '.')
+                });
         }
         let t = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t);
         let mut has_digit = false;
@@ -1290,18 +1803,20 @@ key = value
         let ini_content = "[Constants]\n$active = 0\n$other = hello\n\n[TextureOverrideTest]\nhash = 0x123\nps-t0 = Res\ndrawindexed\n\n[Present]\nx = 1\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
+        // 对齐 Dart 管线：ensure → reorder → inject
+        ini.ensure_section_attribute_keys();
+        ini.reorder_by_ini_key_priority();
         ini.inject_slot_conditions(1, 2);
 
-        // TextureOverride 段：hash 等段属性键应位于 if 守卫之前（3Dmigoto 语义要求）；
-        // if 守卫位置在 hash / match_priority 之后、首个 body 行之前。
+        // TextureOverride 段：对齐 NRMM Dart，if 守卫在段首（index 0）包裹整段（含 hash/match_priority）
         let to_lines = &ini.sections[1].lines;
-        assert!(to_lines.iter().any(|l| matches!(l, IniLine::IfStart { ref condition, .. } if condition.contains("active_slot"))));
+        assert!(matches!(to_lines[0], IniLine::IfStart { ref condition, .. } if condition.contains("active_slot")));
         assert!(to_lines.iter().any(|l| matches!(l, IniLine::EndIf { .. })));
-        // 对齐原版 NRMM：TextureOverride 段无 match_* 键时补 match_priority = 0
+        // TextureOverride 段无 match_* 键时补 match_priority = 0（位于段内）
         assert!(to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, ref value, .. } if key == "match_priority" && value == "0")));
         assert!(!to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, .. } if key == "allow_duplicate_hash")));
-        // hash 段属性键应保留在段首
-        assert!(matches!(to_lines[0], IniLine::KeyValue { ref key, .. } if key == "hash"));
+        // hash 紧随 if 守卫之后（index 1）；整段被 if 包裹（属性键不游离于 if 之外）
+        assert!(matches!(to_lines[1], IniLine::KeyValue { ref key, .. } if key == "hash"));
 
         // Constants 段：注入了 $managed_slot_id = 2，且 NRMM 不包裹
         let constants_lines = &ini.sections[0].lines;
@@ -1316,6 +1831,7 @@ key = value
         let ini_content = "[TextureOverrideHasMatch]\nhash = 0x1\nmatch_first_index = 0\nib = ResourceIB\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.ensure_section_attribute_keys();
         ini.inject_slot_conditions(1, 0);
 
         // 无 [Constants] 段时，注入逻辑会在 index 0 创建；TextureOverride 段被推到 index 1
@@ -1331,6 +1847,7 @@ key = value
         let ini_content = "[TextureOverrideDraw]\nhash = 0x1\noverride_vertex_count = 100\noverride_byte_stride = 56\nuav_byte_stride = 4\n";
         let f = write_temp_ini(ini_content);
         let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.ensure_section_attribute_keys();
         ini.inject_slot_conditions(1, 0);
 
         // 无 [Constants] → index 0 创建，段推到 index 1
@@ -1461,10 +1978,11 @@ key = value
         let ini = IniFile::parse(f.path()).unwrap();
         let known = std::collections::HashSet::new();
         let errors = ini.detect_errors(f.path().parent().unwrap(), &known);
-        assert!(errors.iter().any(|e| e.error_type == 1));
+        // ps-t0 引用不存在的外部库 → ET_NON_EXISTENT_LIB (5)
+        assert!(errors.iter().any(|e| e.error_type == 5));
     }
 
-    // ========== P0-1：合法引用不应误报 missing-library (error_type=1) ==========
+    // ========== P0-1：合法引用不应误报 missing-library (error_type=1 或 5) ==========
     #[test]
     fn test_p0_customshader_run_reference_not_flagged() {
         // `run = CustomShaderElement` 引用 [CustomShaderElement]，应被正确识别为已定义库
@@ -1474,7 +1992,7 @@ key = value
         let known = std::collections::HashSet::new();
         let errors = ini.detect_errors(f.path().parent().unwrap(), &known);
         assert!(
-            !errors.iter().any(|e| e.error_type == 1),
+            !errors.iter().any(|e| e.error_type == 1 || e.error_type == 5),
             "CustomShader 引用被误报为缺失库: {:?}",
             errors
         );
@@ -1489,7 +2007,7 @@ key = value
         let known = std::collections::HashSet::new();
         let errors = ini.detect_errors(f.path().parent().unwrap(), &known);
         assert!(
-            !errors.iter().any(|e| e.error_type == 1),
+            !errors.iter().any(|e| e.error_type == 1 || e.error_type == 5),
             "BuiltInCommandList 引用被误报为缺失库: {:?}",
             errors
         );
@@ -1505,7 +2023,7 @@ key = value
         let known = std::collections::HashSet::new();
         let errors = ini.detect_errors(f.path().parent().unwrap(), &known);
         assert!(
-            !errors.iter().any(|e| e.error_type == 1),
+            !errors.iter().any(|e| e.error_type == 1 || e.error_type == 5),
             "数值 stride 被误报为缺失库: {:?}",
             errors
         );

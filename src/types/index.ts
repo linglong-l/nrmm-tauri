@@ -590,3 +590,21 @@ export interface OrfixDetection {
   /** 是否检测到任何 ORFix/TexFx 异常 */
   hasDetection: boolean;
 }
+
+/**
+ * 更新模组数据遮罩状态
+ * 由 UpdateModDataOverlay 组件内部状态机使用，亦作为 provide/inject 契约的一部分
+ */
+export type OverlayState = 'loading' | 'completed' | 'error';
+
+/**
+ * 更新模组数据遮罩控制器
+ * App.vue 通过 provide('updateOverlay', ...) 提供，SettingsView / UpdateModDataReminder
+ * 等组件通过 inject<OverlayController>('updateOverlay') 消费，替代原先的 `any` 类型。
+ */
+export interface OverlayController {
+  /** 显示遮罩：status 为状态机值，data 携带 result / error / durationMs 等可选载荷 */
+  show: (status: OverlayState, data?: { result?: unknown; error?: string; durationMs?: number }) => void;
+  /** 隐藏遮罩 */
+  hide: () => void;
+}

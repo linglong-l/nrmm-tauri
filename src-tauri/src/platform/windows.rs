@@ -241,7 +241,6 @@ fn find_game_window(process_name: &str) -> Option<HWND> {
 
         let path = String::from_utf16_lossy(&exe_name[..buf_len as usize]);
         if let Some(name) = std::path::Path::new(&path).file_name() {
-            let exe_lower = name.to_string_lossy().to_lowercase();
             let mut state_guard = match ENUM_WINDOWS_STATE.lock() {
                 Ok(g) => g,
                 Err(_) => return TRUE,
@@ -250,7 +249,7 @@ fn find_game_window(process_name: &str) -> Option<HWND> {
                 if found.is_some() {
                     return FALSE;
                 }
-                if exe_lower == *target_lower {
+                if name.to_string_lossy().eq_ignore_ascii_case(target_lower.as_str()) {
                     *found = Some(hwnd.0 as isize);
                     return FALSE;
                 }

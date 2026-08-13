@@ -42,12 +42,12 @@
                   >{{ conflict.hash }}</span>
                   <span class="hash-arrow">-&gt;</span>
                   <span class="hash-mods">
-                    <template v-for="(modName, idx) in conflict.entries.map(e => e.modName)" :key="modName">
+                    <template v-for="(entry, idx) in conflict.entries" :key="entry.modName">
                       <span
                         class="hash-mod-name"
-                        @mouseenter="onModEnter($event, conflict.hash, modName)"
+                        @mouseenter="onModEnter($event, conflict.hash, entry.modName)"
                         @mouseleave="onModLeave"
-                      >{{ modName }}<span v-if="idx < conflict.entries.length - 1" class="mod-separator">、</span></span>
+                      >{{ entry.modName }}<span v-if="idx < conflict.entries.length - 1" class="mod-separator">、</span></span>
                     </template>
                   </span>
                 </div>
@@ -104,6 +104,7 @@ import { detectHashConflicts } from '@/utils/tauri'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from '@/utils/logger'
 import type { HashConflictResult } from '@/types'
+import { useLoadingDots } from '@/composables/useLoadingDots'
 
 type OverlayState = 'loading' | 'completed' | 'error'
 
@@ -113,19 +114,8 @@ const result = ref<HashConflictResult | null>(null)
 const errorMessage = ref('')
 const scrollContainer = ref<HTMLElement | null>(null)
 
-// 加载动画省略号
-const dotsCount = ref(1)
-let dotsTimer: ReturnType<typeof setInterval> | null = null
-
-function startDots() {
-  stopDots()
-  dotsTimer = setInterval(() => {
-    dotsCount.value = (dotsCount.value % 6) + 1
-  }, 300)
-}
-function stopDots() {
-  if (dotsTimer) { clearInterval(dotsTimer); dotsTimer = null }
-}
+// 加载动画省略号（复用统一 composable，避免四处重复实现）
+const { dotsCount, startDots, stopDots } = useLoadingDots()
 
 // 鼠标拖动滚动（隐藏原生滚动条，符合项目"支持鼠标拖拽且无滚动条"约束）
 let isDragging = false

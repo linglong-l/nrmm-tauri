@@ -38,7 +38,7 @@ import { useModsStore } from '@/stores/mods'
 import { logger } from '@/utils/logger'
 import { DEV_MODE } from '@/utils/env'
 import { switchTargetGame, checkModCacheValid, isFileWatcherRunning, currentWatchedPath } from '@/utils/tauri'
-import type { TargetGame } from '@/types'
+import type { TargetGame, OverlayController } from '@/types'
 
 /**
  * 三个Tab视图使用异步组件懒加载
@@ -51,7 +51,7 @@ const SettingsView = defineAsyncComponent(() => import('@/views/SettingsView.vue
 
 // ===== 前端启动计时（使用main.ts的全局起点） =====
 // dev 模式输出启动耗时到控制台；prod 模式静默（编译期消除）
-const FE_BOOT_START: number = (window as any).__NRMM_FE_BOOT_START__ ?? performance.now()
+const FE_BOOT_START = window.__NRMM_FE_BOOT_START__ ?? performance.now()
 if (DEV_MODE) {
   console.log(`[FE-BOOT] T+${(performance.now() - FE_BOOT_START).toFixed(0).padStart(6)}ms - App.vue <script setup> 开始执行`)
 }
@@ -72,8 +72,8 @@ const { t } = useI18n()
 const settingsStore = useSettingsStore()
 const modsStore = useModsStore()
 const overlayRef = ref<InstanceType<typeof UpdateModDataOverlay> | null>(null)
-provide('updateOverlay', {
-  show: (s: any, data?: any) => overlayRef.value?.show(s, data),
+provide<OverlayController>('updateOverlay', {
+  show: (status, data) => overlayRef.value?.show(status, data),
   hide: () => overlayRef.value?.hide(),
 })
 
