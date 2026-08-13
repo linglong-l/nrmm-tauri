@@ -274,6 +274,12 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         cursor_x,
         cursor_y,
     } = args;
+    // mod_index 归一化（与 switch_mod 的 safe_mod_index 语义保持一致）：
+    // 扫描器约定 None 空槽位占据 mod_index=0，真实模组从 1 开始（$managed_slot_id 亦为 1-based）。
+    // 若前端因任何路径误传 0（如收藏模式显示列表下标错位），统一转为 1，
+    // 否则会出现「持久化 selectedindex=1 而按键模拟仍用 x=0」的分歧——
+    // 分组 Y 坐标正确、模组 X 坐标($active_slot)为 0，导致无模组匹配而失效。
+    let mod_index = if mod_index == 0 { 1 } else { mod_index };
     // 提取模组名称与分组名称，便于在调试日志中直接定位所属模组
     let mod_name = Path::new(&mod_path)
         .file_name()

@@ -319,7 +319,11 @@ function handleHighlightMod(modIndex: number) {
  * @param modIndex 模组在当前显示列表中的索引
  */
 function handleActivateMod(modIndex: number) {
-  modsStore.activateModByIndex(modIndex)
+  // 同时传递 modPath 用于定位：收藏模式下 displayMods（无 None、0-based）与
+  // currentGroupMods（含 None 槽位、真实模组 1-based）下标错位，
+  // 仅传下标会选错模组/误传 mod_index=0；以 modPath 定位可保证后端拿到真实分组下标。
+  const mod = displayMods.value[modIndex]
+  modsStore.activateModByIndex(modIndex, mod?.modPath)
 }
 
 /**

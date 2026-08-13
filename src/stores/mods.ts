@@ -637,8 +637,8 @@ export const useModsStore = defineStore('mods', () => {
    *
    * @param modIdx 模组在当前显示列表中的索引
    */
-  async function activateModByIndex(modIdx: number) {
-    logger.debug('ModsStore', 'activateModByIndex', { modIdx })
+  async function activateModByIndex(modIdx: number, modPath?: string) {
+    logger.debug('ModsStore', 'activateModByIndex', { modIdx, modPath })
     if (isUpdatingModData.value) return
     if (isActivating.value) return
     const s = useSettingsStore()
@@ -646,16 +646,27 @@ export const useModsStore = defineStore('mods', () => {
     const group = currentGroup.value
     if (!group) return
     const displayedMods = currentGroupMods.value
-    if (!Number.isSafeInteger(modIdx) || modIdx < 0 || modIdx >= displayedMods.length) {
-      logger.warn('ModsStore', 'activateModByIndex out of range', { modIdx, len: displayedMods.length })
+    // 优先以 modPath（唯一标识）定位模组，规避收藏模式下
+    // displayMods（无 None、0-based）与 currentGroupMods（含 None 槽位）下标错位：
+    // 用收藏列表下标直接取 currentGroupMods 会选错模组，甚至取到 None 槽位（误传 mod_index=0）。
+    let mod: ModData | undefined
+    if (modPath) {
+      mod = displayedMods.find(m => m.modPath === modPath)
+    } else if (Number.isSafeInteger(modIdx) && modIdx >= 0 && modIdx < displayedMods.length) {
+      mod = displayedMods[modIdx]
+    }
+    if (!mod) {
+      logger.warn('ModsStore', 'activateModByIndex mod not found', { modIdx, modPath, len: displayedMods.length })
       return
     }
 
     isActivating.value = true
     try {
       const isMutex = group.groupType === 'mutexGroup'
-      const mod = displayedMods[modIdx]
-      const modPath = mod?.modPath || ''
+      // 后端 mod_index 必须以「当前分组真实列表（含 None 槽位）」中的下标为准，
+      // 与后端扫描器的 mod_index / $managed_slot_id 同基准（None=0，真实模组从 1 起）
+      const realModIdx = displayedMods.indexOf(mod)
+      const modPath2 = mod.modPath || ''
       // 使用 group_xx 目录编号（如 group_1 → 1）作为后端 group_index，
       // 而非 groups 数组下标。后端 switch_mod 与按键模拟的 active_group_id
       // 均以该编号为准；若存在互斥组或编号不连续（删除过分组），数组下标会与编号错位，
@@ -666,10 +677,10 @@ export const useModsStore = defineStore('mods', () => {
         game: s.currentGame,
         modsPath: s.currentModsPath,
         groupIndex: groupIdx,
-        modIndex: modIdx,
+        modIndex: realModIdx,
         isMutex,
         groupPath: group.groupPath,
-        modPath,
+        modPath: modPath2,
       })
 
       // 调用后端select_mod命令处理INI写入和互斥逻辑，取得写入磁盘后的最终索引
@@ -677,10 +688,10 @@ export const useModsStore = defineStore('mods', () => {
         s.currentGame,
         s.currentModsPath,
         groupIdx,
-        modIdx,
+        realModIdx,
         isMutex,
         group.groupPath,
-        modPath,
+        modPath2,
         undefined, // cursorX - pass undefined for now (no coordinate calculation yet)
         undefined, // cursorY - pass undefined for now (no coordinate calculation yet)
       )
@@ -690,9 +701,9 @@ export const useModsStore = defineStore('mods', () => {
       // 注意：模组选择不触发 markNeedUpdate，因为选择不涉及模组数据修改
       // 仅在启用/禁用模组时才需要提醒用户更新模组数据
 
-      // 选择写入磁盘的最终索引：优先使用后端返回值，否则回退到前端传入值
+      // 选择写入磁盘的最终索引：优先使用后端返回值，否则回退到当前分组真实列表下标
       const retSelIdx: number =
-        result && typeof result.selectedModIndex === 'number' ? result.selectedModIndex : modIdx
+        result && typeof result.selectedModIndex === 'number' ? result.selectedModIndex : realModIdx
       // 更新前端选中状态
       selectedModIndex.value = retSelIdx
       // 同步记录到分组索引映射（对应 Flutter 的 previousSelectedModOnGroup）
@@ -724,7 +735,7 @@ export const useModsStore = defineStore('mods', () => {
           setActiveRecursive(child, targetPath)
         }
       }
-      setActiveRecursive(group, modPath)
+      setActiveRecursive(group, modPath2)
     } catch (e: any) {
       // 防抖命中时静默处理，不弹出错误提示
       const errMsg = typeof e === 'string' ? e : (e?.message ?? String(e))
