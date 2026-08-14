@@ -673,6 +673,25 @@ export const useModsStore = defineStore('mods', () => {
       // 导致游戏内 [KeyMod] 的 condition（$group_id == active_group_id）无法命中。
       const groupIdx = group.groupIndex
 
+      // 诊断日志：追踪 realModIdx 的来源与上下文，用于排查鼠标模拟 X 轴异常
+      // 详见 .trae/specs/diagnose-mouse-sim-x-axis/spec.md
+      logger.debug('ModsStore', '[activateModByIndex] mod_index source diagnostic', {
+        displayedModsLength: displayedMods.length,
+        modPath: modPath2,
+        realModIdx,
+        groupIdx,
+        groupPath: group.groupPath,
+      })
+      if (realModIdx < 0 || realModIdx >= displayedMods.length) {
+        logger.warn('ModsStore', '[activateModByIndex] realModIdx out of range', {
+          realModIdx,
+          displayedModsLength: displayedMods.length,
+          modPath: modPath2,
+          groupIdx,
+          groupPath: group.groupPath,
+        })
+      }
+
       logger.debug('ModsStore', '[activateModByIndex] calling selectMod', {
         game: s.currentGame,
         modsPath: s.currentModsPath,

@@ -279,7 +279,19 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
     // 若前端因任何路径误传 0（如收藏模式显示列表下标错位），统一转为 1，
     // 否则会出现「持久化 selectedindex=1 而按键模拟仍用 x=0」的分歧——
     // 分组 Y 坐标正确、模组 X 坐标($active_slot)为 0，导致无模组匹配而失效。
+    sel_dbg!(
+        "mod_commands",
+        "select_mod",
+        "mod_index 归一化前 | mod_index_before_normalize={}",
+        mod_index
+    );
     let mod_index = if mod_index == 0 { 1 } else { mod_index };
+    sel_dbg!(
+        "mod_commands",
+        "select_mod",
+        "mod_index 归一化后 | mod_index_after_normalize={}",
+        mod_index
+    );
     // 提取模组名称与分组名称，便于在调试日志中直接定位所属模组
     let mod_name = Path::new(&mod_path)
         .file_name()
@@ -450,15 +462,28 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             sel_dbg!(
                 "mod_commands",
                 "select_mod",
-                "准备调用 simulate_select_full | 坐标模式={} g(分组索引)={} m(模组索引)={} 模组名称={}",
-                if cursor_x.is_some() && cursor_y.is_some() { "屏幕像素坐标" } else { "索引虚拟坐标" },
+                "坐标传递 | cursor_x_input={:?} cursor_y_input={:?} sim_g={} sim_m={} coordinate_mode={} 模组名称={}",
+                cursor_x,
+                cursor_y,
                 sim_g,
                 sim_m,
+                if cursor_x.is_some() && cursor_y.is_some() { "屏幕像素坐标" } else { "索引虚拟坐标" },
                 mod_name
             );
+            let sim_start = std::time::Instant::now();
             let result: Result<(), String> = simulator
                 .simulate_select_full(sim_g, sim_m)
                 .map_err(|e| e.to_string());
+            let sim_elapsed = sim_start.elapsed();
+            sel_dbg!(
+                "mod_commands",
+                "select_mod",
+                "simulate_select_full 调用完成 | sim_g={} sim_m={} 耗时={}μs result={:?}",
+                sim_g,
+                sim_m,
+                sim_elapsed.as_micros(),
+                result
+            );
             log::debug!(
                 "[commands::mod_commands] [select_mod] simulate_result={:?}",
                 result
