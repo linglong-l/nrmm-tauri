@@ -308,7 +308,9 @@ xxmi-nrmm/
 ├── vite.config.ts                # Vite 配置
 ├── .gitignore                    # Git 忽略配置
 ├── ARCHITECTURE.md               # 项目架构文档（详见 src-tauri/ARCHITECTURE.md）
-├── LICENSE                       # 许可证文件
+├── LICENSE                       # 双授权说明（指向以下两份许可证）
+├── LICENSE-MIT                   # MIT 许可证全文
+├── LICENSE-APACHE                # Apache-2.0 许可证全文
 └── README.md                     # 项目文档（本文档）
 ```
 
@@ -361,5 +363,11 @@ A: 鼠标悬停在导航栏右侧边缘，当光标变为双向箭头时，拖�
 A: 在左侧导航栏或右侧模组展示区域按住鼠标左键拖动，即可上下滚动内容。这在触摸屏设备或小窗口场景下非常方便。
 
 ## 许可协议
+> ⚖️ 本项目采用 **MIT / Apache-2.0 双授权**（Dual License），使用者可任选其一。
 
-仅供学习与个人使用。
+- [MIT License](./LICENSE-MIT)
+- [Apache License, Version 2.0](./LICENSE-APACHE)
+- 双授权说明见 [LICENSE](./LICENSE)
+
+* 本项目为基于 [No-Reload-Mod-Manager](https://github.com/Aglglg/No-Reload-Mod-Manager) 的衍生作品，上游版权归属原作者，本仓库代码以双授权发布。
+* 本软件按"原样"提供，不提供任何明示或暗示的保证。作者不对因使用本软件而产生的任何索赔、损害或其他责任承担责任。
