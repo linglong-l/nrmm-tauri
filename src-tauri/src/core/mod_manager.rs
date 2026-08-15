@@ -1338,24 +1338,42 @@ fn fix_non_managed_crash_lines(
         .map(|entry| entry.into_path())
         .collect();
 
+    // 与组级 catch_unwind 一致的 panic 隔离：单个文件 parse/detect_errors/
+    // comment 若 panic（release=unwind 后生效，见 B1），仅跳过该文件，不中断其余修复。
     ini_files.par_iter().for_each(|path| {
-        let ini = match IniFile::parse(path) {
-            Ok(ini) => ini,
-            Err(_) => return,
-        };
-        let errors = ini.detect_errors(path, known_libraries);
-        let crash_lines: Vec<(u32, String)> = errors
-            .into_iter()
-            .filter(|e| e.error_type == 1)
-            .map(|e| (e.line_number, e.line))
-            .collect();
-        if crash_lines.is_empty() {
-            return;
-        }
-        if comment_crash_lines_in_file(path, &crash_lines) {
-            log::info!(
-                "修复非托管模组崩溃行 {} 处：{:?}",
-                crash_lines.len(),
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let ini = match IniFile::parse(path) {
+                Ok(ini) => ini,
+                Err(_) => return,
+            };
+            let errors = ini.detect_errors(path, known_libraries);
+            let crash_lines: Vec<(u32, String)> = errors
+                .into_iter()
+                .filter(|e| e.error_type == 1)
+                .map(|e| (e.line_number, e.line))
+                .collect();
+            if crash_lines.is_empty() {
+                return;
+            }
+            if comment_crash_lines_in_file(path, &crash_lines) {
+                log::info!(
+                    "修复非托管模组崩溃行 {} 处：{:?}",
+                    crash_lines.len(),
+                    path
+                );
+            }
+        }));
+        if let Err(payload) = result {
+            let reason = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic payload".to_string()
+            };
+            log::error!(
+                "[mod_manager] [fix_non_managed_crash_lines] file panicked, skipped: {} | path={:?}",
+                reason,
                 path
             );
         }
