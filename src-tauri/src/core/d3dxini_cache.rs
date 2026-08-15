@@ -21,6 +21,9 @@ struct CachedIni {
     /// 与 `std::fs::metadata` 返回的 `modified()` 比较，
     /// 不一致时触发重新解析。
     modified_at: SystemTime,
+    /// 文件字节长度，作为修改时间的辅助判定（同秒内内容替换时
+    /// 修改时间可能不变，长度变化可避免误命中，与 mod_ini_cache 对齐）。
+    len: u64,
 }
 
 /// d3dx.ini 解析结果缓存，以 `HashMap<PathBuf, CachedIni>` 实现。
@@ -66,15 +69,18 @@ impl D3dxIniCache {
     /// - INI 解析失败：`IniFile::parse` 返回语法错误。
     pub fn get_or_parse(&mut self, path: &Path) -> Result<IniFile> {
         let norm = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let mt = fs_modified(&norm);
+        let (mt, len) = fs_modified_len(&norm);
         if let Some(cached) = self.inner.get(&norm) {
-            if Some(cached.modified_at) == mt {
+            if Some(cached.modified_at) == mt && cached.len == len {
                 return Ok(cached.parsed.clone());
             }
         }
         let parsed = IniFile::parse(&norm)?;
         let mt_val = mt.unwrap_or_else(SystemTime::now);
-        self.inner.insert(norm, CachedIni { parsed: parsed.clone(), modified_at: mt_val });
+        self.inner.insert(
+            norm,
+            CachedIni { parsed: parsed.clone(), modified_at: mt_val, len },
+        );
         Ok(parsed)
     }
 
@@ -90,9 +96,9 @@ impl D3dxIniCache {
     }
 }
 
-/// 读取文件的修改时间，不存在的文件返回 `None`。
+/// 读取文件的修改时间与字节长度；不存在的文件返回 `(None, 0)`。
 ///
-/// 底层调用 `std::fs::metadata(p)?.modified()`，失败时静默返回 `None`。
+/// 底层调用 `std::fs::metadata(p)`，失败时静默返回 `(None, 0)`。
 ///
 /// # Panics
 ///
@@ -100,9 +106,12 @@ impl D3dxIniCache {
 ///
 /// # Errors
 ///
-/// 此函数不会返回错误；文件不存在或元数据不可读时返回 `None`。
-fn fs_modified(p: &Path) -> Option<SystemTime> {
-    std::fs::metadata(p).ok().and_then(|m| m.modified().ok())
+/// 此函数不会返回错误；文件不存在或元数据不可读时返回 `(None, 0)`。
+fn fs_modified_len(p: &Path) -> (Option<SystemTime>, u64) {
+    match std::fs::metadata(p) {
+        Ok(m) => (m.modified().ok(), m.len()),
+        Err(_) => (None, 0),
+    }
 }
 
 /// 全局 d3dx.ini 缓存单例。

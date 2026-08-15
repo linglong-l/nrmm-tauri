@@ -1397,7 +1397,8 @@ fn collect_ini_files_dfs(root: &Path, ini_files: &mut Vec<PathBuf>) {
         for e in entries.flatten() {
             if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if !name.starts_with('.') && !name.starts_with("DISABLED") {
+                // 跳过隐藏目录与被禁用目录（大小写不敏感，与 is_disabled_dir/contains_disabled_segment 一致）
+                if !name.starts_with('.') && !is_disabled_dir(&name) {
                     stack.push(e.path());
                 }
             }
@@ -1416,7 +1417,7 @@ fn collect_ini_files_dfs(root: &Path, ini_files: &mut Vec<PathBuf>) {
             let path = entry.path();
             if ft.is_dir() {
                 let name = entry.file_name().to_string_lossy().into_owned();
-                if name.starts_with('.') || name.starts_with("DISABLED") {
+                if name.starts_with('.') || is_disabled_dir(&name) {
                     continue;
                 }
                 stack.push(path);

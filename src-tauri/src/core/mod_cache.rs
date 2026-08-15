@@ -312,6 +312,13 @@ impl ModCache {
             }
         };
 
+        // 记录 partial 各分组子树根（用于删除传播；必须在消费 partial_result.groups 之前计算）
+        let partial_roots: Vec<std::path::PathBuf> = partial_result
+            .groups
+            .iter()
+            .map(|g| std::path::PathBuf::from(&g.full_path))
+            .collect();
+
         // 将现有 groups 转为 BTreeMap（按 group_path 去重）
         let mut existing_groups: BTreeMap<String, ModGroupData> = existing
             .result
@@ -332,6 +339,12 @@ impl ModCache {
             .drain(..)
             .map(|m| (m.mod_path.clone(), m))
             .collect();
+        // 删除传播：partial 扫描粒度到分组，partial 中出现的分组代表该子树当前完整状态，
+        // 其子树下未出现在 partial 中的旧 mod 视为已被删除（文件/目录被移除）。
+        // 原合并策略只增改不删，导致删除模组后 UI 仍显示旧条目，直至全量重扫。
+        for gp in &partial_roots {
+            existing_mods.retain(|_, m| !m.full_path.starts_with(gp));
+        }
         // 合并/覆盖 partial_result 的 mods
         for m in partial_result.mods {
             existing_mods.insert(m.mod_path.clone(), m);
@@ -504,5 +517,47 @@ mod tests {
         // 测试全局单例可正常访问
         let cache = MOD_CACHE.read();
         assert!(cache.get(TargetGame::GenshinImpact, Path::new("/nonexistent")).is_none());
+    }
+
+    /// 测试删除传播：局部扫描合并后，磁盘上已删除的模组应从缓存移除。
+    ///
+    /// 回归场景：用户删除 group_1 下某模组目录，文件监听器触发局部重扫 →
+    /// `subtree_replace` 合并 partial 结果。原实现只增改不删，导致已删除模组
+    /// 在 UI 中残留至全量重扫；修复后应即时消失。
+    #[test]
+    fn test_subtree_replace_propagates_deletion() {
+        use crate::core::mod_scanner::scan_partial_path;
+        let (dir, mods_path) = setup_test_mods();
+        let group1 = dir.path().join("_MANAGED_").join("group_1");
+        let mod_gone = group1.join("ModGone");
+        fs::create_dir_all(&mod_gone).unwrap();
+        fs::write(mod_gone.join("mod.ini"), "[Section]\nx=1\n").unwrap();
+
+        let mut cache = ModCache::new();
+        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        cache.set(TargetGame::GenshinImpact, &mods_path, result);
+        assert!(
+            cache.get(TargetGame::GenshinImpact, &mods_path)
+                .unwrap()
+                .mods
+                .iter()
+                .any(|m| m.mod_name == "ModGone"),
+            "前置条件：ModGone 应已进入缓存"
+        );
+
+        // 删除磁盘上的 ModGone 目录后，对 group_1 做局部扫描并合并
+        fs::remove_dir_all(&mod_gone).unwrap();
+        let partial = scan_partial_path(&mods_path, &group1).unwrap();
+        cache.subtree_replace(TargetGame::GenshinImpact, &mods_path, partial);
+
+        let updated = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+        assert!(
+            !updated.mods.iter().any(|m| m.mod_name == "ModGone"),
+            "已删除的模组不应残留在缓存中"
+        );
+        assert!(
+            updated.mods.iter().any(|m| m.mod_name == "TestMod"),
+            "未删除的模组应保留"
+        );
     }
 }

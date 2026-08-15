@@ -630,24 +630,51 @@ impl IniFile {
     /// 5. 注释放置的 `;-; DISABLED_BY_NRMM` 标记行
     pub fn remove_old_managed_content(&mut self) {
         // 清理 preamble 中的 NRMM 注释标记
+        //
+        // 注意：`;` 前缀行在解析时被归类为 `IniLine::Comment`，仅带前导空白的
+        // `;` 行才会成为 `PreambleLine`；两者都必须参与清理，否则旧版 NRMM 头注释
+        // （如 `; No Reload Mod Manager ...`）会残留并与本次 `prepend_header_comment`
+        // 新头并排累积，造成与 Dart 基线的字节级分歧。
         self.preamble.retain(|line| {
-            if let IniLine::PreambleLine(text) = line {
-                let trimmed = text.trim();
-                if trimmed.is_empty() { return false; }
-                if trimmed.starts_with(';') {
-                    let lower = trimmed.to_lowercase();
-                    return !(lower.contains("no reload mod manager")
-                        || lower.contains("\";-;\" are errored")
-                        || lower.contains("\";+;\" are disabled")
-                        || lower.contains("errored conditional blocks")
-                        || lower.contains("if certain syntax is only"));
-                }
+            let text = match line {
+                IniLine::PreambleLine(t) => t.as_str(),
+                IniLine::Comment(t) => t.as_str(),
+                _ => return true,
+            };
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            if trimmed.starts_with(';') {
+                let lower = trimmed.to_lowercase();
+                return !(lower.contains("no reload mod manager")
+                    // NRMM 头注释实际文本为 `; ";-;" are errored ...` / `; "+;" are disabled ...`
+                    // （引号内是 `;-;` / `;+;`），与 prepend_header_comment 写入的文本一致。
+                    // 注意：模式中的 `;-;` 与 IniLine::DisabledKeyValue 的解析前缀同名但含义不同，
+                    // 此处匹配的是头注释引号内的文本，勿改成 `"-;"`（会导致 h1/h2 清理失效、
+                    // 头注释退化为 2 行并在重复更新时累积）。
+                    || lower.contains("\";-;\" are errored")
+                    || lower.contains("\";+;\" are disabled")
+                    || lower.contains("errored conditional blocks")
+                    || lower.contains("if certain syntax is only"));
             }
             true
         });
 
         for section in &mut self.sections {
             // 1. 移除旧 manager if 行
+            //
+            // ⚠️ 已知限制（2026-08-15 审查确认，暂不修复）：`IfStart.condition` 是 `if `
+            // 前缀之后的条件文本（解析时已剥离 "if "），而下方模式带 "if" 前缀
+            // （`if$managed_slot_id==...`），因此**无法**匹配任何解析后的 IfStart，
+            // 旧 manager if 守卫实际不会被清理。
+            //
+            // 不修正的原因：若让守卫真正被移除，重新注入会走 fix_manager_endif，
+            // 把段尾空行卷入守卫块内，导致重复更新每次多一个空行（幂等性回归，
+            // 已被校准的 test_update_mod_data_idempotent 依赖「存在守卫即跳过重新注入」
+            // 的既有语义）。当前行为：守卫残留 + 注入时 has_existing_condition 跳过
+            // 重复注入，输出稳定。潜在代价：分组/槽位编号变化后旧守卫残留（不更新），
+            // 属既有预存行为，与 Dart 对齐的 if/endif 配对策略一并留待专项修复。
             section.lines.retain(|line| {
                 if let IniLine::IfStart { condition, .. } = line {
                     let cleaned: String = condition
@@ -1303,7 +1330,7 @@ impl IniFile {
         // 1: CRASH LINE     - 可能导致 XXMI 崩溃的行（drawindexed/ib/vb0 等，对应 "CRASH LINE"）
         // 2: MISSING ENDIF  - if/else 块缺少匹配的 endif（对应 "Missing \"endif\""）
         // 3: FLOW CONTROL   - 孤儿 endif 或其他流程控制错误（对应 otherError / otherErrorMissingEndif）
-        // 4: PATH TOO LONG  - INI 路径超过 260 字符限制
+        // 6: PATH TOO LONG  - INI 路径超过 260 字符限制（常量 ET_PATH_TOO_LONG = 6）
         // 5: NON EXISTENT LIB - 跨模组引用的库命名空间不存在（对应 "NON EXISTENT LIB: X"）
         const ET_DUPLICATE_LIB: u8 = 0;
         const ET_CRASH_LINE: u8 = 1;
@@ -2047,6 +2074,84 @@ key = value
         let f = write_temp_ini(ini_content);
         let ini = IniFile::parse(f.path()).unwrap();
         assert!(ini.has_include());
+    }
+
+    // ========== 边界情况：空文件 / 重复键 / 引号 / 特殊字符 ==========
+    #[test]
+    fn test_parse_empty_file() {
+        let f = write_temp_ini("");
+        let ini = IniFile::parse(f.path()).unwrap();
+        assert!(ini.preamble.is_empty());
+        assert!(ini.sections.is_empty());
+        assert!(IniFile::force_read_as_utf8(f.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_parse_duplicate_keys_preserved() {
+        // 重复键：解析器保留全部行（3Dmigoto 语义为后写覆盖），不得丢行
+        let ini_content = "[Section]\nkey = first\nkey = second\n";
+        let f = write_temp_ini(ini_content);
+        let ini = IniFile::parse(f.path()).unwrap();
+        let count = ini.sections[0].lines.iter()
+            .filter(|l| matches!(l, IniLine::KeyValue { key, .. } if key == "key"))
+            .count();
+        assert_eq!(count, 2, "重复键应全部保留");
+    }
+
+    #[test]
+    fn test_parse_quoted_value_and_special_chars() {
+        // 引号值内含分号不应被当作注释；反斜杠与中文应原样保留
+        let ini_content = "[Section]\nkey = \"quoted ; value\" ; comment\n$var = a\\b\\c\nname = 中文测试\n";
+        let f = write_temp_ini(ini_content);
+        let ini = IniFile::parse(f.path()).unwrap();
+        let lines = &ini.sections[0].lines;
+        assert!(
+            matches!(&lines[0], IniLine::KeyValue { value, comment: Some(c), .. }
+                if value == "\"quoted ; value\"" && c == "comment"),
+            "引号值中的分号不应截断值: {:?}",
+            lines[0]
+        );
+        assert!(
+            lines.iter().any(|l| matches!(l, IniLine::KeyValue { key, value, .. }
+                if key == "$var" && value == "a\\b\\c")),
+            "反斜杠应原样保留"
+        );
+        assert!(
+            lines.iter().any(|l| matches!(l, IniLine::KeyValue { key, value, .. }
+                if key == "name" && value == "中文测试")),
+            "中文值应原样保留"
+        );
+    }
+
+    // ========== remove_old_managed_content（旧 NRMM 内容清理，含 Comment 型头注释） ==========
+    #[test]
+    fn test_remove_old_managed_content_cleans_comment_headers() {
+        // 旧版 NRMM 头注释（`;` 前缀 → 解析为 Comment）与 PreambleLine 均须被清理，
+        // 否则会与 prepend_header_comment 新头并排累积（对齐 Dart _parseIniSections）。
+        let ini_content = "; No Reload Mod Manager v1.0.1\n\
+; \";-;\" are errored conditional lines.\n\
+namespace = TestMod\n\
+[Constants]\n\
+global $managed_slot_id = 0\n\
+$other = 1\n\
+[TextureOverrideX]\n\
+if $managed_slot_id == $\\modmanageragl\\group_1\\active_slot\n\
+  drawindexed\n\
+endif\n";
+        let f = write_temp_ini(ini_content);
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.remove_old_managed_content();
+
+        // 旧 NRMM 头注释（Comment 型）应被移除
+        assert!(!ini.preamble.iter().any(|l| matches!(l, IniLine::Comment(c) if c.contains("No Reload Mod Manager"))));
+        assert!(!ini.preamble.iter().any(|l| matches!(l, IniLine::Comment(c) if c.contains("errored conditional"))));
+        // Constants 段的 $managed_slot_id 应被移除
+        let constants = ini.sections.iter()
+            .find(|s| s.name.eq_ignore_ascii_case("Constants"))
+            .expect("Constants 段应存在");
+        assert!(!constants.lines.iter().any(|l| matches!(l, IniLine::KeyValue { key, .. } if key.contains("$managed_slot_id"))));
+        // 注：manager if 守卫的清理属已知限制（与幂等性语义耦合），此处不断言其移除；
+        // 仅断言头注释与 Constants 清理生效（见 remove_old_managed_content 内注释说明）。
     }
 
     // ========== is_conditional_section（由 constants::CONDITIONAL_SECTION_PREFIXES 驱动） ==========

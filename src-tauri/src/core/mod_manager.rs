@@ -25,7 +25,9 @@ use std::path::{Path, PathBuf};
 use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use walkdir::WalkDir;
+use rayon::prelude::*;
 use crate::core::constants;
 use crate::core::file_watcher::WATCHER_PAUSED;
 use crate::core::ini_handler::IniFile;
@@ -405,7 +407,7 @@ pub fn detect_orfix_texfx(enabled_mods: &[&ModData]) -> OrfixDetection {
         let mod_path = mod_data.mod_path.clone();
 
         for ini_data in &mod_data.mod_ini_data {
-            if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(std::path::Path::new(ini_data.ini_path.as_str())) {
+            if let Ok(ini) = get_or_parse_ini(std::path::Path::new(ini_data.ini_path.as_str())) {
                 // 1. 检测库在模组内（同时记入声明表，用于重复声明检测）
                 let detected = ini.detect_known_lib_declarations(&known_libs);
                 if !detected.is_empty() {
@@ -482,6 +484,24 @@ pub fn detect_orfix_texfx(enabled_mods: &[&ModData]) -> OrfixDetection {
     }
 }
 
+/// 并行收集一批 INI 文件的库定义（`defined_libraries`），归并为单个集合。
+///
+/// 使用 rayon `par_iter` 并行调用 `mod_ini_cache::get_or_parse_ini` 解析并提取库定义，
+/// 与逐个串行收集得到的结果集合相等（并集语义；解析失败的文件被跳过，与串行版一致）。
+///
+/// # 参数
+/// - `ini_paths`: 待解析的 INI 文件路径列表
+///
+/// # 返回
+/// 所有成功解析的 INI 中库定义段名的并集（`HashSet<String>`）
+fn collect_libraries_parallel(ini_paths: &[PathBuf]) -> HashSet<String> {
+    ini_paths
+        .par_iter()
+        .filter_map(|p| get_or_parse_ini(p).ok())
+        .flat_map_iter(|ini| ini.defined_libraries())
+        .collect()
+}
+
 /// 重量级更新模组数据（完整 INI 解析 + 注入）
 ///
 /// 这是模组管理的核心函数，严格复刻 NRMM 的 updateModData 流程：
@@ -506,6 +526,11 @@ pub fn detect_orfix_texfx(enabled_mods: &[&ModData]) -> OrfixDetection {
 pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppSettings) -> Result<UpdateResult> {
     log::debug!("[core::mod_manager] [update_mod_data] Starting heavy update | game={:?} path={:?}", game, game_mods_path);
     let _s = std::time::Instant::now();
+    // 暂停文件监听器：update_mod_data 会对大量 INI / 标记文件执行写操作，
+    // 若监听器保持活跃，防抖线程会在写入过程中并发触发增量扫描与缓存合并
+    // （可能读到半成品文件、把中间状态并入缓存）。WatcherGuard 在函数退出时
+    // （含 `?` 提前返回）自动恢复监听器（对齐 NRMM 的 watcher.stop()/watch() 模式）。
+    let _watcher_guard = WatcherGuard::new();
     let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);
 
     // 游戏根目录（d3dx.ini 所在位置）。
@@ -566,16 +591,15 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         .collect();
     log::debug!("[mod_manager] [update_mod_data] step=collect_enabled done enabled_mods_count={}", enabled_mods.len());
 
-    let mut known_libraries = HashSet::new();
+    // known_libraries 并行预收集：启用模组的全部 INI 路径经 rayon 并行解析（get_or_parse_ini，
+    // 读锁快路径 + 锁外解析），defined_libraries 归并进同一 HashSet，集合与串行版相等。
+    let mut lib_ini_paths: Vec<PathBuf> = Vec::new();
     for mod_data in &enabled_mods {
         for ini_data in &mod_data.mod_ini_data {
-            if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(std::path::Path::new(ini_data.ini_path.as_str())) {
-                for lib in ini.defined_libraries() {
-                    known_libraries.insert(lib);
-                }
-            }
+            lib_ini_paths.push(PathBuf::from(&ini_data.ini_path));
         }
     }
+    let mut known_libraries = collect_libraries_parallel(&lib_ini_paths);
 
     // 步骤3.1: 收集 # 目录（MutexGroup）中的库定义，补充 known_libraries
     // 深度扫描仅处理 group_xx NormalGroup，会遗漏 MutexGroup 目录中的库定义，
@@ -608,11 +632,12 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     delete_group_ini_files(&managed_folder)?;
     log::debug!("[mod_manager] [update_mod_data] step=delete_group_ini_files done");
 
-    // 步骤5: 按 group 组织启用的模组 INI
-    let mut group_mod_inis: std::collections::HashMap<u32, Vec<PathBuf>> = std::collections::HashMap::new();
-    let mut all_errors: Vec<ErroredLines> = Vec::new();
-    let mut processed_mods = 0u32;
+    // 步骤5: 按 group 组织启用的模组 INI（rayon 线程池按分组并行，组内保持扫描顺序串行）
+    let parallel_start = std::time::Instant::now();
 
+    // 有效模组按 group_index 分桶（BTreeMap 保持组 id 升序，组内保持扫描顺序）。
+    // 分桶前守卫与串行版完全一致（行为与日志不变）。
+    let mut buckets: std::collections::BTreeMap<u32, Vec<&ModData>> = std::collections::BTreeMap::new();
     for mod_data in enabled_mods.iter() {
         let group_id = mod_data.group_index;
 
@@ -648,114 +673,55 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
             );
             continue;
         }
-        let mut mod_inis: Vec<PathBuf> = Vec::new();
-        // 跟踪本模组是否需要写标记文件（对齐 Dart _markAsOldAutoFix / _markAsRemovedSyntaxError）
-        let mut mod_has_crash_lines = false;
-        let mut mod_has_syntax_errors = false;
 
-        for ini_data in &mod_data.mod_ini_data {
-            let ini_path = PathBuf::from(&ini_data.ini_path);
+        buckets.entry(group_id).or_default().push(mod_data);
+    }
 
-            // 备份模组 INI
-            let mod_backup = ini_path.with_extension(constants::BACKUP_EXTENSION);
-            if !mod_backup.exists() {
-                if let Err(e) = fs::copy(&ini_path, &mod_backup) {
-                    log::warn!("Failed to backup mod INI {}: {}", ini_path.display(), e);
-                }
-            }
+    // known_libraries（含 MutexGroup 库补充）以 Arc 只读共享进各分组任务，detect_errors 只读使用
+    let known_libs = Arc::new(known_libraries);
 
-            match D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
-                Ok(mut ini) => {
-                    // 错误检测
-                    let errors = ini.detect_errors(&ini_path, &known_libraries);
-                    if !errors.is_empty() {
-                        // 对齐 Dart _modifyLinesBasedOnError：modsyntaxerrorremoved 标记仅由
-                        // 「非 endif 的崩溃行错误」（crash line=1）触发。
-                        // - 3Dmigoto 容错解析悬空/孤立 endif（flow control=3）、重复库(0)、
-                        //   缺失 endif(2)、缺失库(5)、路径过长(6)，这些错误由 NRMM 自动修复
-                        //   （remove_empty_if_blocks / fix_manager_endif）或仅为 UI 报告项，
-                        //   不会令模组被移除，故不触发 modsyntaxerrorremoved 标记。
-                        // - 仅当模组存在会致 XXMI 崩溃的绘制/缓冲行（crash line=1，如
-                        //   drawindexed/draw/ib 取到非法值且非 auto / 数值 / 资源引用）时，
-                        //   才标记该模组曾被移除（与 Dart 基线行为一致：基线零标记）。
-                        let has_syntax_marker_error =
-                            errors.iter().any(|e| e.error_type == 1);
-                        all_errors.extend(errors);
-                        if has_syntax_marker_error {
-                            mod_has_syntax_errors = true;
-                        }
-                    }
+    // 桶 par_iter：每组任务在单一 worker 线程内串行处理本组全部模组；
+    // catch_unwind 兜底，单组 panic 转组级错误条目，不影响其他组
+    let outcomes: Vec<GroupOutcome> = buckets
+        .par_iter()
+        .map(|(group_id, mods)| {
+            run_group_with_panic_guard(*group_id, || {
+                process_group_task(*group_id, mods, &known_libs)
+            })
+        })
+        .collect();
 
-                    // 展开 namespace 变量
-                    if let Some(ns) = namespace_handler::extract_namespace(&ini) {
-                        namespace_handler::expand_ini_variables(&mut ini, &ns);
-                    }
-
-                    // 清理旧的 NRMM managed 内容（对齐 Dart _parseIniSections），
-                    // 防止重复更新时旧注入内容累积（if 守卫/$managed_slot_id/旧注释标记等）
-                    ini.remove_old_managed_content();
-
-                    // 对齐 NRMM _parseIniSections：补齐段级属性键（match_priority/allow_duplicate_hash），插入段末
-                    ini.ensure_section_attribute_keys();
-
-                    // 对齐 NRMM _reorderByIniKeyPriority：按段类型重排已知优先键到段首
-                    ini.reorder_by_ini_key_priority();
-
-                    // 注入槽位条件（含 $managed_slot_id 赋值）
-                    ini.inject_slot_conditions(group_id, mod_data.mod_index);
-
-                    // 注释崩溃行
-                    let crash_lines = ini.comment_crash_lines();
-                    if !crash_lines.is_empty() {
-                        log::info!("Commented {} crash lines in {}", crash_lines.len(), ini_path.display());
-                        mod_has_crash_lines = true;
-                    }
-
-                    // 移除空 if 块，应用缩进
-                    ini.remove_empty_if_blocks();
-                    ini.apply_indentation();
-                    ini.prepend_header_comment();
-
-                    // 原子写入
-                    ini.write_atomic(&ini_path)?;
-
-                    mod_inis.push(ini_path.clone());
-                    processed_mods += 1;
-                }
-                Err(e) => {
-                    log::error!("Failed to process mod INI {}: {}", ini_path.display(), e);
-                    all_errors.push(ErroredLines {
-                        error_type: 3,
-                        error_message: format!("Processing error: {}", e),
-                        ..Default::default()
-                    });
-                }
-            }
-        }
-
-        group_mod_inis.entry(group_id).or_default().extend(mod_inis);
-
-        // 写入标记文件（对齐 Dart _markAsOldAutoFix / _markAsRemovedSyntaxError）
-        let mod_dir = std::path::Path::new(mod_data.mod_path.as_str());
-        if mod_has_crash_lines {
-            let marker = mod_dir.join(constants::MODFORCED_MARKER);
-            if let Err(e) = fs::write(&marker, "") {
-                log::warn!("写入 modforced 标记失败 {:?}: {}", marker, e);
-            }
-        }
-        if mod_has_syntax_errors {
-            let marker = mod_dir.join("modsyntaxerrorremoved");
-            if let Err(e) = fs::write(&marker, "") {
-                log::warn!("写入 modsyntaxerrorremoved 标记失败 {:?}: {}", marker, e);
-            }
+    // 确定性合并：outcomes 与 BTreeMap 迭代顺序一致（按 group_id 升序），组内序保持
+    let mut group_mod_inis: std::collections::HashMap<u32, Vec<PathBuf>> = std::collections::HashMap::new();
+    let mut all_errors: Vec<ErroredLines> = Vec::new();
+    let mut processed_mods = 0u32;
+    let mut slowest: Option<(u32, u128)> = None;
+    for outcome in outcomes {
+        processed_mods += outcome.processed;
+        all_errors.extend(outcome.errors);
+        group_mod_inis
+            .entry(outcome.group_id)
+            .or_default()
+            .extend(outcome.mod_inis);
+        match slowest {
+            Some((_, ms)) if outcome.elapsed_ms <= ms => {}
+            _ => slowest = Some((outcome.group_id, outcome.elapsed_ms)),
         }
     }
+    log::info!(
+        "[mod_manager] [update_mod_data] parallel phase done | parallel_groups={} workers={} total_ms={} slowest_group={} slowest_ms={}",
+        buckets.len(),
+        rayon::current_num_threads(),
+        parallel_start.elapsed().as_millis(),
+        slowest.map(|(g, _)| g).unwrap_or(0),
+        slowest.map(|(_, ms)| ms).unwrap_or(0)
+    );
     log::debug!("[mod_manager] [update_mod_data] step=process_mod_inis done processed={} groups={} errors={}", processed_mods, group_mod_inis.len(), all_errors.len());
 
     // 步骤5.1: 修复非托管模组的崩溃行（对齐 NRMM _fixNonManagedModsCrashLine）
     // 扫描 Mods 目录下、_MANAGED_ 之外的 .ini 文件，注释其中会导致 XXMI 崩溃的
     // 绘制/缓冲行（drawindexed / draw / ib= / vb0= 等，位于非 TextureOverride 段且不在 if 块内）。
-    fix_non_managed_crash_lines(game_mods_path, &managed_folder, &known_libraries);
+    fix_non_managed_crash_lines(game_mods_path, &managed_folder, &known_libs);
     log::debug!("[mod_manager] [update_mod_data] step=fix_non_managed_crash_lines done");
 
     // 步骤6: 为每个 group 创建 ModFolder.ini
@@ -838,6 +804,207 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     };
     log::debug!("[core::mod_manager] [update_mod_data] done | elapsed={:?}ms | processed={} errors={}", _s.elapsed().as_millis(), result.processed_mods, result.errors.len());
     Ok(result)
+}
+
+/// 单个分组（group）并行任务的处理产出。
+///
+/// `update_mod_data` 步骤 5 按 `group_index` 分桶后，每个分组任务在单一 worker 线程内
+/// 串行处理本组全部模组并产出本结构；全部完成后按 `group_id` 升序确定性合并，
+/// 保证同一输入多次运行的 `errors` 顺序与 `mod_inis` 内容确定。
+#[derive(Debug, Default)]
+struct GroupOutcome {
+    /// 分组 id（group_index）
+    group_id: u32,
+    /// 本组成功处理（已原子写入）的模组 INI 路径（组内保持扫描顺序）
+    mod_inis: Vec<PathBuf>,
+    /// 本组收集到的错误条目（解析/检测/写入失败，组内序保持）
+    errors: Vec<ErroredLines>,
+    /// 本组实际处理（INI 注入并写入成功）的计数
+    processed: u32,
+    /// 本组任务耗时（毫秒），由 panic 兜底包装器统一记录
+    elapsed_ms: u128,
+}
+
+/// 处理单个分组的全部模组 INI（组内串行，保持扫描顺序与现有管线语义）。
+///
+/// 管线：备份 → 解析（mod_ini_cache）→ 错误检测 → namespace 展开 → 清理旧托管内容 →
+/// 补齐段属性键 → 重排 → 注入槽位条件 → 注释崩溃行 → 清理空 if 块 → 缩进 → 头注释 → 原子写入 → 标记文件。
+/// 与串行版的差异仅在于：`write_atomic` 失败不再中止整体，而是收集为 per-mod 错误条目
+/// （`error_type=3`，消息含路径与原因），该 INI 不计入 `mod_inis`，继续处理后续模组。
+///
+/// # 参数
+/// - `group_id`: 分组 id（用于槽位条件注入）
+/// - `mods`: 本组启用模组列表（扫描顺序）
+/// - `known_libraries`: 预收集的已知库集合（只读）
+///
+/// # 返回
+/// 该分组的 [`GroupOutcome`]（局部产出与错误，稍后按 group_id 升序合并）
+fn process_group_task(
+    group_id: u32,
+    mods: &[&ModData],
+    known_libraries: &HashSet<String>,
+) -> GroupOutcome {
+    let mut outcome = GroupOutcome {
+        group_id,
+        ..Default::default()
+    };
+
+    for mod_data in mods {
+        let mut mod_inis: Vec<PathBuf> = Vec::new();
+        // 跟踪本模组是否需要写标记文件（对齐 Dart _markAsOldAutoFix / _markAsRemovedSyntaxError）
+        let mut mod_has_crash_lines = false;
+        let mut mod_has_syntax_errors = false;
+
+        for ini_data in &mod_data.mod_ini_data {
+            let ini_path = PathBuf::from(&ini_data.ini_path);
+
+            // 备份模组 INI
+            let mod_backup = ini_path.with_extension(constants::BACKUP_EXTENSION);
+            if !mod_backup.exists() {
+                if let Err(e) = fs::copy(&ini_path, &mod_backup) {
+                    log::warn!("Failed to backup mod INI {}: {}", ini_path.display(), e);
+                }
+            }
+
+            match get_or_parse_ini(&ini_path) {
+                Ok(mut ini) => {
+                    // 错误检测
+                    let errors = ini.detect_errors(&ini_path, known_libraries);
+                    if !errors.is_empty() {
+                        // 对齐 Dart _modifyLinesBasedOnError：modsyntaxerrorremoved 标记仅由
+                        // 「非 endif 的崩溃行错误」（crash line=1）触发。
+                        // - 3Dmigoto 容错解析悬空/孤立 endif（flow control=3）、重复库(0)、
+                        //   缺失 endif(2)、缺失库(5)、路径过长(6)，这些错误由 NRMM 自动修复
+                        //   （remove_empty_if_blocks / fix_manager_endif）或仅为 UI 报告项，
+                        //   不会令模组被移除，故不触发 modsyntaxerrorremoved 标记。
+                        // - 仅当模组存在会致 XXMI 崩溃的绘制/缓冲行（crash line=1，如
+                        //   drawindexed/draw/ib 取到非法值且非 auto / 数值 / 资源引用）时，
+                        //   才标记该模组曾被移除（与 Dart 基线行为一致：基线零标记）。
+                        let has_syntax_marker_error =
+                            errors.iter().any(|e| e.error_type == 1);
+                        outcome.errors.extend(errors);
+                        if has_syntax_marker_error {
+                            mod_has_syntax_errors = true;
+                        }
+                    }
+
+                    // 展开 namespace 变量
+                    if let Some(ns) = namespace_handler::extract_namespace(&ini) {
+                        namespace_handler::expand_ini_variables(&mut ini, &ns);
+                    }
+
+                    // 清理旧的 NRMM managed 内容（对齐 Dart _parseIniSections），
+                    // 防止重复更新时旧注入内容累积（if 守卫/$managed_slot_id/旧注释标记等）
+                    ini.remove_old_managed_content();
+
+                    // 对齐 NRMM _parseIniSections：补齐段级属性键（match_priority/allow_duplicate_hash），插入段末
+                    ini.ensure_section_attribute_keys();
+
+                    // 对齐 NRMM _reorderByIniKeyPriority：按段类型重排已知优先键到段首
+                    ini.reorder_by_ini_key_priority();
+
+                    // 注入槽位条件（含 $managed_slot_id 赋值）
+                    ini.inject_slot_conditions(group_id, mod_data.mod_index);
+
+                    // 注释崩溃行
+                    let crash_lines = ini.comment_crash_lines();
+                    if !crash_lines.is_empty() {
+                        log::info!("Commented {} crash lines in {}", crash_lines.len(), ini_path.display());
+                        mod_has_crash_lines = true;
+                    }
+
+                    // 移除空 if 块，应用缩进
+                    ini.remove_empty_if_blocks();
+                    ini.apply_indentation();
+                    ini.prepend_header_comment();
+
+                    // 原子写入（失败不中止整体：收集为错误条目，该 INI 不计入 mod_inis）
+                    if let Err(e) = ini.write_atomic(&ini_path) {
+                        log::error!("Failed to write mod INI {}: {}", ini_path.display(), e);
+                        outcome.errors.push(ErroredLines {
+                            error_type: 3,
+                            error_message: format!("Failed to write {}: {}", ini_path.display(), e),
+                            ..Default::default()
+                        });
+                        continue;
+                    }
+
+                    mod_inis.push(ini_path.clone());
+                    outcome.processed += 1;
+                }
+                Err(e) => {
+                    log::error!("Failed to process mod INI {}: {}", ini_path.display(), e);
+                    outcome.errors.push(ErroredLines {
+                        error_type: 3,
+                        error_message: format!("Processing error: {}", e),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
+        outcome.mod_inis.extend(mod_inis);
+
+        // 写入标记文件（对齐 Dart _markAsOldAutoFix / _markAsRemovedSyntaxError）
+        let mod_dir = std::path::Path::new(mod_data.mod_path.as_str());
+        if mod_has_crash_lines {
+            let marker = mod_dir.join(constants::MODFORCED_MARKER);
+            if let Err(e) = fs::write(&marker, "") {
+                log::warn!("写入 modforced 标记失败 {:?}: {}", marker, e);
+            }
+        }
+        if mod_has_syntax_errors {
+            let marker = mod_dir.join("modsyntaxerrorremoved");
+            if let Err(e) = fs::write(&marker, "") {
+                log::warn!("写入 modsyntaxerrorremoved 标记失败 {:?}: {}", marker, e);
+            }
+        }
+    }
+
+    outcome
+}
+
+/// 以 `catch_unwind`（`AssertUnwindSafe`）包裹执行单个分组任务，panic 时不令其逃逸。
+///
+/// # 参数
+/// - `group_id`: 分组 id（用于错误条目与日志定位）
+/// - `task`: 分组任务闭包（通常为 [`process_group_task`] 的调用）
+///
+/// # 返回
+/// 任务正常完成时返回其产出（补充耗时）；任务 panic 时返回仅含一条 `error_type=3`
+/// 错误条目的 [`GroupOutcome`]（组内已收集的局部结果被丢弃，避免半成品路径进入 group INI）
+fn run_group_with_panic_guard(group_id: u32, task: impl FnOnce() -> GroupOutcome) -> GroupOutcome {
+    let start = std::time::Instant::now();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(task)) {
+        Ok(mut outcome) => {
+            outcome.elapsed_ms = start.elapsed().as_millis();
+            outcome
+        }
+        Err(payload) => {
+            let reason = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic payload".to_string()
+            };
+            log::error!(
+                "[mod_manager] [update_mod_data] Group {} processing panicked: {}",
+                group_id,
+                reason
+            );
+            GroupOutcome {
+                group_id,
+                errors: vec![ErroredLines {
+                    error_type: 3,
+                    error_message: format!("Group {} processing panicked: {}", group_id, reason),
+                    ..Default::default()
+                }],
+                elapsed_ms: start.elapsed().as_millis(),
+                ..Default::default()
+            }
+        }
+    }
 }
 
 /// 跨模组 namespace 去重（引入原版语义：忠实移植 `_autoModifyDuplicateNamespaceInManagedMod`）。
@@ -1174,25 +1341,26 @@ fn fix_non_managed_crash_lines(
     managed_path: &Path,
     known_libraries: &HashSet<String>,
 ) {
-    for entry in WalkDir::new(mods_path)
+    // 串行 WalkDir 仅收集文件路径（过滤逻辑不变：is_file、.ini 扩展、跳过 _MANAGED_ 内），
+    // 文件集合互不相交，随后交由 rayon 线程池并行处理，结果与串行版一致。
+    let ini_files: Vec<PathBuf> = WalkDir::new(mods_path)
         .follow_links(false)
         .into_iter()
         .flatten()
-    {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if path.extension().and_then(|e| e.to_str()) != Some("ini") {
-            continue;
-        }
-        // 仅处理非托管（不在 _MANAGED_ 内）的 .ini
-        if path.starts_with(managed_path) {
-            continue;
-        }
+        .filter(|entry| {
+            let path = entry.path();
+            path.is_file()
+                && path.extension().and_then(|e| e.to_str()) == Some("ini")
+                // 仅处理非托管（不在 _MANAGED_ 内）的 .ini
+                && !path.starts_with(managed_path)
+        })
+        .map(|entry| entry.into_path())
+        .collect();
+
+    ini_files.par_iter().for_each(|path| {
         let ini = match IniFile::parse(path) {
             Ok(ini) => ini,
-            Err(_) => continue,
+            Err(_) => return,
         };
         let errors = ini.detect_errors(path, known_libraries);
         let crash_lines: Vec<(u32, String)> = errors
@@ -1201,7 +1369,7 @@ fn fix_non_managed_crash_lines(
             .map(|e| (e.line_number, e.line))
             .collect();
         if crash_lines.is_empty() {
-            continue;
+            return;
         }
         if comment_crash_lines_in_file(path, &crash_lines) {
             log::info!(
@@ -1210,18 +1378,39 @@ fn fix_non_managed_crash_lines(
                 path
             );
         }
-    }
+    });
 }
 
 /// 对齐 Dart `_fixNonManagedModsCrashLine`：将指定行号、行内容的崩溃行注释掉。
 ///
 /// 规则：行号有效、该行 trim 后小写与记录一致、且尚未以 `;-;` 开头时，
 /// 前缀 `;-;`（`;-;<trimmed>`），其余行保持不变。返回是否发生修改。
+///
+/// # 编码安全（修复：防止回写损坏）
+/// 原实现用 `force_read_as_utf8`（有损解码）读取后整体回写：非 UTF-8 文件
+/// （如 GBK 编码）会被替换为 U+FFFD 永久损坏，且 UTF-8 BOM 与 CRLF 换行会被丢弃。
+/// 现改为：
+/// - 非 UTF-8 文件直接跳过修复（记录日志），拒绝任何形式的损坏性回写；
+/// - 保留 UTF-8 BOM（若有）；
+/// - 保留原文件换行风格（CRLF 与 LF）与末尾换行符。
 fn comment_crash_lines_in_file(path: &Path, crash_lines: &[(u32, String)]) -> bool {
-    let content = match IniFile::force_read_as_utf8(path) {
-        Ok(c) => c,
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
         Err(_) => return false,
     };
+    let had_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
+    let body = if had_bom { &bytes[3..] } else { &bytes[..] };
+    let content = match std::str::from_utf8(body) {
+        Ok(s) => s,
+        Err(_) => {
+            log::warn!(
+                "[mod_manager] 跳过非 UTF-8 文件的崩溃行修复（避免回写损坏文件）：{:?}",
+                path
+            );
+            return false;
+        }
+    };
+    let crlf = content.contains("\r\n");
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
     let mut changed = false;
     for (num, text) in crash_lines {
@@ -1236,8 +1425,17 @@ fn comment_crash_lines_in_file(path: &Path, crash_lines: &[(u32, String)]) -> bo
         }
     }
     if changed {
-        let out = lines.join("\n");
-        if atomic_write_file(path, out.as_bytes()).is_ok() {
+        let mut out = lines.join(if crlf { "\r\n" } else { "\n" });
+        // 保留文件末尾换行（str::lines 会吞掉末尾的 \n）
+        if content.ends_with('\n') {
+            out.push_str(if crlf { "\r\n" } else { "\n" });
+        }
+        let mut buf = Vec::with_capacity(out.len() + 3);
+        if had_bom {
+            buf.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        }
+        buf.extend_from_slice(out.as_bytes());
+        if atomic_write_file(path, &buf).is_ok() {
             return true;
         }
     }
@@ -3732,6 +3930,275 @@ endif
         atomic_write_file(&path, b"hello world").unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "hello world");
         assert!(!path.with_extension("tmp").exists());
+    }
+
+    /// 编码安全测试：`comment_crash_lines_in_file` 保留 BOM / CRLF / 末尾换行，
+    /// 并对非 UTF-8 文件跳过修复（拒绝有损回写损坏）。
+    #[test]
+    fn test_comment_crash_lines_encoding_safe() {
+        let dir = TempDir::new().unwrap();
+
+        // 1) BOM + CRLF 文件：仅目标行被加前缀，其余字节原样保留
+        let crlf_path = dir.path().join("crlf.ini");
+        let crlf_content = "\u{FEFF}[Section]\r\nkey = 1\r\ndrawindexed = 999\r\n";
+        fs::write(&crlf_path, crlf_content.as_bytes()).unwrap();
+        let changed = comment_crash_lines_in_file(
+            &crlf_path,
+            &[(3, "drawindexed = 999".to_string())],
+        );
+        assert!(changed, "CRLF 文件应执行崩溃行修复");
+        let bytes = fs::read(&crlf_path).unwrap();
+        assert!(bytes.starts_with(&[0xEF, 0xBB, 0xBF]), "BOM 应保留");
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("\r\n;-;drawindexed = 999\r\n"), "CRLF 与目标行前缀应保留:\n{:?}", text);
+        assert!(text.contains("\r\nkey = 1\r\n"), "未命中行应原样保留");
+
+        // 2) 非 UTF-8 文件（含 GBK 字节）：跳过修复，文件字节不得被改写
+        let gbk_path = dir.path().join("gbk.ini");
+        let gbk_bytes: Vec<u8> = b"[Section]\r\ndrawindexed = 5\r\n\xb2\xe2\xca\xd4\r\n".to_vec();
+        fs::write(&gbk_path, &gbk_bytes).unwrap();
+        let changed2 = comment_crash_lines_in_file(
+            &gbk_path,
+            &[(2, "drawindexed = 5".to_string())],
+        );
+        assert!(!changed2, "非 UTF-8 文件应跳过修复");
+        assert_eq!(
+            fs::read(&gbk_path).unwrap(),
+            gbk_bytes,
+            "非 UTF-8 文件字节不得被改写"
+        );
+
+        // 3) LF 无 BOM 文件：正常修复且保留末尾换行
+        let lf_path = dir.path().join("lf.ini");
+        fs::write(&lf_path, "[Section]\nkey = 1\ndrawindexed = auto\n").unwrap();
+        let changed3 = comment_crash_lines_in_file(
+            &lf_path,
+            &[(3, "drawindexed = auto".to_string())],
+        );
+        assert!(changed3);
+        assert_eq!(
+            fs::read_to_string(&lf_path).unwrap(),
+            "[Section]\nkey = 1\n;-;drawindexed = auto\n",
+            "LF 文件修复后应保留末尾换行"
+        );
+    }
+
+    // ============================================================================
+    // 步骤 5 按分组并行化（rayon）单元测试
+    // ============================================================================
+
+    /// 递归收集目录下所有 .ini 文件内容（路径 → 内容，BTreeMap 保证迭代顺序稳定）
+    fn snapshot_ini_files(root: &Path) -> std::collections::BTreeMap<PathBuf, String> {
+        let mut map = std::collections::BTreeMap::new();
+        for entry in WalkDir::new(root).into_iter().flatten() {
+            let p = entry.path();
+            if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("ini") {
+                map.insert(p.to_path_buf(), fs::read_to_string(p).unwrap_or_default());
+            }
+        }
+        map
+    }
+
+    /// 测试：known_libraries 并行收集（collect_libraries_parallel）与串行逐个收集结果集合相等
+    #[test]
+    fn test_known_libraries_parallel_equals_serial() {
+        let dir = TempDir::new().unwrap();
+        let ini_a = dir.path().join("a.ini");
+        fs::write(&ini_a, "[ResourceLibA]\nhash = 0x1\n").unwrap();
+        let ini_b = dir.path().join("b.ini");
+        fs::write(&ini_b, "[CommandListLibB]\nps-t0 = ResourceLibA\n").unwrap();
+        let ini_c = dir.path().join("c.ini");
+        fs::write(&ini_c, "[Constants]\nx = 1\n").unwrap();
+
+        let paths = vec![ini_a, ini_b, ini_c];
+        let parallel = collect_libraries_parallel(&paths);
+
+        // 串行基准：逐个 get_or_parse_ini 收集 defined_libraries
+        let mut serial = HashSet::new();
+        for p in &paths {
+            if let Ok(ini) = get_or_parse_ini(p) {
+                for lib in ini.defined_libraries() {
+                    serial.insert(lib);
+                }
+            }
+        }
+
+        assert_eq!(parallel, serial, "并行收集与串行收集集合应相等");
+        assert!(parallel.contains("ResourceLibA"));
+        assert!(parallel.contains("CommandListLibB"));
+        assert_eq!(parallel.len(), 2);
+    }
+
+    /// 测试：多分组各自产生错误时，errors 合并顺序按 group_id 升序稳定（多次运行一致）
+    #[test]
+    fn test_parallel_merge_error_order_deterministic() {
+        let dir = setup_test_env();
+        create_main_ini(dir.path(), TargetGame::GenshinImpact);
+        let settings = AppSettings::default();
+
+        // 3 个分组，各含一个引用未知库的模组（触发 NON EXISTENT LIB，error_type=5）
+        for gid in [1u32, 2, 3] {
+            let group_path = create_group_dir(dir.path(), &format!("group_{}", gid));
+            create_mod_with_ini(
+                &group_path,
+                "ModWithMissingLib",
+                &format!(
+                    "[TextureOverrideTest]\nhash = 0x{0}\nrun = MissingLibG{0}\ndrawindexed = auto\n",
+                    gid
+                ),
+            );
+        }
+
+        let fmt_errors = |r: &UpdateResult| -> Vec<(u8, u32, String, String)> {
+            r.errors
+                .iter()
+                .map(|e| (e.error_type, e.line_number, e.line.clone(), e.error_message.clone()))
+                .collect()
+        };
+
+        // 第一次运行完成内容注入；后续运行进入稳态，errors 应逐条一致（顺序确定）
+        let _ = update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+        let steady =
+            fmt_errors(&update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap());
+        let steady2 =
+            fmt_errors(&update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap());
+        assert_eq!(steady, steady2, "多次运行 errors 顺序应稳定");
+
+        // 三组各产生一条 NON EXISTENT LIB 错误
+        let nonexistent_count = steady.iter().filter(|(t, ..)| *t == 5).count();
+        assert_eq!(nonexistent_count, 3, "每组应各产生一条缺失库错误");
+
+        // 合并顺序按 group_id 升序：G1 的错误先于 G2，G2 先于 G3
+        let pos = |name: &str| {
+            steady
+                .iter()
+                .position(|(_, _, _, msg)| msg.contains(name))
+                .unwrap_or_else(|| panic!("缺少包含 {} 的错误条目", name))
+        };
+        assert!(pos("MissingLibG1") < pos("MissingLibG2"), "group_1 错误应先于 group_2");
+        assert!(pos("MissingLibG2") < pos("MissingLibG3"), "group_2 错误应先于 group_3");
+    }
+
+    /// 测试：单模组写入失败被隔离为错误条目，整体返回 Ok，同组其他模组正常处理且 group INI 生成。
+    ///
+    /// 失败构造方式：占位 write_atomic 的临时文件路径（mod.ini → mod.ini.tmp）为目录，
+    /// 使 fs::File::create 必然失败。相比 Windows 只读属性（tmp+rename 策略可能绕过），
+    /// 该方式在 Windows/Linux 上均可可靠复现写入失败。
+    #[test]
+    fn test_write_failure_isolated_per_mod() {
+        let dir = setup_test_env();
+        create_main_ini(dir.path(), TargetGame::GenshinImpact);
+        let settings = AppSettings::default();
+
+        let group_path = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(
+            &group_path,
+            "GoodMod",
+            "[TextureOverrideGood]\nhash = 0x1\ndrawindexed = auto\n",
+        );
+        let bad_mod_dir = create_mod_with_ini(
+            &group_path,
+            "BadMod",
+            "[TextureOverrideBad]\nhash = 0x2\ndrawindexed = auto\n",
+        );
+        fs::create_dir_all(bad_mod_dir.join("mod.ini.tmp")).unwrap();
+
+        let result = update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+
+        // 整体 Ok，仅 GoodMod 计入 processed
+        assert_eq!(result.processed_mods, 1);
+        // BadMod 写入失败被收集为错误条目（error_type=3，消息含路径）
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.error_type == 3 && e.error_message.contains("BadMod")),
+            "应包含 BadMod 写入失败错误条目: {:?}",
+            result.errors
+        );
+        // 同组其他 ini 正常处理（已注入 NRMM 头注释）且 group INI 生成
+        let good = fs::read_to_string(group_path.join("GoodMod").join("mod.ini")).unwrap();
+        assert!(good.contains("; \";-;\" are errored conditional lines."));
+        assert!(group_path.join("group_1.ini").exists());
+        // 失败 INI 未被写入（无 NRMM 头注释）
+        let bad = fs::read_to_string(group_path.join("BadMod").join("mod.ini")).unwrap();
+        assert!(!bad.contains("; \";-;\" are errored conditional lines."));
+    }
+
+    /// 测试：组任务 panic 被 catch_unwind 捕获并转为错误条目，而非 panic 逃逸
+    #[test]
+    fn test_group_panic_isolation() {
+        // &str panic payload
+        let outcome = run_group_with_panic_guard(3, || panic!("boom"));
+        assert_eq!(outcome.group_id, 3);
+        assert!(outcome.mod_inis.is_empty());
+        assert_eq!(outcome.errors.len(), 1);
+        assert_eq!(outcome.errors[0].error_type, 3);
+        assert!(outcome.errors[0].error_message.contains("Group 3 processing panicked"));
+        assert!(outcome.errors[0].error_message.contains("boom"));
+
+        // String panic payload（格式化 panic）
+        let outcome2 = run_group_with_panic_guard(5, || panic!("bad input: {}", 42));
+        assert_eq!(outcome2.group_id, 5);
+        assert_eq!(outcome2.errors.len(), 1);
+        assert!(outcome2.errors[0].error_message.contains("bad input: 42"));
+
+        // 非 panic 路径：正常产出透传
+        let outcome3 = run_group_with_panic_guard(7, || GroupOutcome {
+            group_id: 7,
+            processed: 2,
+            ..Default::default()
+        });
+        assert_eq!(outcome3.group_id, 7);
+        assert_eq!(outcome3.processed, 2);
+        assert!(outcome3.errors.is_empty());
+    }
+
+    /// 测试：幂等性——update_mod_data 连续多次运行后，_MANAGED_ 下 group INI 与模组 ini
+    /// 内容进入稳态且不再变化（比较第 2 次后与第 3 次后）。
+    ///
+    /// 说明：首次运行注入的守卫包裹整段；第 2 次运行起 reorder_by_ini_key_priority 会将
+    /// hash / match_priority 等优先键提升到守卫之前（且已存在守卫时跳过重复注入），
+    /// 故第 1 → 2 次存在一次性的注入归一化，第 2 次后进入稳态。该行为为预存在的
+    /// 管线语义（与串行版一致），非并行化引入。
+    #[test]
+    fn test_update_mod_data_idempotent() {
+        let dir = setup_test_env();
+        create_main_ini(dir.path(), TargetGame::GenshinImpact);
+        let settings = AppSettings::default();
+
+        let group1 = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(
+            &group1,
+            "ModA",
+            "[TextureOverrideBody]\nhash = 0x1\ndrawindexed = auto\n",
+        );
+        create_mod_with_ini(
+            &group1,
+            "ModB",
+            "[TextureOverrideBody]\nhash = 0x2\ndrawindexed = auto\n",
+        );
+        let group2 = create_group_dir(dir.path(), "group_2");
+        create_mod_with_ini(&group2, "ModC", "[Constants]\n$v = 1\n");
+
+        let managed = dir.path().join("_MANAGED_");
+        update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+        assert!(group1.join("group_1.ini").exists());
+        assert!(group2.join("group_2.ini").exists());
+
+        // 第 2 次运行后进入稳态
+        update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+        let snapshot2 = snapshot_ini_files(&managed);
+        assert!(snapshot2.len() >= 5, "应至少包含 3 个模组 ini 与 2 个 group ini");
+
+        // 第 3 次运行后内容应与稳态完全一致（幂等）
+        update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+        let snapshot3 = snapshot_ini_files(&managed);
+
+        assert_eq!(
+            snapshot2, snapshot3,
+            "进入稳态后再次更新，_MANAGED_ 下 ini 内容应保持完全一致"
+        );
     }
 }
 

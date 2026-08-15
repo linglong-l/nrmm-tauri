@@ -226,6 +226,17 @@ impl FileWatcher {
                                 let mut cache_guard =
                                     crate::core::mod_cache::MOD_CACHE.write();
                                 for sub in &consolidated {
+                                    // 收敛根已不存在（整组目录被删除）：scan_partial_path 会退化为
+                                    // 全量扫描，但合并策略不会移除已删分组，缓存会残留已删除的组/模组。
+                                    // 直接使该游戏缓存失效，下次 get_mods 全量重扫兜底。
+                                    if !sub.exists() {
+                                        log::info!(
+                                            "[Incremental] consolidated root no longer exists, invalidating game cache: {:?}",
+                                            sub
+                                        );
+                                        cache_guard.invalidate_game(current_game);
+                                        continue;
+                                    }
                                     match crate::core::mod_scanner::scan_partial_path(
                                         &mods_path_buf,
                                         sub,
