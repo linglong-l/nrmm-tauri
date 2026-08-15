@@ -942,6 +942,33 @@ fn process_group_task(
         }
     }
 
+    // H3：组内全部可见模组写入失败 → 显式告警，避免「组内全失败→create_group_ini 跳过空组→模组被静默移出管理」不可察。
+    // 前端应据此 errors 中 error_type=3 汇总条目提示用户手动介入，而非误以为更新成功。
+    if !mods.is_empty() && outcome.mod_inis.is_empty() {
+        let write_failures = outcome
+            .errors
+            .iter()
+            .filter(|e| e.error_type == 3)
+            .count();
+        if write_failures > 0 {
+            log::error!(
+                "[mod_manager] [process_group_task] group {} 全部 {} 个可见模组写入失败，将无 group_X.ini 生成（模组可能被移出管理）",
+                group_id,
+                mods.len()
+            );
+            outcome.errors.push(ErroredLines {
+                error_type: 3,
+                error_message: format!(
+                    "Group {}: all {} enabled mods failed to write ({} write errors); group INI will be skipped, mods may be dropped from management",
+                    group_id,
+                    mods.len(),
+                    write_failures
+                ),
+                ..Default::default()
+            });
+        }
+    }
+
     outcome
 }
 
