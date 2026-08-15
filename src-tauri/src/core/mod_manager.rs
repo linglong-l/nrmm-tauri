@@ -2466,7 +2466,15 @@ pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
                     }
                 }
                 // 清理子目录下的 group_X.ini 和 ModFolder.ini
+                // 用 file_type().is_dir() 避免 junction 逃逸（R3）
                 if path.is_dir() {
+                    let is_real_dir = path
+                        .symlink_metadata()
+                        .map(|m| m.is_dir() && !m.file_type().is_symlink())
+                        .unwrap_or(false);
+                    if !is_real_dir {
+                        continue;
+                    }
                     if let Ok(sub_entries) = fs::read_dir(&path) {
                         for sub_entry in sub_entries.flatten() {
                             let sub_path = sub_entry.path();
@@ -2494,8 +2502,16 @@ fn restore_inis_recursive(dir: &Path, restored: &mut u32, failed: &mut u32) -> R
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        // 用 entry.file_type()（不跟随 symlink/junction）判断是否为真实目录，
+        // 避免 junction 逃逸到 Mods 根外（R3）
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
             restore_inis_recursive(&path, restored, failed)?;
+        } else if ft.is_symlink() {
+            log::warn!(
+                "restore_inis_recursive: skip symlink/junction (not followed): {:?}",
+                path
+            );
         } else if let Some(ext) = path.extension() {
             if ext.eq_ignore_ascii_case("ini") && !constants::is_desktop_ini(&path) {
                 let backup_path = path.with_extension(constants::BACKUP_EXTENSION);
@@ -2624,8 +2640,16 @@ fn collect_ini_files_recursive_inner(dir: &Path, result: &mut Vec<PathBuf>) -> R
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        // 用 entry.file_type()（不跟随 symlink/junction）判断是否为真实目录，
+        // 避免 junction 逃逸到 Mods 根外创建 / 改写 INI（R3）
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
             collect_ini_files_recursive_inner(&path, result)?;
+        } else if ft.is_symlink() {
+            log::warn!(
+                "collect_ini_files_recursive_inner: skip symlink/junction (not followed): {:?}",
+                path
+            );
         } else if is_restorable_ini(&path) {
             result.push(path);
         }

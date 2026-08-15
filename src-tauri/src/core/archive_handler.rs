@@ -1119,10 +1119,14 @@ fn copy_one(src: &Path, dst: &Path) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    // 符号链接：直接复制本体，不解析、不递归（避免死循环）
+    // 符号链接 / junction：跳过，不重建、不跟随（阻断导入逃逸到 Mods 根外，R3）
+    // 正常 mod 不含符号链接；保留它会把指向 Mods 外的 junction 带进导入目录，
+    // 后续扫描 / 还原遍历该 junction 会在外部创建 / 改写 INI。
     if meta.is_symlink() {
-        let _ = fs::remove_file(dst);
-        copy_symlink_as_is(src, dst)?;
+        log::warn!(
+            "copy_one: skip symlink/junction (not imported to prevent escape): {:?}",
+            src
+        );
         return Ok(());
     }
 
@@ -1134,45 +1138,6 @@ fn copy_one(src: &Path, dst: &Path) -> Result<()> {
         }
     fs::copy(src, dst).map(|_| ())?;
     Ok(())
-}
-
-/// 复制符号链接本体。
-///
-/// - 文件符号链接：`fs::copy` 复制其指向的文件内容（安全，不递归）
-/// - 目录符号链接：跨平台重建一个指向相同目标的符号链接（保留结构、不遍历）
-fn copy_symlink_as_is(src: &Path, dst: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{read_link, symlink};
-        match read_link(src) {
-            Ok(target) => {
-                let _ = fs::remove_file(dst);
-                symlink(&target, dst)?;
-                Ok(())
-            }
-            Err(_) => {
-                fs::copy(src, dst).map(|_| ())?;
-                Ok(())
-            }
-        }
-    }
-    #[cfg(windows)]
-    {
-        match fs::copy(src, dst) {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                use std::os::windows::fs::symlink_dir;
-                match fs::read_link(src) {
-                    Ok(target) => {
-                        let _ = fs::remove_file(dst);
-                        symlink_dir(&target, dst)?;
-                        Ok(())
-                    }
-                    Err(_) => Err(anyhow!("copy_symlink_as_is: 无法复制符号链接 {:?}", src)),
-                }
-            }
-        }
-    }
 }
 
 /// 导入模组到指定分组：统一入口，支持目录和压缩包
