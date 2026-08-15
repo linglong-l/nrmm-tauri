@@ -31,12 +31,21 @@ use crate::sel_dbg;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
+use tokio::sync::Mutex as AsyncMutex;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 全局 `update_mod_data` 串行锁（H1）。
+///
+/// `update_mod_data` 内部会写 `_MANAGED_` 目录（delete_group_ini_files /
+/// create_group_ini / tmp rename 竞态），双击 / 连点可并发两次 update 同时写
+/// 同一目标，导致半成品 INI 进入 group INI 或命名冲突。用异步 Mutex 强制串行，
+/// 不阻塞 rayon 工作线程（锁仅包裹 spawn_blocking 调度点）。
+static UPDATE_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(AsyncMutex::default);
 
 /// 选择模组命令的参数结构体
 ///
@@ -189,6 +198,8 @@ pub async fn update_mod_data(
     let start = std::time::Instant::now();
 
     let update_path = mods_path.clone();
+    // 全局串行化：避免并发两次 update_mod_data 同时写 _MANAGED_ 竞态（H1）
+    let _update_guard = UPDATE_LOCK.lock().await;
     // spawn_blocking 内部若 panic，JoinError 会被转为 String 错误返回，不会导致应用崩溃
     let result = tauri::async_runtime::spawn_blocking(
         move || -> Result<mod_manager::UpdateResult, String> {
