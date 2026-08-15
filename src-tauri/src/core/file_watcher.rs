@@ -11,7 +11,7 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use anyhow::Result;
@@ -19,13 +19,58 @@ use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
 use crate::core::constants;
 
-/// 全局文件监控暂停标志
+/// 全局文件监控暂停标志（引用计数，0=未暂停，>0=暂停）
 ///
 /// 当 NRMM 自身需要写标记文件（如 groupname、selectedindex、fav 等）时，
-/// 设置为 `true` 避免触发文件变化事件导致循环刷新，写完后恢复为 `false`。
-/// 跨线程可见，使用 `Ordering::SeqCst` 保证顺序一致性 —— 所有线程看到的内存操作顺序完全相同。
-/// 使用 `AtomicBool` 保证线程安全和无锁访问。
-pub static WATCHER_PAUSED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+/// 通过 [`WatcherGuard`] 递增计数暂停监控，写完后递减恢复。
+///
+/// 使用 `AtomicUsize` 引用计数而非裸 `AtomicBool`，支持**嵌套暂停**：
+/// 外层 `update_mod_data` 暂停期间，内部 `read_or_create_marker_file` / `switch_mod`
+/// 等再暂停时计数递增，内部 Drop 只递减不恢复，直到最外层 Drop 计数归零才恢复监听。
+/// 修复裸 `AtomicBool` 嵌套 `store(false)` 提前解除暂停、监听器在 update 写中途恢复
+/// 并把半成品并入 `MOD_CACHE` 的竞态（B2）。
+///
+/// 跨线程可见，增减用 `AcqRel`，读取用 `Acquire`。
+pub static WATCHER_PAUSED: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
+
+/// 文件监听器暂停守卫（引用计数，RAII）
+///
+/// `new()` 时 `WATCHER_PAUSED` 计数 +1，`Drop` 时 -1。
+/// 嵌套安全：外层守卫持有期间内部再创建守卫只增计数，内部 Drop 不恢复监听，
+/// 直到最外层 Drop 计数归零才恢复。panic 安全（Drop 保证 fetch_sub）。
+///
+/// 用法：`let _g = WatcherGuard::new();` —— 守卫作用域内监听器保持暂停，离开作用域自动恢复。
+pub struct WatcherGuard;
+
+impl WatcherGuard {
+    /// 创建守卫并递增暂停计数
+    pub fn new() -> Self {
+        WATCHER_PAUSED.fetch_add(1, Ordering::AcqRel);
+        WatcherGuard
+    }
+}
+
+impl Default for WatcherGuard {
+    fn default() -> Self {
+        WatcherGuard::new()
+    }
+}
+
+impl Drop for WatcherGuard {
+    fn drop(&mut self) {
+        // fetch_sub 返回更新前的值；若 prev==0 说明计数本就为 0（逻辑错误），回补防下溢
+        let prev = WATCHER_PAUSED.fetch_sub(1, Ordering::AcqRel);
+        if prev == 0 {
+            WATCHER_PAUSED.fetch_add(1, Ordering::AcqRel);
+            log::error!("WatcherGuard::drop underflow: WATCHER_PAUSED was 0 before fetch_sub");
+        }
+    }
+}
+
+/// 查询全局监听器是否处于暂停状态（计数 > 0）
+pub fn watcher_paused() -> bool {
+    WATCHER_PAUSED.load(Ordering::Acquire) > 0
+}
 
 /// 文件监控器结构体
 ///
@@ -191,8 +236,8 @@ impl FileWatcher {
                             .map(|u| u.is_ready())
                             .unwrap_or(false);
                         if ready {
-                            // 检查暂停标志（全局 + 实例级），任一为 true 则跳过触发
-                            let paused_global = WATCHER_PAUSED.load(Ordering::SeqCst);
+                            // 检查暂停标志（全局引用计数 + 实例级），任一为 true 则跳过触发
+                            let paused_global = WATCHER_PAUSED.load(Ordering::Acquire) > 0;
                             let paused_local = paused_clone.load(Ordering::SeqCst);
                             if paused_global || paused_local {
                                 if let Ok(mut u) = updater_clone.lock() {
@@ -468,4 +513,30 @@ pub fn current_watched_path(
     watcher.lock().ok().and_then(|w| {
         w.watched_path().map(|p| p.to_string_lossy().into_owned())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    /// WatcherGuard 引用计数：嵌套创建/销毁时计数正确（B2 修复验证）
+    ///
+    /// 用 before 差值验证，避免全局 `WATCHER_PAUSED` 在并发测试下的干扰：
+    /// 外层守卫持有期间，内部再创建守卫只增计数，内部 Drop 只递减不归零，
+    /// 直到最外层 Drop 计数才恢复到 before。
+    #[test]
+    fn watcher_guard_nested_count() {
+        let before = WATCHER_PAUSED.load(Ordering::Acquire);
+        {
+            let _g1 = WatcherGuard::new();
+            assert_eq!(WATCHER_PAUSED.load(Ordering::Acquire), before + 1);
+            {
+                let _g2 = WatcherGuard::new();
+                assert_eq!(WATCHER_PAUSED.load(Ordering::Acquire), before + 2);
+            } // _g2 drop → before+1（外层未 Drop，监听器仍暂停）
+            assert_eq!(WATCHER_PAUSED.load(Ordering::Acquire), before + 1);
+        } // _g1 drop → before
+        assert_eq!(WATCHER_PAUSED.load(Ordering::Acquire), before);
+    }
 }

@@ -25,8 +25,7 @@ use walkdir::WalkDir;
 use crate::core::resolution::{compute_limits, ResolutionLimits};
 use tauri::State;
 use crate::core::file_watcher::FileWatcher;
-use crate::core::file_watcher::WATCHER_PAUSED;
-use std::sync::atomic::Ordering;
+use crate::core::file_watcher::WatcherGuard;
 
 /// 压缩包类型枚举
 ///
@@ -405,10 +404,44 @@ fn extract_with_7z_cli(
     Ok(temp_dir)
 }
 
+/// 安全拼接 7z 条目名到目标目录，防止路径穿越（zip-slip / 7z-slip，RUSTSEC-2026-0245）
+///
+/// 拒绝含 `..`、绝对路径前缀（`/`、`C:`）、反斜杠逃逸的条目名。
+/// 反斜杠统一按分隔符处理（Windows 兼容），仅保留 `Normal` 组件。
+fn safe_join_entry(base: &Path, name: &str) -> std::result::Result<PathBuf, sevenz_rust::Error> {
+    if name.is_empty() {
+        return Err(sevenz_rust::Error::other("empty 7z entry name"));
+    }
+    // 反斜杠统一为正斜杠，避免 Windows 下 `\..` 被 components 当作普通文件名段
+    let normalized = name.replace('\\', "/");
+    let p = Path::new(&normalized);
+    let mut safe = base.to_path_buf();
+    for comp in p.components() {
+        match comp {
+            std::path::Component::Normal(s) => safe = safe.join(s),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(sevenz_rust::Error::other(format!(
+                    "unsafe 7z entry name rejected (traversal/absolute/prefix): {}",
+                    name
+                )));
+            }
+        }
+    }
+    Ok(safe)
+}
+
 /// 使用 `sevenz-rust` crate 自实现解压 7z 压缩包到临时目录
 ///
 /// 三级回退链的第三级（7z 格式）：纯 Rust 实现的 7z 解压，不依赖外部 CLI。
 /// 支持密码保护的压缩包。
+///
+/// # 安全
+/// 使用自定义 extract 回调 + `safe_join_entry` 对每个条目名做路径穿越净化，
+/// 修复 RUSTSEC-2026-0245（sevenz-rust 0.6.1 `decompress_file` 内部
+/// `dest.join(entry.name())` 无净化，恶意条目可覆盖任意可写文件）。
 ///
 /// # 参数
 /// - `archive_path`: 7z 压缩包路径
@@ -420,7 +453,7 @@ fn extract_with_7z_cli(
 ///
 /// # Errors
 /// - 临时目录创建失败
-/// - `sevenz_rust::decompress_file` 解压失败
+/// - `sevenz_rust::decompress_file_with_extract_fn` 解压失败
 fn extract_7z_internal(
     archive_path: &Path,
     target_dir: &Path,
@@ -439,8 +472,37 @@ fn extract_7z_internal(
         return Err(anyhow!("Password-protected 7z not supported by internal extractor"));
     }
 
-    sevenz_rust::decompress_file(archive_path, &temp_dir)
-        .context("sevenz-rust decompress_file failed")?;
+    let dest_base = temp_dir.clone();
+    sevenz_rust::decompress_file_with_extract_fn(
+        archive_path,
+        &temp_dir,
+        |entry, reader, _unsafe_path| {
+            // 安全修复（RUSTSEC-2026-0245）：忽略 decompress_impl 内部已 join 的
+            // _unsafe_path（其用 dest.join(entry.name())，对含 `..` 的条目名会穿越），
+            // 改用 entry.name() 重新做安全 join，仅保留 Normal 组件。
+            let safe_path = safe_join_entry(&dest_base, entry.name())?;
+            if entry.is_directory() {
+                if !safe_path.exists() {
+                    fs::create_dir_all(&safe_path).map_err(sevenz_rust::Error::io)?;
+                }
+            } else {
+                if let Some(parent) = safe_path.parent() {
+                    if !parent.exists() {
+                        fs::create_dir_all(parent).map_err(sevenz_rust::Error::io)?;
+                    }
+                }
+                let mut file = fs::File::create(&safe_path).map_err(|e| {
+                    sevenz_rust::Error::io_msg(
+                        e,
+                        format!("create file: {}", safe_path.display()),
+                    )
+                })?;
+                std::io::copy(reader, &mut file).map_err(sevenz_rust::Error::io)?;
+            }
+            Ok(true)
+        },
+    )
+    .context("sevenz-rust decompress_file failed (with path traversal protection)")?;
 
     Ok(temp_dir)
 }
@@ -1380,6 +1442,12 @@ pub fn is_supported_archive_cmd(path: String) -> bool {
 /// - 解压失败（格式不支持、7z 未找到、密码错误等）
 #[tauri::command]
 pub async fn import_mod_cmd(archive_path: String, group_dir: String, password: Option<String>) -> Result<ExtractResult, String> {
+    // 路径边界校验（R1）：group_dir 必须位于任一已配置 mods_root 内
+    // archive_path 是用户选择的压缩包来源，路径任意，不校验
+    let group_dir = crate::config::settings_store::validate_managed_path(&group_dir)
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .to_string();
     tauri::async_runtime::spawn_blocking(move || -> Result<ExtractResult, String> {
         import_mod(
             Path::new(&archive_path),
@@ -1432,12 +1500,19 @@ pub async fn import_item_cmd(
     watcher: State<'_, Arc<Mutex<FileWatcher>>>,
     req: ImportItemRequest,
 ) -> Result<Vec<ExtractResult>, String> {
+    // 路径边界校验（R1）：target_group_dir 必须位于任一已配置 mods_root 内
+    // items 是用户选择的源文件/压缩包，路径任意，不校验
+    let mut req = req;
+    req.target_group_dir = crate::config::settings_store::validate_managed_path(&req.target_group_dir)
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .to_string();
     // 暂停文件监控
     {
         let w = watcher.lock().map_err(|e| e.to_string())?;
         w.pause();
     }
-    WATCHER_PAUSED.store(true, Ordering::SeqCst);
+    let _watcher_guard = WatcherGuard::new(); // 全局暂停（引用计数，函数结束自动恢复）
 
     let result = tauri::async_runtime::spawn_blocking(move || -> Vec<ExtractResult> {
         let target = PathBuf::from(&req.target_group_dir);
@@ -1457,8 +1532,7 @@ pub async fn import_item_cmd(
     .await
     .map_err(|e| e.to_string());
 
-    // 恢复文件监控
-    WATCHER_PAUSED.store(false, Ordering::SeqCst);
+    // 恢复文件监控（全局 WATCHER_PAUSED 由 _watcher_guard 在函数结束 Drop 时自动恢复）
     if let Ok(w) = watcher.lock() {
         w.resume();
     }

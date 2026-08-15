@@ -633,7 +633,7 @@ pub async fn add_group(
 /// 删除分组（移至回收站）
 #[tauri::command]
 pub async fn remove_group(group_path: String) -> Result<(), String> {
-    let path = PathBuf::from(group_path);
+    let path = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
 
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         if !path.exists() {
@@ -664,7 +664,7 @@ pub async fn remove_group(group_path: String) -> Result<(), String> {
 pub async fn remove_mod(
     mod_path: String,
 ) -> Result<crate::core::mod_manager::RemoveModResult, String> {
-    let path = PathBuf::from(mod_path);
+    let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
 
     let result = tauri::async_runtime::spawn_blocking(
         move || -> Result<crate::core::mod_manager::RemoveModResult, String> {
@@ -685,7 +685,8 @@ pub async fn remove_mod(
 /// 重命名模组
 #[tauri::command]
 pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, String> {
-    let path = PathBuf::from(&mod_path);
+    let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
+    settings_store::validate_filename(&new_name).map_err(|e| e.to_string())?;
 
     let new_path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf, String> {
         if !path.exists() {
@@ -748,7 +749,8 @@ pub async fn rename_group(
     new_name: String,
     is_group_xx: bool,
 ) -> Result<PathBuf, String> {
-    let path = PathBuf::from(&group_path);
+    let path = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
+    settings_store::validate_filename(&new_name).map_err(|e| e.to_string())?;
 
     let new_path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf, String> {
         if !path.exists() {
@@ -793,7 +795,7 @@ pub async fn toggle_mod_disabled(
     enable: bool,
     is_mutex: bool,
 ) -> Result<(), String> {
-    let path = PathBuf::from(&mod_path);
+    let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
 
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         if is_mutex {
@@ -820,7 +822,7 @@ pub async fn toggle_mod_disabled(
 /// 切换模组收藏状态
 #[tauri::command]
 pub async fn toggle_favorite(mod_path: String) -> Result<bool, String> {
-    let path = PathBuf::from(&mod_path);
+    let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
 
     let is_fav = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
         let fav_path = path.join(constants::FAV_MARKER);
@@ -923,7 +925,7 @@ pub async fn restore_all_inis(mods_path: String) -> Result<mod_manager::Restored
 pub async fn restore_managed_folder(
     path: String,
 ) -> Result<mod_manager::RestoreManagedResult, String> {
-    let path_buf = PathBuf::from(&path);
+    let path_buf = settings_store::validate_managed_path(&path).map_err(|e| e.to_string())?;
     if !path_buf.exists() {
         log::warn!("Restore managed folder: path not found: {:?}", path_buf);
         return Err(format!(
@@ -1278,6 +1280,8 @@ pub async fn enable_all_mods_in_group(group_path: String) -> Result<u32, String>
 /// 处理错误并记录日志。具体「哪些目录移动到哪里」由底层编排层 `remove_group_ex` 决定。
 #[tauri::command]
 pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<(), String> {
+    // 路径边界校验（R1）：确认 group_path canonicalize 后位于任一已配置 mods_root 内
+    let _validated = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
     let path = PathBuf::from(group_path);
     log::info!(
         "[remove_group_ex] start | group_path={:?} is_group_xx={}",

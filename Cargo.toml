@@ -8,6 +8,6 @@ resolver = "2"
 debug = false
 strip = true
 lto = true
-panic = "abort"
+panic = "unwind"
 opt-level = "z"
 codegen-units = 1

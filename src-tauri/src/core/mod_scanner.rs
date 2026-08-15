@@ -23,12 +23,11 @@ use std::cmp::Ordering as CmpOrdering;
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 use std::fs;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 use regex::Regex;
 use once_cell::sync::Lazy;
 use crate::core::constants;
-use crate::core::file_watcher::WATCHER_PAUSED;
+use crate::core::file_watcher::WatcherGuard;
 use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::namespace_handler;
 use crate::models::enums::{GroupType, TargetGame, ModsPathStatus};
@@ -218,11 +217,8 @@ pub fn is_disabled_dir(dir_name: &str) -> bool {
 
 /// 读取或创建标记文件，不存在则用默认内容创建
 ///
-/// 写文件前暂停文件监控（`WATCHER_PAUSED`），避免触发循环事件。
-///
-/// # Panics
-/// 如果写入文件失败（如权限不足、磁盘满），`write()` 操作会 panic 前先由 `?` 传播错误。
-/// 但若 `WATCHER_PAUSED` 的 `store` 操作在 panic 后未恢复，后续文件监控可能异常。
+/// 写文件前通过 [`WatcherGuard`] 递增全局暂停计数，避免触发循环事件。
+/// 守卫离开作用域自动递减计数（panic 安全），无需手动恢复。
 ///
 /// # Errors
 /// 当 `path` 存在但无法读取，或 `path` 不存在且无法写入时返回 `Err`
@@ -231,9 +227,10 @@ pub fn read_or_create_marker_file(path: &Path, default_content: &str) -> Result<
         let content = fs::read_to_string(path)?;
         Ok(content.trim().to_string())
     } else {
-        WATCHER_PAUSED.store(true, Ordering::SeqCst);
-        let result = fs::write(path, default_content);
-        WATCHER_PAUSED.store(false, Ordering::SeqCst);
+        let result = {
+            let _guard = WatcherGuard::new();
+            fs::write(path, default_content)
+        }; // _guard drop：计数递减
         result?;
         Ok(default_content.to_string())
     }

@@ -15,9 +15,9 @@
 use crate::models::settings::AppSettings;
 use crate::models::enums::TargetGame;
 use crate::config::app_paths;
-use anyhow::Result;
+use anyhow::{Result, bail, Context};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use parking_lot::RwLock;
 use once_cell::sync::Lazy;
 
@@ -96,6 +96,64 @@ pub fn get_settings() -> AppSettings {
         .as_ref()
         .cloned()
         .unwrap_or_default()
+}
+
+/// 校验给定路径是否位于任一已配置游戏的 Mods 根目录内（命令层路径边界防护，R1）
+///
+/// 遍历 `game_mods_path` 的所有值，将目标路径与 mods_root **双方均 canonicalize**
+/// 后比较 `starts_with`。canonicalize 会解析 symlink/junction，因此指向外部的
+/// 链接也会被真实目标比对拦截。
+///
+/// 用于所有接受前端路径参数的 Tauri 命令入口，防止 XSS/依赖投毒经前端传入
+/// 任意绝对路径触发任意文件删改（OWASP A01）。
+///
+/// # 边界
+/// - `game_mods_path` 为空 → 返回 Err（拒绝，不静默放行）
+/// - 目标路径不存在 → canonicalize 失败 → Err（调用方应先 `exists()` 检查）
+/// - symlink/junction 指向外部 → canonicalize 解析真实目标后被 starts_with 拦截
+///
+/// # Errors
+/// - mods_root 未配置、目标路径无法 canonicalize、目标不在任一 mods_root 内
+pub fn validate_managed_path(input: &str) -> Result<PathBuf> {
+    let settings = get_settings();
+    if settings.game_mods_path.is_empty() {
+        bail!("game_mods_path not configured, refuse path operation");
+    }
+    let target = PathBuf::from(input);
+    let target_canon = fs::canonicalize(&target)
+        .with_context(|| format!("canonicalize target failed (path may not exist): {:?}", target))?;
+    let is_managed = settings.game_mods_path.values().any(|root| {
+        fs::canonicalize(root)
+            .map(|root_canon| target_canon.starts_with(&root_canon))
+            .unwrap_or(false)
+    });
+    if !is_managed {
+        bail!(
+            "path {:?} is outside any configured mods_root, operation rejected",
+            target_canon
+        );
+    }
+    Ok(target_canon)
+}
+
+/// 校验裸文件名（非路径），用于 `rename_mod` 的 new_name 等场景（R1）
+///
+/// 拒绝含路径分隔符（`/`、`\`）、`..`、`.`、空字符或为空的输入，
+/// 防止经文件名注入路径穿越。
+///
+/// # Errors
+/// 输入为空或含非法字符时返回 Err
+pub fn validate_filename(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+        || name == "."
+        || name == ".."
+    {
+        bail!("invalid filename rejected: {:?}", name);
+    }
+    Ok(())
 }
 
 /// 保存设置到磁盘并更新内存缓存

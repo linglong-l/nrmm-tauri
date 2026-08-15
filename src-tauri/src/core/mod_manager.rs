@@ -24,12 +24,11 @@ use anyhow::{Result, Context};
 use std::path::{Path, PathBuf};
 use std::collections::{HashSet, VecDeque};
 use std::fs;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use walkdir::WalkDir;
 use rayon::prelude::*;
 use crate::core::constants;
-use crate::core::file_watcher::WATCHER_PAUSED;
+use crate::core::file_watcher::WatcherGuard;
 use crate::core::ini_handler::IniFile;
 use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::namespace_handler;
@@ -41,26 +40,8 @@ use crate::models::enums::GroupType;
 use crate::models::settings::AppSettings;
 use crate::sel_dbg;
 
-/// 文件监听器暂停守卫
-///
-/// 创建时设置 `WATCHER_PAUSED = true`，Drop 时恢复为 `false`。
-/// 确保函数即使中途出错（返回 `Err`）也能恢复监听器状态。
-/// 对齐 NRMM `DynamicDirectoryWatcher.stop()` / `watch()` 的停止/重启模式。
-struct WatcherGuard;
-
-impl WatcherGuard {
-    /// 创建守卫并暂停文件监听器
-    fn new() -> Self {
-        WATCHER_PAUSED.store(true, Ordering::SeqCst);
-        WatcherGuard
-    }
-}
-
-impl Drop for WatcherGuard {
-    fn drop(&mut self) {
-        WATCHER_PAUSED.store(false, Ordering::SeqCst);
-    }
-}
+// 文件监听器暂停守卫 `WatcherGuard` 已移至 `core::file_watcher` 模块
+// （引用计数实现，支持嵌套暂停，修复 B2 竞态）
 
 // 重导出供 commands 层使用（避免 commands 直接依赖 models 模块）
 // 同时供本模块内部使用（pub use 也会将名称引入当前作用域）
@@ -1851,26 +1832,26 @@ pub fn switch_mod(
     let sel_idx_i32 = safe_mod_index as i32;
     if let Some(g_dir) = group_dir {
         let selectedindex_path = g_dir.join(constants::SELECTED_INDEX_FILE);
-        // 暂停文件监听器，防止 selectedindex 写入触发缓存增量更新竞态
-        WATCHER_PAUSED.store(true, Ordering::SeqCst);
-        if let Err(e) = fs::write(&selectedindex_path, safe_mod_index.to_string()) {
-            log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
-        } else {
-            log::debug!(
-                "[core::mod_manager] [switch_mod] wrote selectedindex file | path={} content={}",
-                selectedindex_path.display(),
-                safe_mod_index
-            );
-            sel_dbg!(
-                "mod_manager",
-                "switch_mod",
-                "步骤=写入 selectedindex | 路径={} 内容={}",
-                selectedindex_path.display(),
-                safe_mod_index
-            );
-        }
-        // 恢复文件监听器
-        WATCHER_PAUSED.store(false, Ordering::SeqCst);
+        // 暂停文件监听器（引用计数守卫），防止 selectedindex 写入触发缓存增量更新竞态
+        {
+            let _guard = WatcherGuard::new();
+            if let Err(e) = fs::write(&selectedindex_path, safe_mod_index.to_string()) {
+                log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
+            } else {
+                log::debug!(
+                    "[core::mod_manager] [switch_mod] wrote selectedindex file | path={} content={}",
+                    selectedindex_path.display(),
+                    safe_mod_index
+                );
+                sel_dbg!(
+                    "mod_manager",
+                    "switch_mod",
+                    "步骤=写入 selectedindex | 路径={} 内容={}",
+                    selectedindex_path.display(),
+                    safe_mod_index
+                );
+            }
+        } // _guard drop：计数递减，仅当无外层守卫时才恢复监听
     } else {
         log::warn!(
             "[core::mod_manager] [switch_mod] group not found by group_index={} (no selectedindex written)",
@@ -2238,17 +2219,18 @@ pub fn deselect_group_mods(
     if let Some(g_dir) = group_dir {
         let selectedindex_path = g_dir.join(constants::SELECTED_INDEX_FILE);
         // 写入 0 表示选择 None 槽位（取消选择）
-        // 对齐 NRMM：写 selectedindex 前暂停文件监听器，写完后恢复，防止触发增量更新竞态
-        WATCHER_PAUSED.store(true, Ordering::SeqCst);
-        if let Err(e) = fs::write(&selectedindex_path, "0") {
-            log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
-        } else {
-            log::debug!(
-                "[core::mod_manager] [deselect_group_mods] wrote selectedindex=0 | path={}",
-                selectedindex_path.display()
-            );
-        }
-        WATCHER_PAUSED.store(false, Ordering::SeqCst);
+        // 对齐 NRMM：写 selectedindex 前暂停文件监听器（引用计数守卫），写完后恢复
+        {
+            let _guard = WatcherGuard::new();
+            if let Err(e) = fs::write(&selectedindex_path, "0") {
+                log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
+            } else {
+                log::debug!(
+                    "[core::mod_manager] [deselect_group_mods] wrote selectedindex=0 | path={}",
+                    selectedindex_path.display()
+                );
+            }
+        } // _guard drop
     } else {
         log::warn!(
             "[core::mod_manager] [deselect_group_mods] NormalGroup not found by group_index={}",
