@@ -132,6 +132,10 @@ impl CloudDataManager {
     /// # 参数
     /// - `file_name`: 要刷新的文件名
     pub async fn refresh_async(file_name: &str) -> Result<()> {
+        // R4：白名单校验，仅允许已知云端数据文件名，阻断任意文件名写入缓存目录（路径穿越 / 越权写）
+        if !CLOUD_DATA_FILES.contains(&file_name) {
+            anyhow::bail!("Refusing to refresh unknown cloud data file: {}", file_name);
+        }
         let gitee_url = format!("{}/src-tauri/src/resources/data/{}", GITEE_RAW_BASE, file_name);
         let github_url = format!("{}/src-tauri/src/resources/data/{}", GITHUB_RAW_BASE, file_name);
         let file_name_owned = file_name.to_string();

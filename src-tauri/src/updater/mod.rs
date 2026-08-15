@@ -125,6 +125,16 @@ impl UpdateManager {
             }
         }
 
+        // R4：download_url 域名白名单校验，仅允许官方 release CDN，
+        // 阻断恶意/伪造 release API 响应指向第三方二进制下载地址
+        if !download_url.is_empty() && !Self::is_allowed_download_host(&download_url) {
+            log::warn!(
+                "parse_release_info: rejected download_url with disallowed host: {}",
+                download_url
+            );
+            download_url.clear();
+        }
+
         Ok(UpdateInfo {
             version,
             download_url,
@@ -132,6 +142,23 @@ impl UpdateManager {
             published_at: published,
             source: source.to_string(),
         })
+    }
+
+    /// 校验下载 URL 是否来自官方 release CDN 白名单域名（R4）
+    fn is_allowed_download_host(url: &str) -> bool {
+        match reqwest::Url::parse(url) {
+            Ok(parsed) => match parsed.host_str() {
+                Some(host) => {
+                    host == "github.com"
+                        || host == "objects.githubusercontent.com"
+                        || host == "github-releases.githubusercontent.com"
+                        || host == "gitee.com"
+                        || host.ends_with(".gitee.com")
+                }
+                None => false,
+            },
+            Err(_) => false,
+        }
     }
 
     /// 比较版本号，判断是否需要更新
