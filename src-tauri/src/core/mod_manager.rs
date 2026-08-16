@@ -1935,16 +1935,13 @@ pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
         .to_string_lossy()
         .to_string();
     let parent = mod_path.parent().unwrap_or(mod_path);
-    let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
+    let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
 
     if enable {
         if mod_path.exists() {
             // 传入路径存在 → 检查是否需要启用
             if is_disabled {
-                let new_name = dir_name
-                    .trim_start_matches("DISABLED")
-                    .trim_start_matches("disabled")
-                    .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
+                let new_name = mod_scanner::strip_disabled_prefix(&dir_name);
                 let new_path = parent.join(new_name);
                 if mod_path != new_path {
                     fs::rename(mod_path, &new_path)
@@ -1955,10 +1952,7 @@ pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
         } else {
             // 传入路径不存在 → 检查父目录下是否有启用版本
             if is_disabled {
-                let enabled_name = dir_name
-                    .trim_start_matches("DISABLED")
-                    .trim_start_matches("disabled")
-                    .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
+                let enabled_name = mod_scanner::strip_disabled_prefix(&dir_name);
                 let enabled_path = parent.join(enabled_name);
                 if enabled_path.exists() {
                     // 已启用 → 幂等，直接返回
@@ -2003,6 +1997,28 @@ pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
     Ok(())
 }
 
+/// 路径比较（Windows 大小写不敏感，其他平台敏感）
+///
+/// 用于 `enable_mutex_mod` 目标模组匹配，避免 Windows 下路径大小写/规范化
+/// 不一致时目标被误判为"兄弟"而禁用。
+///
+/// # 参数
+/// - `a`: 待比较路径
+/// - `b`: 待比较路径
+///
+/// # 返回
+/// Windows 下按小写比对，其他平台直接比较
+fn path_eq_ignore_case(a: &Path, b: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
 /// 互斥启用模组：启用指定模组，禁用其父目录下同级的其他模组叶子节点（含.ini的目录）
 ///
 /// - 只处理父目录下的一级子目录，不递归子分组
@@ -2043,17 +2059,14 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
             continue;
         }
 
-        if path == mod_path {
+        if path_eq_ignore_case(&path, mod_path) {
             let current_name = path.file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let is_disabled = current_name.to_uppercase().starts_with("DISABLED");
+            let is_disabled = mod_scanner::is_disabled_dir(&current_name);
             if is_disabled {
-                let new_name = current_name
-                    .trim_start_matches("DISABLED")
-                    .trim_start_matches("disabled")
-                    .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
+                let new_name = mod_scanner::strip_disabled_prefix(&current_name);
                 let new_path = path.parent().unwrap_or(&path).join(new_name);
                 if path != new_path {
                     if new_path.exists() {
@@ -2076,7 +2089,7 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let is_disabled = current_name.to_uppercase().starts_with("DISABLED");
+            let is_disabled = mod_scanner::is_disabled_dir(&current_name);
             if !is_disabled {
                 let new_name = format!("{}{}", constants::DISABLED_PREFIX, current_name);
                 let new_path = path.parent().unwrap_or(&path).join(new_name);
@@ -2107,7 +2120,7 @@ pub fn disable_mutex_mod(mod_path: &Path) -> Result<()> {
         .to_string_lossy()
         .to_string();
     let parent = mod_path.parent().unwrap_or(mod_path);
-    let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
+    let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
 
     // 传入路径不存在 → 检查磁盘上是否已禁用
     if !mod_path.exists() {
@@ -2193,7 +2206,7 @@ pub fn disable_all_mods_in_group(group_path: &Path) -> Result<u32> {
         }
 
         // 检查是否已禁用（名称以 DISABLED 开头，大小写不敏感）
-        let is_disabled = dir_name.to_uppercase().starts_with(constants::DISABLED_PREFIX);
+        let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
         if is_disabled {
             continue;
         }
@@ -2308,7 +2321,7 @@ pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> 
             .to_string_lossy()
             .to_string();
         let parent = path.parent().unwrap_or(&path);
-        let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
+        let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
         
         // 判断是否需要操作
         let needs_change = if enable {
@@ -2317,9 +2330,7 @@ pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> 
                 is_disabled
             } else {
                 !is_disabled || {
-                    let enabled_name = dir_name.trim_start_matches("DISABLED")
-                        .trim_start_matches("disabled")
-                        .trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
+                    let enabled_name = mod_scanner::strip_disabled_prefix(&dir_name);
                     !parent.join(enabled_name).exists()
                 }
             }
@@ -2407,27 +2418,18 @@ pub fn enable_all_mods_in_group(group_path: &Path) -> Result<u32> {
         }
 
         // 检查是否已禁用（名称以 DISABLED 开头，大小写不敏感）
-        let is_disabled = dir_name.to_uppercase().starts_with(constants::DISABLED_PREFIX);
+        let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
         if !is_disabled {
             continue;
         }
 
-        // 去除 DISABLED 前缀，再去除前导分隔符 _ 空格 - 等
-        let prefix = constants::DISABLED_PREFIX;
-        let stripped_upper = dir_name.to_uppercase();
-        let after_prefix = if stripped_upper.starts_with(prefix) {
-            &dir_name[prefix.len()..]
-        } else {
-            // 大小写混合情况，按字节长度截取
-            let len = std::cmp::min(prefix.len(), dir_name.len());
-            &dir_name[len..]
-        };
-        let new_name = after_prefix.trim_start_matches(|c: char| ['_', ' ', '-'].contains(&c));
+        // 去除 DISABLED 前缀及前导分隔符 _ 空格 - 等
+        let new_name = mod_scanner::strip_disabled_prefix(&dir_name);
         let new_name = if new_name.is_empty() {
             // 极端情况：整个目录名就是前缀，跳过
             continue;
         } else {
-            new_name.to_string()
+            new_name
         };
 
         let new_path = group_path.join(&new_name);
@@ -4251,6 +4253,110 @@ endif
             "进入稳态后再次更新，_MANAGED_ 下 ini 内容应保持完全一致"
         );
     }
+
+    /// 测试：toggle_mod 目标为 `DISABLEDDISABLEDMod` 时启用应一次移除全部前缀 → `Mod`
+    #[test]
+    fn test_toggle_mod_enable_removes_all_prefixes() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path();
+        let mod_path = parent.join("DISABLEDDISABLEDMod");
+        fs::create_dir_all(&mod_path).unwrap();
+        fs::write(mod_path.join("mod.ini"), "[ShaderOverride]").unwrap();
+
+        toggle_mod(&mod_path, true).unwrap();
+
+        assert!(!mod_path.exists(), "原 DISABLEDDISABLEDMod 目录应被重命名");
+        assert!(
+            parent.join("Mod").exists(),
+            "启用后应为 Mod（一次移除全部连续前缀）"
+        );
+    }
+
+    /// 测试：toggle_mod 对已禁用目录重复禁用不重复加前缀（幂等）
+    #[test]
+    fn test_toggle_mod_disable_idempotent_no_extra_prefix() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path();
+        let mod_path = parent.join("DISABLEDMod");
+        fs::create_dir_all(&mod_path).unwrap();
+        fs::write(mod_path.join("mod.ini"), "[ShaderOverride]").unwrap();
+
+        // 已禁用 → 应幂等跳过，不新增前缀
+        toggle_mod(&mod_path, false).unwrap();
+
+        let entries: Vec<String> = fs::read_dir(parent).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            entries.iter().any(|n| n == "DISABLEDMod"),
+            "目录仍应为 DISABLEDMod"
+        );
+        assert!(
+            entries.iter().all(|n| !n.starts_with("DISABLEDDISABLED")),
+            "不应重复加前缀产生 DISABLEDDISABLEDxxx"
+        );
+    }
+
+    /// 测试：enable_mutex_mod 目标匹配大小写不敏感，目标正确启用、兄弟正确禁用
+    ///
+    /// Windows 下路径大小写不敏感，用大小写差异的 mod_path 调用时目标应被识别并启用，
+    /// 而非被误判为"兄弟"禁用（缺陷 B 回归测试）。
+    #[test]
+    fn test_enable_mutex_mod_case_insensitive_target_match() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path();
+        // 目标 ModA、兄弟 ModB（均含 .ini）
+        let mod_a = parent.join("ModA");
+        fs::create_dir_all(&mod_a).unwrap();
+        fs::write(mod_a.join("mod.ini"), "[ShaderOverride]").unwrap();
+        let mod_b = parent.join("ModB");
+        fs::create_dir_all(&mod_b).unwrap();
+        fs::write(mod_b.join("mod.ini"), "[ShaderOverride]").unwrap();
+
+        // 以大小写差异的路径调用（Windows 下视为同一目录）
+        let target = parent.join("moda");
+        enable_mutex_mod(&target).unwrap();
+
+        assert!(
+            parent.join("ModA").exists(),
+            "目标 ModA 应被识别并保持启用（未被改名）"
+        );
+        assert!(
+            parent.join("DISABLEDModB").exists(),
+            "兄弟 ModB 应被禁用（加 DISABLED 前缀）"
+        );
+    }
+
+    /// 测试：rename_mod 互斥分支 final_name 前缀防重复
+    ///
+    /// 复刻 mod_commands::rename_mod 的 core 逻辑（validate + spawn_blocking 为 Tauri 命令
+    /// 封装不便直接调用），验证 new_name 带 DISABLED 前缀时最终只保有一个前缀。
+    #[test]
+    fn test_rename_mod_final_name_no_duplicate_prefix() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path();
+        let mod_path = parent.join("DISABLEDMod");
+        fs::create_dir_all(&mod_path).unwrap();
+        fs::write(mod_path.join("mod.ini"), "[ShaderOverride]").unwrap();
+
+        // 危险场景：用户重命名 new_name 已带 DISABLED 前缀
+        let is_disabled = mod_scanner::is_disabled_dir(&mod_path.file_name().unwrap().to_string_lossy());
+        let new_name = "DISABLEDNewName".to_string();
+        let final_name = if is_disabled {
+            format!(
+                "{}{}",
+                constants::DISABLED_PREFIX,
+                mod_scanner::strip_disabled_prefix(&new_name)
+            )
+        } else {
+            new_name.clone()
+        };
+
+        assert_eq!(
+            final_name, "DISABLEDNewName",
+            "重命名结果应只含一个 DISABLED 前缀，而非 DISABLEDDISABLEDNewName"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -4310,6 +4416,31 @@ mod tests_disable_all {
 
         let count = disable_all_mods_in_group(&group).unwrap();
         assert_eq!(count, 0, "全部已禁用时计数为0");
+    }
+
+    /// 幂等性：对已含 DISABLED 前缀的目录不重复加前缀（仍为 DISABLEDxxx 而非 DISABLEDDISABLEDxxx）
+    #[test]
+    fn test_disable_all_no_duplicate_prefix_on_disabled() {
+        let tmp = TempDir::new().unwrap();
+        let group = tmp.path().join("group_1");
+        fs::create_dir_all(&group).unwrap();
+
+        create_mod_dir(&group, "DISABLEDModA");
+        create_mod_dir(&group, "DISABLEDModB");
+        create_mod_dir(&group, "ModC");
+
+        let count = disable_all_mods_in_group(&group).unwrap();
+        assert_eq!(count, 1, "仅未禁用的 ModC 应被禁用");
+
+        let entries: Vec<String> = fs::read_dir(&group).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(entries.iter().any(|n| n == "DISABLEDModA"), "DISABLEDModA 应保持不变");
+        assert!(entries.iter().any(|n| n == "DISABLEDModB"), "DISABLEDModB 应保持不变");
+        assert!(
+            entries.iter().all(|n| !n.starts_with("DISABLEDDISABLED")),
+            "不应产生 DISABLEDDISABLEDxxx 重复前缀目录"
+        );
     }
 
     /// 无模组场景：仅有子分组或空目录

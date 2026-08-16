@@ -215,6 +215,27 @@ pub fn is_disabled_dir(dir_name: &str) -> bool {
     DISABLED_PREFIX_RE.is_match(dir_name)
 }
 
+/// 移除 DISABLED 前缀（不区分大小写，含 `_`/`-`/空格分隔符），一次移除连续的全部前缀
+///
+/// 复用 [`DISABLED_PREFIX_RE`]（`^(?i:disabled)[_\- ]*`），因 `^` 锚定在串首，
+/// 单次 `replace` 仅移除首个前缀，故循环剥离直到无变化，确保 `DISABLEDDISABLEDMod` → `Mod`。
+///
+/// # 参数
+/// - `name`: 原始目录名
+///
+/// # 返回
+/// 移除全部连续 DISABLED 前缀及前导分隔符后的目录名
+pub fn strip_disabled_prefix(name: &str) -> String {
+    let mut result = name.to_string();
+    loop {
+        let stripped = DISABLED_PREFIX_RE.replace(&result, "");
+        if stripped.as_ref() == result {
+            return result;
+        }
+        result = stripped.into_owned();
+    }
+}
+
 /// 读取或创建标记文件，不存在则用默认内容创建
 ///
 /// 写文件前通过 [`WatcherGuard`] 递增全局暂停计数，避免触发循环事件。
@@ -1764,6 +1785,27 @@ mod tests {
     /// 测试辅助：在根目录下创建主 INI 文件（d3dx.ini）
     fn create_d3dx_ini(base: &Path) {
         fs::write(base.join("d3dx.ini"), "; test").unwrap();
+    }
+
+    /// 测试：strip_disabled_prefix 一次移除连续的全部 DISABLED 前缀及分隔符
+    #[test]
+    fn test_strip_disabled_prefix() {
+        // 大小写 + 不同分隔符
+        assert_eq!(strip_disabled_prefix("DISABLED_Mod"), "Mod");
+        assert_eq!(strip_disabled_prefix("Disabled-Mod"), "Mod");
+        assert_eq!(strip_disabled_prefix("disabled_mod"), "mod");
+        assert_eq!(strip_disabled_prefix("DISABLED Mod"), "Mod");
+        assert_eq!(strip_disabled_prefix("DISABLEDMod"), "Mod");
+        // 连续多个前缀：必须一次全部移除
+        assert_eq!(strip_disabled_prefix("DISABLEDDISABLEDMod"), "Mod");
+        assert_eq!(
+            strip_disabled_prefix("DISABLED_DISABLED_Mod"),
+            "Mod"
+        );
+        // 无前缀时原样返回
+        assert_eq!(strip_disabled_prefix("Mod"), "Mod");
+        // 整个名称就是前缀 → 空串
+        assert_eq!(strip_disabled_prefix("DISABLED"), "");
     }
 
     // ========== 深度扫描测试（原 scan_mods 改名为 scan_mods_deep） ==========

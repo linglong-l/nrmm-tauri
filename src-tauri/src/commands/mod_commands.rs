@@ -356,6 +356,14 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
 
         let mod_path_buf = PathBuf::from(mod_path.clone());
         let managed_path = mods_path.join(constants::MANAGED_FOLDER);
+        // 守卫：mod_path 必须位于 _MANAGED_ 下且第一段非 group_xx（互斥模组），
+        // 否则禁止调用 enable_mutex_mod，避免作用于错误父目录成批禁用其下含 ini 的目录。
+        if !mod_manager::is_mutex_mod(&mod_path_buf, &managed_path) {
+            return Err(format!(
+                "Invalid mutex mod path (not under _MANAGED_ or is a group_xx): {:?}",
+                mod_path_buf
+            ));
+        }
         sel_dbg!(
             "mod_commands",
             "select_mod",
@@ -726,9 +734,13 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let is_disabled = dir_name.to_uppercase().starts_with("DISABLED");
+        let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
         let final_name = if is_disabled {
-            format!("{}{}", constants::DISABLED_PREFIX, new_name)
+            format!(
+                "{}{}",
+                constants::DISABLED_PREFIX,
+                mod_scanner::strip_disabled_prefix(&new_name)
+            )
         } else {
             new_name.clone()
         };
