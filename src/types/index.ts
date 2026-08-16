@@ -604,7 +604,7 @@ export type OverlayState = 'loading' | 'completed' | 'error';
  */
 export interface OverlayController {
   /** 显示遮罩：status 为状态机值，data 携带 result / error / durationMs 等可选载荷 */
-  show: (status: OverlayState, data?: { result?: unknown; error?: string; durationMs?: number }) => void;
+  show: (status: OverlayState, data?: { result?: UpdateResult | null; error?: string; durationMs?: number }) => void;
   /** 隐藏遮罩 */
   hide: () => void;
 }

@@ -109,7 +109,7 @@ impl CloudDataManager {
             let content = fs::read_to_string(&bundled)?;
             if let Ok(data) = serde_json::from_str::<T>(&content) {
                 // 加载成功后写入缓存
-                let _ = fs::write(&cache_path, &content);
+                let _ = crate::utils::atomic_write(&cache_path, content.as_bytes());
                 return Ok(data);
             }
         }
@@ -161,7 +161,7 @@ impl CloudDataManager {
         let text_clone = text.clone();
         tauri::async_runtime::spawn_blocking(move || -> Result<()> {
             let cache_path = Self::cache_path(&file_name_owned)?;
-            fs::write(&cache_path, text_clone)?;
+            crate::utils::atomic_write(&cache_path, text_clone.as_bytes())?;
             Ok(())
         })
         .await??;

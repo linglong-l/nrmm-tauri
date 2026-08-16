@@ -546,7 +546,7 @@ impl IniFile {
         if backup_path.exists() {
             return Ok(backup_path);
         }
-        fs::copy(path, &backup_path)
+        crate::utils::atomic_copy(path, &backup_path)
             .with_context(|| format!("Failed to backup {:?} to {:?}", path, backup_path))?;
         Ok(backup_path)
     }

@@ -187,7 +187,7 @@ pub fn reset_settings() -> Result<AppSettings> {
 pub fn export_settings(path: &Path) -> Result<()> {
     let settings = get_settings();
     let json = serde_json::to_string_pretty(&settings)?;
-    fs::write(path, json)?;
+    crate::utils::atomic_write(path, json.as_bytes())?;
     Ok(())
 }
 

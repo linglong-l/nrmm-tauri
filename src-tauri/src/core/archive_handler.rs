@@ -1418,7 +1418,13 @@ pub async fn import_mod_cmd(archive_path: String, group_dir: String, password: O
             Path::new(&archive_path),
             Path::new(&group_dir),
             password.as_deref(),
-        ).map_err(|e| e.to_string())
+        ).map_err(|e| e.to_string()).map(|result| {
+            // 新导入目录补做 INI 备份（幂等，白名单同样生效，错误仅记录日志）
+            if let ExtractResult::Success { ref mod_path, .. } = result {
+                crate::core::ini_backup::backup_ini_files(mod_path);
+            }
+            result
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1435,7 +1441,13 @@ pub async fn import_mod_auto_cmd(archive_path: String, mods_path: String, passwo
             Path::new(&archive_path),
             Path::new(&mods_path),
             password.as_deref(),
-        ).map_err(|e| e.to_string())
+        ).map_err(|e| e.to_string()).map(|result| {
+            // 新导入目录补做 INI 备份（幂等，白名单同样生效，错误仅记录日志）
+            if let ExtractResult::Success { ref mod_path, .. } = result {
+                crate::core::ini_backup::backup_ini_files(mod_path);
+            }
+            result
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1486,7 +1498,13 @@ pub async fn import_item_cmd(
             let p = PathBuf::from(&item);
             let res = import_item(&p, &target, req.password.as_deref());
             match res {
-                Ok(r) => outs.push(r),
+                Ok(r) => {
+                    // 新导入目录补做 INI 备份（幂等，白名单同样生效，错误仅记录日志）
+                    if let ExtractResult::Success { ref mod_path, .. } = r {
+                        crate::core::ini_backup::backup_ini_files(mod_path);
+                    }
+                    outs.push(r);
+                }
                 Err(e) => outs.push(ExtractResult::ExtractFailed {
                     message: format!("{}: {}", item, e),
                 }),

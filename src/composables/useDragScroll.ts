@@ -45,6 +45,10 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
   let dragStarted = false
   /** 当前绑定事件的DOM元素引用 */
   let currentEl: HTMLElement | null = null
+  /** clickBlocker 的 setTimeout 清理ID，用于组件卸载时提前清理 */
+  let cleanupTimer: ReturnType<typeof setTimeout> | null = null
+  /** 当前注册的 clickBlocker 引用，用于组件卸载时移除 window 监听器 */
+  let currentClickBlocker: ((ev: MouseEvent) => void) | null = null
 
   /**
    * 指针按下事件处理
@@ -147,9 +151,14 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
         }
         window.removeEventListener('click', clickBlocker, true)
       }
+      currentClickBlocker = clickBlocker
       window.addEventListener('click', clickBlocker, true)
       // 100ms后自动清理，防止阻断正常点击
-      setTimeout(() => window.removeEventListener('click', clickBlocker, true), 100)
+      cleanupTimer = setTimeout(() => {
+        window.removeEventListener('click', clickBlocker, true)
+        cleanupTimer = null
+        currentClickBlocker = null
+      }, 100)
     }
     dragStarted = false
     currentEl = null
@@ -202,6 +211,14 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
   onUnmounted(() => {
     if (attachedEl) {
       detach(attachedEl)
+    }
+    if (cleanupTimer !== null) {
+      clearTimeout(cleanupTimer)
+      cleanupTimer = null
+    }
+    if (currentClickBlocker) {
+      window.removeEventListener('click', currentClickBlocker, true)
+      currentClickBlocker = null
     }
   })
 

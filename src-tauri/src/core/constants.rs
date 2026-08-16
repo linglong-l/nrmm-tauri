@@ -8,6 +8,9 @@
 //! - 文件监控防抖时间
 //! - 平台相关的 7z 可执行文件名
 
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 /// NRMM 管理的模组根目录名，所有模组都存放在此目录下
 pub const MANAGED_FOLDER: &str = "_MANAGED_";
 
@@ -78,6 +81,44 @@ pub const SELECTED_INDEX_FILE: &str = "selectedindex";
 
 /// INI 文件备份扩展名：update_mod_data 前自动备份原文件
 pub const BACKUP_EXTENSION: &str = "ini_managed_backup";
+
+/// INI 启动备份后缀（防损坏冗余备份，与 BACKUP_EXTENSION 的 NRMM 注入备份区分）
+pub const INI_MANAGER_BACKUP_SUFFIX: &str = "ini_manager_backup";
+
+/// INI 备份白名单（精确文件名，小写比较）：不参与启动备份
+/// - `desktop.ini`: Windows 系统文件
+/// - `manager_group.ini` / `nrmm_include.ini`: NRMM 管理文件，每次 update 重写
+pub const INI_BACKUP_WHITELIST: &[&str] = &["desktop.ini", "manager_group.ini", "nrmm_include.ini"];
+
+/// group_N.ini 分组管理文件正则：NRMM 每次 update_mod_data 全量重写（delete 后重建）
+/// 约束对齐 mod_scanner 的 GROUP_N_RE：禁止前导零、禁止 group_0、数值位数 ≤ 9
+// SAFETY: Hardcoded valid regex literal; compilation cannot fail at runtime.
+static GROUP_N_INI_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^group_([1-9][0-9]{0,8})\.ini$").unwrap());
+
+/// 判断 ini 文件名是否命中备份白名单（不参与启动备份）
+///
+/// # 参数
+/// - `file_name`: 文件名字符串（大小写不敏感）
+///
+/// # 返回
+/// `true` 表示命中白名单，跳过备份：
+/// - 精确匹配 `INI_BACKUP_WHITELIST`（desktop.ini / manager_group.ini / nrmm_include.ini）
+/// - 匹配 `group_<数字>.ini`（NRMM 分组管理文件，每次 update 全量重写）
+/// - 以 `.ini_manager_backup` / `.ini_managed_backup` 结尾（备份文件自身，防递归再备份）
+#[inline]
+pub fn is_ini_backup_whitelisted(file_name: &str) -> bool {
+    let lower = file_name.to_lowercase();
+    if INI_BACKUP_WHITELIST.contains(&lower.as_str()) {
+        return true;
+    }
+    if GROUP_N_INI_RE.is_match(&lower) {
+        return true;
+    }
+    let manager_backup = format!(".{}", INI_MANAGER_BACKUP_SUFFIX);
+    let managed_backup = format!(".{}", BACKUP_EXTENSION);
+    lower.ends_with(&manager_backup) || lower.ends_with(&managed_backup)
+}
 
 /// NRMM 在 INI 中添加的禁用标记注释
 pub const DISABLED_BY_NRMM: &str = "DISABLED_BY_NRMM";

@@ -14,6 +14,7 @@
 pub mod constants;
 pub mod file_logger;
 pub mod file_watcher;
+pub mod ini_backup;
 pub mod ini_handler;
 pub mod error_normalizer;
 pub mod mod_manager;

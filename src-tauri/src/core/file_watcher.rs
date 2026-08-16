@@ -211,7 +211,8 @@ impl FileWatcher {
                             continue;
                         }
                         let backup_suffix = format!(".{}", constants::BACKUP_EXTENSION);
-                        // 过滤临时文件（.tmp）、备份文件、隐藏文件（以 . 开头）
+                        let manager_backup_suffix = format!(".{}", constants::INI_MANAGER_BACKUP_SUFFIX);
+                        // 过滤临时文件（.tmp）、备份文件（NRMM 注入备份 + INI 启动备份）、隐藏文件（以 . 开头）
                         for p in event.paths {
                             let path_str = p.to_string_lossy();
                             let file_name = p
@@ -220,6 +221,7 @@ impl FileWatcher {
                                 .unwrap_or_default();
                             let relevant = !path_str.contains(".tmp")
                                 && !path_str.ends_with(&backup_suffix)
+                                && !path_str.ends_with(&manager_backup_suffix)
                                 && !file_name.starts_with('.');
                             if relevant {
                                 // 收集相关变更路径到 IncrementalUpdater

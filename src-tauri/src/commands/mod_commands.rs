@@ -44,7 +44,7 @@ static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> =
 /// `update_mod_data` 内部会写 `_MANAGED_` 目录（delete_group_ini_files /
 /// create_group_ini / tmp rename 竞态），双击 / 连点可并发两次 update 同时写
 /// 同一目标，导致半成品 INI 进入 group INI 或命名冲突。用异步 Mutex 强制串行，
-/// 不阻塞 rayon 工作线程（锁仅包裹 spawn_blocking 调度点）。
+/// 锁包裹整个 spawn_blocking + .await 执行期，禁止并发重入。
 static UPDATE_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(AsyncMutex::default);
 
 /// 选择模组命令的参数结构体
@@ -89,12 +89,15 @@ pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::Sc
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
-    {
+    // 先在锁作用域内取出缓存结果，锁释放后再触发启动备份（fire-and-forget）
+    let cached = {
         let cache = crate::core::mod_cache::MOD_CACHE.read();
-        if let Some(result) = cache.get(game, &mods_path) {
-            log::info!("[get_mods] Cache hit for {}", game.as_str());
-            return Ok(result);
-        }
+        cache.get(game, &mods_path)
+    };
+    if let Some(result) = cached {
+        log::info!("[get_mods] Cache hit for {}", game.as_str());
+        crate::core::ini_backup::ensure_startup_ini_backup(mods_path.clone());
+        return Ok(result);
     }
 
     log::info!("[get_mods] Cache miss, scanning light...");
@@ -124,6 +127,9 @@ pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::Sc
         let mut cache = crate::core::mod_cache::MOD_CACHE.write();
         cache.set(game, &mods_path, result.clone());
     }
+
+    // 启动后首次扫描完成：触发一次性启动 INI 备份（fire-and-forget）
+    crate::core::ini_backup::ensure_startup_ini_backup(mods_path.clone());
 
     Ok(result)
 }
@@ -622,7 +628,8 @@ pub async fn add_group(
                 .replace("{group_x}", &dir_name)
                 .replace("{x}", &group_num.to_string());
             let ini_path = group_path.join("ModFolder.ini");
-            fs::write(&ini_path, ini_content).map_err(|e| e.to_string())?;
+            crate::utils::atomic_write(&ini_path, ini_content.as_bytes())
+                .map_err(|e| e.to_string())?;
 
             if let Some(custom_name) = group_name {
                 let trimmed = custom_name.trim();
@@ -723,7 +730,7 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
         // NRMM 逻辑：group_xx 普通分组下的模组，重命名仅修改 modname 标记文件（展示名），文件夹名保持不变
         if mod_scanner::is_group_xx_dir(&parent_name) {
             let modname_path = path.join("modname");
-            fs::write(&modname_path, &new_name)
+            crate::utils::atomic_write(&modname_path, new_name.as_bytes())
                 .map_err(|e| format!("Failed to write modname file: {}", e))?;
             return Ok(path);
         }
@@ -782,7 +789,7 @@ pub async fn rename_group(
 
         if is_group_xx {
             let groupname_path = path.join("groupname");
-            fs::write(&groupname_path, &new_name)
+            crate::utils::atomic_write(&groupname_path, new_name.as_bytes())
                 .map_err(|e| format!("Failed to write groupname file: {}", e))?;
             Ok(groupname_path)
         } else {
@@ -853,7 +860,7 @@ pub async fn toggle_favorite(mod_path: String) -> Result<bool, String> {
             fs::remove_file(&fav_path).map_err(|e| e.to_string())?;
             Ok(false)
         } else {
-            fs::write(&fav_path, "").map_err(|e| e.to_string())?;
+            crate::utils::atomic_write(&fav_path, b"").map_err(|e| e.to_string())?;
             Ok(true)
         }
     })
@@ -1512,7 +1519,7 @@ mod tests {
         fs::create_dir_all(runtime).expect("创建运行时根目录失败");
 
         let src_root = input_dataset();
-        copy_dir(&src_root, runtime).unwrap_or_else(|_| panic!("复制 {:?} 失败", src_root));
+        copy_dir(&src_root, runtime).unwrap();
 
         runtime.join("Mods")
     }

@@ -98,18 +98,18 @@ import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { simulateF10 } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
-import type { OverlayState } from '@/types'
+import type { OverlayState, UpdateResult } from '@/types'
 import { useLoadingDots } from '@/composables/useLoadingDots'
 
 const visible = ref(false)
 const state = ref<OverlayState>('loading')
-const result = ref<any>(null)
+const result = ref<UpdateResult | null>(null)
 const errorMessage = ref('')
 const durationSec = ref(-1)
 
 const { dotsCount, startDots, stopDots } = useLoadingDots()
 
-function show(s: OverlayState, data?: { result?: any; error?: string; durationMs?: number }) {
+function show(s: OverlayState, data?: { result?: UpdateResult | null; error?: string; durationMs?: number }) {
   state.value = s
   result.value = data?.result ?? null
   errorMessage.value = data?.error ?? ''

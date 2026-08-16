@@ -258,8 +258,6 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
                 continue;
             }
 
-            let mod_name = mod_data.name.clone();
-            let mod_path = mod_data.mod_path.clone();
             *scanned_mods += 1;
 
             // 轻量扫描未解析 INI，需从模组目录查找 .ini 文件并按需解析
@@ -270,7 +268,11 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
                         hash_to_mods
                             .entry(hash)
                             .or_default()
-                            .push((mod_name.clone(), mod_path.clone(), ini_path.clone()));
+                            .push((
+                                mod_data.name.clone(),
+                                mod_data.mod_path.clone(),
+                                ini_path.clone(),
+                            ));
                     }
                 }
             }
@@ -384,24 +386,21 @@ pub fn detect_orfix_texfx(enabled_mods: &[&ModData]) -> OrfixDetection {
         if mod_data.mod_name == "None" {
             continue;
         }
-        let mod_name = mod_data.name.clone();
-        let mod_path = mod_data.mod_path.clone();
-
         for ini_data in &mod_data.mod_ini_data {
             if let Ok(ini) = get_or_parse_ini(std::path::Path::new(ini_data.ini_path.as_str())) {
                 // 1. 检测库在模组内（同时记入声明表，用于重复声明检测）
                 let detected = ini.detect_known_lib_declarations(&known_libs);
                 if !detected.is_empty() {
                     libs_in_mods.push(LibInMod {
-                        mod_name: mod_name.clone(),
-                        mod_path: mod_path.clone(),
+                        mod_name: mod_data.name.clone(),
+                        mod_path: mod_data.mod_path.clone(),
                         lib_names: detected.clone(),
                     });
                     for lib in &detected {
                         lib_declarations
                             .entry(lib.clone())
                             .or_default()
-                            .push(mod_name.clone());
+                            .push(mod_data.name.clone());
                     }
                 }
 
@@ -411,7 +410,7 @@ pub fn detect_orfix_texfx(enabled_mods: &[&ModData]) -> OrfixDetection {
                         lib_references
                             .entry(display.to_string())
                             .or_default()
-                            .push(mod_name.clone());
+                            .push(mod_data.name.clone());
                     }
                 }
             }
@@ -550,10 +549,10 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
             main_ini_path
         );
     } else {
-        // 备份主 INI
+        // 备份主 INI（原子复制：进程任一时刻退出不产生半成品备份）
         let backup_path = main_ini_path.with_extension(constants::BACKUP_EXTENSION);
         if !backup_path.exists() {
-            fs::copy(&main_ini_path, &backup_path)
+            crate::utils::atomic_copy(&main_ini_path, &backup_path)
                 .with_context(|| format!("Failed to backup main INI: {:?}", main_ini_path))?;
         }
     }
@@ -839,10 +838,10 @@ fn process_group_task(
         for ini_data in &mod_data.mod_ini_data {
             let ini_path = PathBuf::from(&ini_data.ini_path);
 
-            // 备份模组 INI
+            // 备份模组 INI（原子复制：进程任一时刻退出不产生半成品备份）
             let mod_backup = ini_path.with_extension(constants::BACKUP_EXTENSION);
             if !mod_backup.exists() {
-                if let Err(e) = fs::copy(&ini_path, &mod_backup) {
+                if let Err(e) = crate::utils::atomic_copy(&ini_path, &mod_backup) {
                     log::warn!("Failed to backup mod INI {}: {}", ini_path.display(), e);
                 }
             }
@@ -930,13 +929,13 @@ fn process_group_task(
         let mod_dir = std::path::Path::new(mod_data.mod_path.as_str());
         if mod_has_crash_lines {
             let marker = mod_dir.join(constants::MODFORCED_MARKER);
-            if let Err(e) = fs::write(&marker, "") {
+            if let Err(e) = crate::utils::atomic_write(&marker, b"") {
                 log::warn!("写入 modforced 标记失败 {:?}: {}", marker, e);
             }
         }
         if mod_has_syntax_errors {
             let marker = mod_dir.join("modsyntaxerrorremoved");
-            if let Err(e) = fs::write(&marker, "") {
+            if let Err(e) = crate::utils::atomic_write(&marker, b"") {
                 log::warn!("写入 modsyntaxerrorremoved 标记失败 {:?}: {}", marker, e);
             }
         }
@@ -1102,7 +1101,7 @@ pub fn auto_modify_duplicate_namespace(enabled_mods: &[&ModData]) {
             namespaces_in_group.extend(future.iter().cloned());
             if !namespaces_in_mod.is_empty() {
                 let marker = std::path::Path::new(m.mod_path.as_str()).join(constants::NAMESPACED_MARKER);
-                if let Err(e) = fs::write(&marker, "") {
+                if let Err(e) = crate::utils::atomic_write(&marker, b"") {
                     log::warn!("写入 namespaced 标记失败 {:?}: {}", marker, e);
                 }
             }
@@ -1880,7 +1879,7 @@ pub fn switch_mod(
         // 暂停文件监听器（引用计数守卫），防止 selectedindex 写入触发缓存增量更新竞态
         {
             let _guard = WatcherGuard::new();
-            if let Err(e) = fs::write(&selectedindex_path, safe_mod_index.to_string()) {
+            if let Err(e) = crate::utils::atomic_write(&selectedindex_path, safe_mod_index.to_string().as_bytes()) {
                 log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
             } else {
                 log::debug!(
@@ -2280,7 +2279,7 @@ pub fn deselect_group_mods(
         // 对齐 NRMM：写 selectedindex 前暂停文件监听器（引用计数守卫），写完后恢复
         {
             let _guard = WatcherGuard::new();
-            if let Err(e) = fs::write(&selectedindex_path, "0") {
+            if let Err(e) = crate::utils::atomic_write(&selectedindex_path, b"0") {
                 log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
             } else {
                 log::debug!(

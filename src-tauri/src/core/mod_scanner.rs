@@ -230,7 +230,12 @@ pub fn strip_disabled_prefix(name: &str) -> String {
     loop {
         let stripped = DISABLED_PREFIX_RE.replace(&result, "");
         if stripped.as_ref() == result {
-            return result;
+            return result; // 无可剥前缀
+        }
+        // 关键：剩余部分以精确全大写 DISABLED（NRMM 累积前缀）开头才继续，
+        // 避免把模组名中自然的大小写混合 "Disabled" 误删。
+        if !stripped.starts_with("DISABLED") {
+            return stripped.into_owned();
         }
         result = stripped.into_owned();
     }
@@ -250,7 +255,7 @@ pub fn read_or_create_marker_file(path: &Path, default_content: &str) -> Result<
     } else {
         let result = {
             let _guard = WatcherGuard::new();
-            fs::write(path, default_content)
+            crate::utils::atomic_write(path, default_content.as_bytes())
         }; // _guard drop：计数递减
         result?;
         Ok(default_content.to_string())
@@ -1802,6 +1807,9 @@ mod tests {
             strip_disabled_prefix("DISABLED_DISABLED_Mod"),
             "Mod"
         );
+        // 前缀 DISABLED + 模组名以 Disabled（大小写混合）开头：只剥前缀，保留模组名
+        assert_eq!(strip_disabled_prefix("DISABLEDDisabledMod"), "DisabledMod");
+        assert_eq!(strip_disabled_prefix("DISABLEDDISABLEDDisabledMod"), "DisabledMod");
         // 无前缀时原样返回
         assert_eq!(strip_disabled_prefix("Mod"), "Mod");
         // 整个名称就是前缀 → 空串

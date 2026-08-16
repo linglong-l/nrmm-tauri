@@ -260,7 +260,7 @@ const settingsStore = useSettingsStore()
 const modsStore = useModsStore()
 const { platformInfo } = usePlatform()
 const updateOverlay = inject<OverlayController>('updateOverlay')
-const hashConflictOverlay: any = inject('hashConflictOverlay')
+const hashConflictOverlay = inject<{ show: () => void; hide: () => void }>('hashConflictOverlay')
 
 /** 界面缩放滑块边界（须与后端 AppSettings.interfaceScale 取值范围一致） */
 const SCALE_MIN = 0.6
@@ -482,7 +482,7 @@ async function handleBrowse() {
       logger.warn('SettingsView', 'Selected path is not a Mods directory:', selected)
     }
     settingsStore.setCurrentModsPath(selected)
-  } catch (e: any) {
+  } catch (e: unknown) {
     ElMessage.error(t('Failed to open folder dialog'))
     logger.error('SettingsView', 'Browse failed', e)
   }
@@ -510,11 +510,11 @@ async function handleUpdateModData() {
     try {
       const result = await modsStore.updateModData() ?? (await updateModData(settingsStore.currentGame, settingsStore.currentModsPath))
       updateOverlay?.show('completed', { result, durationMs: Date.now() - start })
-    } catch (e: any) {
-      const msg = typeof e === 'string' ? e : (e?.message ?? String(e))
+    } catch (e: unknown) {
+      const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))
       updateOverlay?.show('error', { error: msg })
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     logger.error('SettingsView', 'Update mod data failed', e)
   }
 }
@@ -645,7 +645,7 @@ async function handleRestoreDrop(e: DragEvent) {
 
   const paths: string[] = []
   for (let i = 0; i < files.length; i++) {
-    const f = files[i] as any
+    const f = files[i] as File & { path?: string; webkitRelativePath?: string }
     const p = f.path || f.webkitRelativePath
     if (p) paths.push(p)
   }
@@ -666,7 +666,7 @@ async function handleRestoreZone() {
     const selected = await selectFolder()
     if (!selected) return
     await doRestore([selected])
-  } catch (e: any) {
+  } catch (e: unknown) {
     logger.error('SettingsView', 'Restore zone select failed', e)
   }
 }
@@ -703,7 +703,7 @@ async function doRestore(paths: string[]) {
     for (const p of paths) {
       try {
         results.push(await restoreManagedFolder(p))
-      } catch (err: any) {
+      } catch (err: unknown) {
         // 单个目录还原失败：记录失败结果，不中断其余目录
         logger.error('SettingsView', 'Restore failed for path', p, err)
         results.push({ path: p, iniCount: 0, failedCount: 1, success: false })
@@ -753,8 +753,8 @@ async function handleCheckUpdates() {
     } else {
       ElMessage.info(t('Updater.upToDate'))
     }
-  } catch (e: any) {
-    ElMessage.error(t('Updater.checkFailed') + ': ' + (e?.message || e))
+  } catch (e: unknown) {
+    ElMessage.error(t('Updater.checkFailed') + ': ' + (e instanceof Error ? e.message : String(e)))
   } finally {
     checkingUpdates.value = false
   }
@@ -766,7 +766,7 @@ async function handleResetPosition() {
     const { resetWindowPosition } = await import('@/utils/tauri')
     await resetWindowPosition('main')
     ElMessage.success(t('Reset Position'))
-  } catch (e: any) {
+  } catch (e: unknown) {
     logger.error('SettingsView', 'Reset position failed', e)
   }
 }
@@ -776,7 +776,7 @@ async function handleExit() {
   try {
     const { hardQuitApp } = await import('@/utils/tauri')
     await hardQuitApp()
-  } catch (e: any) {
+  } catch (e: unknown) {
     logger.error('SettingsView', 'Exit failed', e)
   }
 }
