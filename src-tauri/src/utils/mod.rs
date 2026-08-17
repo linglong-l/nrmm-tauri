@@ -3,9 +3,9 @@
 //! 提供 Mutex 安全锁获取和线程 panic 安全包装工具函数。
 
 use std::fs;
+use std::panic::UnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::panic::UnwindSafe;
 
 /// 安全获取 Mutex 锁，中毒时恢复数据并记录日志
 ///

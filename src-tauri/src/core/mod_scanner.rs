@@ -17,21 +17,21 @@
 //! - 排序规则：启用优先 > 收藏优先 > 最新收藏 > 自然排序
 //! - 每个 NormalGroup 自动添加 "None" 空槽位（索引 0），表示不选任何模组
 
-use anyhow::Result;
-use rayon::prelude::*;
-use std::cmp::Ordering as CmpOrdering;
-use std::path::{Path, PathBuf};
-use std::collections::HashSet;
-use std::fs;
-use std::time::Instant;
-use regex::Regex;
-use once_cell::sync::Lazy;
 use crate::core::constants;
 use crate::core::file_watcher::WatcherGuard;
 use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::namespace_handler;
-use crate::models::enums::{GroupType, TargetGame, ModsPathStatus};
-use crate::models::mod_data::{ModData, ModGroupData, ModIniData, ErroredLines};
+use crate::models::enums::{GroupType, ModsPathStatus, TargetGame};
+use crate::models::mod_data::{ErroredLines, ModData, ModGroupData, ModIniData};
+use anyhow::Result;
+use once_cell::sync::Lazy;
+use rayon::prelude::*;
+use regex::Regex;
+use std::cmp::Ordering as CmpOrdering;
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// 支持的图标文件扩展名列表
 ///
@@ -73,7 +73,8 @@ static GROUP_N_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^group_([1-9][0-9]{0,
 /// 用于 `is_disabled_dir()` 检测目录是否被禁用，以及 `DISABLED_PREFIX_RE.replace()` 移除前缀获取显示名称。
 /// 设计为不区分大小写以兼容不同用户命名习惯，同时允许灵活的分隔符以保持可读性。
 // SAFETY: Hardcoded valid regex literal; compilation cannot fail at runtime.
-static DISABLED_PREFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(?i:disabled)[_\- ]*").unwrap());
+static DISABLED_PREFIX_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(?i:disabled)[_\- ]*").unwrap());
 
 /// 扫描结果结构体
 ///
@@ -288,7 +289,10 @@ pub fn find_icon_path(dir_path: &Path) -> Result<Option<PathBuf>> {
         if ft.is_file() || ft.is_symlink() {
             let path = entry.path();
             if let Some(ext) = path.extension() {
-                if ICON_EXTENSIONS.iter().any(|e| ext.to_string_lossy().eq_ignore_ascii_case(e)) {
+                if ICON_EXTENSIONS
+                    .iter()
+                    .any(|e| ext.to_string_lossy().eq_ignore_ascii_case(e))
+                {
                     files.push(path);
                 }
             }
@@ -434,7 +438,10 @@ pub fn sort_mods_light(mods: &mut [ModData]) {
 /// # Errors
 /// 当 `_MANAGED_` 目录不存在且无法创建，或 `fs::read_dir()` 读取失败时返回 `Err`。
 pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
-    log::debug!("[core::mod_scanner] [scan_mods_light] Starting light scan | path={:?}", game_mods_path);
+    log::debug!(
+        "[core::mod_scanner] [scan_mods_light] Starting light scan | path={:?}",
+        game_mods_path
+    );
     let _s = std::time::Instant::now();
     let start = Instant::now();
     let managed_folder = get_managed_folder(game_mods_path);
@@ -449,11 +456,11 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
         });
     }
 
-    let mut groups: Vec<ModGroupData> = Vec::with_capacity(32);   // 预分配 32 个分组，覆盖绝大多数场景
-    let mut all_mods: Vec<ModData> = Vec::with_capacity(256);     // 预分配 256 个模组，减少扩容次数
+    let mut groups: Vec<ModGroupData> = Vec::with_capacity(32); // 预分配 32 个分组，覆盖绝大多数场景
+    let mut all_mods: Vec<ModData> = Vec::with_capacity(256); // 预分配 256 个模组，减少扩容次数
 
     let entries = fs::read_dir(&managed_folder)?;
-    let mut root_dirs: Vec<PathBuf> = Vec::with_capacity(32);     // 预分配存储根目录列表
+    let mut root_dirs: Vec<PathBuf> = Vec::with_capacity(32); // 预分配存储根目录列表
 
     for entry in entries {
         let entry = entry?;
@@ -474,7 +481,11 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     let normal_tasks: Vec<(PathBuf, String, u32)> = root_dirs_vec
         .iter()
         .filter_map(|dir_path| {
-            let dir_name = dir_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let dir_name = dir_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             is_normal_group_dir(&dir_name).map(|gi| (dir_path.clone(), dir_name, gi))
         })
         .collect();
@@ -495,7 +506,11 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     let mutex_roots: Vec<PathBuf> = root_dirs_vec
         .iter()
         .filter(|p| {
-            let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let name = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             is_normal_group_dir(&name).is_none()
         })
         .cloned()
@@ -530,8 +545,18 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     }
 
     let elapsed = start.elapsed().as_millis();
-    log::info!("Light scan completed in {}ms, {} mods, {} groups", elapsed, total, groups.len());
-    log::debug!("[core::mod_scanner] [scan_mods_light] done | elapsed={:?}ms | mods={} groups={}", _s.elapsed().as_millis(), total, groups.len());
+    log::info!(
+        "Light scan completed in {}ms, {} mods, {} groups",
+        elapsed,
+        total,
+        groups.len()
+    );
+    log::debug!(
+        "[core::mod_scanner] [scan_mods_light] done | elapsed={:?}ms | mods={} groups={}",
+        _s.elapsed().as_millis(),
+        total,
+        groups.len()
+    );
 
     Ok(ScanResult {
         groups,
@@ -560,8 +585,12 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
 ///
 /// # Errors
 /// 当目录无法读取、标记文件无法创建时返回 `Err`。
-fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) -> Result<(ModGroupData, Vec<ModData>)> {
-    let mut mods: Vec<ModData> = Vec::with_capacity(32);   // 预分配 32 个模组槽位，覆盖绝大多数 NormalGroup
+fn scan_normal_group_light(
+    dir_path: &Path,
+    group_name: &str,
+    group_index: u32,
+) -> Result<(ModGroupData, Vec<ModData>)> {
+    let mut mods: Vec<ModData> = Vec::with_capacity(32); // 预分配 32 个模组槽位，覆盖绝大多数 NormalGroup
 
     // 读取/创建标记文件
     let groupname_path = dir_path.join("groupname");
@@ -594,7 +623,10 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
             continue;
         }
         // 跳过标记文件目录（不会是目录，这里仅作保险）
-        if dir_name == "groupname" || dir_name == constants::SELECTED_INDEX_FILE || dir_name == "modname" {
+        if dir_name == "groupname"
+            || dir_name == constants::SELECTED_INDEX_FILE
+            || dir_name == "modname"
+        {
             continue;
         }
 
@@ -609,7 +641,11 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
         let modname_path = path.join("modname");
         let mod_name = {
             let n = read_or_create_marker_file(&modname_path, &display_name)?;
-            if n.trim().is_empty() { display_name.clone() } else { n }
+            if n.trim().is_empty() {
+                display_name.clone()
+            } else {
+                n
+            }
         };
 
         // 检查 fav 文件
@@ -651,7 +687,7 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
 
     // 分离 None 槽位和其他模组
     let mut none_slot: Option<ModData> = None;
-    let mut other_mods: Vec<ModData> = Vec::with_capacity(mods.len().saturating_sub(1));  // 预分配（总数-1），排除 None 槽位
+    let mut other_mods: Vec<ModData> = Vec::with_capacity(mods.len().saturating_sub(1)); // 预分配（总数-1），排除 None 槽位
     for m in mods.drain(..) {
         if m.name == "None" {
             none_slot = Some(m);
@@ -677,7 +713,8 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
     // - 恰好一个启用 → 该模组为 active
     // - 零个启用 → None 为 active
     // - 多个启用（异常状态，如手动操作文件）→ 回退到 selectedindex 文件
-    let enabled_non_none: Vec<usize> = mods.iter()
+    let enabled_non_none: Vec<usize> = mods
+        .iter()
         .enumerate()
         .filter(|(_, m)| m.name != "None" && !m.disabled)
         .map(|(i, _)| i)
@@ -714,7 +751,12 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
             }
         }
         // 如果 selectedindex 指向的模组是禁用的，则 fallback 到第一个启用的
-        if active_idx < 0 || mods.get(active_idx as usize).map(|m| m.disabled).unwrap_or(true) {
+        if active_idx < 0
+            || mods
+                .get(active_idx as usize)
+                .map(|m| m.disabled)
+                .unwrap_or(true)
+        {
             if let Some(&first_enabled) = enabled_non_none.first() {
                 for m in mods.iter_mut() {
                     m.is_active = false;
@@ -726,7 +768,8 @@ fn scan_normal_group_light(dir_path: &Path, group_name: &str, group_index: u32) 
         active_idx
     };
 
-    let mod_paths: Vec<PathBuf> = mods.iter()
+    let mod_paths: Vec<PathBuf> = mods
+        .iter()
         .filter(|m| m.name != "None")
         .map(|m| m.full_path.clone())
         .collect();
@@ -796,7 +839,11 @@ struct DfsStackItem {
 /// # Errors
 /// 当目录无法读取、标记文件无法创建时返回 `Err`。
 fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<ModData>)> {
-    let root_name = root_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let root_name = root_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let root_disabled = is_disabled_dir(&root_name);
     let base_root_name = if root_disabled {
         DISABLED_PREFIX_RE.replace(&root_name, "").to_string()
@@ -812,8 +859,10 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     };
 
     // 规范化路径 visited 集合：防止 symlink/hardlink 导致循环或重复
-    let mut visited: HashSet<PathBuf> = HashSet::with_capacity(64);   // 预分配 64 个容量，覆盖大多数嵌套深度
-    let root_canonical = root_path.canonicalize().unwrap_or_else(|_| root_path.to_path_buf());
+    let mut visited: HashSet<PathBuf> = HashSet::with_capacity(64); // 预分配 64 个容量，覆盖大多数嵌套深度
+    let root_canonical = root_path
+        .canonicalize()
+        .unwrap_or_else(|_| root_path.to_path_buf());
     visited.insert(root_canonical);
 
     // 检查根目录是否本身就是模组（含 ini）
@@ -823,9 +872,9 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         return Ok((None, vec![mod_data]));
     }
 
-    let mut all_mods: Vec<ModData> = Vec::with_capacity(256);   // 预分配 256 个模组，覆盖大多数 MutexGroup
-    // groups[0] 是根分组，后续是子分组
-    let mut groups: Vec<ModGroupData> = Vec::with_capacity(32);   // 预分配 32 个分组，覆盖大多数嵌套深度
+    let mut all_mods: Vec<ModData> = Vec::with_capacity(256); // 预分配 256 个模组，覆盖大多数 MutexGroup
+                                                              // groups[0] 是根分组，后续是子分组
+    let mut groups: Vec<ModGroupData> = Vec::with_capacity(32); // 预分配 32 个分组，覆盖大多数嵌套深度
 
     // 创建根分组
     let root_icon = find_icon_path(root_path)?;
@@ -852,11 +901,11 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     groups.push(root_group);
 
     // DFS 栈初始化（LIFO 后进先出）
-    let mut stack: Vec<DfsStackItem> = Vec::with_capacity(64);   // 预分配 64 个栈元素，覆盖大多数嵌套深度
+    let mut stack: Vec<DfsStackItem> = Vec::with_capacity(64); // 预分配 64 个栈元素，覆盖大多数嵌套深度
 
     // 列出根目录的一级子目录，push 到栈（用 entry.file_type() 避免 metadata 系统调用）
     let root_entries = fs::read_dir(root_path)?;
-    let mut root_subdirs: Vec<PathBuf> = Vec::with_capacity(8);    // 预分配 8 个，大多数 MutexGroup 根目录子目录不多
+    let mut root_subdirs: Vec<PathBuf> = Vec::with_capacity(8); // 预分配 8 个，大多数 MutexGroup 根目录子目录不多
     for entry in root_entries {
         let entry = match entry {
             Ok(e) => e,
@@ -909,7 +958,11 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         }
 
         // 没有 ini，视为分组节点
-        let dir_name = current_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let dir_name = current_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let dir_disabled = is_disabled_dir(&dir_name);
         let base_dir_name = if dir_disabled {
             DISABLED_PREFIX_RE.replace(&dir_name, "").to_string()
@@ -929,7 +982,7 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
 
         // 检查是否有子目录（用 entry.file_type() + canonicalize 去重）
         let sub_entries = fs::read_dir(&current_path)?;
-        let mut subdirs: Vec<PathBuf> = Vec::with_capacity(8);    // 预分配 8 个，大多数分组子目录数量有限
+        let mut subdirs: Vec<PathBuf> = Vec::with_capacity(8); // 预分配 8 个，大多数分组子目录数量有限
         for entry in sub_entries {
             let entry = match entry {
                 Ok(e) => e,
@@ -1001,7 +1054,9 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     // 更新根分组的 child_groups（因为后续分组修改了，需要重建）
     // 重新构建树形结构
     fn rebuild_tree(groups: &mut [ModGroupData], parent_idx: usize) {
-        let child_indices: Vec<usize> = groups.iter().enumerate()
+        let child_indices: Vec<usize> = groups
+            .iter()
+            .enumerate()
             .filter(|(i, g)| {
                 *i != parent_idx && g.full_path.parent() == Some(&groups[parent_idx].full_path)
             })
@@ -1015,7 +1070,8 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         }
         // 同步 children 字段（前端使用 camelCase 后的 children）
         groups[parent_idx].children = groups[parent_idx].child_groups.clone();
-        groups[parent_idx].has_child = !groups[parent_idx].child_groups.is_empty() || !groups[parent_idx].mods.is_empty();
+        groups[parent_idx].has_child =
+            !groups[parent_idx].child_groups.is_empty() || !groups[parent_idx].mods.is_empty();
     }
 
     rebuild_tree(&mut groups, 0);
@@ -1044,7 +1100,11 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
 ///
 /// 使用 `entry.file_type()` 避免 `metadata()` 系统调用。
 fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> Result<ModData> {
-    let dir_name = mod_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let dir_name = mod_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let disabled = is_disabled_dir(&dir_name);
     let display_name = if disabled {
         DISABLED_PREFIX_RE.replace(&dir_name, "").to_string()
@@ -1143,9 +1203,9 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
         });
     }
 
-    let mut groups: Vec<ModGroupData> = Vec::with_capacity(32);   // 预分配 32 个分组，覆盖绝大多数场景
-    let mut all_mods: Vec<ModData> = Vec::with_capacity(256);     // 预分配 256 个模组，减少扩容次数
-    let mut known_libraries = HashSet::new();                       // 收集所有模组中定义的库
+    let mut groups: Vec<ModGroupData> = Vec::with_capacity(32); // 预分配 32 个分组，覆盖绝大多数场景
+    let mut all_mods: Vec<ModData> = Vec::with_capacity(256); // 预分配 256 个模组，减少扩容次数
+    let mut known_libraries = HashSet::new(); // 收集所有模组中定义的库
 
     let entries = fs::read_dir(&managed_folder)?;
 
@@ -1171,7 +1231,8 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
 
         for mod_data in &mods {
             for ini_data in &mod_data.mod_ini_data {
-                if let Ok(ini) = get_or_parse_ini(std::path::Path::new(ini_data.ini_path.as_str())) {
+                if let Ok(ini) = get_or_parse_ini(std::path::Path::new(ini_data.ini_path.as_str()))
+                {
                     let libs = ini.defined_libraries();
                     known_libraries.extend(libs);
                 }
@@ -1184,8 +1245,14 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
 
     groups.sort_by_key(|g| g.group_index());
 
-    let enabled = all_mods.iter().filter(|m| !m.disabled && !m.mod_disabled).count();
-    let disabled = all_mods.iter().filter(|m| m.disabled || m.mod_disabled).count();
+    let enabled = all_mods
+        .iter()
+        .filter(|m| !m.disabled && !m.mod_disabled)
+        .count();
+    let disabled = all_mods
+        .iter()
+        .filter(|m| m.disabled || m.mod_disabled)
+        .count();
 
     Ok(ScanResult {
         groups,
@@ -1210,17 +1277,21 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
 ///
 /// # Errors
 /// 当目录无法读取时返回 `Err`。
-fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: GroupType) -> Result<(ModGroupData, Vec<ModData>)> {
+fn scan_group_directory_deep(
+    dir_path: &Path,
+    group_name: &str,
+    group_type: GroupType,
+) -> Result<(ModGroupData, Vec<ModData>)> {
     use std::collections::VecDeque;
 
-    let mut mods = Vec::with_capacity(256);                 // 预分配 256 个模组
+    let mut mods = Vec::with_capacity(256); // 预分配 256 个模组
     let mut subgroups: Vec<ModGroupData> = Vec::with_capacity(32); // 预分配 32 个子分组
     let mut subgroup_paths: HashSet<PathBuf> = HashSet::with_capacity(32);
 
     let mut queue = VecDeque::new();
     queue.push_back(dir_path.to_path_buf());
 
-    let mut visited_dirs = HashSet::with_capacity(64);      // 规范化路径 visited 集合，防止 symlink 循环
+    let mut visited_dirs = HashSet::with_capacity(64); // 规范化路径 visited 集合，防止 symlink 循环
     visited_dirs.insert(dir_path.to_path_buf());
 
     while let Some(current_path) = queue.pop_front() {
@@ -1236,7 +1307,14 @@ fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: Grou
 
         if has_ini || has_icon {
             let parent_groups: Vec<String> = Vec::with_capacity(4);
-            let mod_data = build_mod_data_deep(&current_path, dir_path, group_name, &parent_groups, ini_files, icon_path)?;
+            let mod_data = build_mod_data_deep(
+                &current_path,
+                dir_path,
+                group_name,
+                &parent_groups,
+                ini_files,
+                icon_path,
+            )?;
             mods.push(mod_data);
         } else {
             let sub_entries = match fs::read_dir(&current_path) {
@@ -1271,7 +1349,8 @@ fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: Grou
 
             if current_path != dir_path && has_subdirs && !subgroup_paths.contains(&current_path) {
                 subgroup_paths.insert(current_path.clone());
-                let subgroup_name = current_path.file_name()
+                let subgroup_name = current_path
+                    .file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
@@ -1288,10 +1367,7 @@ fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: Grou
         }
     }
 
-    let group_index: u32 = group_name
-        .trim_start_matches("group_")
-        .parse()
-        .unwrap_or(0);
+    let group_index: u32 = group_name.trim_start_matches("group_").parse().unwrap_or(0);
 
     let mod_paths: Vec<PathBuf> = mods.iter().map(|m| m.full_path.clone()).collect();
 
@@ -1314,7 +1390,7 @@ fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: Grou
 
     for (idx, mod_data) in mods.iter_mut().enumerate() {
         mod_data.group_index = group_index;
-        mod_data.mod_index = idx as u32 + 1;  // 1-based，对齐原版 NRMM
+        mod_data.mod_index = idx as u32 + 1; // 1-based，对齐原版 NRMM
         mod_data.mod_path = mod_data.full_path.to_string_lossy().to_string();
         mod_data.mod_name = mod_data.name.clone();
         mod_data.mod_disabled = mod_data.disabled;
@@ -1371,9 +1447,13 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
                     }
                     has_ini = true;
                     ini_files.push(path);
-                } else if ICON_EXTENSIONS.iter().any(|e| ext_cow.eq_ignore_ascii_case(e)) {
+                } else if ICON_EXTENSIONS
+                    .iter()
+                    .any(|e| ext_cow.eq_ignore_ascii_case(e))
+                {
                     has_icon = true;
-                    let stem = path.file_stem()
+                    let stem = path
+                        .file_stem()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_lowercase();
@@ -1445,7 +1525,8 @@ fn collect_ini_files_dfs(root: &Path, ini_files: &mut Vec<PathBuf>) {
                 }
                 stack.push(path);
             } else if (ft.is_file() || ft.is_symlink())
-                && path.extension()
+                && path
+                    .extension()
                     .map(|e| e.to_string_lossy().eq_ignore_ascii_case("ini"))
                     .unwrap_or(false)
                 && !constants::is_desktop_ini(&path)
@@ -1474,7 +1555,8 @@ fn build_mod_data_deep(
     ini_files: Vec<PathBuf>,
     icon_path: Option<PathBuf>,
 ) -> Result<ModData> {
-    let dir_name = dir.file_name()
+    let dir_name = dir
+        .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
@@ -1500,8 +1582,8 @@ fn build_mod_data_deep(
         display_name
     };
 
-    let mut mod_ini_data: Vec<ModIniData> = Vec::with_capacity(8);           // 预分配 8 个 INI 数据，大多数模组只有少量 INI
-    let mut all_errored_lines: Vec<ErroredLines> = Vec::with_capacity(8);  // 预分配 8 个错误行
+    let mut mod_ini_data: Vec<ModIniData> = Vec::with_capacity(8); // 预分配 8 个 INI 数据，大多数模组只有少量 INI
+    let mut all_errored_lines: Vec<ErroredLines> = Vec::with_capacity(8); // 预分配 8 个错误行
     let mut total_sections = 0;
     let mut total_key_sections = 0;
     let mut total_texture_sections = 0;
@@ -1509,7 +1591,7 @@ fn build_mod_data_deep(
     let mut total_command_lists = 0;
     let mut total_resources = 0;
     let mut mod_namespace: Option<String> = None;
-    let mut defined_libraries = HashSet::with_capacity(32);                 // 预分配 32 个库，覆盖大多数模组
+    let mut defined_libraries = HashSet::with_capacity(32); // 预分配 32 个库，覆盖大多数模组
 
     for ini_path in &ini_files {
         match get_or_parse_ini(ini_path) {
@@ -1556,7 +1638,8 @@ fn build_mod_data_deep(
                 let errors = ini.detect_errors(ini_path, &known_libs);
                 all_errored_lines.extend(errors);
 
-                let ini_filename = ini_path.file_name()
+                let ini_filename = ini_path
+                    .file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
@@ -1587,7 +1670,10 @@ fn build_mod_data_deep(
     }
 
     let is_namespaced = mod_namespace.is_some();
-    let namespaces_vec = mod_namespace.as_ref().map(|ns| vec![ns.clone()]).unwrap_or_default();
+    let namespaces_vec = mod_namespace
+        .as_ref()
+        .map(|ns| vec![ns.clone()])
+        .unwrap_or_default();
 
     Ok(ModData {
         name: mod_name.clone(),
@@ -1683,8 +1769,14 @@ pub fn scan_partial_path(mods_path: &Path, target_subpath: &Path) -> Result<Scan
         // 否则视为 MutexGroup 根目录
         let (g_opt, ms) = scan_mutex_group_dfs(&first_dir)?;
         let total = ms.iter().filter(|m| m.name != "None").count();
-        let enabled = ms.iter().filter(|m| !m.disabled && !m.mod_disabled && m.name != "None").count();
-        let disabled = ms.iter().filter(|m| (m.disabled || m.mod_disabled) && m.name != "None").count();
+        let enabled = ms
+            .iter()
+            .filter(|m| !m.disabled && !m.mod_disabled && m.name != "None")
+            .count();
+        let disabled = ms
+            .iter()
+            .filter(|m| (m.disabled || m.mod_disabled) && m.name != "None")
+            .count();
         return Ok(ScanResult {
             groups: g_opt.into_iter().collect(),
             mods: ms,
@@ -1803,13 +1895,13 @@ mod tests {
         assert_eq!(strip_disabled_prefix("DISABLEDMod"), "Mod");
         // 连续多个前缀：必须一次全部移除
         assert_eq!(strip_disabled_prefix("DISABLEDDISABLEDMod"), "Mod");
-        assert_eq!(
-            strip_disabled_prefix("DISABLED_DISABLED_Mod"),
-            "Mod"
-        );
+        assert_eq!(strip_disabled_prefix("DISABLED_DISABLED_Mod"), "Mod");
         // 前缀 DISABLED + 模组名以 Disabled（大小写混合）开头：只剥前缀，保留模组名
         assert_eq!(strip_disabled_prefix("DISABLEDDisabledMod"), "DisabledMod");
-        assert_eq!(strip_disabled_prefix("DISABLEDDISABLEDDisabledMod"), "DisabledMod");
+        assert_eq!(
+            strip_disabled_prefix("DISABLEDDISABLEDDisabledMod"),
+            "DisabledMod"
+        );
         // 无前缀时原样返回
         assert_eq!(strip_disabled_prefix("Mod"), "Mod");
         // 整个名称就是前缀 → 空串
@@ -1834,7 +1926,11 @@ mod tests {
         let dir = setup_test_dir();
         create_d3dx_ini(dir.path());
         let group_path = create_group_dir(dir.path(), "group_1");
-        create_mod_with_ini(&group_path, "TestMod", "[TextureOverrideTest]\nhash = 0x123\n");
+        create_mod_with_ini(
+            &group_path,
+            "TestMod",
+            "[TextureOverrideTest]\nhash = 0x123\n",
+        );
 
         let result = scan_mods_deep(dir.path()).unwrap();
         assert_eq!(result.groups.len(), 1);
@@ -1850,7 +1946,11 @@ mod tests {
         let dir = setup_test_dir();
         create_d3dx_ini(dir.path());
         let group_path = create_group_dir(dir.path(), "group_1");
-        create_mod_with_ini(&group_path, "DISABLEDMyMod", "[TextureOverrideTest]\nhash = 0x456\n");
+        create_mod_with_ini(
+            &group_path,
+            "DISABLEDMyMod",
+            "[TextureOverrideTest]\nhash = 0x456\n",
+        );
 
         let result = scan_mods_deep(dir.path()).unwrap();
         assert_eq!(result.mods.len(), 1);
@@ -1869,14 +1969,26 @@ mod tests {
 
         let mutex_path = dir.path().join("_MANAGED_").join("#MutexMods");
         fs::create_dir_all(&mutex_path).unwrap();
-        create_mod_with_ini(&mutex_path, "MutexMod", "[TextureOverrideTest]\nhash = 0x789\n");
+        create_mod_with_ini(
+            &mutex_path,
+            "MutexMod",
+            "[TextureOverrideTest]\nhash = 0x789\n",
+        );
 
         let other_path = dir.path().join("_MANAGED_").join("OtherFolder");
         fs::create_dir_all(&other_path).unwrap();
-        create_mod_with_ini(&other_path, "OtherMod", "[TextureOverrideTest]\nhash = 0xABC\n");
+        create_mod_with_ini(
+            &other_path,
+            "OtherMod",
+            "[TextureOverrideTest]\nhash = 0xABC\n",
+        );
 
         let group_path = create_group_dir(dir.path(), "group_1");
-        create_mod_with_ini(&group_path, "ValidMod", "[TextureOverrideTest]\nhash = 0xDEF\n");
+        create_mod_with_ini(
+            &group_path,
+            "ValidMod",
+            "[TextureOverrideTest]\nhash = 0xDEF\n",
+        );
 
         let result = scan_mods_deep(dir.path()).unwrap();
         assert_eq!(result.groups.len(), 1);
@@ -1918,7 +2030,11 @@ mod tests {
         let result = scan_mods_deep(dir.path()).unwrap();
         assert_eq!(result.mods.len(), 1);
         assert!(result.mods[0].preview_image_path.is_some());
-        assert!(result.mods[0].preview_image_path.as_ref().unwrap().ends_with("icon.png"));
+        assert!(result.mods[0]
+            .preview_image_path
+            .as_ref()
+            .unwrap()
+            .ends_with("icon.png"));
     }
 
     /// 测试：`check_mods_path` 对有效路径返回 `Valid`
@@ -1972,7 +2088,11 @@ mod tests {
 
         let subdir_under_mod = mod_path.join("ShouldNotBeScanned");
         fs::create_dir_all(&subdir_under_mod).unwrap();
-        fs::write(subdir_under_mod.join("ignored.ini"), "[TextureOverrideB]\nhash=2\n").unwrap();
+        fs::write(
+            subdir_under_mod.join("ignored.ini"),
+            "[TextureOverrideB]\nhash=2\n",
+        )
+        .unwrap();
 
         let result = scan_mods_deep(dir.path()).unwrap();
         assert_eq!(result.mods.len(), 1);
@@ -2325,7 +2445,10 @@ filename = test.dds
         let result = scan_mods_light(dir.path()).unwrap();
         let mod_names: Vec<&str> = result.mods.iter().map(|m| m.name.as_str()).collect();
         assert!(mod_names.contains(&"ModWithIni"));
-        assert!(!mod_names.contains(&"SubModUnder"), "Should not recurse into mod dir with ini");
+        assert!(
+            !mod_names.contains(&"SubModUnder"),
+            "Should not recurse into mod dir with ini"
+        );
     }
 
     /// 测试：轻量扫描正确识别 NormalGroup 和 MutexGroup 中的禁用模组
@@ -2355,7 +2478,11 @@ filename = test.dds
 
         for m in &result.mods {
             if m.name.contains("Disabled") {
-                assert!(m.disabled || m.name == "None", "{} should be disabled", m.name);
+                assert!(
+                    m.disabled || m.name == "None",
+                    "{} should be disabled",
+                    m.name
+                );
             } else if m.name != "None" {
                 assert!(!m.disabled, "{} should be enabled", m.name);
             }
@@ -2466,19 +2593,32 @@ filename = test.dds
         create_mod_with_ini(&g1, "Mod1", "[S]\n");
 
         let result = scan_mods_light(dir.path()).unwrap();
-        let group_names: Vec<&str> = result.groups.iter()
+        let group_names: Vec<&str> = result
+            .groups
+            .iter()
             .filter(|g| g.group_type == GroupType::NormalGroup)
             .map(|g| g.group_name.as_str())
             .collect();
 
-        assert!(group_names.contains(&"group_1"), "group_1 should be NormalGroup");
+        assert!(
+            group_names.contains(&"group_1"),
+            "group_1 should be NormalGroup"
+        );
         // group_0 和 group_01 应该作为 MutexGroup 存在
-        let mutex_names: Vec<&str> = result.groups.iter()
+        let mutex_names: Vec<&str> = result
+            .groups
+            .iter()
             .filter(|g| g.group_type == GroupType::MutexGroup)
             .map(|g| g.group_name.as_str())
             .collect();
-        assert!(mutex_names.contains(&"group_0"), "group_0 should be MutexGroup");
-        assert!(mutex_names.contains(&"group_01"), "group_01 should be MutexGroup");
+        assert!(
+            mutex_names.contains(&"group_0"),
+            "group_0 should be MutexGroup"
+        );
+        assert!(
+            mutex_names.contains(&"group_01"),
+            "group_01 should be MutexGroup"
+        );
     }
 
     /// 测试：轻量扫描排序规则（启用优先 > 收藏优先 > 自然排序）
@@ -2528,11 +2668,11 @@ mod tests_non_group_no_markers {
     fn test_is_group_xx_dir() {
         assert!(is_group_xx_dir("group_1"));
         assert!(is_group_xx_dir("group_123"));
-        assert!(!is_group_xx_dir("group_"));        // 无数字
-        assert!(!is_group_xx_dir("group_abc"));     // 非数字
-        assert!(!is_group_xx_dir("Group_1"));       // 大小写敏感
-        assert!(!is_group_xx_dir("#MyGroup"));      // mutexGroup
-        assert!(!is_group_xx_dir("SubGroup"));      // 自定义子分组
+        assert!(!is_group_xx_dir("group_")); // 无数字
+        assert!(!is_group_xx_dir("group_abc")); // 非数字
+        assert!(!is_group_xx_dir("Group_1")); // 大小写敏感
+        assert!(!is_group_xx_dir("#MyGroup")); // mutexGroup
+        assert!(!is_group_xx_dir("SubGroup")); // 自定义子分组
         assert!(!is_group_xx_dir("DISABLEDgroup_1")); // 禁用前缀
     }
 
@@ -2552,8 +2692,14 @@ mod tests_non_group_no_markers {
         let result = scan_mods_light(mods_root).expect("scan should succeed");
 
         // 检查不应存在的标记文件
-        assert!(!non_group.join("groupname").exists(), "非group不应创建 groupname 文件");
-        assert!(!mod_dir.join("modname").exists(), "非group下模组不应创建 modname 文件");
+        assert!(
+            !non_group.join("groupname").exists(),
+            "非group不应创建 groupname 文件"
+        );
+        assert!(
+            !mod_dir.join("modname").exists(),
+            "非group下模组不应创建 modname 文件"
+        );
 
         // 但模组仍应被正确识别
         let mod_names: Vec<&str> = result.mods.iter().map(|m| m.name.as_str()).collect();
@@ -2576,8 +2722,14 @@ mod tests_non_group_no_markers {
         let _result = scan_mods_light(mods_root).expect("scan should succeed");
 
         // group_xx 目录应创建标记文件
-        assert!(group1.join("groupname").exists(), "group_xx 应创建 groupname 文件");
-        assert!(mod_dir.join("modname").exists(), "group_xx 下模组应创建 modname 文件");
+        assert!(
+            group1.join("groupname").exists(),
+            "group_xx 应创建 groupname 文件"
+        );
+        assert!(
+            mod_dir.join("modname").exists(),
+            "group_xx 下模组应创建 modname 文件"
+        );
     }
 }
 
@@ -2675,8 +2827,7 @@ mod tests_scan_partial_path {
         create_mod_with_ini(&g1, "Mod1", "[TextureOverride1]\nhash=1\n");
 
         // 指向不存在的分组
-        let result =
-            scan_partial_path(dir.path(), Path::new("_MANAGED_/group_999")).unwrap();
+        let result = scan_partial_path(dir.path(), Path::new("_MANAGED_/group_999")).unwrap();
         assert_eq!(
             result.groups.len(),
             1,
@@ -2698,8 +2849,7 @@ mod tests_scan_partial_path {
         create_mod_with_ini(&g10, "Mod10", "[TextureOverride10]\nhash=10\n");
 
         // 仅扫描 group_2
-        let result =
-            scan_partial_path(dir.path(), Path::new("_MANAGED_/group_2")).unwrap();
+        let result = scan_partial_path(dir.path(), Path::new("_MANAGED_/group_2")).unwrap();
 
         // 仅返回 group_2，不包含 group_1 和 group_10
         assert_eq!(result.groups.len(), 1, "应仅返回目标分组");
@@ -2729,8 +2879,7 @@ mod tests_scan_partial_path {
         create_mod_with_ini(&g1, "Mod1", "[TextureOverride1]\nhash=1\n");
 
         // 仅扫描 #CustomGroup
-        let result =
-            scan_partial_path(dir.path(), Path::new("_MANAGED_/#CustomGroup")).unwrap();
+        let result = scan_partial_path(dir.path(), Path::new("_MANAGED_/#CustomGroup")).unwrap();
 
         // 仅包含 ModA，不包含 Mod1
         assert_eq!(
@@ -2759,8 +2908,7 @@ mod tests_scan_partial_path {
         create_mod_with_ini(&g2, "Mod3", "[TextureOverride3]\nhash=3\n");
 
         // 指向 group_1 下的 Mod1（粒度仍为分组级）
-        let result =
-            scan_partial_path(dir.path(), Path::new("_MANAGED_/group_1/Mod1")).unwrap();
+        let result = scan_partial_path(dir.path(), Path::new("_MANAGED_/group_1/Mod1")).unwrap();
 
         // 应扫描整个 group_1（None + Mod1 + Mod2），不包含 group_2 的 Mod3
         assert_eq!(result.groups.len(), 1, "应仅返回 group_1");
@@ -2818,7 +2966,10 @@ mod tests_scan_partial_path {
         // 模拟 consolidate 返回的绝对路径：mods_path/_MANAGED_/group_1
         let abs_path = dir.path().join("_MANAGED_").join("group_1");
         let result = normalize_subpath(&abs_path, dir.path());
-        assert_eq!(result, "group_1", "绝对路径应被剥离为相对于 _MANAGED_ 的子路径");
+        assert_eq!(
+            result, "group_1",
+            "绝对路径应被剥离为相对于 _MANAGED_ 的子路径"
+        );
 
         // 模组级绝对路径：mods_path/_MANAGED_/group_1/Mod1
         let abs_mod_path = g1.join("Mod1");

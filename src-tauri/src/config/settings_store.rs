@@ -12,14 +12,14 @@
 //!
 //! 这样即使中途断电/崩溃，也只会留下临时文件，不会损坏原配置
 
-use crate::models::settings::AppSettings;
-use crate::models::enums::TargetGame;
 use crate::config::app_paths;
-use anyhow::{Result, bail, Context};
+use crate::models::enums::TargetGame;
+use crate::models::settings::AppSettings;
+use anyhow::{bail, Context, Result};
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
 use std::fs;
 use std::path::{Path, PathBuf};
-use parking_lot::RwLock;
-use once_cell::sync::Lazy;
 
 /// 设置内存缓存（全局单例）
 /// Lazy 保证首次访问时初始化，RwLock 保证多线程读写安全
@@ -92,10 +92,7 @@ fn save_to_file(path: &Path, settings: &AppSettings) -> Result<()> {
 ///
 /// 无 IO 操作，线程安全，读取不阻塞其他读者
 pub fn get_settings() -> AppSettings {
-    SETTINGS.read()
-        .as_ref()
-        .cloned()
-        .unwrap_or_default()
+    SETTINGS.read().as_ref().cloned().unwrap_or_default()
 }
 
 /// 校验给定路径是否位于任一已配置游戏的 Mods 根目录内（命令层路径边界防护，R1）
@@ -120,8 +117,12 @@ pub fn validate_managed_path(input: &str) -> Result<PathBuf> {
         bail!("game_mods_path not configured, refuse path operation");
     }
     let target = PathBuf::from(input);
-    let target_canon = fs::canonicalize(&target)
-        .with_context(|| format!("canonicalize target failed (path may not exist): {:?}", target))?;
+    let target_canon = fs::canonicalize(&target).with_context(|| {
+        format!(
+            "canonicalize target failed (path may not exist): {:?}",
+            target
+        )
+    })?;
     let is_managed = settings.game_mods_path.values().any(|root| {
         fs::canonicalize(root)
             .map(|root_canon| target_canon.starts_with(&root_canon))
@@ -168,7 +169,8 @@ pub fn save_settings(settings: &AppSettings) -> Result<()> {
 ///
 /// 便捷方法：读取 → 修改 → 保存 原子操作
 pub fn update_settings<F>(updater: F) -> Result<AppSettings>
-where F: FnOnce(&mut AppSettings)
+where
+    F: FnOnce(&mut AppSettings),
 {
     let mut settings = get_settings();
     updater(&mut settings);
@@ -246,7 +248,8 @@ pub fn fill_defaults(settings: &mut AppSettings) {
 
     // 填充默认进程名（仅当用户未设置时）
     for (game, proc_name) in default_processes {
-        settings.target_process_per_game
+        settings
+            .target_process_per_game
             .entry(game)
             .or_insert_with(|| proc_name.to_string());
     }
@@ -274,10 +277,9 @@ pub fn fill_defaults(settings: &mut AppSettings) {
                 .join(launcher_dir)
                 .join("Mods");
             if mods_path.exists() {
-                settings.game_mods_path.insert(
-                    game,
-                    mods_path.to_string_lossy().to_string()
-                );
+                settings
+                    .game_mods_path
+                    .insert(game, mods_path.to_string_lossy().to_string());
             }
         }
     }
@@ -292,17 +294,17 @@ mod tests {
     fn test_save_load_consistency() {
         let dir = tempdir().unwrap();
         let test_path = dir.path().join("test_settings.json");
-        
+
         let settings = AppSettings {
             language: "zh-CN".to_string(),
             interface_scale: 1.5,
             dark_mode: false,
             ..Default::default()
         };
-        
+
         save_to_file(&test_path, &settings).unwrap();
         let loaded = load_from_file(&test_path).unwrap();
-        
+
         assert_eq!(loaded.language, "zh-CN");
         assert_eq!(loaded.interface_scale, 1.5);
         assert!(!loaded.dark_mode);
@@ -324,13 +326,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let test_path = dir.path().join("atomic_test.json");
         let tmp_path = test_path.with_extension("json.tmp");
-        
+
         let settings = AppSettings::default();
         save_to_file(&test_path, &settings).unwrap();
-        
+
         assert!(test_path.exists());
         assert!(!tmp_path.exists());
-        
+
         let loaded = load_from_file(&test_path).unwrap();
         assert_eq!(loaded.language, "en");
     }
@@ -339,18 +341,18 @@ mod tests {
     fn test_export_import_file_operations() {
         let dir = tempdir().unwrap();
         let export_path = dir.path().join("export.json");
-        
+
         let settings = AppSettings {
             language: "de".to_string(),
             bg_transparency: 0.5,
             dynamic_background: false,
             ..Default::default()
         };
-        
+
         save_to_file(&export_path, &settings).unwrap();
-        
+
         let imported = load_from_file(&export_path).unwrap();
-        
+
         assert_eq!(imported.language, "de");
         assert_eq!(imported.bg_transparency, 0.5);
         assert!(!imported.dynamic_background);
@@ -360,14 +362,14 @@ mod tests {
     fn test_create_parent_directories() {
         let dir = tempdir().unwrap();
         let nested_path = dir.path().join("nested").join("dir").join("settings.json");
-        
+
         let settings = AppSettings::default();
-        
+
         if let Some(parent) = nested_path.parent() {
             fs::create_dir_all(parent).unwrap();
         }
         save_to_file(&nested_path, &settings).unwrap();
-        
+
         assert!(nested_path.exists());
     }
 
@@ -375,18 +377,24 @@ mod tests {
     fn test_fill_defaults_process_names() {
         let mut settings = AppSettings::default();
         fill_defaults(&mut settings);
-        
+
         // 所有游戏都应该有默认进程名
         for game in TargetGame::all().iter() {
             let proc_name = settings.target_process_per_game.get(game);
-            assert!(proc_name.is_some(), "Missing default process for {:?}", game);
+            assert!(
+                proc_name.is_some(),
+                "Missing default process for {:?}",
+                game
+            );
             let name = proc_name.unwrap();
             assert!(!name.is_empty(), "Empty process name for {:?}", game);
         }
-        
+
         // 验证具体进程名
         assert_eq!(
-            settings.target_process_per_game.get(&TargetGame::HonkaiStarRail),
+            settings
+                .target_process_per_game
+                .get(&TargetGame::HonkaiStarRail),
             Some(&"StarRail.exe".to_string())
         );
         assert_eq!(
@@ -399,21 +407,24 @@ mod tests {
     fn test_fill_defaults_preserves_user_settings() {
         let mut settings = AppSettings::default();
         // 用户自定义了星铁进程名
-        settings.target_process_per_game.insert(
-            TargetGame::HonkaiStarRail,
-            "CustomProcess.exe".to_string()
-        );
+        settings
+            .target_process_per_game
+            .insert(TargetGame::HonkaiStarRail, "CustomProcess.exe".to_string());
         settings.language = "zh-CN".to_string();
-        
+
         fill_defaults(&mut settings);
-        
+
         // 用户自定义值不应被覆盖
         assert_eq!(
-            settings.target_process_per_game.get(&TargetGame::HonkaiStarRail),
+            settings
+                .target_process_per_game
+                .get(&TargetGame::HonkaiStarRail),
             Some(&"CustomProcess.exe".to_string())
         );
         // 其他未设置的游戏仍应获得默认值
-        assert!(settings.target_process_per_game.contains_key(&TargetGame::ZZZ));
+        assert!(settings
+            .target_process_per_game
+            .contains_key(&TargetGame::ZZZ));
         // 其他设置字段不受影响
         assert_eq!(settings.language, "zh-CN");
     }
@@ -422,7 +433,7 @@ mod tests {
     fn test_default_process_names_match_spec() {
         let mut settings = AppSettings::default();
         fill_defaults(&mut settings);
-        
+
         let expected: Vec<(TargetGame, &str)> = vec![
             (TargetGame::GenshinImpact, "GenshinImpact.exe"),
             (TargetGame::HonkaiStarRail, "StarRail.exe"),
@@ -431,12 +442,13 @@ mod tests {
             (TargetGame::HonkaiImpact3rd, "BH3.exe"),
             (TargetGame::ArknightsEndfield, "Endfield.exe"),
         ];
-        
+
         for (game, expected_name) in expected {
             assert_eq!(
                 settings.target_process_per_game.get(&game),
                 Some(&expected_name.to_string()),
-                "Process name mismatch for {:?}", game
+                "Process name mismatch for {:?}",
+                game
             );
         }
     }

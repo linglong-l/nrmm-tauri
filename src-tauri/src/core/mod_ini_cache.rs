@@ -46,8 +46,7 @@ impl ModIniCache {
 }
 
 /// 全局通用 INI 缓存单例（首次访问时初始化）。
-static MOD_INI_CACHE: Lazy<RwLock<ModIniCache>> =
-    Lazy::new(|| RwLock::new(ModIniCache::new()));
+static MOD_INI_CACHE: Lazy<RwLock<ModIniCache>> = Lazy::new(|| RwLock::new(ModIniCache::new()));
 
 /// 读取并解析指定 INI 文件；若缓存有效则直接返回克隆，否则解析并回填缓存。
 ///

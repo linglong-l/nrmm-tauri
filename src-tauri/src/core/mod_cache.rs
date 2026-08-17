@@ -1,17 +1,17 @@
 //! 模组数据缓存模块
-//! 
+//!
 //! 提供内存缓存功能，避免重复扫描文件系统。
 //! 缓存键为 (TargetGame, 规范化路径字符串)，值为轻量扫描结果 ScanResult。
 //! 使用 parking_lot::RwLock 保证线程安全的并发读写。
 
+use crate::core::mod_scanner::ScanResult;
+use crate::models::enums::TargetGame;
+use crate::models::mod_data::{ModData, ModGroupData};
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
-use once_cell::sync::Lazy;
-use parking_lot::RwLock;
-use crate::models::enums::TargetGame;
-use crate::models::mod_data::{ModGroupData, ModData};
-use crate::core::mod_scanner::ScanResult;
 
 /// 缓存键类型，由目标游戏和规范化后的 Mods 目录路径字符串组成的二元组。
 ///
@@ -82,7 +82,11 @@ impl ModCache {
     pub fn get(&self, game: TargetGame, mods_path: &Path) -> Option<ScanResult> {
         let key = Self::make_key(game, mods_path);
         let result = self.cache.get(&key).map(|entry| entry.result.clone());
-        log::debug!("[core::mod_cache] [get] game={:?} hit={}", game, result.is_some());
+        log::debug!(
+            "[core::mod_cache] [get] game={:?} hit={}",
+            game,
+            result.is_some()
+        );
         result
     }
 
@@ -107,13 +111,20 @@ impl ModCache {
     pub fn set(&mut self, game: TargetGame, mods_path: &Path, result: ScanResult) {
         let key = Self::make_key(game, mods_path);
         let mods_count = result.mods.len();
-        self.cache.insert(key, CachedEntry {
-            result,
-            _timestamp: Instant::now(),
-        });
+        self.cache.insert(
+            key,
+            CachedEntry {
+                result,
+                _timestamp: Instant::now(),
+            },
+        );
         // 清除该游戏的失效标记，表示缓存已更新
         self.invalidated_games.remove(&game);
-        log::debug!("[core::mod_cache] [set] game={:?} mods={}", game, mods_count);
+        log::debug!(
+            "[core::mod_cache] [set] game={:?} mods={}",
+            game,
+            mods_count
+        );
     }
 
     /// 精确移除指定游戏 + 路径的一个缓存条目。
@@ -132,7 +143,11 @@ impl ModCache {
     pub fn invalidate(&mut self, game: TargetGame, mods_path: &Path) {
         let key = Self::make_key(game, mods_path);
         let removed = self.cache.remove(&key);
-        log::debug!("[core::mod_cache] [invalidate] game={:?} removed={}", game, removed.is_some());
+        log::debug!(
+            "[core::mod_cache] [invalidate] game={:?} removed={}",
+            game,
+            removed.is_some()
+        );
     }
 
     /// 失效指定游戏的所有缓存条目。
@@ -183,15 +198,15 @@ impl ModCache {
 
         // 先收集受影响的游戏（路径包含前缀的条目），再移除条目
         // 避免误标所有剩余游戏为失效
-        let affected_games: HashSet<TargetGame> = self.cache
+        let affected_games: HashSet<TargetGame> = self
+            .cache
             .keys()
             .filter(|(_, path_str)| path_str.to_lowercase().contains(&prefix_lower))
             .map(|(g, _)| *g)
             .collect();
 
-        self.cache.retain(|(_, path_str), _| {
-            !path_str.to_lowercase().contains(&prefix_lower)
-        });
+        self.cache
+            .retain(|(_, path_str), _| !path_str.to_lowercase().contains(&prefix_lower));
 
         for g in affected_games {
             self.invalidated_games.insert(g);
@@ -231,7 +246,8 @@ impl ModCache {
     ///
     /// 此方法不会返回错误。
     fn make_key(game: TargetGame, mods_path: &Path) -> CacheKey {
-        let normalized = mods_path.canonicalize()
+        let normalized = mods_path
+            .canonicalize()
             .unwrap_or_else(|_| mods_path.to_path_buf())
             .to_string_lossy()
             .to_string();
@@ -377,9 +393,7 @@ impl Default for ModCache {
 ///
 /// 使用 `once_cell::sync::Lazy` 实现首次访问时自动初始化为空缓存，
 /// 以 `parking_lot::RwLock` 包装支持并发读和独占写。
-pub static MOD_CACHE: Lazy<RwLock<ModCache>> = Lazy::new(|| {
-    RwLock::new(ModCache::new())
-});
+pub static MOD_CACHE: Lazy<RwLock<ModCache>> = Lazy::new(|| RwLock::new(ModCache::new()));
 
 /// Tauri IPC 命令：检查指定游戏的模组缓存是否有效。
 ///
@@ -408,10 +422,10 @@ pub fn check_mod_cache_valid(game: String, mods_path: String) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::mod_scanner;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
-    use crate::core::mod_scanner;
 
     /// 创建测试用的临时 Mods 目录结构：
     /// - `_MANAGED_/group_1/TestMod/mod.ini`
@@ -437,10 +451,10 @@ mod tests {
     fn test_cache_set_and_get() {
         let (_dir, mods_path) = setup_test_mods();
         let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
-        
+
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
-        
+
         let cached = cache.get(TargetGame::GenshinImpact, &mods_path);
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().total_mods_count, result.total_mods_count);
@@ -459,11 +473,11 @@ mod tests {
     fn test_cache_invalidate() {
         let (_dir, mods_path) = setup_test_mods();
         let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
-        
+
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result);
         assert!(cache.get(TargetGame::GenshinImpact, &mods_path).is_some());
-        
+
         cache.invalidate(TargetGame::GenshinImpact, &mods_path);
         assert!(cache.get(TargetGame::GenshinImpact, &mods_path).is_none());
     }
@@ -473,11 +487,11 @@ mod tests {
     fn test_cache_invalidate_game() {
         let (_dir, mods_path) = setup_test_mods();
         let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
-        
+
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
         cache.set(TargetGame::Wuwa, &mods_path, result);
-        
+
         cache.invalidate_game(TargetGame::GenshinImpact);
         assert!(cache.get(TargetGame::GenshinImpact, &mods_path).is_none());
         assert!(cache.get(TargetGame::Wuwa, &mods_path).is_some());
@@ -488,11 +502,11 @@ mod tests {
     fn test_cache_invalidate_all() {
         let (_dir, mods_path) = setup_test_mods();
         let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
-        
+
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
         cache.set(TargetGame::Wuwa, &mods_path, result);
-        
+
         cache.invalidate_all();
         assert!(cache.get(TargetGame::GenshinImpact, &mods_path).is_none());
         assert!(cache.get(TargetGame::Wuwa, &mods_path).is_none());
@@ -503,10 +517,10 @@ mod tests {
     fn test_cache_different_games_isolated() {
         let (_dir, mods_path) = setup_test_mods();
         let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
-        
+
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result);
-        
+
         assert!(cache.get(TargetGame::Wuwa, &mods_path).is_none());
         assert!(cache.get(TargetGame::GenshinImpact, &mods_path).is_some());
     }
@@ -516,7 +530,9 @@ mod tests {
     fn test_global_cache_singleton() {
         // 测试全局单例可正常访问
         let cache = MOD_CACHE.read();
-        assert!(cache.get(TargetGame::GenshinImpact, Path::new("/nonexistent")).is_none());
+        assert!(cache
+            .get(TargetGame::GenshinImpact, Path::new("/nonexistent"))
+            .is_none());
     }
 
     /// 测试删除传播：局部扫描合并后，磁盘上已删除的模组应从缓存移除。
@@ -537,7 +553,8 @@ mod tests {
         let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
         cache.set(TargetGame::GenshinImpact, &mods_path, result);
         assert!(
-            cache.get(TargetGame::GenshinImpact, &mods_path)
+            cache
+                .get(TargetGame::GenshinImpact, &mods_path)
                 .unwrap()
                 .mods
                 .iter()

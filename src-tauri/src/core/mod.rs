@@ -11,20 +11,20 @@
 //! - `cloud_data`: 云端数据管理（链接、消息、图标库等远程资源）
 //! - `mod_cache`: 模组数据内存缓存（避免重复文件系统扫描）
 
+pub mod archive_handler;
+pub mod cloud_data;
 pub mod constants;
+pub mod d3dxini_cache;
+pub mod dll_capability;
+pub mod error_normalizer;
 pub mod file_logger;
 pub mod file_watcher;
+pub mod incremental_updater;
 pub mod ini_backup;
 pub mod ini_handler;
-pub mod error_normalizer;
+pub mod mod_cache;
+pub mod mod_ini_cache;
 pub mod mod_manager;
 pub mod mod_scanner;
 pub mod namespace_handler;
-pub mod archive_handler;
-pub mod cloud_data;
-pub mod mod_cache;
-pub mod d3dxini_cache;
-pub mod mod_ini_cache;
-pub mod incremental_updater;
-pub mod dll_capability;
 pub mod resolution;

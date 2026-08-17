@@ -129,7 +129,9 @@ pub fn backup_ini_files(mods_path: &Path) {
             if ft.is_symlink() {
                 // 符号链接：解析后登记链接池，按 follow 目标类型分派
                 let real = path.canonicalize().unwrap_or_else(|_| path.clone());
-                symlink_pool.entry(path.clone()).or_insert_with(|| real.clone());
+                symlink_pool
+                    .entry(path.clone())
+                    .or_insert_with(|| real.clone());
                 match fs::metadata(&path) {
                     Ok(md) if md.is_dir() => {
                         if visited.insert(real.clone()) {
@@ -241,11 +243,8 @@ fn backup_one_ini(ini_path: &Path, symlink_pool: &mut HashMap<PathBuf, PathBuf>)
         // 普通文件：同目录 <stem>.ini_manager_backup（拼接构造，避免 with_extension
         // 对多 dot stem（如 "my.mod.ini"）的破坏）
         let stem = ini_path.file_stem().unwrap_or_default().to_string_lossy();
-        let backup = ini_path.with_file_name(format!(
-            "{}.{}",
-            stem,
-            constants::INI_MANAGER_BACKUP_SUFFIX
-        ));
+        let backup =
+            ini_path.with_file_name(format!("{}.{}", stem, constants::INI_MANAGER_BACKUP_SUFFIX));
         if backup.exists() {
             return BackupOutcome::Skipped;
         }
@@ -416,13 +415,22 @@ mod tests {
 
         backup_ini_files(dir.path());
 
-        assert!(managed.join(backup_name("a")).exists(), "_MANAGED_/group_1 内 ini 应备份");
-        assert!(mutex.join(backup_name("b")).exists(), "#Mutex 内 ini 应备份");
+        assert!(
+            managed.join(backup_name("a")).exists(),
+            "_MANAGED_/group_1 内 ini 应备份"
+        );
+        assert!(
+            mutex.join(backup_name("b")).exists(),
+            "#Mutex 内 ini 应备份"
+        );
         assert!(
             removed.join(backup_name("c")).exists(),
             "DISABLED_MANAGED_REMOVED 内 ini 应备份"
         );
-        assert!(dir.path().join(backup_name("root")).exists(), "根直属 ini 应备份");
+        assert!(
+            dir.path().join(backup_name("root")).exists(),
+            "根直属 ini 应备份"
+        );
     }
 
     #[test]
@@ -436,7 +444,13 @@ mod tests {
 
         backup_ini_files(dir.path());
 
-        for name in ["desktop", "manager_group", "nrmm_include", "group_1", "GROUP_12"] {
+        for name in [
+            "desktop",
+            "manager_group",
+            "nrmm_include",
+            "group_1",
+            "GROUP_12",
+        ] {
             assert!(
                 !dir.path().join(backup_name(name)).exists(),
                 "白名单文件 {} 不应产生备份",
@@ -471,7 +485,10 @@ mod tests {
         backup_ini_files(dir.path());
 
         // 不存在 <stem>.ini_manager_backup.ini_manager_backup（备份自身不被再备份）
-        assert!(!dir.path().join("mod.ini_manager_backup.ini_manager_backup").exists());
+        assert!(!dir
+            .path()
+            .join("mod.ini_manager_backup.ini_manager_backup")
+            .exists());
         // 目录内备份文件数量稳定（恰为 1）
         let backup_count = fs::read_dir(dir.path())
             .unwrap()
@@ -508,7 +525,10 @@ mod tests {
         assert!(link_backup.exists(), "链接所在目录应有备份链接");
         // 链接指向有效目标
         let target = fs::read_link(&link_backup).unwrap();
-        assert!(target.try_exists().unwrap_or(false), "备份链接应指向有效目标");
+        assert!(
+            target.try_exists().unwrap_or(false),
+            "备份链接应指向有效目标"
+        );
 
         // 再次运行幂等：链接数量不翻倍（目录内 .ini_manager_backup 后缀项仍为 1）
         backup_ini_files(dir.path());

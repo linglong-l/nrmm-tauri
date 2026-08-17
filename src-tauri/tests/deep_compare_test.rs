@@ -6,6 +6,9 @@
 //! 3. Compare output with NRMM-test baseline file-by-file (bytes + INI line diff)
 //! 4. Output structured diagnostic report
 
+// 同 lib.rs：关闭主观的 pedantic / nursery 两组，保留 `-D warnings` 把关真实问题。
+#![allow(clippy::pedantic, clippy::nursery)]
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use xxmi_nrmm_lib::core::mod_manager;
@@ -14,25 +17,39 @@ use xxmi_nrmm_lib::models::settings::AppSettings;
 
 // Path helpers
 fn input_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("NRMM-Rust-test")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("NRMM-Rust-test")
 }
 fn baseline_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("NRMM-test")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("NRMM-test")
 }
 
 // File content helpers
-fn read_bytes(p: &Path) -> Option<Vec<u8>> { std::fs::read(p).ok() }
-fn read_utf8(p: &Path) -> String { std::fs::read_to_string(p).unwrap_or_default() }
+fn read_bytes(p: &Path) -> Option<Vec<u8>> {
+    std::fs::read(p).ok()
+}
+fn read_utf8(p: &Path) -> String {
+    std::fs::read_to_string(p).unwrap_or_default()
+}
 
-fn normalize_path(s: &str) -> String { s.replace('\\', "/") }
+fn normalize_path(s: &str) -> String {
+    s.replace('\\', "/")
+}
 
 fn normalize_ini_content(s: &str) -> String {
     let mut out = String::new();
     for line in s.lines() {
         let t = line.trim();
-        if t.is_empty() { continue; }
+        if t.is_empty() {
+            continue;
+        }
         let lower = t.to_lowercase();
-        if lower.starts_with("ini_path_absolute") { continue; }
+        if lower.starts_with("ini_path_absolute") {
+            continue;
+        }
         if lower.starts_with("global $managed_slot_id") && t.contains('=') {
             out.push_str("global $managed_slot_id = <SLOT>\n");
             continue;
@@ -50,10 +67,16 @@ fn collect_files(root: &Path) -> BTreeMap<String, PathBuf> {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for e in entries.flatten() {
                 let p = e.path();
-                let rel = p.strip_prefix(base).unwrap_or(&p)
-                    .to_string_lossy().replace('\\', "/");
-                if p.is_dir() { walk(&p, base, map); }
-                else { map.insert(rel, p); }
+                let rel = p
+                    .strip_prefix(base)
+                    .unwrap_or(&p)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if p.is_dir() {
+                    walk(&p, base, map);
+                } else {
+                    map.insert(rel, p);
+                }
             }
         }
     }
@@ -80,7 +103,9 @@ fn restore_env(src: &Path, temp: &Path) -> PathBuf {
         if name == "Mods" {
             // 游戏 Mods 目录：仅复制其下的 _MANAGED_（其余模组由 update_mod_data 处理）
             let mgr = sp.join("_MANAGED_");
-            if mgr.exists() { copy_dir(&mgr, &mods_dir.join("_MANAGED_")); }
+            if mgr.exists() {
+                copy_dir(&mgr, &mods_dir.join("_MANAGED_"));
+            }
         } else if name == "d3dx.ini" {
             // 主 INI 位于游戏根目录（Mods 的父目录）
             std::fs::copy(&sp, temp.join("d3dx.ini")).unwrap();
@@ -101,8 +126,13 @@ fn restore_env(src: &Path, temp: &Path) -> PathBuf {
 fn copy_dir(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for e in std::fs::read_dir(src).unwrap().flatten() {
-        let sp = e.path(); let dp = dst.join(e.file_name());
-        if sp.is_dir() { copy_dir(&sp, &dp); } else { std::fs::copy(&sp, &dp).unwrap(); }
+        let sp = e.path();
+        let dp = dst.join(e.file_name());
+        if sp.is_dir() {
+            copy_dir(&sp, &dp);
+        } else {
+            std::fs::copy(&sp, &dp).unwrap();
+        }
     }
 }
 
@@ -112,7 +142,10 @@ fn is_ini_file(name: &str) -> bool {
 }
 
 fn is_managed_file(name: &str) -> bool {
-    matches!(name, "nrmm_include.ini" | "nrmm_keypress.txt" | "manager_group.ini" | "selectedindex")
+    matches!(
+        name,
+        "nrmm_include.ini" | "nrmm_keypress.txt" | "manager_group.ini" | "selectedindex"
+    )
 }
 
 #[test]
@@ -130,36 +163,55 @@ fn deep_compare_after_update_mod_data() {
     // Step 2: Run update_mod_data
     println!("\n[2] Running update_mod_data...");
     let result = mod_manager::update_mod_data(
-        TargetGame::GenshinImpact, &mods_dir, &AppSettings::default()
-    ).expect("update_mod_data failed");
-    println!("    enabled={} disabled={} processed={} errors={} groups={}",
-        result.enabled_mods, result.disabled_mods,
-        result.processed_mods, result.errors.len(), result.total_groups);
+        TargetGame::GenshinImpact,
+        &mods_dir,
+        &AppSettings::default(),
+    )
+    .expect("update_mod_data failed");
+    println!(
+        "    enabled={} disabled={} processed={} errors={} groups={}",
+        result.enabled_mods,
+        result.disabled_mods,
+        result.processed_mods,
+        result.errors.len(),
+        result.total_groups
+    );
 
     // Step 3: Collect files from both sides
     let actual = collect_files(temp.path());
     let baseline = collect_files(&baseline_dir());
-    println!("\n[3] File counts: actual={} baseline={}", actual.len(), baseline.len());
+    println!(
+        "\n[3] File counts: actual={} baseline={}",
+        actual.len(),
+        baseline.len()
+    );
 
     // Step 4: Compare
-    let mut all_keys: Vec<&str> = actual.keys().chain(baseline.keys())
-        .map(|s| s.as_str()).collect();
+    let mut all_keys: Vec<&str> = actual
+        .keys()
+        .chain(baseline.keys())
+        .map(|s| s.as_str())
+        .collect();
     all_keys.sort();
     all_keys.dedup();
 
-    let mut missing     = Vec::new();   // in baseline, not in actual
-    let mut extra       = Vec::new();   // in actual, not in baseline
-    let mut bytes_ok    = 0usize;
-    let mut bytes_diff  = Vec::new();   // bytes differ
+    let mut missing = Vec::new(); // in baseline, not in actual
+    let mut extra = Vec::new(); // in actual, not in baseline
+    let mut bytes_ok = 0usize;
+    let mut bytes_diff = Vec::new(); // bytes differ
 
     for rel in &all_keys {
-        let a = actual.get(*rel); let b = baseline.get(*rel);
+        let a = actual.get(*rel);
+        let b = baseline.get(*rel);
         match (a, b) {
             (None, Some(bp)) => missing.push((rel.to_string(), bp.clone())),
             (Some(ap), None) => extra.push((rel.to_string(), ap.clone())),
             (Some(ap), Some(bp)) => {
-                if read_bytes(ap) == read_bytes(bp) { bytes_ok += 1; }
-                else { bytes_diff.push((rel.to_string(), ap.clone(), bp.clone())); }
+                if read_bytes(ap) == read_bytes(bp) {
+                    bytes_ok += 1;
+                } else {
+                    bytes_diff.push((rel.to_string(), ap.clone(), bp.clone()));
+                }
             }
             _ => {}
         }
@@ -169,8 +221,12 @@ fn deep_compare_after_update_mod_data() {
     let mut ini_diffs = Vec::new();
     for (rel, ap, bp) in &bytes_diff {
         let fname = std::path::Path::new(rel)
-            .file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        if !is_ini_file(&fname) { continue; }
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !is_ini_file(&fname) {
+            continue;
+        }
         let na = normalize_ini_content(&normalize_path(&read_utf8(ap)));
         let nb = normalize_ini_content(&normalize_path(&read_utf8(bp)));
         if na != nb {
@@ -179,21 +235,30 @@ fn deep_compare_after_update_mod_data() {
     }
 
     // Step 6: Classify and report
-    let missing_real: Vec<_> = missing.iter()
+    let missing_real: Vec<_> = missing
+        .iter()
         .filter(|(p, _)| {
-            let name = std::path::Path::new(p).file_name()
-                .map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = std::path::Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             !is_managed_file(&name)
-        }).collect();
+        })
+        .collect();
 
-    let missing_mgr: Vec<_> = missing.iter()
+    let missing_mgr: Vec<_> = missing
+        .iter()
         .filter(|(p, _)| {
-            let name = std::path::Path::new(p).file_name()
-                .map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let name = std::path::Path::new(p)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             is_managed_file(&name)
-        }).collect();
+        })
+        .collect();
 
-    let ini_filtered: Vec<_> = ini_diffs.iter()
+    let ini_filtered: Vec<_> = ini_diffs
+        .iter()
         .filter(|(r, _, _)| !r.to_lowercase().contains("desktop.ini"))
         .collect();
 
@@ -202,30 +267,53 @@ fn deep_compare_after_update_mod_data() {
     println!("=================================================");
 
     println!("\n--- Missing files (baseline has, actual doesn't) ---");
-    if missing_real.is_empty() { println!("  OK: none"); }
-    else { for (p, _) in &missing_real { println!("  MISSING: {}", p); } }
+    if missing_real.is_empty() {
+        println!("  OK: none");
+    } else {
+        for (p, _) in &missing_real {
+            println!("  MISSING: {}", p);
+        }
+    }
 
     println!("\n--- NRMM managed files (expected missing) ---");
-    if missing_mgr.is_empty() { println!("  OK: none"); }
-    else { for (p, _) in &missing_mgr { println!("  EXPECTED: {}", p); } }
+    if missing_mgr.is_empty() {
+        println!("  OK: none");
+    } else {
+        for (p, _) in &missing_mgr {
+            println!("  EXPECTED: {}", p);
+        }
+    }
 
     println!("\n--- Extra files (actual has, baseline doesn't) ---");
-    if extra.is_empty() { println!("  OK: none"); }
-    else { for (p, _) in &extra { println!("  EXTRA: {}", p); } }
+    if extra.is_empty() {
+        println!("  OK: none");
+    } else {
+        for (p, _) in &extra {
+            println!("  EXTRA: {}", p);
+        }
+    }
 
     println!("\n--- Bytes comparison ---");
     println!("  MATCH: {}", bytes_ok);
     println!("  DIFF:  {}", bytes_diff.len());
     for (rel, _ap, _bp) in &bytes_diff {
-        let tag = if rel.to_lowercase().contains("desktop.ini") { " [whitelist-ignore]" } else { "" };
+        let tag = if rel.to_lowercase().contains("desktop.ini") {
+            " [whitelist-ignore]"
+        } else {
+            ""
+        };
         println!("    DIFF: {}{}", rel, tag);
     }
 
     println!("\n--- INI line-level diff ---");
-    if ini_filtered.is_empty() { println!("  OK: all INI contents match"); }
-    else {
+    if ini_filtered.is_empty() {
+        println!("  OK: all INI contents match");
+    } else {
         for (rel, a_len, b_len) in &ini_filtered {
-            println!("  DIFF: {} (actual {} lines vs baseline {} lines)", rel, a_len, b_len);
+            println!(
+                "  DIFF: {} (actual {} lines vs baseline {} lines)",
+                rel, a_len, b_len
+            );
         }
     }
 
@@ -266,8 +354,7 @@ fn deep_compare_after_update_mod_data() {
 
     // 分歧忽略已禁用：对 _MANAGED_ 内部（及全部）差异执行严格 parity，
     // 任一非空即判定失败，把刻意的设计分歧暴露为真实、可定位的失败。
-    let any_divergence =
-        !missing_real.is_empty() || !extra.is_empty() || !ini_filtered.is_empty();
+    let any_divergence = !missing_real.is_empty() || !extra.is_empty() || !ini_filtered.is_empty();
     if !any_divergence {
         println!("  PASS: 输出与 NRMM-test 基线完全匹配（含布局与 _MANAGED_ 内部）");
         println!("=================================================\n");

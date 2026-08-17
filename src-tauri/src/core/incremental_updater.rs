@@ -150,7 +150,9 @@ impl IncrementalUpdater {
             .iter()
             .map(|p| {
                 if p.is_file() {
-                    p.parent().map(|pp| pp.to_path_buf()).unwrap_or_else(|| p.clone())
+                    p.parent()
+                        .map(|pp| pp.to_path_buf())
+                        .unwrap_or_else(|| p.clone())
                 } else {
                     p.clone()
                 }
@@ -323,19 +325,17 @@ fn snap_to_group_or_mod_boundary(path: &Path, managed_root: &Path) -> PathBuf {
                     return cur;
                 }
             }
-            let has_ini = std::fs::read_dir(&cur)
-                .ok()
-                .and_then(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .find(|e| {
-                            e.path()
-                                .extension()
-                                .and_then(|x| x.to_str())
-                                .map(|ext| ext.eq_ignore_ascii_case("ini"))
-                                .unwrap_or(false)
-                        })
-                        .map(|_| true)
-                });
+            let has_ini = std::fs::read_dir(&cur).ok().and_then(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .find(|e| {
+                        e.path()
+                            .extension()
+                            .and_then(|x| x.to_str())
+                            .map(|ext| ext.eq_ignore_ascii_case("ini"))
+                            .unwrap_or(false)
+                    })
+                    .map(|_| true)
+            });
             if has_ini == Some(true) {
                 return cur;
             }

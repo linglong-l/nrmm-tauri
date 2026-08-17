@@ -9,11 +9,11 @@
 //! 数据加载优先级：本地缓存 > 内置资源 > 编译时 include_bytes
 //! 启动时后台自动刷新所有云端数据。
 
-use anyhow::Result;
-use std::path::PathBuf;
-use std::fs;
-use serde::{Serialize, Deserialize};
 use crate::config::app_paths;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 
 /// Gitee 仓库 raw 文件基础 URL（国内优先）
 static GITEE_RAW_BASE: &str = "https://gitee.com/Yezi26/nrmm-tauri/raw/master";
@@ -119,7 +119,9 @@ impl CloudDataManager {
             "links.json" => Ok(serde_json::from_slice(crate::resources::LINKS_JSON)?),
             "messages.json" => Ok(serde_json::from_slice(crate::resources::MESSAGES_JSON)?),
             "auto_icons.json" => Ok(serde_json::from_slice(crate::resources::AUTO_ICONS_JSON)?),
-            "known_libraries.json" => Ok(serde_json::from_slice(crate::resources::KNOWN_LIBRARIES_JSON)?),
+            "known_libraries.json" => Ok(serde_json::from_slice(
+                crate::resources::KNOWN_LIBRARIES_JSON,
+            )?),
             _ => anyhow::bail!("Unknown data file: {}", file_name),
         }
     }
@@ -136,8 +138,14 @@ impl CloudDataManager {
         if !CLOUD_DATA_FILES.contains(&file_name) {
             anyhow::bail!("Refusing to refresh unknown cloud data file: {}", file_name);
         }
-        let gitee_url = format!("{}/src-tauri/src/resources/data/{}", GITEE_RAW_BASE, file_name);
-        let github_url = format!("{}/src-tauri/src/resources/data/{}", GITHUB_RAW_BASE, file_name);
+        let gitee_url = format!(
+            "{}/src-tauri/src/resources/data/{}",
+            GITEE_RAW_BASE, file_name
+        );
+        let github_url = format!(
+            "{}/src-tauri/src/resources/data/{}",
+            GITHUB_RAW_BASE, file_name
+        );
         let file_name_owned = file_name.to_string();
 
         let client = reqwest::Client::new();
@@ -189,7 +197,9 @@ pub async fn refresh_cloud_data(file_name: String) -> Result<(), String> {
     // 路径边界校验（R1）：file_name 用于 join 落盘到缓存目录，必须是合法文件名
     // 拒绝含 / \ .. \0 的输入，防止路径穿越写出缓存目录外
     crate::config::settings_store::validate_filename(&file_name).map_err(|e| e.to_string())?;
-    CloudDataManager::refresh_async(&file_name).await.map_err(|e| e.to_string())
+    CloudDataManager::refresh_async(&file_name)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Tauri 命令：刷新所有云端数据文件

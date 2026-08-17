@@ -22,16 +22,16 @@
 //!   无并发重入风险；回调内访问 `ENUM_WINDOWS_STATE` 的 Mutex 被外层
 //!   `find_game_window` 的锁获取/释放正确包裹（状态在回调前设置、回调后读取）
 
-use anyhow::{Result, anyhow, Context};
-use windows::Win32::UI::Input::KeyboardAndMouse::*;
-use windows::Win32::Foundation::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
+use crate::sel_dbg;
+use anyhow::{anyhow, Context, Result};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use windows::Win32::System::Threading::*;
 use windows::core::PWSTR;
-use std::sync::Mutex;
-use crate::sel_dbg;
+use windows::Win32::Foundation::*;
+use windows::Win32::System::Threading::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 static ENUM_WINDOWS_STATE: Mutex<Option<(String, Option<isize>)>> = Mutex::new(None);
 
@@ -128,7 +128,7 @@ impl super::KeySimulator for WindowsKeySimulator {
         self.dispatch_key(VK_SPACE)?;
         Ok(())
     }
-    
+
     fn simulate_select_mod(&mut self) -> Result<()> {
         self.dispatch_key(VK_CLEAR)?;
         thread::sleep(Duration::from_millis(30));
@@ -158,25 +158,42 @@ impl super::KeySimulator for WindowsKeySimulator {
             x,
             y
         );
-        log::debug!("[platform::windows] [simulate_select_full] target_hwnd exists: {:?} | group={} mod={}", self.target_hwnd.is_some(), group_idx, mod_idx);
-        sel_dbg!("platform::windows", "simulate_select_full", "阶段=按下 VK_CLEAR（组合键起始，保持按住）");
+        log::debug!(
+            "[platform::windows] [simulate_select_full] target_hwnd exists: {:?} | group={} mod={}",
+            self.target_hwnd.is_some(),
+            group_idx,
+            mod_idx
+        );
+        sel_dbg!(
+            "platform::windows",
+            "simulate_select_full",
+            "阶段=按下 VK_CLEAR（组合键起始，保持按住）"
+        );
         let t_vkclear_down_before = std::time::Instant::now();
         self.dispatch_key_down_only(VK_CLEAR)?;
         let t_vkclear_down_after = std::time::Instant::now();
         log::debug!(
             "[simulate_select_full] phase=VK_CLEAR_DOWN x={} y={} duration_ms={} result=Ok",
-            x, y,
-            t_vkclear_down_after.duration_since(t_vkclear_down_before).as_millis()
+            x,
+            y,
+            t_vkclear_down_after
+                .duration_since(t_vkclear_down_before)
+                .as_millis()
         );
         thread::sleep(Duration::from_millis(10));
 
-        log::debug!("[simulate_select_full] phase=VK_SPACE before | x={} y={}", x, y);
+        log::debug!(
+            "[simulate_select_full] phase=VK_SPACE before | x={} y={}",
+            x,
+            y
+        );
         let t_vkspace_before = std::time::Instant::now();
         let r1 = self.dispatch_simulate_key_with_cursor(VK_SPACE, x, y);
         let t_vkspace_after = std::time::Instant::now();
         log::debug!(
             "[simulate_select_full] phase=VK_SPACE after | x={} y={} duration_ms={} result={:?}",
-            x, y,
+            x,
+            y,
             t_vkspace_after.duration_since(t_vkspace_before).as_millis(),
             r1
         );
@@ -193,14 +210,21 @@ impl super::KeySimulator for WindowsKeySimulator {
         );
         thread::sleep(Duration::from_millis(30));
 
-        log::debug!("[simulate_select_full] phase=VK_RETURN before | x={} y={}", x, y);
+        log::debug!(
+            "[simulate_select_full] phase=VK_RETURN before | x={} y={}",
+            x,
+            y
+        );
         let t_vkreturn_before = std::time::Instant::now();
         let r2 = self.dispatch_simulate_key_with_cursor(VK_RETURN, x, y);
         let t_vkreturn_after = std::time::Instant::now();
         log::debug!(
             "[simulate_select_full] phase=VK_RETURN after | x={} y={} duration_ms={} result={:?}",
-            x, y,
-            t_vkreturn_after.duration_since(t_vkreturn_before).as_millis(),
+            x,
+            y,
+            t_vkreturn_after
+                .duration_since(t_vkreturn_before)
+                .as_millis(),
             r2
         );
         if let Err(e) = &r2 {
@@ -215,21 +239,29 @@ impl super::KeySimulator for WindowsKeySimulator {
             r2.is_ok()
         );
 
-        sel_dbg!("platform::windows", "simulate_select_full", "阶段=抬起 VK_CLEAR（组合键结束，松开）");
+        sel_dbg!(
+            "platform::windows",
+            "simulate_select_full",
+            "阶段=抬起 VK_CLEAR（组合键结束，松开）"
+        );
         let t_vkclear_up_before = std::time::Instant::now();
         self.dispatch_key_up_only(VK_CLEAR)?;
         let t_vkclear_up_after = std::time::Instant::now();
         log::debug!(
             "[simulate_select_full] phase=VK_CLEAR_UP x={} y={} duration_ms={} result=Ok",
-            x, y,
-            t_vkclear_up_after.duration_since(t_vkclear_up_before).as_millis()
+            x,
+            y,
+            t_vkclear_up_after
+                .duration_since(t_vkclear_up_before)
+                .as_millis()
         );
 
         let result = r1.and(r2);
         let elapsed = start.elapsed().as_millis();
         log::debug!(
             "[platform::windows] [simulate_select_full] completed | elapsed={}ms result={:?}",
-            elapsed, result
+            elapsed,
+            result
         );
         sel_dbg!(
             "platform::windows",
@@ -269,9 +301,7 @@ fn find_game_window(process_name: &str) -> Option<HWND> {
             return TRUE;
         }
 
-        let handle = match unsafe {
-            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
-        } {
+        let handle = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
             Ok(h) => h,
             Err(_) => return TRUE,
         };
@@ -305,7 +335,10 @@ fn find_game_window(process_name: &str) -> Option<HWND> {
                 if found.is_some() {
                     return FALSE;
                 }
-                if name.to_string_lossy().eq_ignore_ascii_case(target_lower.as_str()) {
+                if name
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(target_lower.as_str())
+                {
                     *found = Some(hwnd.0 as isize);
                     return FALSE;
                 }
@@ -323,9 +356,7 @@ fn find_game_window(process_name: &str) -> Option<HWND> {
 }
 
 fn get_scan_code(vk: VIRTUAL_KEY) -> u32 {
-    unsafe {
-        MapVirtualKeyW(vk.0 as u32, MAPVK_VK_TO_VSC) as u32
-    }
+    unsafe { MapVirtualKeyW(vk.0 as u32, MAPVK_VK_TO_VSC) as u32 }
 }
 
 fn send_key_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
@@ -334,9 +365,7 @@ fn send_key_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
     let lparam_up: LPARAM = LPARAM(0xC0000001 | ((scan_code as isize) << 16));
     let wparam = WPARAM(vk.0 as usize);
 
-    let down_ok = unsafe {
-        PostMessageW(Some(hwnd), WM_KEYDOWN, wparam, lparam_down).is_ok()
-    };
+    let down_ok = unsafe { PostMessageW(Some(hwnd), WM_KEYDOWN, wparam, lparam_down).is_ok() };
     if !down_ok {
         log::warn!(
             "[send_key_to_window] vk={:04x} hwnd={:?} down_ok=false up_ok=skipped | WM_KEYDOWN failed, bailing",
@@ -346,9 +375,7 @@ fn send_key_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
     }
     thread::sleep(Duration::from_millis(30));
 
-    let up_ok = unsafe {
-        PostMessageW(Some(hwnd), WM_KEYUP, wparam, lparam_up).is_ok()
-    };
+    let up_ok = unsafe { PostMessageW(Some(hwnd), WM_KEYUP, wparam, lparam_up).is_ok() };
     if !up_ok {
         log::warn!(
             "[send_key_to_window] vk={:04x} hwnd={:?} down_ok=true up_ok=false | WM_KEYUP failed, bailing",
@@ -358,7 +385,10 @@ fn send_key_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
     }
     log::debug!(
         "[send_key_to_window] vk={:04x} hwnd={:?} down_ok={} up_ok={}",
-        vk.0, hwnd, down_ok, up_ok
+        vk.0,
+        hwnd,
+        down_ok,
+        up_ok
     );
     Ok(())
 }
@@ -384,7 +414,11 @@ fn send_key(vk: VIRTUAL_KEY) -> Result<()> {
         let got_after_down = GetCursorPos(&mut cursor_after_down).is_ok();
         log::debug!(
             "[send_key] vk={:04x} down_sent={} cursor_after_down=({}, {}) got={}",
-            vk.0, down_events, cursor_after_down.x, cursor_after_down.y, got_after_down
+            vk.0,
+            down_events,
+            cursor_after_down.x,
+            cursor_after_down.y,
+            got_after_down
         );
         thread::sleep(Duration::from_millis(50));
 
@@ -392,7 +426,11 @@ fn send_key(vk: VIRTUAL_KEY) -> Result<()> {
         // 与 down 后对比，验证按键保持期间光标是否漂移（3Dmigoto 可能读取到错误坐标）
         let mut cursor_before_up = POINT { x: 0, y: 0 };
         let got_before_up = GetCursorPos(&mut cursor_before_up).is_ok();
-        if got_after_down && got_before_up && (cursor_after_down.x != cursor_before_up.x || cursor_after_down.y != cursor_before_up.y) {
+        if got_after_down
+            && got_before_up
+            && (cursor_after_down.x != cursor_before_up.x
+                || cursor_after_down.y != cursor_before_up.y)
+        {
             log::warn!("[send_key] Cursor drifted during key hold | after_down=({}, {}) before_up=({}, {})", cursor_after_down.x, cursor_after_down.y, cursor_before_up.x, cursor_before_up.y);
         }
 
@@ -440,7 +478,9 @@ fn send_key_down_only(vk: VIRTUAL_KEY) -> Result<()> {
         thread::sleep(Duration::from_millis(5));
         log::debug!(
             "[send_key_down_only] vk={:04x} events_sent={} result={}",
-            vk.0, events_sent, if events_sent == 1 { "Ok" } else { "Failed" }
+            vk.0,
+            events_sent,
+            if events_sent == 1 { "Ok" } else { "Failed" }
         );
     }
     Ok(())
@@ -464,7 +504,9 @@ fn send_key_up_only(vk: VIRTUAL_KEY) -> Result<()> {
         thread::sleep(Duration::from_millis(5));
         log::debug!(
             "[send_key_up_only] vk={:04x} events_sent={} result={}",
-            vk.0, events_sent, if events_sent == 1 { "Ok" } else { "Failed" }
+            vk.0,
+            events_sent,
+            if events_sent == 1 { "Ok" } else { "Failed" }
         );
     }
     Ok(())
@@ -527,7 +569,12 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
             "[simulate_key_with_cursor_window] vk={:04x} ClipCursor verify | clip_rect=({}, {}, {}, {}) cursor_after_clip=({}, {}) got={}",
             vk.0, rect.left, rect.top, rect.right, rect.bottom, cursor_after_clip.x, cursor_after_clip.y, got_after_clip
         );
-        if got_after_clip && (cursor_after_clip.x < rect.left || cursor_after_clip.x >= rect.right || cursor_after_clip.y < rect.top || cursor_after_clip.y >= rect.bottom) {
+        if got_after_clip
+            && (cursor_after_clip.x < rect.left
+                || cursor_after_clip.x >= rect.right
+                || cursor_after_clip.y < rect.top
+                || cursor_after_clip.y >= rect.bottom)
+        {
             log::warn!("[simulate_key_with_cursor_window] Cursor escaped clip region | clip_rect=({}, {}, {}, {}) cursor=({}, {})", rect.left, rect.top, rect.right, rect.bottom, cursor_after_clip.x, cursor_after_clip.y);
         }
 
@@ -538,7 +585,10 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
         let got_before_sendkey = GetCursorPos(&mut cursor_before_sendkey).is_ok();
         log::debug!(
             "[simulate_key_with_cursor_window] vk={:04x} cursor_before_sendkey=({}, {}) got={}",
-            vk.0, cursor_before_sendkey.x, cursor_before_sendkey.y, got_before_sendkey
+            vk.0,
+            cursor_before_sendkey.x,
+            cursor_before_sendkey.y,
+            got_before_sendkey
         );
         let t_sendkey_before = std::time::Instant::now();
         let result = send_key(vk);
@@ -553,7 +603,9 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
 
         let clip_restore_result = ClipCursor(None).is_ok();
         let t_clip_restore_after = std::time::Instant::now();
-        let delay_sendkey_to_clip_restore = t_clip_restore_after.duration_since(t_sendkey_after).as_millis();
+        let delay_sendkey_to_clip_restore = t_clip_restore_after
+            .duration_since(t_sendkey_after)
+            .as_millis();
         let mut cursor_after_clip_restore = POINT { x: 0, y: 0 };
         let got_after_clip_restore = GetCursorPos(&mut cursor_after_clip_restore).is_ok();
         log::debug!(
@@ -567,7 +619,9 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
             false
         };
         let t_cursor_restore_after = std::time::Instant::now();
-        let delay_sendkey_to_cursor_restore = t_cursor_restore_after.duration_since(t_sendkey_after).as_millis();
+        let delay_sendkey_to_cursor_restore = t_cursor_restore_after
+            .duration_since(t_sendkey_after)
+            .as_millis();
         // 验证光标恢复是否成功：调用后立即 GetCursorPos 对比期望坐标
         let mut cursor_after_restore = POINT { x: 0, y: 0 };
         let got_after_restore = GetCursorPos(&mut cursor_after_restore).is_ok();
@@ -575,7 +629,10 @@ fn simulate_key_with_cursor_window(vk: VIRTUAL_KEY, x: i32, y: i32, _hwnd: HWND)
             "[simulate_key_with_cursor_window] vk={:04x} cursor restore verify | expected=({}, {}) actual=({}, {}) got={} restore_result={} delay_sendkey_to_cursor_restore_ms={}",
             vk.0, initial_pos.x, initial_pos.y, cursor_after_restore.x, cursor_after_restore.y, got_after_restore, restore_result, delay_sendkey_to_cursor_restore
         );
-        if has_initial && got_after_restore && (cursor_after_restore.x != initial_pos.x || cursor_after_restore.y != initial_pos.y) {
+        if has_initial
+            && got_after_restore
+            && (cursor_after_restore.x != initial_pos.x || cursor_after_restore.y != initial_pos.y)
+        {
             log::warn!("[simulate_key_with_cursor_window] SetCursorPos(initial) did not take effect | expected=({}, {}) actual=({}, {})", initial_pos.x, initial_pos.y, cursor_after_restore.x, cursor_after_restore.y);
         }
 
@@ -655,7 +712,12 @@ fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
             "[simulate_key_with_cursor] vk={:04x} ClipCursor verify | clip_rect=({}, {}, {}, {}) cursor_after_clip=({}, {}) got={}",
             vk.0, rect.left, rect.top, rect.right, rect.bottom, cursor_after_clip.x, cursor_after_clip.y, got_after_clip
         );
-        if got_after_clip && (cursor_after_clip.x < rect.left || cursor_after_clip.x >= rect.right || cursor_after_clip.y < rect.top || cursor_after_clip.y >= rect.bottom) {
+        if got_after_clip
+            && (cursor_after_clip.x < rect.left
+                || cursor_after_clip.x >= rect.right
+                || cursor_after_clip.y < rect.top
+                || cursor_after_clip.y >= rect.bottom)
+        {
             log::warn!("[simulate_key_with_cursor] Cursor escaped clip region | clip_rect=({}, {}, {}, {}) cursor=({}, {})", rect.left, rect.top, rect.right, rect.bottom, cursor_after_clip.x, cursor_after_clip.y);
         }
 
@@ -664,7 +726,10 @@ fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
         let got_before_sendkey = GetCursorPos(&mut cursor_before_sendkey).is_ok();
         log::debug!(
             "[simulate_key_with_cursor] vk={:04x} cursor_before_sendkey=({}, {}) got={}",
-            vk.0, cursor_before_sendkey.x, cursor_before_sendkey.y, got_before_sendkey
+            vk.0,
+            cursor_before_sendkey.x,
+            cursor_before_sendkey.y,
+            got_before_sendkey
         );
         let t_sendkey_before = std::time::Instant::now();
         let result = send_key(vk);
@@ -679,7 +744,9 @@ fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
 
         let clip_restore_result = ClipCursor(None).is_ok();
         let t_clip_restore_after = std::time::Instant::now();
-        let delay_sendkey_to_clip_restore = t_clip_restore_after.duration_since(t_sendkey_after).as_millis();
+        let delay_sendkey_to_clip_restore = t_clip_restore_after
+            .duration_since(t_sendkey_after)
+            .as_millis();
         let mut cursor_after_clip_restore = POINT { x: 0, y: 0 };
         let got_after_clip_restore = GetCursorPos(&mut cursor_after_clip_restore).is_ok();
         log::debug!(
@@ -693,7 +760,9 @@ fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
             false
         };
         let t_cursor_restore_after = std::time::Instant::now();
-        let delay_sendkey_to_cursor_restore = t_cursor_restore_after.duration_since(t_sendkey_after).as_millis();
+        let delay_sendkey_to_cursor_restore = t_cursor_restore_after
+            .duration_since(t_sendkey_after)
+            .as_millis();
         // 验证光标恢复是否成功：调用后立即 GetCursorPos 对比期望坐标
         let mut cursor_after_restore = POINT { x: 0, y: 0 };
         let got_after_restore = GetCursorPos(&mut cursor_after_restore).is_ok();
@@ -701,7 +770,10 @@ fn simulate_key_with_cursor(vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
             "[simulate_key_with_cursor] vk={:04x} cursor restore verify | expected=({}, {}) actual=({}, {}) got={} restore_result={} delay_sendkey_to_cursor_restore_ms={}",
             vk.0, initial_pos.x, initial_pos.y, cursor_after_restore.x, cursor_after_restore.y, got_after_restore, restore_result, delay_sendkey_to_cursor_restore
         );
-        if has_initial && got_after_restore && (cursor_after_restore.x != initial_pos.x || cursor_after_restore.y != initial_pos.y) {
+        if has_initial
+            && got_after_restore
+            && (cursor_after_restore.x != initial_pos.x || cursor_after_restore.y != initial_pos.y)
+        {
             log::warn!("[simulate_key_with_cursor] SetCursorPos(initial) did not take effect | expected=({}, {}) actual=({}, {})", initial_pos.x, initial_pos.y, cursor_after_restore.x, cursor_after_restore.y);
         }
 
@@ -739,13 +811,13 @@ impl super::ForegroundDetector for WindowsForegroundDetector {
             if pid == 0 {
                 return Err(anyhow!("Failed to get process ID"));
             }
-            
+
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
                 .context("Failed to open process")?;
             if handle.is_invalid() {
                 return Err(anyhow!("Failed to open process: invalid handle"));
             }
-            
+
             let mut exe_name = [0u16; 260];
             let mut buf_len = 260u32;
             QueryFullProcessImageNameW(
@@ -753,9 +825,10 @@ impl super::ForegroundDetector for WindowsForegroundDetector {
                 PROCESS_NAME_FORMAT(0),
                 PWSTR(exe_name.as_mut_ptr()),
                 &mut buf_len,
-            ).context("QueryFullProcessImageNameW failed")?;
+            )
+            .context("QueryFullProcessImageNameW failed")?;
             CloseHandle(handle).ok();
-            
+
             let path = String::from_utf16_lossy(&exe_name[..buf_len as usize]);
             let name = std::path::Path::new(&path)
                 .file_name()
@@ -764,7 +837,7 @@ impl super::ForegroundDetector for WindowsForegroundDetector {
             Ok(name.trim_end_matches('\0').to_string())
         }
     }
-    
+
     fn get_cursor_position(&self) -> Result<(i32, i32)> {
         unsafe {
             let mut point = POINT { x: 0, y: 0 };

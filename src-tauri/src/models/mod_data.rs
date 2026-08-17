@@ -2,9 +2,9 @@
 //!
 //! 定义模组、分组、INI 数据等核心数据结构
 
-use serde::{Serialize, Deserialize};
-use std::path::PathBuf;
 use super::enums::*;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// 按键绑定数据
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

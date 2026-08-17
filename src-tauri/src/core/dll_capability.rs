@@ -36,8 +36,12 @@ impl KeypressTemplate {
     pub fn template_bytes(&self) -> &'static [u8] {
         match self {
             KeypressTemplate::Manager => crate::resources::LISTEN_KEYPRESS_MANAGER,
-            KeypressTemplate::AdditionalWindow => crate::resources::LISTEN_KEYPRESS_ADDITIONAL_WINDOW,
-            KeypressTemplate::EvenOnBackground => crate::resources::LISTEN_KEYPRESS_EVEN_ON_BACKGROUND,
+            KeypressTemplate::AdditionalWindow => {
+                crate::resources::LISTEN_KEYPRESS_ADDITIONAL_WINDOW
+            }
+            KeypressTemplate::EvenOnBackground => {
+                crate::resources::LISTEN_KEYPRESS_EVEN_ON_BACKGROUND
+            }
         }
     }
 }
@@ -105,8 +109,7 @@ fn check_rdata<F: Read + Seek>(file: &mut F) -> bool {
     }
 
     // PE 头部偏移（DOS 头 0x3C 处的 u32 LE）
-    let pe_offset =
-        u32::from_le_bytes([dos[0x3C], dos[0x3D], dos[0x3E], dos[0x3F]]) as u64;
+    let pe_offset = u32::from_le_bytes([dos[0x3C], dos[0x3D], dos[0x3E], dos[0x3F]]) as u64;
 
     // COFF 头（PE 偏移 + 4 起，24 字节）
     let mut coff = [0u8; 24];
@@ -137,8 +140,7 @@ fn check_rdata<F: Read + Seek>(file: &mut F) -> bool {
         }
 
         // 段特征（偏移 36，u32 LE）
-        let characteristics =
-            u32::from_le_bytes([sh[36], sh[37], sh[38], sh[39]]);
+        let characteristics = u32::from_le_bytes([sh[36], sh[37], sh[38], sh[39]]);
         // IMAGE_SCN_CNT_INITIALIZED_DATA (0x40) | IMAGE_SCN_MEM_READ (0x40000000)
         // 且非 IMAGE_SCN_MEM_WRITE (0x80000000)
         let is_read_only_data = (characteristics & 0x00000040) != 0
@@ -254,7 +256,10 @@ mod tests {
 
     #[test]
     fn boyer_moore_basic() {
-        assert!(boyer_moore_search(b"abc \"Manager\" key supported in [Loader] section xyz", NRMM_MANAGER_MARKER));
+        assert!(boyer_moore_search(
+            b"abc \"Manager\" key supported in [Loader] section xyz",
+            NRMM_MANAGER_MARKER
+        ));
         assert!(!boyer_moore_search(b"no marker here", NRMM_MANAGER_MARKER));
     }
 

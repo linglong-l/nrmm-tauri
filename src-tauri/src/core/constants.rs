@@ -183,8 +183,18 @@ pub const ICON_EXTENSIONS: &[&str] = &[".png", ".jpg", ".jpeg", ".webp", ".bmp",
 /// 图标文件名优先级列表：按顺序查找，第一个找到的作为模组图标
 /// 优先级：icon.* > preview.* > .jasm_cover.png > cover.*
 pub const ICON_NAME_PRIORITY: &[&str] = &[
-    "icon.png", "icon.jpg", "icon.jpeg", "icon.webp", "icon.bmp", "icon.gif",
-    "preview.png", "preview.jpg", "preview.jpeg", ".jasm_cover.png", "cover.png", "cover.jpg"
+    "icon.png",
+    "icon.jpg",
+    "icon.jpeg",
+    "icon.webp",
+    "icon.bmp",
+    "icon.gif",
+    "preview.png",
+    "preview.jpg",
+    "preview.jpeg",
+    ".jasm_cover.png",
+    "cover.png",
+    "cover.jpg",
 ];
 
 /// 3Dmigoto 条件段前缀列表（这些段需要注入槽位条件）
@@ -194,7 +204,11 @@ pub const ICON_NAME_PRIORITY: &[&str] = &[
 /// ShaderOverride: 着色器覆盖段
 /// CommandList: 命令列表段
 pub const CONDITIONAL_SECTION_PREFIXES: &[&str] = &[
-    "Key", "KeyPress", "TextureOverride", "ShaderOverride", "CommandList"
+    "Key",
+    "KeyPress",
+    "TextureOverride",
+    "ShaderOverride",
+    "CommandList",
 ];
 
 /// 3Dmigoto 覆盖资源键名列表（用于检测可能的崩溃行）
@@ -205,15 +219,17 @@ pub const CONDITIONAL_SECTION_PREFIXES: &[&str] = &[
 /// u0-u7: 无序访问视图
 pub const OVERRIDE_KEYS: &[&str] = &[
     "vb0", "vb1", "ib", "ps-t0", "ps-t1", "ps-t2", "ps-t3", "ps-t4", "ps-t5", "ps-t6", "ps-t7",
-    "vs-t0", "vs-t1", "vs-t2", "vs-t3", "vs-t4", "vs-t5", "vs-t6", "vs-t7",
-    "ps-", "vs-", "cs-",
-    "o0", "o1", "o2", "o3", "o4", "o5", "o6", "o7",
-    "u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7"
+    "vs-t0", "vs-t1", "vs-t2", "vs-t3", "vs-t4", "vs-t5", "vs-t6", "vs-t7", "ps-", "vs-", "cs-",
+    "o0", "o1", "o2", "o3", "o4", "o5", "o6", "o7", "u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7",
 ];
 
 /// 可能导致游戏崩溃的行模式（这些行会被自动注释掉）
 pub const CRASH_LINE_PATTERNS: &[&str] = &[
-    "drawindexed", "drawindexed = auto", "draw = ", "ib = ", "vb0 = "
+    "drawindexed",
+    "drawindexed = auto",
+    "draw = ",
+    "ib = ",
+    "vb0 = ",
 ];
 
 /// Windows 最大路径长度限制（用于路径过长检测）
@@ -278,13 +294,17 @@ pub const KNOWN_LIB_NAMESPACES: &[(&str, &str)] = &[
 
 /// 将已知库命名空间转为 HashSet（小写）
 pub fn known_lib_namespaces_set() -> std::collections::HashSet<String> {
-    KNOWN_LIB_NAMESPACES.iter().map(|(ns, _)| ns.to_lowercase()).collect()
+    KNOWN_LIB_NAMESPACES
+        .iter()
+        .map(|(ns, _)| ns.to_lowercase())
+        .collect()
 }
 
 /// 根据命名空间查找显示名
 pub fn lookup_lib_display_name(namespace: &str) -> Option<&'static str> {
     let ns_lower = namespace.to_lowercase();
-    KNOWN_LIB_NAMESPACES.iter()
+    KNOWN_LIB_NAMESPACES
+        .iter()
         .find(|(ns, _)| *ns == ns_lower)
         .map(|(_, display)| *display)
 }
@@ -348,7 +368,9 @@ mod tests {
     #[test]
     fn is_desktop_ini_mixed_case() {
         // Windows 下文件名大小写不敏感，NRMM 也用不敏感比较
-        assert!(is_desktop_ini(&PathBuf::from("C:/mods/group_2/Desktop.INI")));
+        assert!(is_desktop_ini(&PathBuf::from(
+            "C:/mods/group_2/Desktop.INI"
+        )));
         assert!(is_desktop_ini(&PathBuf::from("DESKTOP.INI")));
     }
 
@@ -357,7 +379,9 @@ mod tests {
         assert!(!is_desktop_ini(&PathBuf::from("/mods/group_1/d3dx.ini")));
         assert!(!is_desktop_ini(&PathBuf::from("/mods/group_1/group_1.ini")));
         // 文件名前缀相同但不是 desktop.ini 本身
-        assert!(!is_desktop_ini(&PathBuf::from("/mods/desktop_ini_backup.ini")));
+        assert!(!is_desktop_ini(&PathBuf::from(
+            "/mods/desktop_ini_backup.ini"
+        )));
         // 没有文件名的路径
         assert!(!is_desktop_ini(&PathBuf::from("/")));
     }
@@ -398,7 +422,7 @@ mod tests {
         // "DISABLED" 作为文件夹名的前缀才算，嵌入中间不算（Component Normal 分割是按目录段）
         let base = PathBuf::from("D:/Mods");
         let mod_path = base.join("MyDISABLEDMod").join("m.ini"); // 整个段名 MyDISABLEDMod 以 DISABLED 开头？
-        // 注意：段名完整字符串 "MyDISABLEDMod" 以 "DISABLED" 开头 → NO → false
+                                                                 // 注意：段名完整字符串 "MyDISABLEDMod" 以 "DISABLED" 开头 → NO → false
         assert!(!contains_disabled_segment(&mod_path, &base));
     }
 
@@ -409,7 +433,11 @@ mod tests {
         for name in INJECTABLE_SECTION_EXACT {
             assert!(is_injectable_section(name), "missing exact: {}", name);
             let upper = name.to_uppercase();
-            assert!(is_injectable_section(&upper), "missing exact case: {}", upper);
+            assert!(
+                is_injectable_section(&upper),
+                "missing exact case: {}",
+                upper
+            );
         }
         assert!(is_injectable_section("Present"));
         assert!(is_injectable_section("ClearDepthStencilView"));
@@ -419,7 +447,11 @@ mod tests {
     fn is_injectable_section_prefixes() {
         for p in INJECTABLE_SECTION_PREFIXES {
             let sample = format!("{}ExampleSuffix", p);
-            assert!(is_injectable_section(&sample), "missing prefix sample: {}", sample);
+            assert!(
+                is_injectable_section(&sample),
+                "missing prefix sample: {}",
+                sample
+            );
         }
         assert!(is_injectable_section("TextureOverride_Ningguang_Dress"));
         assert!(is_injectable_section("CustomShaderTest01"));

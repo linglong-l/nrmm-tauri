@@ -12,6 +12,12 @@
 //! - 注册所有 Tauri 命令处理器
 //! - 处理窗口关闭事件（阻止主窗口关闭，仅隐藏）
 
+// pedantic / nursery 是 Rust 官方标注为「主观 / 启发式」的 Clippy lint 组，默认不启用。
+// 实测启用后产生 166 处多为 cast 放开、must_use、文档契约、命名风格等非真实缺陷的建议，
+// 且 `--fix` 自动修复会大范围改写核心逻辑（违背最小改动、引入回归风险）。
+// 故在本 crate 级别关闭这两组，同时保留 `-D warnings` 严格把关默认警告级的真实质量问题。
+#![allow(clippy::pedantic, clippy::nursery)]
+
 pub mod commands;
 pub mod config;
 pub mod core;
@@ -46,13 +52,18 @@ fn report_frontend_ready(stage: String, frontend_ms: f64) {
         let total_ms = start.elapsed().as_millis();
         log::info!(
             "[BOOT] T+{:>6}ms - 前端 [{}] 就绪（前端耗时: {:.0}ms）",
-            total_ms, stage, frontend_ms
+            total_ms,
+            stage,
+            frontend_ms
         );
 
         // 在 fully-ready 阶段输出汇总信息
         if stage == "fully-ready" {
-            log::info!("[BOOT] ===== NRMM 启动完成，总耗时: {}ms（前端: {:.0}ms） =====",
-                total_ms, frontend_ms);
+            log::info!(
+                "[BOOT] ===== NRMM 启动完成，总耗时: {}ms（前端: {:.0}ms） =====",
+                total_ms,
+                frontend_ms
+            );
         }
     }
 }
@@ -93,11 +104,17 @@ pub fn run() {
             crate::core::file_logger::DualWriter::new(),
         )))
         .init();
-    log::info!("[BOOT] T+{:>6}ms - 日志系统初始化完成", boot_start.elapsed().as_millis());
+    log::info!(
+        "[BOOT] T+{:>6}ms - 日志系统初始化完成",
+        boot_start.elapsed().as_millis()
+    );
 
     // SAFETY: Settings initialization is critical for app startup; failure is unrecoverable.
     config::settings_store::init_settings().expect("Failed to initialize settings");
-    log::info!("[BOOT] T+{:>6}ms - 设置存储初始化完成", boot_start.elapsed().as_millis());
+    log::info!(
+        "[BOOT] T+{:>6}ms - 设置存储初始化完成",
+        boot_start.elapsed().as_millis()
+    );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -117,12 +134,18 @@ pub fn run() {
                 .build(),
         )
         .setup(move |app| {
-            log::info!("[BOOT] T+{:>6}ms - setup() 回调开始（插件已加载）", boot_start.elapsed().as_millis());
+            log::info!(
+                "[BOOT] T+{:>6}ms - setup() 回调开始（插件已加载）",
+                boot_start.elapsed().as_millis()
+            );
 
             if let Err(e) = tray::create_tray(app.handle()) {
                 log::warn!("Failed to create tray icon: {}", e);
             }
-            log::info!("[BOOT] T+{:>6}ms - 系统托盘创建完成", boot_start.elapsed().as_millis());
+            log::info!(
+                "[BOOT] T+{:>6}ms - 系统托盘创建完成",
+                boot_start.elapsed().as_millis()
+            );
 
             // 全局原生菜单事件：处理游戏选择菜单的点击（热键未匹配游戏时弹出）
             let app_handle_clone = app.app_handle().clone();
@@ -150,11 +173,17 @@ pub fn run() {
                 log::warn!("Failed to register hotkeys: {}", e);
             }
             app.manage(Arc::new(hotkey_mgr));
-            log::info!("[BOOT] T+{:>6}ms - 全局快捷键注册完成", boot_start.elapsed().as_millis());
+            log::info!(
+                "[BOOT] T+{:>6}ms - 全局快捷键注册完成",
+                boot_start.elapsed().as_millis()
+            );
 
             let file_watcher = FileWatcher::new();
             app.manage(Arc::new(Mutex::new(file_watcher)));
-            log::info!("[BOOT] T+{:>6}ms - 文件监控器初始化完成", boot_start.elapsed().as_millis());
+            log::info!(
+                "[BOOT] T+{:>6}ms - 文件监控器初始化完成",
+                boot_start.elapsed().as_millis()
+            );
 
             // 克隆启动时间用于异步任务和事件监听
             let boot_start_clone = boot_start;
@@ -163,40 +192,66 @@ pub fn run() {
             // 前端完全就绪（fully-ready）后会提前触发
             tauri::async_runtime::spawn(async move {
                 const CLOUD_REFRESH_DELAY_MS: u64 = 5000;
-                log::info!("[BOOT] T+{:>6}ms - 后台云端数据刷新任务已调度（延迟{}ms启动）",
-                    boot_start_clone.elapsed().as_millis(), CLOUD_REFRESH_DELAY_MS);
+                log::info!(
+                    "[BOOT] T+{:>6}ms - 后台云端数据刷新任务已调度（延迟{}ms启动）",
+                    boot_start_clone.elapsed().as_millis(),
+                    CLOUD_REFRESH_DELAY_MS
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(CLOUD_REFRESH_DELAY_MS)).await;
-                log::info!("[BOOT] T+{:>6}ms - 开始执行云端数据刷新", boot_start_clone.elapsed().as_millis());
+                log::info!(
+                    "[BOOT] T+{:>6}ms - 开始执行云端数据刷新",
+                    boot_start_clone.elapsed().as_millis()
+                );
                 let results = core::cloud_data::CloudDataManager::refresh_all_async().await;
                 for (name, res) in results {
                     match res {
-                        Ok(_) => log::info!("[BOOT] Cloud data refreshed: {} (T+{}ms)", name, boot_start_clone.elapsed().as_millis()),
-                        Err(e) => log::warn!("[BOOT] Failed to refresh cloud data {}: {} (T+{}ms)", name, e, boot_start_clone.elapsed().as_millis()),
+                        Ok(_) => log::info!(
+                            "[BOOT] Cloud data refreshed: {} (T+{}ms)",
+                            name,
+                            boot_start_clone.elapsed().as_millis()
+                        ),
+                        Err(e) => log::warn!(
+                            "[BOOT] Failed to refresh cloud data {}: {} (T+{}ms)",
+                            name,
+                            e,
+                            boot_start_clone.elapsed().as_millis()
+                        ),
                     }
                 }
             });
 
             // 监听窗口事件，记录窗口首次显示时间
             // SAFETY: The main window is declared in tauri.conf.json and must exist during setup().
-            let window = app.get_webview_window("main").expect("Main window not found");
+            let window = app
+                .get_webview_window("main")
+                .expect("Main window not found");
             let boot_start_for_window = boot_start;
             let first_resized_logged = Arc::new(AtomicBool::new(false));
             let first_focus_logged = Arc::new(AtomicBool::new(false));
-            window.on_window_event(move |event| {
-                match event {
-                    tauri::WindowEvent::Resized(_) => {
-                        if !first_resized_logged.swap(true, Ordering::SeqCst) {
-                            log::info!("[BOOT] T+{:>6}ms - 窗口首次 Resized（即将可见）", boot_start_for_window.elapsed().as_millis());
-                        }
+            window.on_window_event(move |event| match event {
+                tauri::WindowEvent::Resized(_) => {
+                    if !first_resized_logged.swap(true, Ordering::SeqCst) {
+                        log::info!(
+                            "[BOOT] T+{:>6}ms - 窗口首次 Resized（即将可见）",
+                            boot_start_for_window.elapsed().as_millis()
+                        );
                     }
-                    tauri::WindowEvent::Focused(focused) if *focused && !first_focus_logged.swap(true, Ordering::SeqCst) => {
-                        log::info!("[BOOT] T+{:>6}ms - 窗口首次获得焦点（可见）", boot_start_for_window.elapsed().as_millis());
-                    }
-                    _ => {}
                 }
+                tauri::WindowEvent::Focused(focused)
+                    if *focused && !first_focus_logged.swap(true, Ordering::SeqCst) =>
+                {
+                    log::info!(
+                        "[BOOT] T+{:>6}ms - 窗口首次获得焦点（可见）",
+                        boot_start_for_window.elapsed().as_millis()
+                    );
+                }
+                _ => {}
             });
 
-            log::info!("[BOOT] T+{:>6}ms - setup() 完成，等待前端渲染", boot_start.elapsed().as_millis());
+            log::info!(
+                "[BOOT] T+{:>6}ms - setup() 完成，等待前端渲染",
+                boot_start.elapsed().as_millis()
+            );
             Ok(())
         })
         .on_window_event(|window, event| {

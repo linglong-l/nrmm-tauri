@@ -8,15 +8,17 @@
 //!
 //! 路径获取失败时回退到当前目录（"."），保证应用不会崩溃
 
+use dirs::{cache_dir, config_dir, data_local_dir};
 use std::path::PathBuf;
-use dirs::{config_dir, cache_dir, data_local_dir};
 
 /// 获取应用配置目录
 /// Windows: %APPDATA%\nrmm-tauri
 /// macOS: ~/Library/Application Support/nrmm-tauri
 /// Linux: ~/.config/nrmm-tauri
 pub fn app_config_dir() -> PathBuf {
-    config_dir().unwrap_or_else(|| PathBuf::from(".")).join("nrmm-tauri")
+    config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("nrmm-tauri")
 }
 
 /// 获取应用缓存目录
@@ -24,12 +26,16 @@ pub fn app_config_dir() -> PathBuf {
 /// macOS: ~/Library/Caches/nrmm-tauri
 /// Linux: ~/.cache/nrmm-tauri
 pub fn app_cache_dir() -> PathBuf {
-    cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("nrmm-tauri")
+    cache_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("nrmm-tauri")
 }
 
 /// 获取应用本地数据目录
 pub fn app_data_dir() -> PathBuf {
-    data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("nrmm-tauri")
+    data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("nrmm-tauri")
 }
 
 /// 获取设置文件路径（settings.json）

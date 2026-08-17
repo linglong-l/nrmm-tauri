@@ -11,7 +11,6 @@
 use anyhow::Result;
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, WebviewWindow};
 
-
 /// 显示指定窗口并获取焦点
 ///
 /// 通过窗口名称查找窗口，然后依次执行：显示窗口、获取焦点、取消最小化
@@ -339,5 +338,7 @@ pub fn hard_quit_app(app: AppHandle) {
 #[tauri::command]
 pub fn get_foreground_process_name() -> Result<String, String> {
     let detector = crate::platform::get_foreground_detector();
-    detector.get_foreground_process_name().map_err(|e| e.to_string())
+    detector
+        .get_foreground_process_name()
+        .map_err(|e| e.to_string())
 }

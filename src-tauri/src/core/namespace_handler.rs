@@ -1,10 +1,10 @@
+use crate::core::constants;
+use crate::core::ini_handler::{IniFile, IniLine};
 use anyhow::Result;
-use std::path::{Path, PathBuf};
+use regex::RegexBuilder;
 use std::collections::HashSet;
 use std::fs;
-use regex::RegexBuilder;
-use crate::core::ini_handler::{IniFile, IniLine};
-use crate::core::constants;
+use std::path::{Path, PathBuf};
 
 fn extract_namespace_from_kv_string(s: &str) -> Option<String> {
     let trimmed = s.trim();
@@ -127,22 +127,38 @@ pub fn expand_ini_variables(ini: &mut IniFile, namespace: &str) {
 
 fn expand_line_variables(line: &mut IniLine, namespace: &str) {
     match line {
-        IniLine::KeyValue { key, value, disabled: _, comment: _, indent: _ } => {
+        IniLine::KeyValue {
+            key,
+            value,
+            disabled: _,
+            comment: _,
+            indent: _,
+        } => {
             if key.starts_with('$') && !key.starts_with("$\\") {
                 *key = expand_variable(key, namespace);
             }
             *value = expand_variables_in_value(value, namespace);
         }
-        IniLine::DisabledKeyValue { key, value, comment: _ } => {
+        IniLine::DisabledKeyValue {
+            key,
+            value,
+            comment: _,
+        } => {
             if key.starts_with('$') && !key.starts_with("$\\") {
                 *key = expand_variable(key, namespace);
             }
             *value = expand_variables_in_value(value, namespace);
         }
-        IniLine::IfStart { condition, indent: _ } => {
+        IniLine::IfStart {
+            condition,
+            indent: _,
+        } => {
             *condition = expand_variables_in_value(condition, namespace);
         }
-        IniLine::Elif { condition, indent: _ } => {
+        IniLine::Elif {
+            condition,
+            indent: _,
+        } => {
             *condition = expand_variables_in_value(condition, namespace);
         }
         IniLine::Command(text) => {
@@ -164,7 +180,11 @@ pub fn collect_existing_namespaces(mod_dir: &Path) -> Result<HashSet<String>> {
     Ok(namespaces)
 }
 
-fn collect_namespaces_recursive(_base: &Path, dir: &Path, namespaces: &mut HashSet<String>) -> Result<()> {
+fn collect_namespaces_recursive(
+    _base: &Path,
+    dir: &Path,
+    namespaces: &mut HashSet<String>,
+) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -320,8 +340,7 @@ pub fn replace_namespace_in_mod(
             p.file_name().unwrap_or_default().to_string_lossy(),
             constants::NAMESPACE_BACKUP_SUFFIX
         ));
-        fs::copy(p, &bak)
-            .map_err(|e| anyhow::anyhow!("namespace 备份失败 {:?}: {}", p, e))?;
+        fs::copy(p, &bak).map_err(|e| anyhow::anyhow!("namespace 备份失败 {:?}: {}", p, e))?;
         backups.push((p.clone(), bak));
     }
 
@@ -369,9 +388,9 @@ pub fn replace_namespace_in_mod(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
     use tempfile::NamedTempFile;
-    use std::fs;
 
     fn write_temp_ini(content: &str) -> NamedTempFile {
         let mut f = NamedTempFile::with_suffix(".ini").unwrap();
@@ -509,10 +528,18 @@ if $mymod$Other == 1\n\
 endif\n";
         let (changed, out) = rewrite_namespace_references(content, "MyMod", "MyMod_1");
         assert!(changed);
-        assert!(out.contains("namespace = MyMod_1"), "声明行应被替换:\n{}", out);
+        assert!(
+            out.contains("namespace = MyMod_1"),
+            "声明行应被替换:\n{}",
+            out
+        );
         // 引用被替换
         assert!(out.contains("$MyMod_1$SomeVar"), "引用应被替换:\n{}", out);
-        assert!(out.contains("$MyMod_1$Other"), "引用应大小写不敏感替换:\n{}", out);
+        assert!(
+            out.contains("$MyMod_1$Other"),
+            "引用应大小写不敏感替换:\n{}",
+            out
+        );
         assert!(out.contains("$MyMod_1$Ref"), "引用应被替换:\n{}", out);
         // 注释行保持原样（不被替换）
         assert!(
@@ -536,7 +563,11 @@ endif\n";
         let content = "namespace = MyModX\n[Constants]\n$y = $MyMod$Ref\n";
         let (changed, out) = rewrite_namespace_references(content, "MyMod", "MyMod_1");
         assert!(changed);
-        assert!(out.contains("namespace = MyModX"), "声明不应被前缀误改:\n{}", out);
+        assert!(
+            out.contains("namespace = MyModX"),
+            "声明不应被前缀误改:\n{}",
+            out
+        );
         assert!(out.contains("$MyMod_1$Ref"), "独立引用仍应替换:\n{}", out);
     }
 

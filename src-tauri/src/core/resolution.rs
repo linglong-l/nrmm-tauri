@@ -66,9 +66,9 @@ pub struct ResolutionLimits {
 /// - 其他平台：暂返回基准分辨率 `(1080, 720)`。
 #[cfg(windows)]
 pub fn screen_resolution() -> (u32, u32) {
-    use windows::Win32::Foundation::{LPARAM, RECT, TRUE};
     use windows::core::BOOL;
-    use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HMONITOR, HDC};
+    use windows::Win32::Foundation::{LPARAM, RECT, TRUE};
+    use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
     use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
     extern "system" fn monitor_enum_proc(

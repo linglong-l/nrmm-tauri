@@ -20,25 +20,28 @@
 //! 7. _manageMod: 修改每个启用模组的 INI 文件，注入条件包裹
 //! 8. 生成主 INI 注入段，include nrmm_include.ini
 
-use anyhow::{Result, Context};
-use std::path::{Path, PathBuf};
-use std::collections::{HashSet, VecDeque};
-use std::fs;
-use std::sync::Arc;
-use walkdir::WalkDir;
-use rayon::prelude::*;
 use crate::core::constants;
+use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::file_watcher::WatcherGuard;
 use crate::core::ini_handler::IniFile;
-use crate::core::d3dxini_cache::D3DX_INI_CACHE;
-use crate::core::namespace_handler;
-use crate::core::mod_scanner;
 use crate::core::mod_ini_cache::get_or_parse_ini;
-use crate::models::enums::TargetGame;
-use crate::models::mod_data::{ModData, ModGroupData, ErroredLines, HashConflict, HashConflictEntry, LibInMod, DuplicateLib, NonExistentLib};
+use crate::core::mod_scanner;
+use crate::core::namespace_handler;
 use crate::models::enums::GroupType;
+use crate::models::enums::TargetGame;
+use crate::models::mod_data::{
+    DuplicateLib, ErroredLines, HashConflict, HashConflictEntry, LibInMod, ModData, ModGroupData,
+    NonExistentLib,
+};
 use crate::models::settings::AppSettings;
 use crate::sel_dbg;
+use anyhow::{Context, Result};
+use rayon::prelude::*;
+use std::collections::{HashSet, VecDeque};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use walkdir::WalkDir;
 
 // 文件监听器暂停守卫 `WatcherGuard` 已移至 `core::file_watcher` 模块
 // （引用计数实现，支持嵌套暂停，修复 B2 竞态）
@@ -164,7 +167,8 @@ pub fn detect_standard_xxmi(game_mods_path: &Path, main_ini_name: &str) -> bool 
             let lower = trimmed.to_lowercase();
             // XXMI Launcher 常见注入标记：global $xxmi_xxx、global $inject、xxmi_inject、$xxmi_inject 等
             if lower.contains("xxmi")
-                || (lower.contains("global") && (lower.contains("$inject") || lower.contains("inject")))
+                || (lower.contains("global")
+                    && (lower.contains("$inject") || lower.contains("inject")))
                 || lower.contains("xxmi_inject")
                 || lower.contains("$xxmi")
             {
@@ -250,7 +254,10 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
             // NormalGroup 仅扫描 is_active 模组；MutexGroup 扫描所有启用模组
             // 两者均需检查 group_disabled，避免被禁用分组下的模组参与检测
             let should_scan = if is_normal {
-                mod_data.is_active && !mod_data.disabled && !mod_data.mod_disabled && !group_disabled
+                mod_data.is_active
+                    && !mod_data.disabled
+                    && !mod_data.mod_disabled
+                    && !group_disabled
             } else {
                 !mod_data.disabled && !mod_data.mod_disabled && !group_disabled
             };
@@ -265,21 +272,24 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
                 if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
                     for (_section, hash) in ini.extract_hashes() {
                         *scanned_hashes += 1;
-                        hash_to_mods
-                            .entry(hash)
-                            .or_default()
-                            .push((
-                                mod_data.name.clone(),
-                                mod_data.mod_path.clone(),
-                                ini_path.clone(),
-                            ));
+                        hash_to_mods.entry(hash).or_default().push((
+                            mod_data.name.clone(),
+                            mod_data.mod_path.clone(),
+                            ini_path.clone(),
+                        ));
                     }
                 }
             }
         }
         // 递归子分组，传递 group_disabled
         for child in &group.children {
-            process_group(child, group_disabled, hash_to_mods, scanned_mods, scanned_hashes);
+            process_group(
+                child,
+                group_disabled,
+                hash_to_mods,
+                scanned_mods,
+                scanned_hashes,
+            );
         }
     }
 
@@ -300,7 +310,8 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
             // 去重粒度为 (mod_name, ini_path)：
             // 同一模组同一 INI 内多次出现同一 hash 只算一条；
             // 同一模组不同 INI 各保留一条，聚合到该模组的 ini_vec。
-            let mut seen: std::collections::HashSet<(String, PathBuf)> = std::collections::HashSet::new();
+            let mut seen: std::collections::HashSet<(String, PathBuf)> =
+                std::collections::HashSet::new();
             let mut unique_entries: Vec<(String, String, PathBuf)> = Vec::new();
             for (name, path, ini) in mods.into_iter() {
                 if seen.insert((name.clone(), ini.clone())) {
@@ -308,7 +319,8 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
                 }
             }
             // 仅当涉及 ≥2 个不同模组时才算冲突
-            let unique_mod_count = unique_entries.iter()
+            let unique_mod_count = unique_entries
+                .iter()
                 .map(|(n, _, _)| n.as_str())
                 .collect::<std::collections::HashSet<_>>()
                 .len();
@@ -421,7 +433,11 @@ pub fn detect_orfix_texfx(enabled_mods: &[&ModData]) -> OrfixDetection {
     let duplicate_libs: Vec<DuplicateLib> = lib_declarations
         .into_iter()
         .filter_map(|(lib, mods)| {
-            let mut unique: Vec<String> = mods.into_iter().collect::<std::collections::HashSet<_>>().into_iter().collect();
+            let mut unique: Vec<String> = mods
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
             unique.sort();
             if unique.len() >= 2 {
                 Some(DuplicateLib {
@@ -441,7 +457,11 @@ pub fn detect_orfix_texfx(enabled_mods: &[&ModData]) -> OrfixDetection {
             // 检查该库是否被任何模组声明
             let is_declared = libs_in_mods.iter().any(|m| m.lib_names.contains(&lib));
             if !is_declared {
-                let mut unique: Vec<String> = mods.into_iter().collect::<std::collections::HashSet<_>>().into_iter().collect();
+                let mut unique: Vec<String> = mods
+                    .into_iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
                 unique.sort();
                 Some(NonExistentLib {
                     lib_name: lib,
@@ -503,8 +523,16 @@ fn collect_libraries_parallel(ini_paths: &[PathBuf]) -> HashSet<String> {
 /// - `game`: 目标游戏
 /// - `game_mods_path`: 游戏 Mods 目录
 /// - `_settings`: 应用设置（预留参数）
-pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppSettings) -> Result<UpdateResult> {
-    log::debug!("[core::mod_manager] [update_mod_data] Starting heavy update | game={:?} path={:?}", game, game_mods_path);
+pub fn update_mod_data(
+    game: TargetGame,
+    game_mods_path: &Path,
+    _settings: &AppSettings,
+) -> Result<UpdateResult> {
+    log::debug!(
+        "[core::mod_manager] [update_mod_data] Starting heavy update | game={:?} path={:?}",
+        game,
+        game_mods_path
+    );
     let _s = std::time::Instant::now();
     // 暂停文件监听器：update_mod_data 会对大量 INI / 标记文件执行写操作，
     // 若监听器保持活跃，防抖线程会在写入过程中并发触发增量扫描与缓存合并
@@ -526,11 +554,18 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
     // 步骤1: 准备 _MANAGED_ 目录，创建模板 INI 文件
     let mut need_reload_manual = prepare_managed_folder(&managed_folder, game)?;
-    log::debug!("[mod_manager] [update_mod_data] step=prepare_managed_folder done need_reload_manual={}", need_reload_manual);
+    log::debug!(
+        "[mod_manager] [update_mod_data] step=prepare_managed_folder done need_reload_manual={}",
+        need_reload_manual
+    );
 
     // 步骤2: 扫描模组
     let scan_result = mod_scanner::scan_mods(game_mods_path)?;
-    log::debug!("[mod_manager] [update_mod_data] step=scan_mods done total_mods={} total_groups={}", scan_result.total_mods_count, scan_result.groups.len());
+    log::debug!(
+        "[mod_manager] [update_mod_data] step=scan_mods done total_mods={} total_groups={}",
+        scan_result.total_mods_count,
+        scan_result.groups.len()
+    );
 
     let main_ini_name = game.d3dx_ini_name();
     // d3dx.ini 位于游戏根目录（Mods 的父目录），而非 Mods/ 内。
@@ -566,10 +601,15 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     };
 
     // 步骤3: 收集启用模组和已知库
-    let enabled_mods: Vec<&ModData> = scan_result.mods.iter()
+    let enabled_mods: Vec<&ModData> = scan_result
+        .mods
+        .iter()
         .filter(|m| !m.disabled && !m.mod_disabled)
         .collect();
-    log::debug!("[mod_manager] [update_mod_data] step=collect_enabled done enabled_mods_count={}", enabled_mods.len());
+    log::debug!(
+        "[mod_manager] [update_mod_data] step=collect_enabled done enabled_mods_count={}",
+        enabled_mods.len()
+    );
 
     // known_libraries 并行预收集：启用模组的全部 INI 路径经 rayon 并行解析（get_or_parse_ini，
     // 读锁快路径 + 锁外解析），defined_libraries 归并进同一 HashSet，集合与串行版相等。
@@ -585,9 +625,15 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     // 深度扫描仅处理 group_xx NormalGroup，会遗漏 MutexGroup 目录中的库定义，
     // 导致 detect_errors 产生大量假阳性。此处用非递归 BFS 补充收集。
     let mutex_libs = collect_mutex_group_libraries(&managed_folder);
-    log::debug!("[mod_manager] [update_mod_data] step=collect_mutex_libs done count={}", mutex_libs.len());
+    log::debug!(
+        "[mod_manager] [update_mod_data] step=collect_mutex_libs done count={}",
+        mutex_libs.len()
+    );
     known_libraries.extend(mutex_libs);
-    log::debug!("[mod_manager] [update_mod_data] step=collect_libraries done total_known_libraries={}", known_libraries.len());
+    log::debug!(
+        "[mod_manager] [update_mod_data] step=collect_libraries done total_known_libraries={}",
+        known_libraries.len()
+    );
 
     // 步骤3.6: 跨模组 namespace 去重（引入原版语义：_autoModifyDuplicateNamespaceInManagedMod）
     // 必须在每-ini 注入循环之前调用，使改名后的 namespace= 声明能被 expand_ini_variables 展开。
@@ -606,7 +652,10 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
     // 步骤3.5: ORFix/TexFx 检测（在 INI 修改之前，使用原始 INI 内容）
     let orfix_detection = detect_orfix_texfx(&enabled_mods);
-    log::debug!("[mod_manager] [update_mod_data] step=detect_orfix_texfx done has_detection={}", orfix_detection.has_detection);
+    log::debug!(
+        "[mod_manager] [update_mod_data] step=detect_orfix_texfx done has_detection={}",
+        orfix_detection.has_detection
+    );
 
     // 步骤4: 清理旧的 group INI 文件
     delete_group_ini_files(&managed_folder)?;
@@ -617,7 +666,8 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
 
     // 有效模组按 group_index 分桶（BTreeMap 保持组 id 升序，组内保持扫描顺序）。
     // 分桶前守卫与串行版完全一致（行为与日志不变）。
-    let mut buckets: std::collections::BTreeMap<u32, Vec<&ModData>> = std::collections::BTreeMap::new();
+    let mut buckets: std::collections::BTreeMap<u32, Vec<&ModData>> =
+        std::collections::BTreeMap::new();
     for mod_data in enabled_mods.iter() {
         let group_id = mod_data.group_index;
 
@@ -672,7 +722,8 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         .collect();
 
     // 确定性合并：outcomes 与 BTreeMap 迭代顺序一致（按 group_id 升序），组内序保持
-    let mut group_mod_inis: std::collections::HashMap<u32, Vec<PathBuf>> = std::collections::HashMap::new();
+    let mut group_mod_inis: std::collections::HashMap<u32, Vec<PathBuf>> =
+        std::collections::HashMap::new();
     let mut all_errors: Vec<ErroredLines> = Vec::new();
     let mut processed_mods = 0u32;
     let mut slowest: Option<(u32, u128)> = None;
@@ -707,19 +758,34 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
     // 步骤6: 为每个 group 创建 ModFolder.ini
     let mut group_ini_paths: Vec<PathBuf> = Vec::new();
     for (group_id, ini_paths) in &group_mod_inis {
-        log::debug!("[mod_manager] [update_mod_data] step=create_group_ini group_id={} mod_ini_count={}", group_id, ini_paths.len());
+        log::debug!(
+            "[mod_manager] [update_mod_data] step=create_group_ini group_id={} mod_ini_count={}",
+            group_id,
+            ini_paths.len()
+        );
         let group_dir = managed_folder.join(format!("group_{}", group_id));
         let group_ini_path = create_group_ini(&group_dir, *group_id, ini_paths)?;
         if let Some(p) = group_ini_path {
             group_ini_paths.push(p);
         }
     }
-    log::debug!("[mod_manager] [update_mod_data] step=create_group_ini done total_groups={}", group_ini_paths.len());
+    log::debug!(
+        "[mod_manager] [update_mod_data] step=create_group_ini done total_groups={}",
+        group_ini_paths.len()
+    );
 
     // 步骤7: 生成 nrmm_include.ini
     let nrmm_include_path = managed_folder.join(constants::INCLUDE_FILENAME);
-    create_nrmm_include_ini(&nrmm_include_path, &managed_folder, &group_ini_paths, game_mods_path)?;
-    log::debug!("[mod_manager] [update_mod_data] step=create_nrmm_include done group_ini_count={}", group_ini_paths.len());
+    create_nrmm_include_ini(
+        &nrmm_include_path,
+        &managed_folder,
+        &group_ini_paths,
+        game_mods_path,
+    )?;
+    log::debug!(
+        "[mod_manager] [update_mod_data] step=create_nrmm_include done group_ini_count={}",
+        group_ini_paths.len()
+    );
 
     // 步骤8: 检测 include_recursive，缺失时自动注入 include 指令
     // 标准 XXMI 环境通过 [Include] 段的 include_recursive = Mods 自动加载 _MANAGED_ 下的 .ini 文件。
@@ -751,20 +817,28 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
             }
             need_reload_manual = true;
         } else {
-            log::debug!("[mod_manager] [update_mod_data] d3dx.ini 已有 include_recursive=Mods，跳过注入");
+            log::debug!(
+                "[mod_manager] [update_mod_data] d3dx.ini 已有 include_recursive=Mods，跳过注入"
+            );
         }
 
         // 仅当 d3dx.ini 被实际修改时才写回，避免不必要的编码转换或格式变更
         if d3dx_modified {
             let tmp_path = main_ini_path.with_extension("ini.tmp");
             fs::write(&tmp_path, &final_content)
-            .with_context(|| format!("Failed to write temp main INI: {:?}", tmp_path))?;
-            fs::rename(&tmp_path, &main_ini_path)
-                .with_context(|| format!("Failed to rename temp main INI to: {:?}", main_ini_path))?;
-            log::debug!("[mod_manager] [update_mod_data] step=write_main_ini done path={:?}", main_ini_path);
+                .with_context(|| format!("Failed to write temp main INI: {:?}", tmp_path))?;
+            fs::rename(&tmp_path, &main_ini_path).with_context(|| {
+                format!("Failed to rename temp main INI to: {:?}", main_ini_path)
+            })?;
+            log::debug!(
+                "[mod_manager] [update_mod_data] step=write_main_ini done path={:?}",
+                main_ini_path
+            );
         }
     } else {
-        log::debug!("[mod_manager] [update_mod_data] step=write_main_ini skipped (d3dx.ini 不存在)");
+        log::debug!(
+            "[mod_manager] [update_mod_data] step=write_main_ini skipped (d3dx.ini 不存在)"
+        );
     }
 
     // 步骤9: 检测标准 XXMI/3DMigoto 环境
@@ -782,7 +856,12 @@ pub fn update_mod_data(game: TargetGame, game_mods_path: &Path, _settings: &AppS
         orfix_detection,
         ..Default::default()
     };
-    log::debug!("[core::mod_manager] [update_mod_data] done | elapsed={:?}ms | processed={} errors={}", _s.elapsed().as_millis(), result.processed_mods, result.errors.len());
+    log::debug!(
+        "[core::mod_manager] [update_mod_data] done | elapsed={:?}ms | processed={} errors={}",
+        _s.elapsed().as_millis(),
+        result.processed_mods,
+        result.errors.len()
+    );
     Ok(result)
 }
 
@@ -860,8 +939,7 @@ fn process_group_task(
                         // - 仅当模组存在会致 XXMI 崩溃的绘制/缓冲行（crash line=1，如
                         //   drawindexed/draw/ib 取到非法值且非 auto / 数值 / 资源引用）时，
                         //   才标记该模组曾被移除（与 Dart 基线行为一致：基线零标记）。
-                        let has_syntax_marker_error =
-                            errors.iter().any(|e| e.error_type == 1);
+                        let has_syntax_marker_error = errors.iter().any(|e| e.error_type == 1);
                         outcome.errors.extend(errors);
                         if has_syntax_marker_error {
                             mod_has_syntax_errors = true;
@@ -889,7 +967,11 @@ fn process_group_task(
                     // 注释崩溃行
                     let crash_lines = ini.comment_crash_lines();
                     if !crash_lines.is_empty() {
-                        log::info!("Commented {} crash lines in {}", crash_lines.len(), ini_path.display());
+                        log::info!(
+                            "Commented {} crash lines in {}",
+                            crash_lines.len(),
+                            ini_path.display()
+                        );
                         mod_has_crash_lines = true;
                     }
 
@@ -944,11 +1026,7 @@ fn process_group_task(
     // H3：组内全部可见模组写入失败 → 显式告警，避免「组内全失败→create_group_ini 跳过空组→模组被静默移出管理」不可察。
     // 前端应据此 errors 中 error_type=3 汇总条目提示用户手动介入，而非误以为更新成功。
     if !mods.is_empty() && outcome.mod_inis.is_empty() {
-        let write_failures = outcome
-            .errors
-            .iter()
-            .filter(|e| e.error_type == 3)
-            .count();
+        let write_failures = outcome.errors.iter().filter(|e| e.error_type == 3).count();
         if write_failures > 0 {
             log::error!(
                 "[mod_manager] [process_group_task] group {} 全部 {} 个可见模组写入失败，将无 group_X.ini 生成（模组可能被移出管理）",
@@ -1100,7 +1178,8 @@ pub fn auto_modify_duplicate_namespace(enabled_mods: &[&ModData]) {
             // 提交本模组 namespace 到组状态；写 modnamespaced 标记
             namespaces_in_group.extend(future.iter().cloned());
             if !namespaces_in_mod.is_empty() {
-                let marker = std::path::Path::new(m.mod_path.as_str()).join(constants::NAMESPACED_MARKER);
+                let marker =
+                    std::path::Path::new(m.mod_path.as_str()).join(constants::NAMESPACED_MARKER);
                 if let Err(e) = crate::utils::atomic_write(&marker, b"") {
                     log::warn!("写入 namespaced 标记失败 {:?}: {}", marker, e);
                 }
@@ -1135,7 +1214,10 @@ fn collect_mutex_group_libraries(managed_folder: &Path) -> HashSet<String> {
     let first_level = match fs::read_dir(managed_folder) {
         Ok(e) => e,
         Err(e) => {
-            log::warn!("[mod_manager] collect_mutex_group_libraries: 读取 _MANAGED_ 目录失败: {}", e);
+            log::warn!(
+                "[mod_manager] collect_mutex_group_libraries: 读取 _MANAGED_ 目录失败: {}",
+                e
+            );
             return libraries;
         }
     };
@@ -1170,7 +1252,9 @@ fn collect_mutex_group_libraries(managed_folder: &Path) -> HashSet<String> {
         queue.push_back(mutex_root.clone());
 
         let mut visited: HashSet<PathBuf> = HashSet::new();
-        let canon_root = mutex_root.canonicalize().unwrap_or_else(|_| mutex_root.clone());
+        let canon_root = mutex_root
+            .canonicalize()
+            .unwrap_or_else(|_| mutex_root.clone());
         visited.insert(canon_root);
 
         while let Some(current_dir) = queue.pop_front() {
@@ -1197,7 +1281,12 @@ fn collect_mutex_group_libraries(managed_folder: &Path) -> HashSet<String> {
                         continue;
                     }
                     // 仅处理 .ini 文件
-                    if sub_path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("ini")).unwrap_or(false) {
+                    if sub_path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.eq_ignore_ascii_case("ini"))
+                        .unwrap_or(false)
+                    {
                         // 步骤4: 解析 INI 并收集库定义
                         match get_or_parse_ini(&sub_path) {
                             Ok(ini) => {
@@ -1226,7 +1315,10 @@ fn collect_mutex_group_libraries(managed_folder: &Path) -> HashSet<String> {
         }
     }
 
-    log::debug!("[mod_manager] collect_mutex_group_libraries: 收集到 {} 个 MutexGroup 库定义", libraries.len());
+    log::debug!(
+        "[mod_manager] collect_mutex_group_libraries: 收集到 {} 个 MutexGroup 库定义",
+        libraries.len()
+    );
     libraries
 }
 
@@ -1305,8 +1397,8 @@ fn prepare_managed_folder(managed_path: &Path, game: TargetGame) -> Result<bool>
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| managed_path.to_path_buf());
     let dll_path = game_root.join("d3d11.dll");
-    let keypress_bytes = crate::core::dll_capability::select_keypress_template(&dll_path)
-        .template_bytes();
+    let keypress_bytes =
+        crate::core::dll_capability::select_keypress_template(&dll_path).template_bytes();
     let keypress_template = String::from_utf8_lossy(keypress_bytes)
         .replace("\r\n", "\n")
         .replace('\r', "\n")
@@ -1332,7 +1424,10 @@ fn prepare_managed_folder(managed_path: &Path, game: TargetGame) -> Result<bool>
     let root_selectedindex = managed_path.join(constants::SELECTED_INDEX_FILE);
     if !root_selectedindex.exists() {
         atomic_write_file(&root_selectedindex, b"0")?;
-        log::debug!("[mod_manager] prepare_managed_folder: 创建根级 selectedindex 文件 {:?}", root_selectedindex);
+        log::debug!(
+            "[mod_manager] prepare_managed_folder: 创建根级 selectedindex 文件 {:?}",
+            root_selectedindex
+        );
     }
 
     Ok(need_reload_manual)
@@ -1510,7 +1605,9 @@ fn validate_group_ini_consistency(managed_path: &Path, enabled_mods: &[&ModData]
             if ini_group_id != *gid {
                 log::warn!(
                     "[mod_manager] group_{}.ini 中 group_id={} 与目录 group_{} 不一致，跳过",
-                    gid, ini_group_id, gid
+                    gid,
+                    ini_group_id,
+                    gid
                 );
                 mismatched.push(*gid);
             }
@@ -1548,9 +1645,7 @@ fn delete_group_ini_files(managed_path: &Path) -> Result<()> {
                 }
             } else if path.is_dir() {
                 // 仅递归清理严格 group_<int> 目录；绝不触碰 # / XX / groupxx 等非标准目录
-                let dir_name = path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if mod_scanner::is_normal_group_dir(dir_name).is_some() {
                     let _ = delete_in_dir(&path);
                 }
@@ -1580,7 +1675,10 @@ fn create_group_ini(
     // 跳过空分组：无启用模组时不生成 group_X.ini，
     // 避免 nrmm_include.ini 引用空文件导致 3Dmigoto 加载警告
     if mod_ini_paths.is_empty() {
-        log::debug!("[mod_manager] create_group_ini: 跳过空分组 group_{}", group_index);
+        log::debug!(
+            "[mod_manager] create_group_ini: 跳过空分组 group_{}",
+            group_index
+        );
         return Ok(None);
     }
 
@@ -1683,7 +1781,10 @@ fn strip_nrmm_injected_content(content: &str) -> String {
 /// - [Constants] 段定义管理变量
 /// - include nrmm_include.ini
 #[allow(dead_code)]
-fn generate_nrmm_injected_content(nrmm_include_path: &Path, game_mods_path: &Path) -> Result<String> {
+fn generate_nrmm_injected_content(
+    nrmm_include_path: &Path,
+    game_mods_path: &Path,
+) -> Result<String> {
     let mut content = String::new();
 
     content.push_str(";NRMM_INI_START\n");
@@ -1763,7 +1864,10 @@ fn detect_include_recursive(main_ini_path: &Path, game_mods_path: &Path) -> bool
 /// # 注意
 /// - d3dx_user.ini 会被 3Dmigoto 自动加载（如果存在）
 /// - NRMM 不会修改或覆盖 d3dx_user.ini 中的内容
-pub fn save_customizations(game_mods_path: &Path, game: TargetGame) -> Result<SaveCustomizationsResult> {
+pub fn save_customizations(
+    game_mods_path: &Path,
+    game: TargetGame,
+) -> Result<SaveCustomizationsResult> {
     let main_ini_name = game.d3dx_ini_name();
     // d3dx.ini 和 d3dx_user.ini 位于游戏根目录（Mods 的父目录），不在 Mods/ 内
     let game_root = game_mods_path.parent().unwrap_or(game_mods_path);
@@ -1820,7 +1924,12 @@ pub fn switch_mod(
         mod_index,
         game_mods_path
     );
-    log::debug!("[core::mod_manager] [switch_mod] Starting | group={} mod={} path={:?}", group_index, mod_index, game_mods_path);
+    log::debug!(
+        "[core::mod_manager] [switch_mod] Starting | group={} mod={} path={:?}",
+        group_index,
+        mod_index,
+        game_mods_path
+    );
     let _s = std::time::Instant::now();
     // 使用轻量扫描以匹配前端索引（None 在 mod_index=0，真实模组从 1 开始）
     let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
@@ -1841,7 +1950,9 @@ pub fn switch_mod(
     // 严格限制：仅 NormalGroup（group_xx 目录）允许写入 selectedindex 标记文件。
     // MutexGroup（非group目录）不参与标记文件生成，仅参与模组读取和 hash 冲突检测。
     // 通过 group_type == NormalGroup 校验避免误在非group目录下写入标记文件。
-    let group_dir = scan_result.groups.iter()
+    let group_dir = scan_result
+        .groups
+        .iter()
         .find(|g| g.group_index == group_index && g.group_type == GroupType::NormalGroup)
         .map(|g| g.full_path.clone());
     log::debug!(
@@ -1879,8 +1990,15 @@ pub fn switch_mod(
         // 暂停文件监听器（引用计数守卫），防止 selectedindex 写入触发缓存增量更新竞态
         {
             let _guard = WatcherGuard::new();
-            if let Err(e) = crate::utils::atomic_write(&selectedindex_path, safe_mod_index.to_string().as_bytes()) {
-                log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
+            if let Err(e) = crate::utils::atomic_write(
+                &selectedindex_path,
+                safe_mod_index.to_string().as_bytes(),
+            ) {
+                log::warn!(
+                    "Failed to write selectedindex file {:?}: {}",
+                    selectedindex_path,
+                    e
+                );
             } else {
                 log::debug!(
                     "[core::mod_manager] [switch_mod] wrote selectedindex file | path={} content={}",
@@ -1907,7 +2025,11 @@ pub fn switch_mod(
         selected_mod_index: Some(sel_idx_i32),
         ..Default::default()
     };
-    log::debug!("[core::mod_manager] [switch_mod] done | elapsed={:?}ms | selected={:?}", _s.elapsed().as_millis(), result.selected_mod_index);
+    log::debug!(
+        "[core::mod_manager] [switch_mod] done | elapsed={:?}ms | selected={:?}",
+        _s.elapsed().as_millis(),
+        result.selected_mod_index
+    );
     sel_dbg!(
         "mod_manager",
         "switch_mod",
@@ -1929,7 +2051,8 @@ pub fn switch_mod(
 /// - `mod_path`: 模组目录路径
 /// - `enable`: true = 启用（移除 DISABLED 前缀），false = 禁用（添加 DISABLED 前缀）
 pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
-    let dir_name = mod_path.file_name()
+    let dir_name = mod_path
+        .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
@@ -1970,7 +2093,10 @@ pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
                 let new_path = parent.join(new_name);
                 if mod_path != new_path {
                     if new_path.exists() {
-                        log::warn!("Target path already exists, skipping disable: {:?}", new_path);
+                        log::warn!(
+                            "Target path already exists, skipping disable: {:?}",
+                            new_path
+                        );
                     } else {
                         fs::rename(mod_path, &new_path)
                             .with_context(|| format!("Failed to disable mod: {:?}", mod_path))?;
@@ -2032,10 +2158,14 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
         "enable_mutex_mod",
         "调用链: select_mod(互斥) → enable_mutex_mod | 入口 | 模组路径={:?} 模组名称={}",
         mod_path,
-        mod_path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
+        mod_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default()
     );
 
-    let parent_dir = mod_path.parent()
+    let parent_dir = mod_path
+        .parent()
         .with_context(|| format!("Failed to get parent directory of: {:?}", mod_path))?;
 
     let entries = fs::read_dir(parent_dir)
@@ -2059,7 +2189,8 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
         }
 
         if path_eq_ignore_case(&path, mod_path) {
-            let current_name = path.file_name()
+            let current_name = path
+                .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
@@ -2069,7 +2200,10 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
                 let new_path = path.parent().unwrap_or(&path).join(new_name);
                 if path != new_path {
                     if new_path.exists() {
-                        log::warn!("Target path already exists, skipping enable: {:?}", new_path);
+                        log::warn!(
+                            "Target path already exists, skipping enable: {:?}",
+                            new_path
+                        );
                     } else {
                         sel_dbg!(
                             "mod_manager",
@@ -2084,7 +2218,8 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
                 }
             }
         } else {
-            let current_name = path.file_name()
+            let current_name = path
+                .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
@@ -2094,10 +2229,14 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
                 let new_path = path.parent().unwrap_or(&path).join(new_name);
                 if path != new_path {
                     if new_path.exists() {
-                        log::warn!("Target path already exists, skipping disable: {:?}", new_path);
+                        log::warn!(
+                            "Target path already exists, skipping disable: {:?}",
+                            new_path
+                        );
                     } else {
-                        fs::rename(&path, &new_path)
-                            .with_context(|| format!("Failed to disable sibling mod: {:?}", path))?;
+                        fs::rename(&path, &new_path).with_context(|| {
+                            format!("Failed to disable sibling mod: {:?}", path)
+                        })?;
                     }
                 }
             }
@@ -2114,7 +2253,8 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
 /// - 如果已经以DISABLED开头（大小写不敏感）则不做任何操作（幂等）
 /// - 检查目标路径不存在才重命名
 pub fn disable_mutex_mod(mod_path: &Path) -> Result<()> {
-    let dir_name = mod_path.file_name()
+    let dir_name = mod_path
+        .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
@@ -2140,7 +2280,10 @@ pub fn disable_mutex_mod(mod_path: &Path) -> Result<()> {
         let new_path = parent.join(new_name);
         if mod_path != new_path {
             if new_path.exists() {
-                log::warn!("Target path already exists, skipping disable: {:?}", new_path);
+                log::warn!(
+                    "Target path already exists, skipping disable: {:?}",
+                    new_path
+                );
             } else {
                 fs::rename(mod_path, &new_path)
                     .with_context(|| format!("Failed to disable mod: {:?}", mod_path))?;
@@ -2216,7 +2359,10 @@ pub fn disable_all_mods_in_group(group_path: &Path) -> Result<u32> {
 
         // 检查目标路径是否已存在（避免覆盖）
         if new_path.exists() {
-            log::warn!("Target path already exists, skipping disable: {:?}", new_path);
+            log::warn!(
+                "Target path already exists, skipping disable: {:?}",
+                new_path
+            );
             continue;
         }
 
@@ -2269,7 +2415,9 @@ pub fn deselect_group_mods(
     let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
 
     // 仅 NormalGroup 写入 selectedindex，MutexGroup 不参与标记文件
-    let group_dir = scan_result.groups.iter()
+    let group_dir = scan_result
+        .groups
+        .iter()
         .find(|g| g.group_index == group_index && g.group_type == GroupType::NormalGroup)
         .map(|g| g.full_path.clone());
 
@@ -2280,7 +2428,11 @@ pub fn deselect_group_mods(
         {
             let _guard = WatcherGuard::new();
             if let Err(e) = crate::utils::atomic_write(&selectedindex_path, b"0") {
-                log::warn!("Failed to write selectedindex file {:?}: {}", selectedindex_path, e);
+                log::warn!(
+                    "Failed to write selectedindex file {:?}: {}",
+                    selectedindex_path,
+                    e
+                );
             } else {
                 log::debug!(
                     "[core::mod_manager] [deselect_group_mods] wrote selectedindex=0 | path={}",
@@ -2313,15 +2465,16 @@ pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> 
     let mut count = 0u32;
     for path_str in mod_paths {
         let path = PathBuf::from(path_str);
-        
+
         // 预检查是否需要操作
-        let dir_name = path.file_name()
+        let dir_name = path
+            .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
         let parent = path.parent().unwrap_or(&path);
         let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
-        
+
         // 判断是否需要操作
         let needs_change = if enable {
             // 启用：路径存在且已禁用，或路径不存在但父目录有禁用版本
@@ -2344,11 +2497,11 @@ pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> 
                 }
             }
         };
-        
+
         if !needs_change {
             continue;
         }
-        
+
         if is_mutex {
             if enable {
                 enable_mutex_mod(&path)?;
@@ -2434,7 +2587,10 @@ pub fn enable_all_mods_in_group(group_path: &Path) -> Result<u32> {
         let new_path = group_path.join(&new_name);
 
         if new_path.exists() {
-            log::warn!("Target path already exists, skipping enable: {:?}", new_path);
+            log::warn!(
+                "Target path already exists, skipping enable: {:?}",
+                new_path
+            );
             continue;
         }
 
@@ -2642,7 +2798,11 @@ pub fn restore_managed_mod(mod_dir: &Path) -> (u32, u32) {
         match collect_ini_files_recursive(mod_dir) {
             Ok(files) => files,
             Err(e) => {
-                log::error!("[restore_managed_mod] Failed to collect INI files in {:?}: {}", mod_dir, e);
+                log::error!(
+                    "[restore_managed_mod] Failed to collect INI files in {:?}: {}",
+                    mod_dir,
+                    e
+                );
                 return (0, 1);
             }
         }
@@ -2656,7 +2816,11 @@ pub fn restore_managed_mod(mod_dir: &Path) -> (u32, u32) {
     for ini_path in &ini_files {
         total += 1;
         if let Err(e) = restore_single_ini(ini_path) {
-            log::warn!("[restore_managed_mod] Failed to restore {:?}: {}", ini_path, e);
+            log::warn!(
+                "[restore_managed_mod] Failed to restore {:?}: {}",
+                ini_path,
+                e
+            );
             failed += 1;
         }
     }
@@ -2669,7 +2833,9 @@ fn is_restorable_ini(path: &Path) -> bool {
     if let Some(ext) = path.extension() {
         if ext.eq_ignore_ascii_case("ini") {
             // 跳过 .ini_managed_backup 备份文件
-            return !path.to_string_lossy().ends_with(&format!(".{}", constants::BACKUP_EXTENSION));
+            return !path
+                .to_string_lossy()
+                .ends_with(&format!(".{}", constants::BACKUP_EXTENSION));
         }
     }
     false
@@ -2740,7 +2906,10 @@ fn collect_mod_ini_files(mod_dir: &Path) -> Vec<PathBuf> {
         if let Some(ext) = path.extension() {
             if ext.eq_ignore_ascii_case("ini") {
                 // 排除 .ini_managed_backup 备份文件
-                if !path.to_string_lossy().ends_with(&format!(".{}", constants::BACKUP_EXTENSION)) {
+                if !path
+                    .to_string_lossy()
+                    .ends_with(&format!(".{}", constants::BACKUP_EXTENSION))
+                {
                     result.push(path);
                 }
             }
@@ -2826,8 +2995,7 @@ fn restore_single_ini(ini_path: &Path) -> Result<()> {
 
         // 4. 移除管理器 if 行 + 跟踪 if 栈
         if trimmed_lower.starts_with("if ") {
-            let is_manager_if = no_space
-                .contains("if$managed_slot_id==$\\modmanageragl\\group_");
+            let is_manager_if = no_space.contains("if$managed_slot_id==$\\modmanageragl\\group_");
             if_stack.push(is_manager_if);
             if is_manager_if {
                 *line = "-----".to_string();
@@ -2853,7 +3021,11 @@ fn restore_single_ini(ini_path: &Path) -> Result<()> {
 
     if modified {
         let filtered: Vec<&String> = lines.iter().filter(|s| s.as_str() != "-----").collect();
-        let new_content = filtered.iter().map(|s| s.as_str()).collect::<Vec<&str>>().join("\n");
+        let new_content = filtered
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n");
         atomic_write_file(ini_path, new_content.as_bytes())?;
     }
 
@@ -2907,7 +3079,10 @@ pub fn remove_mod(mod_path: &Path) -> Result<RemoveModResult> {
         return Err(anyhow::anyhow!("Mod path does not exist: {:?}", mod_path));
     }
     if !mod_path.is_dir() {
-        return Err(anyhow::anyhow!("Mod path is not a directory: {:?}", mod_path));
+        return Err(anyhow::anyhow!(
+            "Mod path is not a directory: {:?}",
+            mod_path
+        ));
     }
 
     let mod_name = mod_path
@@ -2923,8 +3098,13 @@ pub fn remove_mod(mod_path: &Path) -> Result<RemoveModResult> {
     // ========== 定位 DISABLED_MANAGED_REMOVED 目录 ==========
     let removed_folder = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
     if !removed_folder.exists() {
-        fs::create_dir_all(&removed_folder)
-            .with_context(|| format!("Failed to create {}: {:?}", constants::MANAGED_REMOVED_FOLDER, removed_folder))?;
+        fs::create_dir_all(&removed_folder).with_context(|| {
+            format!(
+                "Failed to create {}: {:?}",
+                constants::MANAGED_REMOVED_FOLDER,
+                removed_folder
+            )
+        })?;
     }
 
     // ========== 构造目标路径（冲突追加 _1、_2…） ==========
@@ -3018,7 +3198,6 @@ fn get_available_folder_name(base_name: &str, base_dir: &Path) -> PathBuf {
     }
 }
 
-
 /// 底层移动：将目录移动到目标删除目录（仅负责移动，不做任何业务判断）
 ///
 /// 单一职责：仅接受「源目录」与「目标删除目录」，执行目录移动。
@@ -3042,7 +3221,8 @@ pub fn move_dir_to_removed(src: &Path, removed_dir: &Path) -> Result<PathBuf> {
             .with_context(|| format!("Failed to create removed dir: {:?}", removed_dir))?;
     }
 
-    let name = src.file_name()
+    let name = src
+        .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
@@ -3077,10 +3257,16 @@ pub fn move_dir_to_removed(src: &Path, removed_dir: &Path) -> Result<PathBuf> {
 /// 路径不存在或目录移动失败时返回错误
 pub fn remove_group_ex(group_path: &Path, is_group_xx: bool, mods_root: &Path) -> Result<()> {
     if !group_path.exists() {
-        return Err(anyhow::anyhow!("Group path does not exist: {:?}", group_path));
+        return Err(anyhow::anyhow!(
+            "Group path does not exist: {:?}",
+            group_path
+        ));
     }
     if !group_path.is_dir() {
-        return Err(anyhow::anyhow!("Group path is not a directory: {:?}", group_path));
+        return Err(anyhow::anyhow!(
+            "Group path is not a directory: {:?}",
+            group_path
+        ));
     }
 
     // ========== 非group：先将一级子分组（无 .ini 的子目录）移至 mods_root ==========
@@ -3088,7 +3274,12 @@ pub fn remove_group_ex(group_path: &Path, is_group_xx: bool, mods_root: &Path) -
         // 收集所有一级子分组（子目录且不含 .ini 的目录）
         let entries = match fs::read_dir(group_path) {
             Ok(e) => e,
-            Err(_) => return Err(anyhow::anyhow!("Failed to read group directory: {:?}", group_path)),
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "Failed to read group directory: {:?}",
+                    group_path
+                ))
+            }
         };
 
         // 先收集再处理（避免在迭代期间修改目录）
@@ -3158,7 +3349,10 @@ mod tests {
         // 包含 [Include] 段的 include_recursive，对齐标准 XXMI 环境
         // 使用实际目录名确保 detect_include_recursive 返回 true，不注入 ;NRMM_INI_START 块
         let dir_name = base.file_name().and_then(|n| n.to_str()).unwrap_or("Mods");
-        let content = format!("; original main ini\n[Include]\ninclude_recursive = {}\n", dir_name);
+        let content = format!(
+            "; original main ini\n[Include]\ninclude_recursive = {}\n",
+            dir_name
+        );
         fs::write(base.join(ini_name), content).unwrap();
     }
 
@@ -3197,7 +3391,11 @@ y = 2
         let mods_path = dir.path().join("Mods");
         fs::create_dir_all(&mods_path).unwrap();
         let ini_path = dir.path().join("d3dx.ini");
-        fs::write(&ini_path, "[Include]\ninclude_recursive = Mods\n\n[Constants]\nglobal $test = 0\n").unwrap();
+        fs::write(
+            &ini_path,
+            "[Include]\ninclude_recursive = Mods\n\n[Constants]\nglobal $test = 0\n",
+        )
+        .unwrap();
         assert!(detect_include_recursive(&ini_path, &mods_path));
     }
 
@@ -3257,7 +3455,12 @@ y = 2
         fs::create_dir_all(&enabled_path).unwrap();
 
         toggle_mod(&enabled_path, false).unwrap();
-        let disabled_name = enabled_path.file_name().unwrap().to_str().unwrap().to_string();
+        let disabled_name = enabled_path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         let new_path = dir.path().join(format!("DISABLED{}", disabled_name));
         assert!(new_path.exists());
         assert!(!enabled_path.exists());
@@ -3374,9 +3577,15 @@ y = 2
         let libs = collect_mutex_group_libraries(&managed);
 
         // 验证收集了 MutexGroup 中的库定义
-        assert!(libs.contains("ResourceMyLib"), "应收集 MutexGroup 中的 ResourceMyLib");
+        assert!(
+            libs.contains("ResourceMyLib"),
+            "应收集 MutexGroup 中的 ResourceMyLib"
+        );
         // 验证未收集 NormalGroup 中的库定义（由深度扫描处理）
-        assert!(!libs.contains("CommandListNormal"), "不应收集 NormalGroup 中的库定义");
+        assert!(
+            !libs.contains("CommandListNormal"),
+            "不应收集 NormalGroup 中的库定义"
+        );
         // 验证 desktop.ini 被跳过
         assert!(!libs.contains("ResourceSkip"), "应跳过 desktop.ini");
     }
@@ -3394,7 +3603,10 @@ y = 2
         prepare_managed_folder(&managed, TargetGame::GenshinImpact).unwrap();
 
         // 验证根级 selectedindex 已创建
-        assert!(root_selectedindex.exists(), "根级 selectedindex 文件应被创建");
+        assert!(
+            root_selectedindex.exists(),
+            "根级 selectedindex 文件应被创建"
+        );
         let content = fs::read_to_string(&root_selectedindex).unwrap();
         assert_eq!(content, "0", "根级 selectedindex 默认值应为 0");
 
@@ -3461,7 +3673,7 @@ y = 2
         create_mod_with_ini(
             &group_path,
             "TestMod",
-            "[TextureOverrideTest]\nhash = 0x12345678\nps-t0 = ResourceTest\ndrawindexed = auto\n"
+            "[TextureOverrideTest]\nhash = 0x12345678\nps-t0 = ResourceTest\ndrawindexed = auto\n",
         );
 
         let result = update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
@@ -3479,7 +3691,8 @@ y = 2
         assert!(!group_content.contains("; === NRMM Managed Includes ==="));
 
         // 验证 nrmm_include.ini 仅包含 IncludeKeypress（对齐 NRMM）
-        let include_content = fs::read_to_string(dir.path().join("_MANAGED_/nrmm_include.ini")).unwrap();
+        let include_content =
+            fs::read_to_string(dir.path().join("_MANAGED_/nrmm_include.ini")).unwrap();
         assert!(include_content.contains("[IncludeKeypress]"));
         assert!(include_content.contains("nrmm_keypress.txt"));
         assert!(!include_content.contains("manager_group.ini"));
@@ -3509,8 +3722,7 @@ y = 2
             "namespace = Shared\n[Constants]\n$w = $Shared$Other\n",
         );
 
-        let _result =
-            update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
+        let _result = update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
 
         let a_path = group_path.join("ModA/mod.ini");
         let b_path = group_path.join("ModB/mod.ini");
@@ -3569,7 +3781,11 @@ y = 2
         fs::create_dir_all(&managed).unwrap();
         create_main_ini(dir.path(), TargetGame::GenshinImpact);
         // 覆盖 include_recursive 值为 "Mods"，使 detect_include_recursive 匹配
-        fs::write(dir.path().join("d3dx.ini"), "; original main ini\n[Include]\ninclude_recursive = Mods\n").unwrap();
+        fs::write(
+            dir.path().join("d3dx.ini"),
+            "; original main ini\n[Include]\ninclude_recursive = Mods\n",
+        )
+        .unwrap();
         let settings = AppSettings::default();
 
         let group_path = managed.join("group_1");
@@ -3607,7 +3823,11 @@ y = 2
         let dir = setup_test_env();
         // 构造一个含 NRMM 管理注入的单个 .ini 文件
         let ini_path = dir.path().join("mod.ini");
-        fs::write(&ini_path, "[TextureOverrideTest]\nhash = 0x1\n; no reload mod manager\n").unwrap();
+        fs::write(
+            &ini_path,
+            "[TextureOverrideTest]\nhash = 0x1\n; no reload mod manager\n",
+        )
+        .unwrap();
 
         // 单 .ini 文件应被还原
         let (restored, failed) = restore_managed_mod(&ini_path);
@@ -3633,8 +3853,16 @@ y = 2
     fn test_restore_managed_mod_directory_recursive() {
         let dir = setup_test_env();
         let group_path = create_group_dir(dir.path(), "group_1");
-        create_mod_with_ini(&group_path, "ModA", "[TextureOverrideA]\nhash = 0x1\n; no reload mod manager\n");
-        create_mod_with_ini(&group_path, "ModB", "[TextureOverrideB]\nhash = 0x2\nglobal $managed_slot_id = 0\n");
+        create_mod_with_ini(
+            &group_path,
+            "ModA",
+            "[TextureOverrideA]\nhash = 0x1\n; no reload mod manager\n",
+        );
+        create_mod_with_ini(
+            &group_path,
+            "ModB",
+            "[TextureOverrideB]\nhash = 0x2\nglobal $managed_slot_id = 0\n",
+        );
 
         // 目录应递归还原其下所有 .ini 文件
         let (restored, failed) = restore_managed_mod(&group_path);
@@ -3749,12 +3977,18 @@ endif
         assert!(!out.contains("are errored"), "管理器头注释应被移除");
         assert!(!out.contains("are disabled keys"), "管理器头注释应被移除");
         // 2) global $managed_slot_id 被移除
-        assert!(!out.contains("global $managed_slot_id"), "global 声明应被移除");
+        assert!(
+            !out.contains("global $managed_slot_id"),
+            "global 声明应被移除"
+        );
         // 3) manager if 与该段 endif 被移除，且不含任何管理器残留
         assert!(!out.contains("managed_slot_id"), "管理器槽位残留应被清除");
         assert!(!out.contains("active_slot"), "管理器槽位残留应被清除");
         // 4) 4 空格缩进被移除（段体行去缩进）
-        assert!(out.contains("drawindexed = auto"), "缩进后的命令应去缩进保留");
+        assert!(
+            out.contains("drawindexed = auto"),
+            "缩进后的命令应去缩进保留"
+        );
         assert!(!out.contains("    drawindexed"), "不应残留 4 空格缩进");
         // 5) 非管理器注释保留
         assert!(out.contains("; inner note"), "非管理器注释应保留");
@@ -3764,7 +3998,10 @@ endif
         assert!(out.contains("endif"), "合法悬空 endif 应被保留");
         // 8) match_priority=0 由 update 注入，restore 不移除（非管理器专属标记；
         //    作为独立 3Dmigoto 指令在脱管后依然合法。此行为是否为 NRMM 严格一致项待 Dart 基线确认。）
-        assert!(out.contains("match_priority = 0"), "match_priority 注入项当前保留（对齐待确认）");
+        assert!(
+            out.contains("match_priority = 0"),
+            "match_priority 注入项当前保留（对齐待确认）"
+        );
     }
 
     /// 真实管线回放：update_mod_data 产出后，对 mod 目录执行 restore_managed_mod，
@@ -3793,8 +4030,14 @@ endif
         assert_eq!(failed, 0);
 
         let out = fs::read_to_string(mod_dir.join("mod.ini")).unwrap();
-        assert!(!out.contains("managed_slot_id"), "真实管线还原后不应残留管理器槽位");
-        assert!(!out.contains("active_slot"), "真实管线还原后不应残留管理器槽位");
+        assert!(
+            !out.contains("managed_slot_id"),
+            "真实管线还原后不应残留管理器槽位"
+        );
+        assert!(
+            !out.contains("active_slot"),
+            "真实管线还原后不应残留管理器槽位"
+        );
         // 段体命令保留且去缩进
         assert!(out.contains("drawindexed = auto"));
     }
@@ -3994,25 +4237,25 @@ endif
         let crlf_path = dir.path().join("crlf.ini");
         let crlf_content = "\u{FEFF}[Section]\r\nkey = 1\r\ndrawindexed = 999\r\n";
         fs::write(&crlf_path, crlf_content.as_bytes()).unwrap();
-        let changed = comment_crash_lines_in_file(
-            &crlf_path,
-            &[(3, "drawindexed = 999".to_string())],
-        );
+        let changed =
+            comment_crash_lines_in_file(&crlf_path, &[(3, "drawindexed = 999".to_string())]);
         assert!(changed, "CRLF 文件应执行崩溃行修复");
         let bytes = fs::read(&crlf_path).unwrap();
         assert!(bytes.starts_with(&[0xEF, 0xBB, 0xBF]), "BOM 应保留");
         let text = String::from_utf8(bytes).unwrap();
-        assert!(text.contains("\r\n;-;drawindexed = 999\r\n"), "CRLF 与目标行前缀应保留:\n{:?}", text);
+        assert!(
+            text.contains("\r\n;-;drawindexed = 999\r\n"),
+            "CRLF 与目标行前缀应保留:\n{:?}",
+            text
+        );
         assert!(text.contains("\r\nkey = 1\r\n"), "未命中行应原样保留");
 
         // 2) 非 UTF-8 文件（含 GBK 字节）：跳过修复，文件字节不得被改写
         let gbk_path = dir.path().join("gbk.ini");
         let gbk_bytes: Vec<u8> = b"[Section]\r\ndrawindexed = 5\r\n\xb2\xe2\xca\xd4\r\n".to_vec();
         fs::write(&gbk_path, &gbk_bytes).unwrap();
-        let changed2 = comment_crash_lines_in_file(
-            &gbk_path,
-            &[(2, "drawindexed = 5".to_string())],
-        );
+        let changed2 =
+            comment_crash_lines_in_file(&gbk_path, &[(2, "drawindexed = 5".to_string())]);
         assert!(!changed2, "非 UTF-8 文件应跳过修复");
         assert_eq!(
             fs::read(&gbk_path).unwrap(),
@@ -4023,10 +4266,8 @@ endif
         // 3) LF 无 BOM 文件：正常修复且保留末尾换行
         let lf_path = dir.path().join("lf.ini");
         fs::write(&lf_path, "[Section]\nkey = 1\ndrawindexed = auto\n").unwrap();
-        let changed3 = comment_crash_lines_in_file(
-            &lf_path,
-            &[(3, "drawindexed = auto".to_string())],
-        );
+        let changed3 =
+            comment_crash_lines_in_file(&lf_path, &[(3, "drawindexed = auto".to_string())]);
         assert!(changed3);
         assert_eq!(
             fs::read_to_string(&lf_path).unwrap(),
@@ -4104,7 +4345,14 @@ endif
         let fmt_errors = |r: &UpdateResult| -> Vec<(u8, u32, String, String)> {
             r.errors
                 .iter()
-                .map(|e| (e.error_type, e.line_number, e.line.clone(), e.error_message.clone()))
+                .map(|e| {
+                    (
+                        e.error_type,
+                        e.line_number,
+                        e.line.clone(),
+                        e.error_message.clone(),
+                    )
+                })
                 .collect()
         };
 
@@ -4127,8 +4375,14 @@ endif
                 .position(|(_, _, _, msg)| msg.contains(name))
                 .unwrap_or_else(|| panic!("缺少包含 {} 的错误条目", name))
         };
-        assert!(pos("MissingLibG1") < pos("MissingLibG2"), "group_1 错误应先于 group_2");
-        assert!(pos("MissingLibG2") < pos("MissingLibG3"), "group_2 错误应先于 group_3");
+        assert!(
+            pos("MissingLibG1") < pos("MissingLibG2"),
+            "group_1 错误应先于 group_2"
+        );
+        assert!(
+            pos("MissingLibG2") < pos("MissingLibG3"),
+            "group_2 错误应先于 group_3"
+        );
     }
 
     /// 测试：单模组写入失败被隔离为错误条目，整体返回 Ok，同组其他模组正常处理且 group INI 生成。
@@ -4186,7 +4440,9 @@ endif
         assert!(outcome.mod_inis.is_empty());
         assert_eq!(outcome.errors.len(), 1);
         assert_eq!(outcome.errors[0].error_type, 3);
-        assert!(outcome.errors[0].error_message.contains("Group 3 processing panicked"));
+        assert!(outcome.errors[0]
+            .error_message
+            .contains("Group 3 processing panicked"));
         assert!(outcome.errors[0].error_message.contains("boom"));
 
         // String panic payload（格式化 panic）
@@ -4241,7 +4497,10 @@ endif
         // 第 2 次运行后进入稳态
         update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
         let snapshot2 = snapshot_ini_files(&managed);
-        assert!(snapshot2.len() >= 5, "应至少包含 3 个模组 ini 与 2 个 group ini");
+        assert!(
+            snapshot2.len() >= 5,
+            "应至少包含 3 个模组 ini 与 2 个 group ini"
+        );
 
         // 第 3 次运行后内容应与稳态完全一致（幂等）
         update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
@@ -4283,7 +4542,8 @@ endif
         // 已禁用 → 应幂等跳过，不新增前缀
         toggle_mod(&mod_path, false).unwrap();
 
-        let entries: Vec<String> = fs::read_dir(parent).unwrap()
+        let entries: Vec<String> = fs::read_dir(parent)
+            .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
         assert!(
@@ -4339,7 +4599,8 @@ endif
         fs::write(mod_path.join("mod.ini"), "[ShaderOverride]").unwrap();
 
         // 危险场景：用户重命名 new_name 已带 DISABLED 前缀
-        let is_disabled = mod_scanner::is_disabled_dir(&mod_path.file_name().unwrap().to_string_lossy());
+        let is_disabled =
+            mod_scanner::is_disabled_dir(&mod_path.file_name().unwrap().to_string_lossy());
         let new_name = "DISABLEDNewName".to_string();
         let final_name = if is_disabled {
             format!(
@@ -4380,26 +4641,33 @@ mod tests_disable_all {
         let group = tmp.path().join("group_1");
         fs::create_dir_all(&group).unwrap();
 
-        let _mod_a = create_mod_dir(&group, "ModA");       // 启用
+        let _mod_a = create_mod_dir(&group, "ModA"); // 启用
         let _mod_b = create_mod_dir(&group, "DISABLEDModB"); // 已禁用
-        let _mod_c = create_mod_dir(&group, "ModC");       // 启用
-        // 子分组目录（无 .ini），应跳过
+        let _mod_c = create_mod_dir(&group, "ModC"); // 启用
+                                                     // 子分组目录（无 .ini），应跳过
         let subgroup = group.join("SubGroup");
         fs::create_dir_all(&subgroup).unwrap();
-        let _mod_d = create_mod_dir(&group, "ModD");       // 启用
+        let _mod_d = create_mod_dir(&group, "ModD"); // 启用
 
         let count = disable_all_mods_in_group(&group).unwrap();
         assert_eq!(count, 3); // ModA, ModC, ModD
 
         // 验证目录状态
-        let entries: Vec<String> = fs::read_dir(&group).unwrap()
+        let entries: Vec<String> = fs::read_dir(&group)
+            .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
         assert!(entries.iter().any(|n| n == "DISABLEDModA"), "ModA 应被禁用");
-        assert!(entries.iter().any(|n| n == "DISABLEDModB"), "DisabledModB 应保持不变");
+        assert!(
+            entries.iter().any(|n| n == "DISABLEDModB"),
+            "DisabledModB 应保持不变"
+        );
         assert!(entries.iter().any(|n| n == "DISABLEDModC"), "ModC 应被禁用");
         assert!(entries.iter().any(|n| n == "DISABLEDModD"), "ModD 应被禁用");
-        assert!(entries.iter().any(|n| n == "SubGroup"), "子分组目录应保持不变");
+        assert!(
+            entries.iter().any(|n| n == "SubGroup"),
+            "子分组目录应保持不变"
+        );
         assert_eq!(entries.len(), 5, "目录数量不变（重命名不改变数量）");
     }
 
@@ -4431,11 +4699,18 @@ mod tests_disable_all {
         let count = disable_all_mods_in_group(&group).unwrap();
         assert_eq!(count, 1, "仅未禁用的 ModC 应被禁用");
 
-        let entries: Vec<String> = fs::read_dir(&group).unwrap()
+        let entries: Vec<String> = fs::read_dir(&group)
+            .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
-        assert!(entries.iter().any(|n| n == "DISABLEDModA"), "DISABLEDModA 应保持不变");
-        assert!(entries.iter().any(|n| n == "DISABLEDModB"), "DISABLEDModB 应保持不变");
+        assert!(
+            entries.iter().any(|n| n == "DISABLEDModA"),
+            "DISABLEDModA 应保持不变"
+        );
+        assert!(
+            entries.iter().any(|n| n == "DISABLEDModB"),
+            "DISABLEDModB 应保持不变"
+        );
         assert!(
             entries.iter().all(|n| !n.starts_with("DISABLEDDISABLED")),
             "不应产生 DISABLEDDISABLEDxxx 重复前缀目录"
@@ -4466,7 +4741,11 @@ mod tests_remove_group_ex {
     fn create_mod_dir(parent: &Path, name: &str) -> PathBuf {
         let dir = parent.join(name);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(format!("{}.ini", name.trim_start_matches("DISABLED"))), "[ShaderOverride]").unwrap();
+        fs::write(
+            dir.join(format!("{}.ini", name.trim_start_matches("DISABLED"))),
+            "[ShaderOverride]",
+        )
+        .unwrap();
         dir
     }
 
@@ -4521,7 +4800,10 @@ mod tests_remove_group_ex {
         let removed_root = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
         assert!(removed_root.exists());
         let removed_group = removed_root.join("group_1");
-        assert!(removed_group.exists(), "DISABLED_MANAGED_REMOVED 下应存在 group_1");
+        assert!(
+            removed_group.exists(),
+            "DISABLED_MANAGED_REMOVED 下应存在 group_1"
+        );
         assert!(removed_group.join("ModA").exists(), "模组应随之移动");
     }
 
@@ -4546,14 +4828,28 @@ mod tests_remove_group_ex {
         // 原分组应不存在
         assert!(!non_group.exists());
         // 子分组应在 mods_root 下
-        assert!(mods_root.join("SubGroup1").exists(), "SubGroup1 应移至 Mods 根目录");
-        assert!(mods_root.join("SubGroup1").join("SubMod1").exists(), "SubGroup1 下的模组应保留");
-        assert!(mods_root.join("SubGroup2").exists(), "SubGroup2 应移至 Mods 根目录");
+        assert!(
+            mods_root.join("SubGroup1").exists(),
+            "SubGroup1 应移至 Mods 根目录"
+        );
+        assert!(
+            mods_root.join("SubGroup1").join("SubMod1").exists(),
+            "SubGroup1 下的模组应保留"
+        );
+        assert!(
+            mods_root.join("SubGroup2").exists(),
+            "SubGroup2 应移至 Mods 根目录"
+        );
         // 被移除目录在 DISABLED_MANAGED_REMOVED 下
-        let removed = mods_root.join(constants::MANAGED_REMOVED_FOLDER).join("#MyMutexGroup");
+        let removed = mods_root
+            .join(constants::MANAGED_REMOVED_FOLDER)
+            .join("#MyMutexGroup");
         assert!(removed.exists());
         assert!(removed.join("ModA").exists(), "ModA 随原分组被移除");
-        assert!(!removed.join("SubGroup1").exists(), "SubGroup1 不应随原分组被移除");
+        assert!(
+            !removed.join("SubGroup1").exists(),
+            "SubGroup1 不应随原分组被移除"
+        );
     }
 
     /// 名称冲突场景：DISABLED_MANAGED_REMOVED/group_1 已存在应追加 _1
@@ -4572,7 +4868,10 @@ mod tests_remove_group_ex {
 
         assert!(!group.exists());
         assert!(removed_root.join("group_1").exists(), "原冲突项保留");
-        assert!(removed_root.join("group_1_1").exists(), "新移除项追加 _1 后缀");
+        assert!(
+            removed_root.join("group_1_1").exists(),
+            "新移除项追加 _1 后缀"
+        );
     }
 }
 
@@ -4629,13 +4928,22 @@ mod tests_remove_mod {
 
         // 目标必须位于 Mods/DISABLED_MANAGED_REMOVED（与 _MANAGED_ 同级）
         let expected = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
-        assert!(expected.exists(), "DISABLED_MANAGED_REMOVED 应创建在 Mods 根目录");
+        assert!(
+            expected.exists(),
+            "DISABLED_MANAGED_REMOVED 应创建在 Mods 根目录"
+        );
         assert_eq!(result.moved_to.parent(), Some(expected.as_path()));
 
         // 明确验证：不得创建在 Mods/_MANAGED_ 之下
         let wrongly_placed = managed.join(constants::MANAGED_REMOVED_FOLDER);
-        assert!(!wrongly_placed.join("MyMod").exists(), "不得创建到 _MANAGED_ 之下");
-        assert!(result.moved_to.join("MyMod.ini").exists(), "模组文件应随目录移动");
+        assert!(
+            !wrongly_placed.join("MyMod").exists(),
+            "不得创建到 _MANAGED_ 之下"
+        );
+        assert!(
+            result.moved_to.join("MyMod.ini").exists(),
+            "模组文件应随目录移动"
+        );
     }
 
     /// remove_mod：删除多个模组时，DISABLED_MANAGED_REMOVED 始终位于 Mods 根目录，冲突追加 _1
@@ -4658,7 +4966,10 @@ mod tests_remove_mod {
         let removed_root = mods_root.join(constants::MANAGED_REMOVED_FOLDER);
         assert_eq!(r1.moved_to, removed_root.join("MyMod"));
         assert_eq!(r2.moved_to, removed_root.join("MyMod2"));
-        assert!(!managed.join(constants::MANAGED_REMOVED_FOLDER).exists(), "不得创建到 _MANAGED_ 之下");
+        assert!(
+            !managed.join(constants::MANAGED_REMOVED_FOLDER).exists(),
+            "不得创建到 _MANAGED_ 之下"
+        );
     }
 }
 
@@ -4671,7 +4982,11 @@ mod tests_enable_all {
     fn create_mod_dir(parent: &Path, name: &str) -> PathBuf {
         let dir = parent.join(name);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(format!("{}.ini", name.trim_start_matches("DISABLED"))), "[ShaderOverride]").unwrap();
+        fs::write(
+            dir.join(format!("{}.ini", name.trim_start_matches("DISABLED"))),
+            "[ShaderOverride]",
+        )
+        .unwrap();
         dir
     }
 
@@ -4682,18 +4997,19 @@ mod tests_enable_all {
         let group = tmp.path().join("group_1");
         fs::create_dir_all(&group).unwrap();
 
-        create_mod_dir(&group, "DISABLEDModA");   // 需启用
-        create_mod_dir(&group, "ModB");            // 已启用，跳过
-        create_mod_dir(&group, "DISABLEDModC");   // 需启用
-        // 子分组目录（无 .ini），跳过
+        create_mod_dir(&group, "DISABLEDModA"); // 需启用
+        create_mod_dir(&group, "ModB"); // 已启用，跳过
+        create_mod_dir(&group, "DISABLEDModC"); // 需启用
+                                                // 子分组目录（无 .ini），跳过
         let subgroup = group.join("SubGroup");
         fs::create_dir_all(&subgroup).unwrap();
-        create_mod_dir(&group, "DISABLEDModD");   // 需启用
+        create_mod_dir(&group, "DISABLEDModD"); // 需启用
 
         let count = enable_all_mods_in_group(&group).unwrap();
         assert_eq!(count, 3); // ModA, ModC, ModD
 
-        let entries: Vec<String> = fs::read_dir(&group).unwrap()
+        let entries: Vec<String> = fs::read_dir(&group)
+            .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
         assert!(entries.iter().any(|n| n == "ModA"), "ModA 应被启用");
@@ -4722,14 +5038,15 @@ mod tests_enable_all {
         let tmp = TempDir::new().unwrap();
         let group = tmp.path().join("group_1");
         fs::create_dir_all(&group).unwrap();
-        create_mod_dir(&group, "DISABLED_MyMod");   // 下划线分隔
+        create_mod_dir(&group, "DISABLED_MyMod"); // 下划线分隔
         create_mod_dir(&group, "DISABLED-OtherMod"); // 横杠分隔
-        create_mod_dir(&group, "DISABLED Third");    // 空格分隔
+        create_mod_dir(&group, "DISABLED Third"); // 空格分隔
 
         let count = enable_all_mods_in_group(&group).unwrap();
         assert_eq!(count, 3);
 
-        let entries: Vec<String> = fs::read_dir(&group).unwrap()
+        let entries: Vec<String> = fs::read_dir(&group)
+            .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
             .collect();
         assert!(entries.iter().any(|n| n == "MyMod"));
@@ -4809,14 +5126,21 @@ mod tests_non_group_isolation {
         // 验证冲突涉及两个模组
         let first_conflict = &result.conflicts[0];
         assert_eq!(first_conflict.entries.len(), 2);
-        let mod_names: Vec<&str> = first_conflict.entries.iter().map(|e| e.mod_name.as_str()).collect();
+        let mod_names: Vec<&str> = first_conflict
+            .entries
+            .iter()
+            .map(|e| e.mod_name.as_str())
+            .collect();
         assert!(mod_names.contains(&"ModA"));
         assert!(mod_names.contains(&"ModB"));
         // 验证 entries 已填充且 ini_vec 指向 .ini 文件
         assert!(!first_conflict.entries.is_empty(), "entries 应填充详情");
         for entry in &first_conflict.entries {
             assert!(!entry.ini_vec.is_empty(), "ini_vec 不应为空");
-            assert!(entry.ini_vec[0].ends_with(".ini"), "ini_vec 应指向 .ini 文件");
+            assert!(
+                entry.ini_vec[0].ends_with(".ini"),
+                "ini_vec 应指向 .ini 文件"
+            );
         }
     }
 
@@ -4855,14 +5179,21 @@ mod tests_non_group_isolation {
         );
         let conflict = &result.conflicts[0];
         assert_eq!(conflict.entries.len(), 2);
-        let mod_names: Vec<&str> = conflict.entries.iter().map(|e| e.mod_name.as_str()).collect();
+        let mod_names: Vec<&str> = conflict
+            .entries
+            .iter()
+            .map(|e| e.mod_name.as_str())
+            .collect();
         assert!(mod_names.contains(&"NormalMod"));
         assert!(mod_names.contains(&"MutexMod"));
         // 验证 entries 已填充且 ini_vec 指向 .ini 文件
         assert!(!conflict.entries.is_empty(), "entries 应填充详情");
         for entry in &conflict.entries {
             assert!(!entry.ini_vec.is_empty(), "ini_vec 不应为空");
-            assert!(entry.ini_vec[0].ends_with(".ini"), "ini_vec 应指向 .ini 文件");
+            assert!(
+                entry.ini_vec[0].ends_with(".ini"),
+                "ini_vec 应指向 .ini 文件"
+            );
         }
     }
 
@@ -4979,7 +5310,11 @@ mod tests_non_group_isolation {
         );
         let conflict = &result.conflicts[0];
         assert_eq!(conflict.entries.len(), 2);
-        let mod_names: Vec<&str> = conflict.entries.iter().map(|e| e.mod_name.as_str()).collect();
+        let mod_names: Vec<&str> = conflict
+            .entries
+            .iter()
+            .map(|e| e.mod_name.as_str())
+            .collect();
         assert!(mod_names.contains(&"ModA"));
         assert!(mod_names.contains(&"ModB"));
     }
@@ -5006,7 +5341,8 @@ mod tests_non_group_isolation {
             &settings,
             0, // group_index=0 对应 MutexGroup
             1,
-        ).unwrap();
+        )
+        .unwrap();
 
         // 验证 MutexGroup 目录下未创建 selectedindex 文件
         assert!(
@@ -5041,7 +5377,8 @@ mod tests_non_group_isolation {
             &settings,
             1, // group_index=1 对应 group_1
             1, // mod_index=1（TestMod）
-        ).unwrap();
+        )
+        .unwrap();
 
         // 验证 group_1 目录下已创建/更新 selectedindex 文件
         assert!(
@@ -5068,12 +5405,8 @@ mod tests_non_group_isolation {
         fs::write(mod_dir.join("test.ini"), "[Section]\nkey=val\n").unwrap();
 
         let settings = AppSettings::default();
-        let result = deselect_group_mods(
-            TargetGame::GenshinImpact,
-            mods_path,
-            &settings,
-            1,
-        ).unwrap();
+        let result =
+            deselect_group_mods(TargetGame::GenshinImpact, mods_path, &settings, 1).unwrap();
 
         assert_eq!(result.selected_mod_index, Some(0));
         let sel = fs::read_to_string(group_dir.join("selectedindex")).unwrap();
@@ -5111,8 +5444,13 @@ mod tests_non_group_isolation {
 
         let ini_files = collect_mod_ini_files(&mod_dir);
         // 应收集到 mod.ini 和 config.ini（2 个文件）
-        assert_eq!(ini_files.len(), 2, "应仅收集直接 .ini 文件，排除 desktop/backup/nested");
-        let file_names: Vec<String> = ini_files.iter()
+        assert_eq!(
+            ini_files.len(),
+            2,
+            "应仅收集直接 .ini 文件，排除 desktop/backup/nested"
+        );
+        let file_names: Vec<String> = ini_files
+            .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
             .collect();
         assert!(file_names.contains(&"mod.ini".to_string()));
@@ -5136,7 +5474,8 @@ mod tests_non_group_isolation {
         // 非group目录下的模组
         let mutex_group = dir.path().join("_MANAGED_").join("#Mutex");
         fs::create_dir_all(&mutex_group).unwrap();
-        let mutex_mod = create_mod_with_ini(&mutex_group, "MutexMod", "[TextureOverride]\nhash=0x2\n");
+        let mutex_mod =
+            create_mod_with_ini(&mutex_group, "MutexMod", "[TextureOverride]\nhash=0x2\n");
 
         let _result = update_mod_data(TargetGame::GenshinImpact, dir.path(), &settings).unwrap();
 
@@ -5172,17 +5511,21 @@ mod tests_non_group_isolation {
         fs::create_dir_all(&mutex_a).unwrap();
         let mod_a_dir = mutex_a.join("ModA");
         fs::create_dir_all(&mod_a_dir).unwrap();
-        fs::write(mod_a_dir.join("a1.ini"), "[TextureOverrideT1]\nhash = 0xcafebabe\n").unwrap();
-        fs::write(mod_a_dir.join("a2.ini"), "[TextureOverrideT2]\nhash = 0xcafebabe\n").unwrap();
+        fs::write(
+            mod_a_dir.join("a1.ini"),
+            "[TextureOverrideT1]\nhash = 0xcafebabe\n",
+        )
+        .unwrap();
+        fs::write(
+            mod_a_dir.join("a2.ini"),
+            "[TextureOverrideT2]\nhash = 0xcafebabe\n",
+        )
+        .unwrap();
 
         // ModB：一个 INI 文件使用相同 hash
         let mutex_b = dir.path().join("_MANAGED_").join("#MutexB");
         fs::create_dir_all(&mutex_b).unwrap();
-        create_mod_with_ini(
-            &mutex_b,
-            "ModB",
-            "[TextureOverrideT3]\nhash = 0xcafebabe\n",
-        );
+        create_mod_with_ini(&mutex_b, "ModB", "[TextureOverrideT3]\nhash = 0xcafebabe\n");
 
         let result = detect_hash_conflicts(dir.path()).unwrap();
         assert!(!result.conflicts.is_empty(), "应检测到 hash 冲突");
@@ -5195,22 +5538,44 @@ mod tests_non_group_isolation {
             conflict.entries.len(),
             2,
             "entries 应包含 2 条记录（ModA、ModB 各一条），实际：{:?}",
-            conflict.entries.iter().map(|e| &e.mod_name).collect::<Vec<_>>()
+            conflict
+                .entries
+                .iter()
+                .map(|e| &e.mod_name)
+                .collect::<Vec<_>>()
         );
 
         // 验证 ModA 聚合了两条 INI 路径
-        let mod_a_entry = conflict.entries.iter()
+        let mod_a_entry = conflict
+            .entries
+            .iter()
             .find(|e| e.mod_name == "ModA")
             .expect("应存在 ModA 的 entry");
-        assert_eq!(mod_a_entry.ini_vec.len(), 2, "ModA 的 ini_vec 应有 2 个元素");
-        assert!(mod_a_entry.ini_vec.iter().any(|p| p.ends_with("a1.ini")), "应包含 a1.ini 路径");
-        assert!(mod_a_entry.ini_vec.iter().any(|p| p.ends_with("a2.ini")), "应包含 a2.ini 路径");
+        assert_eq!(
+            mod_a_entry.ini_vec.len(),
+            2,
+            "ModA 的 ini_vec 应有 2 个元素"
+        );
+        assert!(
+            mod_a_entry.ini_vec.iter().any(|p| p.ends_with("a1.ini")),
+            "应包含 a1.ini 路径"
+        );
+        assert!(
+            mod_a_entry.ini_vec.iter().any(|p| p.ends_with("a2.ini")),
+            "应包含 a2.ini 路径"
+        );
 
         // 验证 ModB 聚合了一条 INI 路径
-        let mod_b_entry = conflict.entries.iter()
+        let mod_b_entry = conflict
+            .entries
+            .iter()
             .find(|e| e.mod_name == "ModB")
             .expect("应存在 ModB 的 entry");
-        assert_eq!(mod_b_entry.ini_vec.len(), 1, "ModB 的 ini_vec 应有 1 个元素");
+        assert_eq!(
+            mod_b_entry.ini_vec.len(),
+            1,
+            "ModB 的 ini_vec 应有 1 个元素"
+        );
     }
 
     #[test]

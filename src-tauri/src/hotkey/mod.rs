@@ -21,14 +21,14 @@
 //! # 平台适配
 //! 前台检测和按键模拟通过 `platform` 模块的平台相关实现完成
 
-use tauri::{AppHandle, State, Emitter, Manager};
-use tauri::menu::{MenuBuilder, MenuItem};
-use std::sync::{Arc, Mutex};
-use anyhow::Result;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, Modifiers, Code};
-use crate::platform;
 use crate::config::settings_store;
 use crate::models::enums::TargetGame;
+use crate::platform;
+use anyhow::Result;
+use std::sync::{Arc, Mutex};
+use tauri::menu::{MenuBuilder, MenuItem};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutEvent};
 
 /// 快捷键管理器
 ///
@@ -75,13 +75,21 @@ impl HotkeyManager {
         let gsm = self.app_handle.global_shortcut();
 
         for i in 1..=10 {
-            let key = if i == 10 { "0".to_string() } else { i.to_string() };
+            let key = if i == 10 {
+                "0".to_string()
+            } else {
+                i.to_string()
+            };
             let accel = format!("Ctrl+Alt+{}", key);
             self.register_hotkey(gsm, &accel);
         }
 
         for i in 1..=10 {
-            let key = if i == 10 { "0".to_string() } else { i.to_string() };
+            let key = if i == 10 {
+                "0".to_string()
+            } else {
+                i.to_string()
+            };
             let accel = format!("Ctrl+{}", key);
             self.register_hotkey(gsm, &accel);
         }
@@ -107,7 +115,11 @@ impl HotkeyManager {
     /// # 参数
     /// - `gsm`: 全局快捷键插件实例
     /// - `accel`: 快捷键字符串（如 `"Ctrl+Alt+1"`、`"F5"`）
-    fn register_hotkey(&self, gsm: &tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>, accel: &str) {
+    fn register_hotkey(
+        &self,
+        gsm: &tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>,
+        accel: &str,
+    ) {
         if gsm.is_registered(accel) {
             let _ = gsm.unregister(accel);
         }
@@ -202,9 +214,7 @@ fn handle_window_hotkey(app_handle: &AppHandle) {
         std::thread::sleep(std::time::Duration::from_millis(50));
         fg_proc = detector.get_foreground_process_name().ok();
     }
-    let detected_game = fg_proc
-        .as_deref()
-        .and_then(match_process_name_to_game);
+    let detected_game = fg_proc.as_deref().and_then(match_process_name_to_game);
     let cursor_pos = detector.get_cursor_position().unwrap_or((0, 0));
 
     let decision = handle_window_hotkey_pure(is_visible, detected_game, cursor_pos, fg_proc);
@@ -409,11 +419,17 @@ fn build_game_menu<R: tauri::Runtime, M: tauri::Manager<R>>(
 
     let games_order = [
         ("game_menu:GenshinImpact", "原神 (Genshin Impact)"),
-        ("game_menu:HonkaiStarRail", "崩坏：星穹铁道 (Honkai: Star Rail)"),
+        (
+            "game_menu:HonkaiStarRail",
+            "崩坏：星穹铁道 (Honkai: Star Rail)",
+        ),
         ("game_menu:ZZZ", "绝区零 (Zenless Zone Zero)"),
         ("game_menu:Wuwa", "鸣潮 (Wuthering Waves)"),
         ("game_menu:HonkaiImpact3rd", "崩坏 3rd (Honkai Impact 3rd)"),
-        ("game_menu:ArknightsEndfield", "明日方舟：终末地 (Arknights: Endfield)"),
+        (
+            "game_menu:ArknightsEndfield",
+            "明日方舟：终末地 (Arknights: Endfield)",
+        ),
     ];
 
     for (id, label) in games_order {
@@ -434,11 +450,14 @@ fn build_game_menu<R: tauri::Runtime, M: tauri::Manager<R>>(
 fn show_game_select_menu(app_handle: &AppHandle, action: &HotkeyAction) {
     let detector = platform::get_foreground_detector();
     let (x, y) = detector.get_cursor_position().unwrap_or((100, 100));
-    let _ = app_handle.emit("show-game-select", serde_json::json!({
-        "x": x,
-        "y": y,
-        "action": format!("{:?}", action),
-    }));
+    let _ = app_handle.emit(
+        "show-game-select",
+        serde_json::json!({
+            "x": x,
+            "y": y,
+            "action": format!("{:?}", action),
+        }),
+    );
 }
 
 /// 重新注册所有快捷键（Tauri 命令）
@@ -449,7 +468,10 @@ fn show_game_select_menu(app_handle: &AppHandle, action: &HotkeyAction) {
 /// # Errors
 /// - 快捷键注册失败时返回错误
 #[tauri::command]
-pub fn reregister_hotkeys(hotkey_mgr: State<'_, Arc<HotkeyManager>>, window_hotkey: Option<String>) -> Result<(), String> {
+pub fn reregister_hotkeys(
+    hotkey_mgr: State<'_, Arc<HotkeyManager>>,
+    window_hotkey: Option<String>,
+) -> Result<(), String> {
     // 如果传入了新的窗口热键，先更新设置中的值（让 register_all 读取到最新值）
     if let Some(ref hk) = window_hotkey {
         let mut settings = settings_store::get_settings();
@@ -573,7 +595,9 @@ pub(crate) fn parse_game(game: &str) -> Result<TargetGame, String> {
         "wuwa" | "wutheringwaves" => Ok(TargetGame::Wuwa),
         "zzz" | "zenlesszonezero" => Ok(TargetGame::ZZZ),
         "honkaiimpact3rd" | "hi3" => Ok(TargetGame::HonkaiImpact3rd),
-        "arknightsendfield" | "endfield" | "af" | "arknights endfield" => Ok(TargetGame::ArknightsEndfield),
+        "arknightsendfield" | "endfield" | "af" | "arknights endfield" => {
+            Ok(TargetGame::ArknightsEndfield)
+        }
         _ => Err(format!("Unknown game: {}", game)),
     }
 }
@@ -677,7 +701,10 @@ mod tests {
             (500, 500),
             Some("StarRail.exe".to_string()),
         );
-        assert!(matches!(r, HotkeyDecision::ShowWithGame(TargetGame::HonkaiStarRail)));
+        assert!(matches!(
+            r,
+            HotkeyDecision::ShowWithGame(TargetGame::HonkaiStarRail)
+        ));
     }
 
     /// 纯函数窗口热键决策：窗口不可见 + 前台未匹配（`notepad.exe`）→ `PickGameWithMenu`
@@ -687,14 +714,11 @@ mod tests {
     /// 仅保留进程名，不包含游戏信息。
     #[test]
     fn test_hotkey_decision_invisible_no_game_triggers_pick() {
-        let r = handle_window_hotkey_pure(
-            false,
-            None,
-            (123, 456),
-            Some("notepad.exe".to_string()),
-        );
+        let r = handle_window_hotkey_pure(false, None, (123, 456), Some("notepad.exe".to_string()));
         match r {
-            HotkeyDecision::PickGameWithMenu { foreground_process_name } => {
+            HotkeyDecision::PickGameWithMenu {
+                foreground_process_name,
+            } => {
                 assert_eq!(foreground_process_name.as_deref(), Some("notepad.exe"));
             }
             other => panic!("Expected PickGameWithMenu, got {:?}", other),

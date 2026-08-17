@@ -11,6 +11,9 @@
 //!
 //! 本测试默认接受此架构差异，将两者映射比较。
 
+// 同 lib.rs：关闭主观的 pedantic / nursery 两组，保留 `-D warnings` 把关真实问题。
+#![allow(clippy::pedantic, clippy::nursery)]
+
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -81,7 +84,10 @@ fn normalize_ini_content(s: &str) -> String {
         }
         // 移除纯注释行（保留 NRMM/DISABLED 注释以对照）
         if trimmed.starts_with(';') {
-            if trimmed.contains("NRMM") || trimmed.contains("DISABLED") || trimmed.starts_with("; \"") {
+            if trimmed.contains("NRMM")
+                || trimmed.contains("DISABLED")
+                || trimmed.starts_with("; \"")
+            {
                 out.push_str(line.trim_end());
                 out.push('\n');
             }
@@ -139,16 +145,23 @@ fn test_dataset_parity_update_mod_data() {
     let game_mods_path = mods_dir;
 
     // 运行 update_mod_data
-    println!("[parity] 执行 update_mod_data(GenshinImpact, {:?})", game_mods_path);
+    println!(
+        "[parity] 执行 update_mod_data(GenshinImpact, {:?})",
+        game_mods_path
+    );
     let settings = AppSettings::default();
-    let result = match mod_manager::update_mod_data(TargetGame::GenshinImpact, &game_mods_path, &settings) {
-        Ok(r) => r,
-        Err(e) => panic!("update_mod_data 失败: {:#}", e),
-    };
+    let result =
+        match mod_manager::update_mod_data(TargetGame::GenshinImpact, &game_mods_path, &settings) {
+            Ok(r) => r,
+            Err(e) => panic!("update_mod_data 失败: {:#}", e),
+        };
 
     println!(
         "[parity] 结果: enabled={}, processed={}, errors={}, groups={}",
-        result.enabled_mods, result.processed_mods, result.errors.len(), result.total_groups
+        result.enabled_mods,
+        result.processed_mods,
+        result.errors.len(),
+        result.total_groups
     );
 
     if result.processed_mods == 0 {
@@ -178,7 +191,10 @@ fn test_dataset_parity_update_mod_data() {
             let a_lines: Vec<&str> = na.lines().collect();
             let e_lines: Vec<&str> = ne.lines().collect();
             if a_lines.len() <= e_lines.len() {
-                println!("[INFO] d3dx.ini 已剥离 NRMM 注入块（{} 行差异）", e_lines.len() as isize - a_lines.len() as isize);
+                println!(
+                    "[INFO] d3dx.ini 已剥离 NRMM 注入块（{} 行差异）",
+                    e_lines.len() as isize - a_lines.len() as isize
+                );
             } else {
                 diff_lines("d3dx.ini", &na, &ne);
             }
@@ -207,8 +223,14 @@ fn compare_managed_files(actual_root: &Path, base_root: &Path) {
         let actual = read_file_lossy(&actual_p);
         let expected = read_file_lossy(&expect_p);
 
-        if !actual_p.exists() { println!("[MISSING] {}", fname); continue; }
-        if !expect_p.exists() { println!("[NO_BASELINE] {}", fname); continue; }
+        if !actual_p.exists() {
+            println!("[MISSING] {}", fname);
+            continue;
+        }
+        if !expect_p.exists() {
+            println!("[NO_BASELINE] {}", fname);
+            continue;
+        }
 
         let na = normalize_paths(&actual);
         let ne = normalize_paths(&expected);
@@ -227,8 +249,14 @@ fn compare_group_ini(actual_root: &Path, base_root: &Path) {
     let actual_p = actual_root.join("group_1").join("group_1.ini");
     let expect_p = base_root.join("group_1").join("group_1.ini");
 
-    if !actual_p.exists() { println!("[MISSING] group_1.ini"); return; }
-    if !expect_p.exists() { println!("[NO_BASELINE] group_1.ini"); return; }
+    if !actual_p.exists() {
+        println!("[MISSING] group_1.ini");
+        return;
+    }
+    if !expect_p.exists() {
+        println!("[NO_BASELINE] group_1.ini");
+        return;
+    }
 
     let na = normalize_ini_content(&normalize_paths(&read_file_lossy(&actual_p)));
     let ne = normalize_ini_content(&normalize_paths(&read_file_lossy(&expect_p)));
@@ -248,8 +276,13 @@ fn compare_mod_inis(actual_root: &Path, base_root: &Path) {
 }
 
 fn recurse_compare_mod_inis(dir: &Path, _base_dir: &Path, root_a: &Path, root_b: &Path) {
-    if !dir.is_dir() { return; }
-    let entries = match fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+    if !dir.is_dir() {
+        return;
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
 
     for entry in entries.flatten() {
         let p = entry.path();
@@ -259,12 +292,22 @@ fn recurse_compare_mod_inis(dir: &Path, _base_dir: &Path, root_a: &Path, root_b:
 
         if p.is_dir() {
             let n = name.to_string_lossy().into_owned();
-            if n.starts_with("DISABLED") { continue; }
+            if n.starts_with("DISABLED") {
+                continue;
+            }
             recurse_compare_mod_inis(&p, &bp, root_a, root_b);
         } else if p.extension().map(|e| e == "ini").unwrap_or(false) {
             let n = name.to_string_lossy();
-            if n.starts_with("group_") || n.contains("nrmm_") || n.contains("manager_") || n == "desktop.ini" { continue; }
-            if !bp.exists() { continue; }
+            if n.starts_with("group_")
+                || n.contains("nrmm_")
+                || n.contains("manager_")
+                || n == "desktop.ini"
+            {
+                continue;
+            }
+            if !bp.exists() {
+                continue;
+            }
 
             let na = normalize_ini_content(&read_file_lossy(&p));
             let ne = normalize_ini_content(&read_file_lossy(&bp));
@@ -291,19 +334,27 @@ fn compare_backups(actual_root: &Path, base_root: &Path) {
 
         println!(
             "[BACKUP] Rust 产生 {} 个备份, 基准 {} 个备份",
-            a_backups.len(), b_backups.len()
+            a_backups.len(),
+            b_backups.len()
         );
     }
 }
 
 fn collect_backups(dir: &Path, out: &mut Vec<String>, root: &Path) {
-    if !dir.is_dir() { return; }
-    let entries = match fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+    if !dir.is_dir() {
+        return;
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
     for e in entries.flatten() {
         let p = e.path();
         let n = e.file_name().to_string_lossy().into_owned();
         if p.is_dir() {
-            if n.starts_with("DISABLED") { continue; }
+            if n.starts_with("DISABLED") {
+                continue;
+            }
             collect_backups(&p, out, root);
         } else if p.extension().map(|s| s == "baknamespace").unwrap_or(false)
             || n.contains("_managed_backup")
@@ -333,5 +384,11 @@ fn diff_lines(label: &str, actual: &str, expected: &str) {
     if diffs > 15 {
         println!("  ... 还有 {} 处差异未显示", diffs - 15);
     }
-    println!("  [{}] 总差异行数: {} (实际{}行 vs 期望{}行)", label, diffs, a.len(), e.len());
+    println!(
+        "  [{}] 总差异行数: {} (实际{}行 vs 期望{}行)",
+        label,
+        diffs,
+        a.len(),
+        e.len()
+    );
 }

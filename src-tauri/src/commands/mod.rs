@@ -9,5 +9,5 @@
 //! - 支持 async/await（耗时操作使用 spawn_blocking）
 //! - 返回 Result<T, String> 类型（错误自动序列化为字符串）
 
-pub mod settings_commands;
 pub mod mod_commands;
+pub mod settings_commands;

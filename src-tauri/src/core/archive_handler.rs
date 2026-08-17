@@ -11,21 +11,21 @@
 //! - 支持指定分组导入和自动选择分组导入（扫描 `group_1`, `group_2`... 找到第一个存在的分组）
 //! - 支持直接导入已解压的模组目录（同盘移动 / 跨盘复制 + trash 回收站）
 
-use anyhow::{Result, anyhow, Context};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::fs;
-use std::io::Write;
-use serde::{Serialize, Deserialize};
-use infer;
-use trash::delete;
-use std::sync::{Arc, Mutex};
-use rayon::prelude::*;
-use walkdir::WalkDir;
-use crate::core::resolution::{compute_limits, ResolutionLimits};
-use tauri::State;
 use crate::core::file_watcher::FileWatcher;
 use crate::core::file_watcher::WatcherGuard;
+use crate::core::resolution::{compute_limits, ResolutionLimits};
+use anyhow::{anyhow, Context, Result};
+use infer;
+use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+use tauri::State;
+use trash::delete;
+use walkdir::WalkDir;
 
 /// 压缩包类型枚举
 ///
@@ -163,7 +163,9 @@ pub fn detect_archive_type_robust(path: &Path) -> ArchiveType {
             let ext = kind.extension();
             log::debug!(
                 "detect_archive_type_robust: infer matched mime={} ext={} for {:?}",
-                mime, ext, path
+                mime,
+                ext,
+                path
             );
             match ext {
                 "zip" => ArchiveType::Zip,
@@ -174,11 +176,18 @@ pub fn detect_archive_type_robust(path: &Path) -> ArchiveType {
             }
         }
         Ok(None) => {
-            log::debug!("detect_archive_type_robust: infer returned None for {:?}, fallback to extension", path);
+            log::debug!(
+                "detect_archive_type_robust: infer returned None for {:?}, fallback to extension",
+                path
+            );
             detect_archive_type(path)
         }
         Err(e) => {
-            log::debug!("detect_archive_type_robust: infer error for {:?}: {}, fallback to extension", path, e);
+            log::debug!(
+                "detect_archive_type_robust: infer error for {:?}: {}, fallback to extension",
+                path,
+                e
+            );
             detect_archive_type(path)
         }
     }
@@ -280,7 +289,9 @@ fn get_7z_path() -> Result<PathBuf> {
     if let Some(path) = get_bundled_7z_path() {
         return Ok(path);
     }
-    Err(anyhow!("7z CLI not found in system PATH or application bundle."))
+    Err(anyhow!(
+        "7z CLI not found in system PATH or application bundle."
+    ))
 }
 
 /// 判断两个路径是否在同一磁盘（卷）上
@@ -299,8 +310,8 @@ fn get_7z_path() -> Result<PathBuf> {
 pub fn paths_on_same_disk(a: &Path, b: &Path) -> bool {
     #[cfg(windows)]
     {
-        use std::path::Prefix;
         use std::os::windows::ffi::OsStrExt;
+        use std::path::Prefix;
         fn get_prefix(path: &Path) -> Option<String> {
             let comp = path.components().next()?;
             if let std::path::Component::Prefix(prefix) = comp {
@@ -313,14 +324,16 @@ pub fn paths_on_same_disk(a: &Path, b: &Path) -> bool {
                         return Some(format!("vdisk_{}", (disk as char).to_ascii_lowercase()));
                     }
                     Prefix::UNC(server, share) => {
-                        let s: String = server.encode_wide()
+                        let s: String = server
+                            .encode_wide()
                             .chain(share.encode_wide())
                             .map(|c| (c as u32).to_string())
                             .collect();
                         return Some(format!("unc_{}", s.to_ascii_lowercase()));
                     }
                     Prefix::VerbatimUNC(server, share) => {
-                        let s: String = server.encode_wide()
+                        let s: String = server
+                            .encode_wide()
                             .chain(share.encode_wide())
                             .map(|c| (c as u32).to_string())
                             .collect();
@@ -371,8 +384,8 @@ fn extract_with_7z_cli(
 
     let mut cmd = Command::new(seven_zip_path);
     cmd.arg("x")
-       .arg("-y")
-       .arg(format!("-o{}", temp_dir.to_string_lossy()));
+        .arg("-y")
+        .arg(format!("-o{}", temp_dir.to_string_lossy()));
 
     if let Some(pw) = password {
         let sanitized: String = pw.chars().filter(|c| !c.is_control()).collect();
@@ -393,7 +406,10 @@ fn extract_with_7z_cli(
     let combined = format!("{}{}", stdout, stderr);
 
     if !output.status.success() {
-        if combined.contains("password") || combined.contains("Wrong password") || combined.contains("Encrypted") {
+        if combined.contains("password")
+            || combined.contains("Wrong password")
+            || combined.contains("Encrypted")
+        {
             let _ = fs::remove_dir_all(&temp_dir);
             return Err(anyhow!("PASSWORD_REQUIRED"));
         }
@@ -469,7 +485,9 @@ fn extract_7z_internal(
 
     if password.is_some() {
         // sevenz-rust 0.6 不直接支持密码解压，密码保护的 7z 应在前两级 7z CLI 中处理
-        return Err(anyhow!("Password-protected 7z not supported by internal extractor"));
+        return Err(anyhow!(
+            "Password-protected 7z not supported by internal extractor"
+        ));
     }
 
     let dest_base = temp_dir.clone();
@@ -492,10 +510,7 @@ fn extract_7z_internal(
                     }
                 }
                 let mut file = fs::File::create(&safe_path).map_err(|e| {
-                    sevenz_rust::Error::io_msg(
-                        e,
-                        format!("create file: {}", safe_path.display()),
-                    )
+                    sevenz_rust::Error::io_msg(e, format!("create file: {}", safe_path.display()))
                 })?;
                 std::io::copy(reader, &mut file).map_err(sevenz_rust::Error::io)?;
             }
@@ -523,10 +538,7 @@ fn extract_7z_internal(
 /// - 临时目录创建失败
 /// - 文件打开失败
 /// - `zip::ZipArchive::extract` 解压失败
-fn extract_zip_internal(
-    archive_path: &Path,
-    target_dir: &Path,
-) -> Result<PathBuf> {
+fn extract_zip_internal(archive_path: &Path, target_dir: &Path) -> Result<PathBuf> {
     let temp_dir = target_dir.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)?;
 
@@ -535,11 +547,12 @@ fn extract_zip_internal(
         archive_path
     );
 
-    let file = fs::File::open(archive_path)
-        .context("extract_zip_internal: failed to open archive")?;
-    let mut archive = zip::ZipArchive::new(file)
-        .context("extract_zip_internal: failed to read ZIP archive")?;
-    archive.extract(&temp_dir)
+    let file =
+        fs::File::open(archive_path).context("extract_zip_internal: failed to open archive")?;
+    let mut archive =
+        zip::ZipArchive::new(file).context("extract_zip_internal: failed to read ZIP archive")?;
+    archive
+        .extract(&temp_dir)
         .context("extract_zip_internal: ZIP extraction failed")?;
 
     Ok(temp_dir)
@@ -585,14 +598,17 @@ fn extract_rar_internal(
     };
 
     // 使用状态机模式逐文件解压
-    while let Some(header) = archive.read_header()
+    while let Some(header) = archive
+        .read_header()
         .context("extract_rar_internal: failed to read RAR header")?
     {
         archive = if header.entry().is_file() {
-            header.extract_with_base(&temp_dir)
+            header
+                .extract_with_base(&temp_dir)
                 .context("extract_rar_internal: failed to extract RAR entry")?
         } else {
-            header.skip()
+            header
+                .skip()
                 .context("extract_rar_internal: failed to skip RAR entry")?
         };
     }
@@ -641,13 +657,18 @@ fn extract_rar_internal(
 /// # Errors
 /// - 所有三级解压均失败时返回 `ExtractFailed`
 /// - 密码错误时返回 `PasswordRequired`
-pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<&str>) -> Result<ExtractResult> {
+pub fn extract_archive(
+    archive_path: &Path,
+    target_dir: &Path,
+    password: Option<&str>,
+) -> Result<ExtractResult> {
     let archive_type = detect_archive_type_robust(archive_path);
 
     if let ArchiveType::Unsupported(ext) = archive_type {
         return Ok(ExtractResult::UnsupportedFormat {
             ext,
-            message: "Unsupported archive format. Please manually extract .zip/.rar/.7z files.".to_string(),
+            message: "Unsupported archive format. Please manually extract .zip/.rar/.7z files."
+                .to_string(),
         });
     }
 
@@ -657,7 +678,10 @@ pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<
     if let Some(sys_7z) = get_system_7z_path() {
         match extract_with_7z_cli(&sys_7z, archive_path, target_dir, password) {
             Ok(temp_dir) => {
-                log::info!("extract_archive: system 7z succeeded for {:?}", archive_path);
+                log::info!(
+                    "extract_archive: system 7z succeeded for {:?}",
+                    archive_path
+                );
                 return finalize_extraction(archive_path, target_dir, &temp_dir);
             }
             Err(e) => {
@@ -677,7 +701,10 @@ pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<
     if let Some(bundled_7z) = get_bundled_7z_path() {
         match extract_with_7z_cli(&bundled_7z, archive_path, target_dir, password) {
             Ok(temp_dir) => {
-                log::info!("extract_archive: bundled 7z succeeded for {:?}", archive_path);
+                log::info!(
+                    "extract_archive: bundled 7z succeeded for {:?}",
+                    archive_path
+                );
                 return finalize_extraction(archive_path, target_dir, &temp_dir);
             }
             Err(e) => {
@@ -710,12 +737,19 @@ pub fn extract_archive(archive_path: &Path, target_dir: &Path, password: Option<
 
     match internal_result {
         Ok(temp_dir) => {
-            log::info!("extract_archive: internal extractor succeeded for {:?}", archive_path);
+            log::info!(
+                "extract_archive: internal extractor succeeded for {:?}",
+                archive_path
+            );
             finalize_extraction(archive_path, target_dir, &temp_dir)
         }
         Err(e) => {
             let msg = e.to_string();
-            log::error!("extract_archive: all tiers failed for {:?}: {}", archive_path, msg);
+            log::error!(
+                "extract_archive: all tiers failed for {:?}: {}",
+                archive_path,
+                msg
+            );
             let combined = if let Some(prev) = last_error {
                 format!("{}; internal: {}", prev, msg)
             } else {
@@ -773,7 +807,11 @@ fn finalize_extraction(
     // 展平单层包裹目录（对齐 Dart unwrapSingleFolderNesting）：压缩包内若仅包裹单一根目录，
     // 将其内容提升为模组目录直接内容
     if let Err(e) = unwrap_single_folder_nesting(&target_mod_path) {
-        log::warn!("finalize_extraction: 展平单层目录失败 {:?}: {}", target_mod_path, e);
+        log::warn!(
+            "finalize_extraction: 展平单层目录失败 {:?}: {}",
+            target_mod_path,
+            e
+        );
     }
 
     // 清理临时目录
@@ -861,10 +899,9 @@ fn move_entry_up(src: &Path, dst: &Path) -> Result<()> {
             fs::remove_file(dst)?;
         }
     }
-    if paths_on_same_disk(src, dst)
-        && fs::rename(src, dst).is_ok() {
-            return Ok(());
-        }
+    if paths_on_same_disk(src, dst) && fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
     // 跨盘回退：复制后删除源
     if src.is_dir() {
         copy_dir_deep(src, dst)?;
@@ -899,7 +936,10 @@ fn is_excluded_for_unwrap(name: &str) -> bool {
         return true;
     }
     // 图标文件（对应 Dart ConstantVar.modIconFilenames）
-    if crate::core::constants::ICON_EXTENSIONS.iter().any(|ext| lower.ends_with(*ext)) {
+    if crate::core::constants::ICON_EXTENSIONS
+        .iter()
+        .any(|ext| lower.ends_with(*ext))
+    {
         return true;
     }
     false
@@ -944,7 +984,11 @@ fn unique_path(path: &Path) -> PathBuf {
         return path.to_path_buf();
     }
     let parent = path.parent().unwrap_or(Path::new("."));
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     let mut counter = 1;
@@ -1026,7 +1070,10 @@ fn move_directory_contents(src: &Path, dst: &Path) -> Result<()> {
 /// - 复制操作失败（权限不足、磁盘空间不足等）
 pub fn import_directory(src: &Path, target_group_dir: &Path) -> Result<PathBuf> {
     if !src.is_dir() {
-        return Err(anyhow!("import_directory: src is not a directory: {:?}", src));
+        return Err(anyhow!(
+            "import_directory: src is not a directory: {:?}",
+            src
+        ));
     }
 
     let dir_name = src
@@ -1035,7 +1082,10 @@ pub fn import_directory(src: &Path, target_group_dir: &Path) -> Result<PathBuf> 
         .to_string_lossy()
         .to_string();
     if dir_name.is_empty() {
-        return Err(anyhow!("import_directory: src directory name is empty: {:?}", src));
+        return Err(anyhow!(
+            "import_directory: src directory name is empty: {:?}",
+            src
+        ));
     }
 
     fs::create_dir_all(target_group_dir)?;
@@ -1059,7 +1109,8 @@ pub fn import_directory(src: &Path, target_group_dir: &Path) -> Result<PathBuf> 
         Ok(_) => {}
         Err(e) => log::warn!(
             "import_directory: 回收原目录失败 {:?}: {}，原目录保留",
-            src, e
+            src,
+            e
         ),
     }
 
@@ -1132,10 +1183,9 @@ fn copy_one(src: &Path, dst: &Path) -> Result<()> {
 
     // 普通文件：同盘优先 rename，否则 copy
     let _ = fs::remove_file(dst);
-    if paths_on_same_disk(src, dst)
-        && fs::rename(src, dst).is_ok() {
-            return Ok(());
-        }
+    if paths_on_same_disk(src, dst) && fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
     fs::copy(src, dst).map(|_| ())?;
     Ok(())
 }
@@ -1161,7 +1211,11 @@ fn copy_one(src: &Path, dst: &Path) -> Result<()> {
 /// # Errors
 /// - `src_path` 既不是文件也不是目录
 /// - `metadata` 获取失败（路径不存在、权限不足等）
-pub fn import_item(src_path: &Path, target_group_dir: &Path, password: Option<&str>) -> Result<ExtractResult> {
+pub fn import_item(
+    src_path: &Path,
+    target_group_dir: &Path,
+    password: Option<&str>,
+) -> Result<ExtractResult> {
     let meta = fs::metadata(src_path)
         .map_err(|e| anyhow!("import_item: failed to stat {:?}: {}", src_path, e))?;
 
@@ -1217,7 +1271,11 @@ pub fn import_item(src_path: &Path, target_group_dir: &Path, password: Option<&s
 ///
 /// # Errors
 /// 同 `extract_archive`：7z 未找到、IO 错误、解压失败等
-pub fn import_mod(archive_path: &Path, group_dir: &Path, password: Option<&str>) -> Result<ExtractResult> {
+pub fn import_mod(
+    archive_path: &Path,
+    group_dir: &Path,
+    password: Option<&str>,
+) -> Result<ExtractResult> {
     extract_archive(archive_path, group_dir, password)
 }
 
@@ -1240,7 +1298,11 @@ pub fn import_mod(archive_path: &Path, group_dir: &Path, password: Option<&str>)
 ///
 /// # Errors
 /// 同 `import_mod`：7z 未找到、IO 错误、解压失败等
-pub fn import_mod_auto(archive_path: &Path, mods_path: &Path, password: Option<&str>) -> Result<ExtractResult> {
+pub fn import_mod_auto(
+    archive_path: &Path,
+    mods_path: &Path,
+    password: Option<&str>,
+) -> Result<ExtractResult> {
     use crate::core::constants;
     let managed_dir = mods_path.join(constants::MANAGED_FOLDER);
     if !managed_dir.exists() {
@@ -1406,7 +1468,11 @@ pub fn is_supported_archive_cmd(path: String) -> bool {
 /// # Errors
 /// - 解压失败（格式不支持、7z 未找到、密码错误等）
 #[tauri::command]
-pub async fn import_mod_cmd(archive_path: String, group_dir: String, password: Option<String>) -> Result<ExtractResult, String> {
+pub async fn import_mod_cmd(
+    archive_path: String,
+    group_dir: String,
+    password: Option<String>,
+) -> Result<ExtractResult, String> {
     // 路径边界校验（R1）：group_dir 必须位于任一已配置 mods_root 内
     // archive_path 是用户选择的压缩包来源，路径任意，不校验
     let group_dir = crate::config::settings_store::validate_managed_path(&group_dir)
@@ -1418,7 +1484,9 @@ pub async fn import_mod_cmd(archive_path: String, group_dir: String, password: O
             Path::new(&archive_path),
             Path::new(&group_dir),
             password.as_deref(),
-        ).map_err(|e| e.to_string()).map(|result| {
+        )
+        .map_err(|e| e.to_string())
+        .map(|result| {
             // 新导入目录补做 INI 备份（幂等，白名单同样生效，错误仅记录日志）
             if let ExtractResult::Success { ref mod_path, .. } = result {
                 crate::core::ini_backup::backup_ini_files(mod_path);
@@ -1435,13 +1503,19 @@ pub async fn import_mod_cmd(archive_path: String, group_dir: String, password: O
 /// 前端调用 `importModAuto` 触发。
 /// 使用 `spawn_blocking` 在后台线程解压。
 #[tauri::command]
-pub async fn import_mod_auto_cmd(archive_path: String, mods_path: String, password: Option<String>) -> Result<ExtractResult, String> {
+pub async fn import_mod_auto_cmd(
+    archive_path: String,
+    mods_path: String,
+    password: Option<String>,
+) -> Result<ExtractResult, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<ExtractResult, String> {
         import_mod_auto(
             Path::new(&archive_path),
             Path::new(&mods_path),
             password.as_deref(),
-        ).map_err(|e| e.to_string()).map(|result| {
+        )
+        .map_err(|e| e.to_string())
+        .map(|result| {
             // 新导入目录补做 INI 备份（幂等，白名单同样生效，错误仅记录日志）
             if let ExtractResult::Success { ref mod_path, .. } = result {
                 crate::core::ini_backup::backup_ini_files(mod_path);
@@ -1480,10 +1554,11 @@ pub async fn import_item_cmd(
     // 路径边界校验（R1）：target_group_dir 必须位于任一已配置 mods_root 内
     // items 是用户选择的源文件/压缩包，路径任意，不校验
     let mut req = req;
-    req.target_group_dir = crate::config::settings_store::validate_managed_path(&req.target_group_dir)
-        .map_err(|e| e.to_string())?
-        .to_string_lossy()
-        .to_string();
+    req.target_group_dir =
+        crate::config::settings_store::validate_managed_path(&req.target_group_dir)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .to_string();
     // 暂停文件监控
     {
         let w = watcher.lock().map_err(|e| e.to_string())?;
@@ -1656,8 +1731,16 @@ mod tests {
         let names: Vec<String> = (0..ar.len())
             .map(|i| ar.by_index(i).unwrap().name().to_string())
             .collect();
-        assert!(names.iter().any(|n| n.starts_with("MyMod/mod.ini")), "names={:?}", names);
-        assert!(names.iter().any(|n| n.contains("Textures/tex1.png")), "names={:?}", names);
+        assert!(
+            names.iter().any(|n| n.starts_with("MyMod/mod.ini")),
+            "names={:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n.contains("Textures/tex1.png")),
+            "names={:?}",
+            names
+        );
 
         // 验证文件内容可读
         let mut f = ar.by_name("MyMod/mod.ini").unwrap();
@@ -1679,7 +1762,11 @@ mod tests {
         let mut fd = fs::File::open(&sevenz_path).unwrap();
         let mut sig = [0u8; 6];
         fd.read_exact(&mut sig).unwrap();
-        assert_eq!(&sig, &[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C], "非法的 7z 签名");
+        assert_eq!(
+            &sig,
+            &[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C],
+            "非法的 7z 签名"
+        );
     }
 
     #[test]

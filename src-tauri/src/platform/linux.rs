@@ -6,7 +6,7 @@
 //!
 //! 如果所需工具未安装，返回不支持错误并提示安装命令。
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -181,9 +181,7 @@ impl LinuxKeySimulator {
             "return" => "Return",
             _ => key,
         };
-        let output = Command::new("wtype")
-            .args(["-k", key_name])
-            .output()?;
+        let output = Command::new("wtype").args(["-k", key_name]).output()?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("wtype -k failed: {}", stderr);
@@ -272,7 +270,9 @@ impl LinuxKeySimulator {
                 let _ = Command::new("wlrctl")
                     .args(["window", "focus", app_id])
                     .output();
-                let o = Command::new("wtype").args(["-k", "-M", "KP_Begin"]).output();
+                let o = Command::new("wtype")
+                    .args(["-k", "-M", "KP_Begin"])
+                    .output();
                 if let Ok(o) = o {
                     if o.status.success() {
                         return Ok(());
@@ -299,7 +299,9 @@ impl LinuxKeySimulator {
                 let _ = Command::new("wlrctl")
                     .args(["window", "focus", app_id])
                     .output();
-                let o = Command::new("wtype").args(["-k", "-m", "KP_Begin"]).output();
+                let o = Command::new("wtype")
+                    .args(["-k", "-m", "KP_Begin"])
+                    .output();
                 if let Ok(o) = o {
                     if o.status.success() {
                         return Ok(());
@@ -359,7 +361,11 @@ impl super::KeySimulator for LinuxKeySimulator {
             KeyMethod::Ydotool => {
                 let has_wlrctl = Command::new("wlrctl").arg("--version").output().is_ok();
                 let has_wtype = Command::new("wtype").output().is_ok()
-                    || Command::new("which").arg("wtype").output().map(|o| o.status.success()).unwrap_or(false);
+                    || Command::new("which")
+                        .arg("wtype")
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
                 if has_wlrctl && has_wtype {
                     self.wayland_method = Some(WaylandMethod::WlrctlWtype {
                         app_id: process_name.to_lowercase(),
@@ -390,7 +396,7 @@ impl super::KeySimulator for LinuxKeySimulator {
             KeyMethod::Unsupported(reason) => Err(anyhow!(reason.clone())),
         }
     }
-    
+
     fn simulate_select_mod(&mut self) -> Result<()> {
         match &self.method {
             KeyMethod::XTest => {
@@ -408,7 +414,7 @@ impl super::KeySimulator for LinuxKeySimulator {
             KeyMethod::Unsupported(reason) => Err(anyhow!(reason.clone())),
         }
     }
-    
+
     fn simulate_f10(&mut self) -> Result<()> {
         match &self.method {
             KeyMethod::XTest => {
@@ -439,7 +445,10 @@ impl super::KeySimulator for LinuxKeySimulator {
                             .output();
                         let o = Command::new("wtype").args(["-k", "F10"]).output()?;
                         if !o.status.success() {
-                            anyhow::bail!("wtype -k F10 failed: {}", String::from_utf8_lossy(&o.stderr));
+                            anyhow::bail!(
+                                "wtype -k F10 failed: {}",
+                                String::from_utf8_lossy(&o.stderr)
+                            );
                         }
                         Ok(())
                     })();
@@ -454,9 +463,7 @@ impl super::KeySimulator for LinuxKeySimulator {
                     .map_err(|e| anyhow!("ydotool key F10 failed: {}", e))?;
                 Ok(())
             }
-            KeyMethod::Unsupported(msg) => {
-                Err(anyhow!("F10 keypress not supported: {}", msg))
-            }
+            KeyMethod::Unsupported(msg) => Err(anyhow!("F10 keypress not supported: {}", msg)),
         }
     }
 
@@ -524,18 +531,20 @@ impl super::ForegroundDetector for LinuxForegroundDetector {
                 if !pid_output.status.success() {
                     anyhow::bail!("xdotool getactivewindow failed");
                 }
-                let pid_str = String::from_utf8_lossy(&pid_output.stdout).trim().to_string();
+                let pid_str = String::from_utf8_lossy(&pid_output.stdout)
+                    .trim()
+                    .to_string();
                 let pid: u32 = pid_str.parse().map_err(|_| anyhow!("Invalid PID"))?;
                 let comm_path = format!("/proc/{}/comm", pid);
                 let comm = std::fs::read_to_string(&comm_path)?;
                 Ok(comm.trim().to_string())
             }
-            ForegroundMethod::WlCtrl | ForegroundMethod::Unsupported => {
-                Err(anyhow!("Foreground detection not available on this compositor"))
-            }
+            ForegroundMethod::WlCtrl | ForegroundMethod::Unsupported => Err(anyhow!(
+                "Foreground detection not available on this compositor"
+            )),
         }
     }
-    
+
     fn get_cursor_position(&self) -> Result<(i32, i32)> {
         match &self.method {
             ForegroundMethod::X11 => {
@@ -562,19 +571,23 @@ impl super::ForegroundDetector for LinuxForegroundDetector {
 /// 获取 Linux 平台信息
 pub fn get_linux_platform_info() -> super::PlatformInfo {
     let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
-    
+
     let key_sim = LinuxKeySimulator::new();
     let (key_supported, key_error) = match key_sim.check_support() {
         Ok(()) => (true, None),
         Err(e) => (false, Some(e)),
     };
-    
+
     let fg = LinuxForegroundDetector::new();
     let fg_supported = matches!(fg.method, ForegroundMethod::X11);
-    
+
     super::PlatformInfo {
         os: "linux".to_string(),
-        session_type: if session.is_empty() { None } else { Some(session) },
+        session_type: if session.is_empty() {
+            None
+        } else {
+            Some(session)
+        },
         keypress_supported: key_supported,
         keypress_error: key_error,
         foreground_detection_supported: fg_supported,

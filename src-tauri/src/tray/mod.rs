@@ -13,9 +13,9 @@ use crate::hotkey::HotkeyManager;
 use crate::models::enums::TargetGame;
 use std::sync::Arc;
 use tauri::{
-    AppHandle, Emitter, Manager,
-    tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState},
     menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Manager,
 };
 
 /// 托盘菜单 i18n 翻译表（中文）
@@ -124,31 +124,88 @@ fn handle_quit(app: &AppHandle) {
 pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let lang = settings_store::get_language();
 
-    let show_wuwa = MenuItem::with_id(app, "showGameWuwa", tray_lang_str(&lang, "showGameWuwa"), true, None::<&str>)?;
-    let show_genshin = MenuItem::with_id(app, "showGameGenshin", tray_lang_str(&lang, "showGameGenshin"), true, None::<&str>)?;
-    let show_hsr = MenuItem::with_id(app, "showGameHSR", tray_lang_str(&lang, "showGameHSR"), true, None::<&str>)?;
-    let show_zzz = MenuItem::with_id(app, "showGameZZZ", tray_lang_str(&lang, "showGameZZZ"), true, None::<&str>)?;
-    let show_hi3 = MenuItem::with_id(app, "showGameHi3", tray_lang_str(&lang, "showGameHi3"), true, None::<&str>)?;
-    let show_endfield = MenuItem::with_id(app, "showGameEndfield", tray_lang_str(&lang, "showGameEndfield"), true, None::<&str>)?;
+    let show_wuwa = MenuItem::with_id(
+        app,
+        "showGameWuwa",
+        tray_lang_str(&lang, "showGameWuwa"),
+        true,
+        None::<&str>,
+    )?;
+    let show_genshin = MenuItem::with_id(
+        app,
+        "showGameGenshin",
+        tray_lang_str(&lang, "showGameGenshin"),
+        true,
+        None::<&str>,
+    )?;
+    let show_hsr = MenuItem::with_id(
+        app,
+        "showGameHSR",
+        tray_lang_str(&lang, "showGameHSR"),
+        true,
+        None::<&str>,
+    )?;
+    let show_zzz = MenuItem::with_id(
+        app,
+        "showGameZZZ",
+        tray_lang_str(&lang, "showGameZZZ"),
+        true,
+        None::<&str>,
+    )?;
+    let show_hi3 = MenuItem::with_id(
+        app,
+        "showGameHi3",
+        tray_lang_str(&lang, "showGameHi3"),
+        true,
+        None::<&str>,
+    )?;
+    let show_endfield = MenuItem::with_id(
+        app,
+        "showGameEndfield",
+        tray_lang_str(&lang, "showGameEndfield"),
+        true,
+        None::<&str>,
+    )?;
     let separator1 = PredefinedMenuItem::separator(app)?;
-    let reset_position = MenuItem::with_id(app, "resetWindowPosition", tray_lang_str(&lang, "resetWindowPosition"), true, None::<&str>)?;
-    let toggle_visibility = MenuItem::with_id(app, "toggleVisibility", tray_lang_str(&lang, "toggleVisibility"), true, None::<&str>)?;
+    let reset_position = MenuItem::with_id(
+        app,
+        "resetWindowPosition",
+        tray_lang_str(&lang, "resetWindowPosition"),
+        true,
+        None::<&str>,
+    )?;
+    let toggle_visibility = MenuItem::with_id(
+        app,
+        "toggleVisibility",
+        tray_lang_str(&lang, "toggleVisibility"),
+        true,
+        None::<&str>,
+    )?;
     let separator2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", tray_lang_str(&lang, "quit"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit",
+        tray_lang_str(&lang, "quit"),
+        true,
+        None::<&str>,
+    )?;
 
-    let menu = Menu::with_items(app, &[
-        &show_wuwa,
-        &show_genshin,
-        &show_hsr,
-        &show_zzz,
-        &show_hi3,
-        &show_endfield,
-        &separator1,
-        &reset_position,
-        &toggle_visibility,
-        &separator2,
-        &quit,
-    ])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &show_wuwa,
+            &show_genshin,
+            &show_hsr,
+            &show_zzz,
+            &show_hi3,
+            &show_endfield,
+            &separator1,
+            &reset_position,
+            &toggle_visibility,
+            &separator2,
+            &quit,
+        ],
+    )?;
 
     let _tray = TrayIconBuilder::new()
         .tooltip(tray_lang_str(&lang, "tooltip"))
@@ -162,27 +219,57 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 // 游戏切换涉及写设置文件（阻塞IO），在新线程中执行避免阻塞托盘回调
                 "showGameWuwa" => {
                     let app_handle = app.clone();
-                    crate::utils::spawn_safe("tray_game_switch_wuwa", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::Wuwa)));
+                    crate::utils::spawn_safe(
+                        "tray_game_switch_wuwa",
+                        std::panic::AssertUnwindSafe(move || {
+                            handle_game_switch(&app_handle, TargetGame::Wuwa)
+                        }),
+                    );
                 }
                 "showGameGenshin" => {
                     let app_handle = app.clone();
-                    crate::utils::spawn_safe("tray_game_switch_genshin", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::GenshinImpact)));
+                    crate::utils::spawn_safe(
+                        "tray_game_switch_genshin",
+                        std::panic::AssertUnwindSafe(move || {
+                            handle_game_switch(&app_handle, TargetGame::GenshinImpact)
+                        }),
+                    );
                 }
                 "showGameHSR" => {
                     let app_handle = app.clone();
-                    crate::utils::spawn_safe("tray_game_switch_hsr", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::HonkaiStarRail)));
+                    crate::utils::spawn_safe(
+                        "tray_game_switch_hsr",
+                        std::panic::AssertUnwindSafe(move || {
+                            handle_game_switch(&app_handle, TargetGame::HonkaiStarRail)
+                        }),
+                    );
                 }
                 "showGameZZZ" => {
                     let app_handle = app.clone();
-                    crate::utils::spawn_safe("tray_game_switch_zzz", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::ZZZ)));
+                    crate::utils::spawn_safe(
+                        "tray_game_switch_zzz",
+                        std::panic::AssertUnwindSafe(move || {
+                            handle_game_switch(&app_handle, TargetGame::ZZZ)
+                        }),
+                    );
                 }
                 "showGameHi3" => {
                     let app_handle = app.clone();
-                    crate::utils::spawn_safe("tray_game_switch_hi3", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::HonkaiImpact3rd)));
+                    crate::utils::spawn_safe(
+                        "tray_game_switch_hi3",
+                        std::panic::AssertUnwindSafe(move || {
+                            handle_game_switch(&app_handle, TargetGame::HonkaiImpact3rd)
+                        }),
+                    );
                 }
                 "showGameEndfield" => {
                     let app_handle = app.clone();
-                    crate::utils::spawn_safe("tray_game_switch_endfield", std::panic::AssertUnwindSafe(move || handle_game_switch(&app_handle, TargetGame::ArknightsEndfield)));
+                    crate::utils::spawn_safe(
+                        "tray_game_switch_endfield",
+                        std::panic::AssertUnwindSafe(move || {
+                            handle_game_switch(&app_handle, TargetGame::ArknightsEndfield)
+                        }),
+                    );
                 }
                 "resetWindowPosition" => {
                     let _ = crate::window::reset_window_position(app.clone(), "main".to_string());

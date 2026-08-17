@@ -3,13 +3,13 @@
 //! 核心思路：以 canonicalize 后的路径作为键，将 `IniFile` 解析结果缓存到内存中，
 //! 配合文件修改时间（`modified_at`）判断缓存是否失效。
 
+use crate::core::ini_handler::IniFile;
+use anyhow::Result;
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-use once_cell::sync::Lazy;
-use parking_lot::RwLock;
-use crate::core::ini_handler::IniFile;
-use anyhow::Result;
 
 /// 缓存的 INI 条目，包含解析结果和文件修改时间戳。
 #[derive(Debug, Clone)]
@@ -38,12 +38,18 @@ pub struct D3dxIniCache {
 
 impl Default for D3dxIniCache {
     /// 创建空缓存实例（等价于 `new()`）。
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl D3dxIniCache {
     /// 创建一个新的空 d3dx.ini 缓存。
-    pub fn new() -> Self { Self { inner: HashMap::new() } }
+    pub fn new() -> Self {
+        Self {
+            inner: HashMap::new(),
+        }
+    }
 
     /// 获取或解析指定路径的 INI 文件。
     ///
@@ -79,7 +85,11 @@ impl D3dxIniCache {
         let mt_val = mt.unwrap_or_else(SystemTime::now);
         self.inner.insert(
             norm,
-            CachedIni { parsed: parsed.clone(), modified_at: mt_val, len },
+            CachedIni {
+                parsed: parsed.clone(),
+                modified_at: mt_val,
+                len,
+            },
         );
         Ok(parsed)
     }

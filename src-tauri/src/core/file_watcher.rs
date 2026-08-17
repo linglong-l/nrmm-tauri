@@ -8,16 +8,16 @@
 //! - 过滤无关事件：临时文件、备份文件、隐藏文件不触发刷新
 //! - 缓存失效：文件变化后自动失效模组缓存并通知前端刷新
 
+use crate::core::constants;
+use anyhow::Result;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
-use anyhow::Result;
-use std::sync::{Arc, Mutex};
-use once_cell::sync::Lazy;
-use crate::core::constants;
 
 /// 全局文件监控暂停标志（引用计数，0=未暂停，>0=暂停）
 ///
@@ -189,149 +189,153 @@ impl FileWatcher {
         let paused_clone = self.paused.clone();
 
         let updater = Arc::new(Mutex::new(
-            crate::core::incremental_updater::IncrementalUpdater::new(debounce_duration.as_millis() as u64),
+            crate::core::incremental_updater::IncrementalUpdater::new(
+                debounce_duration.as_millis() as u64,
+            ),
         ));
         let updater_clone = updater.clone();
 
         // 启动防抖线程：消费 channel 事件，实现防抖 + 增量更新管线
         // 管线流程：collect（收集变更路径）→ consolidate（合并根路径）→ scan_partial_path（局部重扫）
         // → subtree_replace（替换缓存子树）→ emit（通知前端）
-        crate::utils::spawn_safe("file_watcher_debounce", std::panic::AssertUnwindSafe(move || {
-            loop {
-                // 50ms 超时轮询：收到事件立即处理，超时后检查防抖就绪状态
-                match rx.recv_timeout(Duration::from_millis(50)) {
-                    Ok(event) => {
-                        use notify::EventKind;
-                        // 仅关注 Create/Remove/Modify 事件，忽略 Access 等元数据事件
-                        let should_trigger = matches!(
-                            event.kind,
-                            EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(_)
-                        );
-                        if !should_trigger {
-                            continue;
-                        }
-                        let backup_suffix = format!(".{}", constants::BACKUP_EXTENSION);
-                        let manager_backup_suffix = format!(".{}", constants::INI_MANAGER_BACKUP_SUFFIX);
-                        // 过滤临时文件（.tmp）、备份文件（NRMM 注入备份 + INI 启动备份）、隐藏文件（以 . 开头）
-                        for p in event.paths {
-                            let path_str = p.to_string_lossy();
-                            let file_name = p
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default();
-                            let relevant = !path_str.contains(".tmp")
-                                && !path_str.ends_with(&backup_suffix)
-                                && !path_str.ends_with(&manager_backup_suffix)
-                                && !file_name.starts_with('.');
-                            if relevant {
-                                // 收集相关变更路径到 IncrementalUpdater
-                                if let Ok(mut u) = updater_clone.lock() {
-                                    u.collect(p.clone());
-                                }
-                            }
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        // 超时：检查是否过了防抖期（自上次 collect 后已过 300ms）
-                        let ready = updater_clone
-                            .lock()
-                            .map(|u| u.is_ready())
-                            .unwrap_or(false);
-                        if ready {
-                            // 检查暂停标志（全局引用计数 + 实例级），任一为 true 则跳过触发
-                            let paused_global = WATCHER_PAUSED.load(Ordering::Acquire) > 0;
-                            let paused_local = paused_clone.load(Ordering::SeqCst);
-                            if paused_global || paused_local {
-                                if let Ok(mut u) = updater_clone.lock() {
-                                    u.reset();
-                                }
+        crate::utils::spawn_safe(
+            "file_watcher_debounce",
+            std::panic::AssertUnwindSafe(move || {
+                loop {
+                    // 50ms 超时轮询：收到事件立即处理，超时后检查防抖就绪状态
+                    match rx.recv_timeout(Duration::from_millis(50)) {
+                        Ok(event) => {
+                            use notify::EventKind;
+                            // 仅关注 Create/Remove/Modify 事件，忽略 Access 等元数据事件
+                            let should_trigger = matches!(
+                                event.kind,
+                                EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(_)
+                            );
+                            if !should_trigger {
                                 continue;
                             }
+                            let backup_suffix = format!(".{}", constants::BACKUP_EXTENSION);
+                            let manager_backup_suffix =
+                                format!(".{}", constants::INI_MANAGER_BACKUP_SUFFIX);
+                            // 过滤临时文件（.tmp）、备份文件（NRMM 注入备份 + INI 启动备份）、隐藏文件（以 . 开头）
+                            for p in event.paths {
+                                let path_str = p.to_string_lossy();
+                                let file_name = p
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                let relevant = !path_str.contains(".tmp")
+                                    && !path_str.ends_with(&backup_suffix)
+                                    && !path_str.ends_with(&manager_backup_suffix)
+                                    && !file_name.starts_with('.');
+                                if relevant {
+                                    // 收集相关变更路径到 IncrementalUpdater
+                                    if let Ok(mut u) = updater_clone.lock() {
+                                        u.collect(p.clone());
+                                    }
+                                }
+                            }
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            // 超时：检查是否过了防抖期（自上次 collect 后已过 300ms）
+                            let ready = updater_clone.lock().map(|u| u.is_ready()).unwrap_or(false);
+                            if ready {
+                                // 检查暂停标志（全局引用计数 + 实例级），任一为 true 则跳过触发
+                                let paused_global = WATCHER_PAUSED.load(Ordering::Acquire) > 0;
+                                let paused_local = paused_clone.load(Ordering::SeqCst);
+                                if paused_global || paused_local {
+                                    if let Ok(mut u) = updater_clone.lock() {
+                                        u.reset();
+                                    }
+                                    continue;
+                                }
 
-                            // consolidate：将收集到的路径合并为根路径（如从多个子文件合并到其父目录）
-                            let consolidated = {
-                                let mut u = crate::utils::lock_or_recover(&updater_clone);
-                                let paths = u.consolidate(&managed_path_clone);
-                                u.reset();
-                                paths
-                            };
+                                // consolidate：将收集到的路径合并为根路径（如从多个子文件合并到其父目录）
+                                let consolidated = {
+                                    let mut u = crate::utils::lock_or_recover(&updater_clone);
+                                    let paths = u.consolidate(&managed_path_clone);
+                                    u.reset();
+                                    paths
+                                };
 
-                            log::info!(
-                                "[Incremental] consolidated {} root path(s) for refresh",
-                                consolidated.len()
-                            );
+                                log::info!(
+                                    "[Incremental] consolidated {} root path(s) for refresh",
+                                    consolidated.len()
+                                );
 
-                            let current_game =
-                                crate::config::settings_store::get_settings().target_game;
-                            let mods_path_buf = managed_path_clone
-                                .parent()
-                                .map(|p| p.to_path_buf())
-                                .unwrap_or_else(|| managed_path_clone.clone());
+                                let current_game =
+                                    crate::config::settings_store::get_settings().target_game;
+                                let mods_path_buf = managed_path_clone
+                                    .parent()
+                                    .map(|p| p.to_path_buf())
+                                    .unwrap_or_else(|| managed_path_clone.clone());
 
-                            // 对每个合并后的根路径执行局部重扫，并 subtree_replace 到缓存
-                            {
-                                let mut cache_guard =
-                                    crate::core::mod_cache::MOD_CACHE.write();
-                                for sub in &consolidated {
-                                    // 收敛根已不存在（整组目录被删除）：scan_partial_path 会退化为
-                                    // 全量扫描，但合并策略不会移除已删分组，缓存会残留已删除的组/模组。
-                                    // 直接使该游戏缓存失效，下次 get_mods 全量重扫兜底。
-                                    if !sub.exists() {
-                                        log::info!(
+                                // 对每个合并后的根路径执行局部重扫，并 subtree_replace 到缓存
+                                {
+                                    let mut cache_guard = crate::core::mod_cache::MOD_CACHE.write();
+                                    for sub in &consolidated {
+                                        // 收敛根已不存在（整组目录被删除）：scan_partial_path 会退化为
+                                        // 全量扫描，但合并策略不会移除已删分组，缓存会残留已删除的组/模组。
+                                        // 直接使该游戏缓存失效，下次 get_mods 全量重扫兜底。
+                                        if !sub.exists() {
+                                            log::info!(
                                             "[Incremental] consolidated root no longer exists, invalidating game cache: {:?}",
                                             sub
                                         );
-                                        cache_guard.invalidate_game(current_game);
-                                        continue;
-                                    }
-                                    match crate::core::mod_scanner::scan_partial_path(
-                                        &mods_path_buf,
-                                        sub,
-                                    ) {
-                                        Ok(partial) => {
-                                            cache_guard.subtree_replace(
-                                                current_game,
-                                                &mods_path_buf,
-                                                partial,
-                                            );
+                                            cache_guard.invalidate_game(current_game);
+                                            continue;
                                         }
-                                        Err(e) => log::error!(
-                                            "[Incremental] scan_partial_path failed for {}: {}",
-                                            sub.display(),
-                                            e
-                                        ),
+                                        match crate::core::mod_scanner::scan_partial_path(
+                                            &mods_path_buf,
+                                            sub,
+                                        ) {
+                                            Ok(partial) => {
+                                                cache_guard.subtree_replace(
+                                                    current_game,
+                                                    &mods_path_buf,
+                                                    partial,
+                                                );
+                                            }
+                                            Err(e) => log::error!(
+                                                "[Incremental] scan_partial_path failed for {}: {}",
+                                                sub.display(),
+                                                e
+                                            ),
+                                        }
                                     }
                                 }
-                            }
 
-                            let window_visible = app_handle
-                                .get_webview_window("main")
-                                .and_then(|w| w.is_visible().ok())
-                                .unwrap_or(false);
+                                let window_visible = app_handle
+                                    .get_webview_window("main")
+                                    .and_then(|w| w.is_visible().ok())
+                                    .unwrap_or(false);
 
-                            // 窗口可见时 emit 前端事件通知刷新；窗口隐藏时仅合并缓存（静默更新）
-                            if window_visible {
-                                // emit managed-folder-changed：通知前端扫描目录变化
-                                let _ = app_handle.emit(
-                                    "managed-folder-changed",
-                                    managed_path_clone.as_os_str(),
-                                );
-                                // emit managed-partial-update：携带增量更新详情（consolidatedRoots + game）
-                                let payload = serde_json::json!({
-                                    "consolidatedRoots": consolidated,
-                                    "game": format!("{:?}", current_game),
-                                });
-                                let _ = app_handle.emit("managed-partial-update", payload);
-                            } else {
-                                log::info!("[Incremental] window hidden -> merged cache silently");
+                                // 窗口可见时 emit 前端事件通知刷新；窗口隐藏时仅合并缓存（静默更新）
+                                if window_visible {
+                                    // emit managed-folder-changed：通知前端扫描目录变化
+                                    let _ = app_handle.emit(
+                                        "managed-folder-changed",
+                                        managed_path_clone.as_os_str(),
+                                    );
+                                    // emit managed-partial-update：携带增量更新详情（consolidatedRoots + game）
+                                    let payload = serde_json::json!({
+                                        "consolidatedRoots": consolidated,
+                                        "game": format!("{:?}", current_game),
+                                    });
+                                    let _ = app_handle.emit("managed-partial-update", payload);
+                                } else {
+                                    log::info!(
+                                        "[Incremental] window hidden -> merged cache silently"
+                                    );
+                                }
                             }
                         }
+                        // channel 发送端已关闭（stop_watching 时 drop tx），线程退出
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
-                    // channel 发送端已关闭（stop_watching 时 drop tx），线程退出
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 }
-            }
-        }));
+            }),
+        );
 
         self.watcher = Some(watcher);
         self._tx = Some(tx);
@@ -389,7 +393,11 @@ impl FileWatcher {
     ///
     /// # Errors
     /// 同 `start_watching`：目录创建失败或 notify watcher 初始化失败。
-    pub fn switch_watched_path(&mut self, app_handle: AppHandle, game_mods_path: &Path) -> Result<()> {
+    pub fn switch_watched_path(
+        &mut self,
+        app_handle: AppHandle,
+        game_mods_path: &Path,
+    ) -> Result<()> {
         self.stop_watching();
         self.start_watching(app_handle, game_mods_path)
     }
@@ -498,9 +506,7 @@ pub fn resume_file_watcher(
 /// 前端调用 `isFileWatcherRunning` 触发，用于 `window-shown` 时判断监控是否需要重启。
 /// 例如窗口从隐藏到显示时，如果监控已停止则需要重新启动。
 #[tauri::command]
-pub fn is_file_watcher_running(
-    watcher: tauri::State<'_, Arc<Mutex<FileWatcher>>>,
-) -> bool {
+pub fn is_file_watcher_running(watcher: tauri::State<'_, Arc<Mutex<FileWatcher>>>) -> bool {
     watcher.lock().map(|w| w.is_running()).unwrap_or(false)
 }
 
@@ -509,12 +515,11 @@ pub fn is_file_watcher_running(
 /// 前端调用 `currentWatchedPath` 触发，供前端对比是否需要切换监控路径。
 /// 例如用户切换游戏时，前端调用此命令获取当前路径并与新路径比较。
 #[tauri::command]
-pub fn current_watched_path(
-    watcher: tauri::State<'_, Arc<Mutex<FileWatcher>>>,
-) -> Option<String> {
-    watcher.lock().ok().and_then(|w| {
-        w.watched_path().map(|p| p.to_string_lossy().into_owned())
-    })
+pub fn current_watched_path(watcher: tauri::State<'_, Arc<Mutex<FileWatcher>>>) -> Option<String> {
+    watcher
+        .lock()
+        .ok()
+        .and_then(|w| w.watched_path().map(|p| p.to_string_lossy().into_owned()))
 }
 
 #[cfg(test)]

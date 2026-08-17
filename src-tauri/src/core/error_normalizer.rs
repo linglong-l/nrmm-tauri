@@ -68,7 +68,8 @@ pub fn normalize(e: &Error) -> FriendlyError {
     FriendlyError {
         code: "internal_error",
         title: "操作未完成".to_string(),
-        message: "处理过程中发生未知错误，请重试；若问题持续，请记录操作时间并联系支持。".to_string(),
+        message: "处理过程中发生未知错误，请重试；若问题持续，请记录操作时间并联系支持。"
+            .to_string(),
     }
 }
 
@@ -105,11 +106,7 @@ fn from_io(err: &io::Error) -> FriendlyError {
             "磁盘空间不足",
             "磁盘空间不足，无法完成操作，请清理空间后重试。",
         ),
-        io::ErrorKind::Interrupted => (
-            "interrupted",
-            "操作被中断",
-            "操作被系统中断，请重试。",
-        ),
+        io::ErrorKind::Interrupted => ("interrupted", "操作被中断", "操作被系统中断，请重试。"),
         io::ErrorKind::IsADirectory => (
             "is_a_directory",
             "路径类型错误",

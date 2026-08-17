@@ -2,11 +2,13 @@
 //!
 //! 定义应用设置相关的所有数据结构，使用 serde 序列化/反序列化（camelCase）
 
-use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
 use super::enums::*;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// 键盘快捷键配置
 #[derive(Serialize, Deserialize, Debug, Clone)]

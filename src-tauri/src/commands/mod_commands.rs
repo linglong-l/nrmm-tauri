@@ -31,10 +31,10 @@ use crate::sel_dbg;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
-use tokio::sync::Mutex as AsyncMutex;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex as AsyncMutex;
 
 static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -1311,7 +1311,8 @@ pub async fn enable_all_mods_in_group(group_path: String) -> Result<u32, String>
 #[tauri::command]
 pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<(), String> {
     // 路径边界校验（R1）：确认 group_path canonicalize 后位于任一已配置 mods_root 内
-    let _validated = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
+    let _validated =
+        settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
     let path = PathBuf::from(group_path);
     log::info!(
         "[remove_group_ex] start | group_path={:?} is_group_xx={}",
@@ -1456,8 +1457,7 @@ mod tests {
         }
 
         for entry in walkdir::WalkDir::new(src).follow_links(false) {
-            let entry =
-                entry.map_err(|e| std::io::Error::other(e.to_string()))?;
+            let entry = entry.map_err(|e| std::io::Error::other(e.to_string()))?;
 
             // ✅ 核心：计算相对于源根的路径
             let relative: PathBuf = entry
@@ -1587,9 +1587,8 @@ mod tests {
         let settings = AppSettings::default();
         // 注意：NRMM-test 基线由 NRMM 以 Zenless（nrmm_name = "Zenless_Zone_Zero"）生成，
         // keypress 模板 `{game}` 替换依赖游戏标识，故此处必须用同款游戏以保证 parity 比对一致。
-        let result =
-            mod_manager::update_mod_data(TargetGame::ZZZ, &game_mods_path, &settings)
-                .expect("update_mod_data 执行失败");
+        let result = mod_manager::update_mod_data(TargetGame::ZZZ, &game_mods_path, &settings)
+            .expect("update_mod_data 执行失败");
 
         println!(
             "  [result] enabled={} disabled={} processed={} errors={} groups={}",

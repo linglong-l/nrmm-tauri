@@ -9,12 +9,14 @@
 //! - get_app_version: 获取当前应用版本
 
 use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Gitee Releases API 地址
-static GITEE_RELEASES_API: &str = "https://gitee.com/api/v5/repos/Yezi26/nrmm-tauri/releases/latest";
+static GITEE_RELEASES_API: &str =
+    "https://gitee.com/api/v5/repos/Yezi26/nrmm-tauri/releases/latest";
 /// GitHub Releases API 地址
-static GITHUB_RELEASES_API: &str = "https://api.github.com/repos/linglong-l/nrmm-tauri/releases/latest";
+static GITHUB_RELEASES_API: &str =
+    "https://api.github.com/repos/linglong-l/nrmm-tauri/releases/latest";
 
 /// 更新信息结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,16 +94,16 @@ impl UpdateManager {
             for asset in assets {
                 let name = asset["name"].as_str().unwrap_or("").to_lowercase();
 
-                if name.contains(keyword) && (
-                    name.ends_with(".msi") ||
-                    name.ends_with(".exe") ||
-                    name.ends_with(".AppImage") ||
-                    name.ends_with(".dmg") ||
-                    name.ends_with(".deb") ||
-                    name.ends_with(".rpm") ||
-                    name.ends_with(".nsis.zip") ||
-                    name.ends_with(".msi.zip")
-                ) {
+                if name.contains(keyword)
+                    && (name.ends_with(".msi")
+                        || name.ends_with(".exe")
+                        || name.ends_with(".AppImage")
+                        || name.ends_with(".dmg")
+                        || name.ends_with(".deb")
+                        || name.ends_with(".rpm")
+                        || name.ends_with(".nsis.zip")
+                        || name.ends_with(".msi.zip"))
+                {
                     if source == "gitee" {
                         if let Some(url) = asset["browser_download_url"].as_str() {
                             download_url = url.to_string();
@@ -178,8 +180,12 @@ impl UpdateManager {
         let latest_parts = parse_version(latest);
 
         for (c, l) in current_parts.iter().zip(latest_parts.iter()) {
-            if l > c { return true; }
-            if l < c { return false; }
+            if l > c {
+                return true;
+            }
+            if l < c {
+                return false;
+            }
         }
 
         latest_parts.len() > current_parts.len()
@@ -189,7 +195,9 @@ impl UpdateManager {
 /// 检查更新（Tauri 命令）
 #[tauri::command]
 pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
-    UpdateManager::check_update().await.map_err(|e| e.to_string())
+    UpdateManager::check_update()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 比较版本号（Tauri 命令）

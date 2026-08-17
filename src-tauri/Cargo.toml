@@ -28,7 +28,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
-thiserror = "2"
 log = "0.4"
 env_logger = "0.11"
 notify = { version = "8.2", features = ["serde"] }
@@ -36,24 +35,16 @@ walkdir = "2"
 zip = { version = "8.6", default-features = true }
 regex = "1"
 dirs = "6"
-md-5 = "0.11"
-sha1 = "0.11"
-sha2 = "0.11"
 reqwest = { version = "0.13", features = ["blocking", "json", "rustls"], default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 once_cell = "1"
-base64 = "0.23"
 parking_lot = "0.12"
-global-hotkey = "0.8"
-tray-icon = "0.24"
-trash = "5"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
 rayon = "1.12"
 infer = "0.16"
-fs_extra = "1.3"
 sevenz-rust = "0.6"
 unrar = "0.5"
+trash = "5"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -81,3 +72,11 @@ core-foundation = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+# cargo machete 忽略列表：
+# - tauri-build      ：build.rs 中 `tauri_build::build()` 使用（build-dependency）
+# - x11-dl           ：Linux 平台 target（当前 Windows 下 machete 静态检测不到引用）
+# - core-graphics / core-foundation：macOS 平台 target（同上）
+# 以上均为「隐式/平台条件」依赖，实际需要，故在此忽略而非删除。
+[package.metadata.cargo-machete]
+ignored = ["tauri-build", "x11-dl", "core-graphics", "core-foundation"]

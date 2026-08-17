@@ -2,7 +2,7 @@
 //!
 //! 包含应用中使用的所有枚举类型，均支持 serde 序列化（camelCase 命名）
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// 支持的目标游戏列表
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -113,7 +113,7 @@ impl TargetGame {
             TargetGame::ArknightsEndfield => "ArknightsEndfield",
         }
     }
-    
+
     /// 获取游戏显示名称（用于 UI）
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -142,19 +142,27 @@ impl TargetGame {
             TargetGame::ArknightsEndfield => "Arknights_Endfield",
         }
     }
-    
+
     /// 获取游戏进程名列表（用于前台检测）
     pub fn process_names(&self) -> &[&str] {
         match self {
             TargetGame::GenshinImpact => &["GenshinImpact.exe", "YuanShen.exe"],
             TargetGame::HonkaiStarRail => &["StarRail.exe"],
-            TargetGame::Wuwa => &["Wuthering Waves.exe", "WutheringWaves.exe", "Client-Win64-Shipping.exe"],
+            TargetGame::Wuwa => &[
+                "Wuthering Waves.exe",
+                "WutheringWaves.exe",
+                "Client-Win64-Shipping.exe",
+            ],
             TargetGame::ZZZ => &["ZenlessZoneZero.exe"],
             TargetGame::HonkaiImpact3rd => &["BH3.exe"],
-            TargetGame::ArknightsEndfield => &["ArknightsEndfield.exe", "Endfield.exe", "Endfield-Win64-Shipping.exe"],
+            TargetGame::ArknightsEndfield => &[
+                "ArknightsEndfield.exe",
+                "Endfield.exe",
+                "Endfield-Win64-Shipping.exe",
+            ],
         }
     }
-    
+
     /// 获取主 INI 文件名
     /// 星穹铁道使用 RatioShot.ini，其他游戏使用 d3dx.ini
     pub fn d3dx_ini_name(&self) -> &'static str {
@@ -163,9 +171,16 @@ impl TargetGame {
             _ => "d3dx.ini",
         }
     }
-    
+
     /// 获取所有支持的游戏列表
     pub fn all() -> [TargetGame; 6] {
-        [TargetGame::GenshinImpact, TargetGame::HonkaiStarRail, TargetGame::Wuwa, TargetGame::ZZZ, TargetGame::HonkaiImpact3rd, TargetGame::ArknightsEndfield]
+        [
+            TargetGame::GenshinImpact,
+            TargetGame::HonkaiStarRail,
+            TargetGame::Wuwa,
+            TargetGame::ZZZ,
+            TargetGame::HonkaiImpact3rd,
+            TargetGame::ArknightsEndfield,
+        ]
     }
 }

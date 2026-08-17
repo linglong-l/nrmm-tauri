@@ -11,15 +11,15 @@
 //!
 //! 工厂函数 get_key_simulator() 和 get_foreground_detector() 根据编译目标平台返回对应实现。
 
-use anyhow::Result;
 use crate::models::enums::TargetGame;
+use anyhow::Result;
 
-#[cfg(target_os = "windows")]
-pub mod windows;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 /// 平台信息结构体
 #[derive(Debug, Clone, serde::Serialize)]
@@ -91,18 +91,20 @@ pub trait KeySimulator: Send + Sync {
 pub trait ForegroundDetector: Send + Sync {
     /// 获取当前前台进程名
     fn get_foreground_process_name(&self) -> Result<String>;
-    
+
     /// 判断目标游戏是否在前台
     fn is_game_foreground(&self, game: TargetGame) -> bool {
         match self.get_foreground_process_name() {
             Ok(name) => {
                 let lower = name.to_lowercase();
-                game.process_names().iter().any(|pn| pn.to_lowercase() == lower)
+                game.process_names()
+                    .iter()
+                    .any(|pn| pn.to_lowercase() == lower)
             }
             Err(_) => false,
         }
     }
-    
+
     /// 获取当前光标位置（屏幕坐标）
     fn get_cursor_position(&self) -> Result<(i32, i32)>;
 }
@@ -110,21 +112,33 @@ pub trait ForegroundDetector: Send + Sync {
 /// 获取当前平台的按键模拟器实例
 pub fn get_key_simulator() -> Box<dyn KeySimulator> {
     #[cfg(target_os = "windows")]
-    { Box::new(windows::WindowsKeySimulator::default()) }
+    {
+        Box::new(windows::WindowsKeySimulator::default())
+    }
     #[cfg(target_os = "linux")]
-    { Box::new(linux::LinuxKeySimulator::new()) }
+    {
+        Box::new(linux::LinuxKeySimulator::new())
+    }
     #[cfg(target_os = "macos")]
-    { Box::new(macos::MacOSKeySimulator) }
+    {
+        Box::new(macos::MacOSKeySimulator)
+    }
 }
 
 /// 获取当前平台的前台窗口检测器实例
 pub fn get_foreground_detector() -> Box<dyn ForegroundDetector> {
     #[cfg(target_os = "windows")]
-    { Box::new(windows::WindowsForegroundDetector) }
+    {
+        Box::new(windows::WindowsForegroundDetector)
+    }
     #[cfg(target_os = "linux")]
-    { Box::new(linux::LinuxForegroundDetector::new()) }
+    {
+        Box::new(linux::LinuxForegroundDetector::new())
+    }
     #[cfg(target_os = "macos")]
-    { Box::new(macos::MacOSForegroundDetector) }
+    {
+        Box::new(macos::MacOSForegroundDetector)
+    }
 }
 
 /// 获取平台信息（Tauri 命令）
@@ -141,14 +155,18 @@ pub fn get_platform_info() -> PlatformInfo {
         }
     }
     #[cfg(target_os = "linux")]
-    { linux::get_linux_platform_info() }
+    {
+        linux::get_linux_platform_info()
+    }
     #[cfg(target_os = "macos")]
     {
         PlatformInfo {
             os: "macos".to_string(),
             session_type: None,
             keypress_supported: false,
-            keypress_error: Some("macOS keypress simulation requires assistive access permission".to_string()),
+            keypress_error: Some(
+                "macOS keypress simulation requires assistive access permission".to_string(),
+            ),
             foreground_detection_supported: false,
         }
     }

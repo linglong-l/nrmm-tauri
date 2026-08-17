@@ -55,13 +55,14 @@ impl DualWriter {
     fn open_daily_log() -> Option<File> {
         // 获取用户本地数据目录
         let data_dir = dirs::data_local_dir()?;
-        let log_dir: PathBuf = data_dir
-            .join("nrmm-rust")
-            .join("logs");
+        let log_dir: PathBuf = data_dir.join("nrmm-rust").join("logs");
 
         // 创建日志目录（若不存在）
         if let Err(e) = std::fs::create_dir_all(&log_dir) {
-            eprintln!("[file_logger] Failed to create log dir {:?}: {}", log_dir, e);
+            eprintln!(
+                "[file_logger] Failed to create log dir {:?}: {}",
+                log_dir, e
+            );
             return None;
         }
 
@@ -70,18 +71,21 @@ impl DualWriter {
         let log_path = log_dir.join(format!("{}.log", date_str));
 
         // 以追加模式打开文件
-        match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-        {
+        match OpenOptions::new().create(true).append(true).open(&log_path) {
             Ok(mut f) => {
                 // 写入分隔标记，标识新的一次启动
-                let _ = writeln!(f, "\n--- NRMM 启动 {} ---", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+                let _ = writeln!(
+                    f,
+                    "\n--- NRMM 启动 {} ---",
+                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+                );
                 Some(f)
             }
             Err(e) => {
-                eprintln!("[file_logger] Failed to open log file {:?}: {}", log_path, e);
+                eprintln!(
+                    "[file_logger] Failed to open log file {:?}: {}",
+                    log_path, e
+                );
                 None
             }
         }

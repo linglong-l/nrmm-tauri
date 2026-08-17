@@ -10,8 +10,8 @@
 //! 所有涉及文件 IO 的操作都使用 spawn_blocking 避免阻塞 UI 线程
 
 use crate::config::settings_store;
-use crate::models::settings::AppSettings;
 use crate::models::enums::TargetGame;
+use crate::models::settings::AppSettings;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 
@@ -77,4 +77,3 @@ pub async fn switch_target_game(app: AppHandle, game: TargetGame) -> Result<(), 
     .await
     .map_err(|e| e.to_string())?
 }
-
