@@ -46,7 +46,7 @@ function timestamp(): string {
  * @param _args 额外参数（当前未使用，预留扩展）
  * @returns 格式化后的日志字符串
  */
-function format(level: LogLevel, module: string, msg: string, ..._args: any[]): string {
+function format(level: LogLevel, module: string, msg: string, ..._args: unknown[]): string {
   return `[${timestamp()}][${level}][${module}] ${msg}`
 }
 
@@ -56,7 +56,7 @@ function format(level: LogLevel, module: string, msg: string, ..._args: any[]): 
  * @param args 原始参数数组
  * @returns 处理后的安全参数数组
  */
-function safeArgs(args: any[]): any[] {
+function safeArgs(args: unknown[]): unknown[] {
   return args.map(a => (a instanceof Error ? a.message : a))
 }
 
@@ -77,7 +77,7 @@ export const logger = {
    * @param msg 日志消息
    * @param args 额外参数
    */
-  debug(module: string, msg: string, ...args: any[]) {
+  debug(module: string, msg: string, ...args: unknown[]) {
     if (DEV_MODE) {
       console.debug(format('DEBUG', module, msg), ...safeArgs(args))
     }
@@ -90,7 +90,7 @@ export const logger = {
    * @param msg 日志消息
    * @param args 额外参数
    */
-  info(module: string, msg: string, ...args: any[]) {
+  info(module: string, msg: string, ...args: unknown[]) {
     if (DEV_MODE) {
       console.info(format('INFO', module, msg), ...safeArgs(args))
     }
@@ -103,7 +103,7 @@ export const logger = {
    * @param msg 日志消息
    * @param args 额外参数
    */
-  warn(module: string, msg: string, ...args: any[]) {
+  warn(module: string, msg: string, ...args: unknown[]) {
     console.warn(format('WARN', module, msg), ...safeArgs(args))
   },
 
@@ -114,7 +114,7 @@ export const logger = {
    * @param msg 日志消息
    * @param args 额外参数（通常为Error对象）
    */
-  error(module: string, msg: string, ...args: any[]) {
+  error(module: string, msg: string, ...args: unknown[]) {
     console.error(format('ERROR', module, msg), ...safeArgs(args))
   },
 }

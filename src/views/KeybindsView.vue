@@ -70,7 +70,7 @@
 /**
  * 按键绑定页面
  * 显示当前选中模组的按键配置列表，支持点击模拟按键
- * 内置拖拽滚动功能（内联实现，未使用useDragScroll composable）
+ * 拖拽滚动复用 useDragScroll composable
  * 检测平台按键模拟支持状态并显示提示
  */
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
@@ -80,7 +80,7 @@ import { checkKeypressSupport, getAppVersion } from '@/utils/tauri'
 import { usePlatform } from '@/stores/platform'
 import { useModsStore } from '@/stores/mods'
 import { logger } from '@/utils/logger'
-import { DRAG_THRESHOLD_PX } from '@/utils/constants'
+import { useDragScroll } from '@/composables/useDragScroll'
 import type { KeybindData } from '@/types'
 
 const { t } = useI18n()
@@ -89,112 +89,12 @@ const modsStore = useModsStore()
 
 /** 滚动容器DOM引用 */
 const scrollRef = ref<HTMLElement | null>(null)
-/** 拖拽滚动状态 */
-const dragState = {
-  isDragging: false,
-  startX: 0,
-  startY: 0,
-  startScrollTop: 0,
-  dragStarted: false,
-}
-
-/**
- * 指针按下事件：开始拖拽滚动
- * 仅响应鼠标左键，排除按钮/链接/输入框等交互元素
- */
-function onPointerDown(e: PointerEvent) {
-  if (e.button !== 0) return
-  const target = e.target as HTMLElement
-  if (target.closest('button, a, input, textarea, [role="button"], [role="combobox"], .no-drag-scroll')) return
-  const el = scrollRef.value
-  if (!el) return
-  dragState.isDragging = true
-  dragState.dragStarted = false
-  dragState.startX = e.clientX
-  dragState.startY = e.clientY
-  dragState.startScrollTop = el.scrollTop
-  try { el.setPointerCapture(e.pointerId) } catch (_) {}
-  el.style.cursor = 'grabbing'
-}
-
-/**
- * 指针移动事件：拖拽时更新滚动位置
- * 3px阈值：移动超过3像素才认为是拖拽而非点击
- */
-function onPointerMove(e: PointerEvent) {
-  if (!dragState.isDragging) return
-  const el = scrollRef.value
-  if (!el) return
-  const dX = e.clientX - dragState.startX
-  const dY = e.clientY - dragState.startY
-  if (!dragState.dragStarted && (Math.abs(dX) > DRAG_THRESHOLD_PX || Math.abs(dY) > DRAG_THRESHOLD_PX)) {
-    dragState.dragStarted = true
-  }
-  if (dragState.dragStarted) {
-    el.scrollTop = dragState.startScrollTop - dY
-    if (e.cancelable) e.preventDefault()
-  }
-}
-
-/** 点击事件阻断器（用于拖拽后阻止误触发点击） */
-let kbClickBlocker: ((ev: MouseEvent) => void) | null = null
-
-/**
- * 指针抬起事件：结束拖拽
- * 若发生了实际拖拽，添加一次性点击阻断器防止误触卡片点击
- * 120ms后自动清理阻断器
- */
-function onPointerUp(e: PointerEvent) {
-  if (!dragState.isDragging) return
-  dragState.isDragging = false
-  const el = scrollRef.value
-  if (el) {
-    try { el.releasePointerCapture(e.pointerId) } catch (_) {}
-    el.style.cursor = ''
-  }
-  if (dragState.dragStarted) {
-    kbClickBlocker = (ev: MouseEvent) => {
-      ev.stopPropagation()
-      ev.preventDefault()
-      window.removeEventListener('click', kbClickBlocker!, true)
-      kbClickBlocker = null
-    }
-    window.addEventListener('click', kbClickBlocker, true)
-    setTimeout(() => {
-      if (kbClickBlocker) {
-        window.removeEventListener('click', kbClickBlocker, true)
-        kbClickBlocker = null
-      }
-    }, 120)
-  }
-  dragState.dragStarted = false
-}
-
-/** 挂载拖拽滚动事件监听器 */
-function attachDrag() {
-  const el = scrollRef.value
-  if (!el) return
-  el.addEventListener('pointerdown', onPointerDown)
-  el.addEventListener('pointermove', onPointerMove)
-  el.addEventListener('pointerup', onPointerUp)
-  el.addEventListener('pointercancel', onPointerUp)
-}
-
-/** 卸载拖拽滚动事件监听器 */
-function detachDrag() {
-  const el = scrollRef.value
-  if (!el) return
-  el.removeEventListener('pointerdown', onPointerDown)
-  el.removeEventListener('pointermove', onPointerMove)
-  el.removeEventListener('pointerup', onPointerUp)
-  el.removeEventListener('pointercancel', onPointerUp)
-  try { el.style.cursor = '' } catch (_) {}
-}
+/** 拖拽滚动：复用 useDragScroll composable（默认排除规则已覆盖按钮/开关等交互元素） */
+useDragScroll(scrollRef)
 
 onBeforeUnmount(() => {
   // 离开按键绑定页时清理目标模组（防止切回 Mods 后 selectedMod 仍显示旧 keybind 目标）
   modsStore.clearKeybindTargetMod()
-  detachDrag()
 })
 
 /** 当前选中的模组 */
@@ -256,7 +156,6 @@ onMounted(async () => {
     logger.warn('KeybindsView', 'Failed to get app version', e)
   }
   await nextTick()
-  attachDrag()
 })
 </script>
 

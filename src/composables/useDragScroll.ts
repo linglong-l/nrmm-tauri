@@ -26,11 +26,34 @@
  * - 自动清理：组件卸载时自动移除事件监听器
  *
  * @param el 要启用拖拽滚动的DOM元素Ref
+ * @param options 可选配置项
+ * @param options.excludeSelector 追加的自定义排除选择器（追加到默认排除规则末尾，用逗号连接）。
+ *        用于让调用方额外排除默认规则未覆盖的可交互元素（如 .custom-exclude），避免拖拽误触。
  * @returns { isDragging } 是否正在拖拽的响应式状态
  */
 import { ref, onMounted, onUnmounted, watch, type Ref } from 'vue'
 
-export function useDragScroll(el: Ref<HTMLElement | null>) {
+export interface DragScrollOptions {
+  /** 追加到默认排除规则末尾的自定义选择器（逗号分隔，可为空字符串） */
+  excludeSelector?: string
+}
+
+/** 默认排除的可交互元素 / Element Plus 组件选择器（不含用户自定义部分） */
+const DEFAULT_EXCLUDE_SELECTOR =
+  'button, a, input, textarea, select, option, label, ' +
+  '[role="button"], [role="combobox"], [role="listbox"], [role="option"], ' +
+  '[role="slider"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="treeitem"], ' +
+  '.el-select, .el-select__wrapper, .el-select-dropdown, .el-cascader, .el-date-editor, ' +
+  '.el-checkbox, .el-radio, .el-switch, .el-slider, .el-input, .el-input__wrapper, .el-textarea, ' +
+  '.el-button, .el-popper, .el-picker-panel, .el-dialog, .el-message-box, .el-dropdown, ' +
+  '.allow-context-menu, .allow-text-select, .no-drag-scroll'
+
+export function useDragScroll(el: Ref<HTMLElement | null>, options: DragScrollOptions = {}) {
+  /** 最终生效的排除选择器（默认规则 + 自定义追加） */
+  const { excludeSelector = '' } = options
+  const excludeTargetSelector = excludeSelector
+    ? `${DEFAULT_EXCLUDE_SELECTOR}, ${excludeSelector}`
+    : DEFAULT_EXCLUDE_SELECTOR
   /** 是否正在拖拽中（响应式状态，可用于UI反馈） */
   const isDragging = ref(false)
   /** 拖拽起始X坐标 */
@@ -61,18 +84,10 @@ export function useDragScroll(el: Ref<HTMLElement | null>) {
     if (e.button !== 0) return
     const target = e.target as HTMLElement
 
-    // 排除所有可交互元素和Element Plus组件
+    // 排除所有可交互元素和Element Plus组件 + 调用方自定义排除
     // 注意：不排除 .group-item / .group-avatar / .group-name
     // 这些元素覆盖左侧导航栏全部区域，采用"放开鼠标选择"策略区分点击和拖拽
-    if (target.closest(
-      'button, a, input, textarea, select, option, label, ' +
-      '[role="button"], [role="combobox"], [role="listbox"], [role="option"], ' +
-      '[role="slider"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="treeitem"], ' +
-      '.el-select, .el-select__wrapper, .el-select-dropdown, .el-cascader, .el-date-editor, ' +
-      '.el-checkbox, .el-radio, .el-switch, .el-slider, .el-input, .el-input__wrapper, .el-textarea, ' +
-      '.el-button, .el-popper, .el-picker-panel, .el-dialog, .el-message-box, .el-dropdown, ' +
-      '.allow-context-menu, .allow-text-select, .no-drag-scroll'
-    )) return
+    if (target.closest(excludeTargetSelector)) return
 
     currentEl = el.value
     if (!currentEl) return

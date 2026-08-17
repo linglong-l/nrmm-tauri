@@ -7,9 +7,10 @@
           <div class="process-col">
             <div class="field-label">{{ t('settings.targetProcess') }}</div>
             <el-input
-              v-model="targetProcessValue"
+              :model-value="targetProcessValue"
               class="process-input"
               :placeholder="t('settings.targetProcessPlaceholder')"
+              @update:model-value="updateTargetProcess"
               @blur="onTargetProcessBlur"
             />
           </div>
@@ -253,7 +254,7 @@ import { usePlatform } from '@/stores/platform'
 import { selectFolder, checkForUpdates, getAppVersion, updateModData, restoreManagedFolder } from '@/utils/tauri'
 import type { RestoreManagedResult, OverlayController } from '@/types'
 import { logger } from '@/utils/logger'
-import { DRAG_THRESHOLD_PX } from '@/utils/constants'
+import { useDragScroll } from '@/composables/useDragScroll'
 
 const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
@@ -296,141 +297,23 @@ const isModsPathValid = computed<boolean>(() => {
 
 /** 滚动容器DOM引用 */
 const scrollRef = ref<HTMLElement | null>(null)
-/** 拖拽滚动状态 */
-const dragState = {
-  isDragging: false,
-  startX: 0,
-  startY: 0,
-  startScrollTop: 0,
-  dragStarted: false,
-}
+/** 拖拽滚动：复用 useDragScroll composable（默认排除规则已覆盖交互元素 + Element Plus 组件） */
+useDragScroll(scrollRef)
 
 /**
- * 指针按下事件：开始拖拽滚动
- * 仅响应鼠标左键，排除所有交互元素和Element Plus控件
- * 排除规则包含：原生表单控件、带role的可交互元素、Element Plus组件class、标记了no-drag-scroll的元素
+ * 当前游戏目标进程名（只读 computed）
+ * 数据源：settingsStore.currentTargetProcess（含 fallback 默认进程名）
+ * 修改统一通过 updateTargetProcess 方法触发，避免 computed setter 副作用
  */
-function onPointerDown(e: PointerEvent) {
-  if (e.button !== 0) return
-  const target = e.target as HTMLElement
-  // 所有表单/交互控件 / Element Plus组件 / teleport弹层 一律不触发拖拽
-  if (target.closest(
-    'button, a, input, textarea, select, option, label, ' +
-    '[role="button"], [role="combobox"], [role="listbox"], [role="option"], [role="slider"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], ' +
-    '.el-select, .el-select__wrapper, .el-select-dropdown, .el-cascader, .el-date-editor, .el-checkbox, .el-radio, .el-switch, .el-slider, ' +
-    '.el-input, .el-input__wrapper, .el-textarea, .el-button, .el-popper, .el-picker-panel, .el-dialog, .el-message-box, .el-dropdown, ' +
-    '.allow-context-menu, .allow-text-select, .no-drag-scroll'
-  )) return
-  const el = scrollRef.value
-  if (!el) return
-  dragState.isDragging = true
-  dragState.dragStarted = false
-  dragState.startX = e.clientX
-  dragState.startY = e.clientY
-  dragState.startScrollTop = el.scrollTop
-  try { el.setPointerCapture(e.pointerId) } catch (_) {}
-  el.style.cursor = 'grabbing'
-}
-
+const targetProcessValue = computed(() => settingsStore.currentTargetProcess)
 /**
- * 指针移动事件：拖拽更新滚动位置
- * 3px阈值防止误触
+ * 更新目标进程名（显式方法，替代 computed setter 副作用）
+ * 由 el-input 的 @update:model-value 触发，内部调用 store 持久化方法
+ * @param val 新的进程名字符串
  */
-function onPointerMove(e: PointerEvent) {
-  if (!dragState.isDragging) return
-  const el = scrollRef.value
-  if (!el) return
-  const dX = e.clientX - dragState.startX
-  const dY = e.clientY - dragState.startY
-  if (!dragState.dragStarted && (Math.abs(dX) > DRAG_THRESHOLD_PX || Math.abs(dY) > DRAG_THRESHOLD_PX)) {
-    dragState.dragStarted = true
-  }
-  if (dragState.dragStarted) {
-    el.scrollTop = dragState.startScrollTop - dY
-    if (e.cancelable) e.preventDefault()
-  }
+function updateTargetProcess(val: string) {
+  settingsStore.setCurrentTargetProcess(val)
 }
-
-/** 点击事件阻断器（只阻止scrollRef内部的误点击，不拦截Element Plus弹层等teleport元素） */
-let clickBlocker: ((ev: MouseEvent) => void) | null = null
-
-/**
- * 指针抬起事件：结束拖拽
- * 拖拽后阻止scrollRef内部元素的误点击，120ms后清理
- * 关键点：clickBlocker只拦截滚动容器内部的点击，不要拦截body下teleport出来的
- *         Element Plus弹层（.el-popper / .el-select-dropdown），否则下拉框无法选中
- */
-function onPointerUp(e: PointerEvent) {
-  if (!dragState.isDragging) return
-  dragState.isDragging = false
-  const el = scrollRef.value
-  if (el) {
-    try { el.releasePointerCapture(e.pointerId) } catch (_) {}
-    el.style.cursor = ''
-  }
-  if (dragState.dragStarted) {
-    clickBlocker = (ev: MouseEvent) => {
-      const t = ev.target as HTMLElement
-      // 只拦截scrollRef容器内部的真实点击（误触）
-      // 对于teleport到body下的弹层（el-popper、下拉选项、对话框等）一律放行
-      if (el && el.contains(t) && !t.closest('.el-popper, .el-select-dropdown, .el-dialog, .el-message-box, .el-dropdown-menu')) {
-        ev.stopPropagation()
-        ev.preventDefault()
-      }
-      window.removeEventListener('click', clickBlocker!, true)
-      clickBlocker = null
-    }
-    window.addEventListener('click', clickBlocker, true)
-    setTimeout(() => {
-      if (clickBlocker) {
-        window.removeEventListener('click', clickBlocker, true)
-        clickBlocker = null
-      }
-    }, 120)
-  }
-  dragState.dragStarted = false
-}
-
-/** 挂载拖拽事件监听 */
-function attachDrag() {
-  const el = scrollRef.value
-  if (!el) return
-  el.addEventListener('pointerdown', onPointerDown)
-  el.addEventListener('pointermove', onPointerMove)
-  el.addEventListener('pointerup', onPointerUp)
-  el.addEventListener('pointercancel', onPointerUp)
-}
-
-/** 卸载拖拽事件监听 */
-function detachDrag() {
-  const el = scrollRef.value
-  if (!el) return
-  el.removeEventListener('pointerdown', onPointerDown)
-  el.removeEventListener('pointermove', onPointerMove)
-  el.removeEventListener('pointerup', onPointerUp)
-  el.removeEventListener('pointercancel', onPointerUp)
-  try { el.style.cursor = '' } catch (_) {}
-}
-
-onBeforeUnmount(() => {
-  detachDrag()
-  if (unlistenDragDrop) {
-    unlistenDragDrop()
-    unlistenDragDrop = null
-  }
-})
-
-/**
- * 当前游戏目标进程名（双向绑定computed）
- * getter: 从store的currentTargetProcess读取
- * setter: 调用setCurrentTargetProcess保存
- */
-const targetProcessValue = computed({
-  get: () => settingsStore.currentTargetProcess,
-  set: (val: string) => {
-    settingsStore.setCurrentTargetProcess(val)
-  }
-})
 
 /** 更新模组数据加载状态 */
 const updatingModData = ref(false)
@@ -815,8 +698,15 @@ onMounted(async () => {
     logger.warn('SettingsView', 'Failed to get app version', e)
   }
   await nextTick()
-  attachDrag()
   await setupTauriDragDrop()
+})
+
+onBeforeUnmount(() => {
+  // 清理 Tauri 拖放事件监听，防止组件卸载后回调残留
+  if (unlistenDragDrop) {
+    unlistenDragDrop()
+    unlistenDragDrop = null
+  }
 })
 </script>
 

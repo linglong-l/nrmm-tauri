@@ -11,7 +11,7 @@
     }"
     @click="handleClick"
     @dblclick="handleDoubleClick"
-    @contextmenu.prevent="onContextMenu"
+    @contextmenu.prevent="openContextMenu"
   >
     <!-- 状态徽章：收藏⭐、禁用🔒、错误⚠️ -->
     <div v-if="!isNoneSlot && mod" class="card-badges">
@@ -81,7 +81,7 @@
       <div
         v-if="contextMenuVisible"
         class="context-menu"
-        :style="{ top: contextMenuY + 'px', left: contextMenuX + 'px' }"
+        :style="{ top: contextMenuPosition.y + 'px', left: contextMenuPosition.x + 'px' }"
         @click.stop
         @mouseleave="closeContextMenu"
       >
@@ -141,14 +141,15 @@
  * - 虚线边框：空槽位（用于网格对齐）
  * 支持：单击选中、双击确认启用、右键菜单
  */
-import { ref, computed, onMounted, onUnmounted, inject, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus, Setting, Check } from '@element-plus/icons-vue'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModData } from '@/types'
-import { toggleModDisabled, toggleFavorite, renameMod, openModFolder, handlePathNotFoundError } from '@/utils/tauri'
+import { renameMod } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'
 import { useImageLazyLoad } from '@/composables/useImageLazyLoad'
+import { useModContextMenu } from '@/composables/useModContextMenu'
 import HighlightText from '@/components/common/HighlightText.vue'
 import RemoveModDialog from '@/components/mod/RemoveModDialog.vue'
 import type { ImageLoadState } from '@/composables/useImageLazyLoad'
@@ -156,8 +157,6 @@ import { logger } from '@/utils/logger'
 
 const { t } = useI18n()
 const modsStore = useModsStore()
-/** 从 App.vue provide 注入的标签页切换函数，用于「按键切换」菜单跳转到 Keybinds 页 */
-const switchTab = inject<(key: 'keybinds' | 'mods' | 'settings') => void>('switchTab', () => {})
 
 const props = defineProps<{
   /** 模组数据（空槽位时无） */
@@ -237,12 +236,26 @@ function onImageError() {
   imageLazyLoad.markError(props.modIndex)
 }
 
-/** 右键菜单是否可见 */
-const contextMenuVisible = ref(false)
-/** 右键菜单位置X */
-const contextMenuX = ref(0)
-/** 右键菜单位置Y */
-const contextMenuY = ref(0)
+/** 右键菜单 composable */
+const {
+  contextMenuVisible,
+  contextMenuPosition,
+  ignoreNextClickUntil,
+  openContextMenu,
+  closeContextMenu,
+  handleSelectMod,
+  handleToggleEnabled,
+  handleToggleFavorite,
+  handleOpenKeybind,
+  handleOpenFolder,
+} = useModContextMenu(
+  mod,
+  computed(() => props.modIndex),
+  isNoneSlot,
+  emit as (event: 'activate', modIndex: number) => void,
+  modsStore,
+  t
+)
 
 /**
  * 是否为当前选中模组
@@ -284,51 +297,11 @@ const hasError = computed(() => {
          mod.value.missingEndif.length > 0
 })
 
-/** 右键菜单 */
-function onContextMenu(e: MouseEvent) {
-  if (isNoneSlot.value) return
-  // 标记后续短暂时间内的左键为右键后残留点击，避免误选中
-  // Teleport后误触概率已大幅降低，缩短时间窗到300ms
-  ignoreNextClickUntil = performance.now() + 300
-  // 菜单估算尺寸（min-width:160px，按6项约184x240px 保守计算）
-  const MENU_ESTIMATED_W = 200
-  const MENU_ESTIMATED_H = 260
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  let x = e.clientX
-  let y = e.clientY
-  // 水平溢出：右边缘超出就左对齐到鼠标位置左侧
-  if (x + MENU_ESTIMATED_W > vw - 4) {
-    x = Math.max(4, x - MENU_ESTIMATED_W)
-  }
-  // 垂直溢出：下边缘超出就向上弹出
-  if (y + MENU_ESTIMATED_H > vh - 4) {
-    y = Math.max(4, y - MENU_ESTIMATED_H)
-  }
-  contextMenuX.value = x
-  contextMenuY.value = y
-  contextMenuVisible.value = true
-}
-
-/** 关闭右键菜单 */
-function closeContextMenu() {
-  contextMenuVisible.value = false
-  // 关闭菜单后短暂忽略左键（teleport后已极短100ms即可）
-  ignoreNextClickUntil = performance.now() + 100
-}
-
-/**
- * 右键菜单显示期间及刚关闭后，左键点击不触发选中，防止"飘逸"。
- * - 飘逸根因：用户右键→菜单弹出→左键点空白关闭菜单→这次click事件恰好落在卡片上→
- *   浏览器把它当普通左键点击卡片→select触发→选中状态跳动（看起来飘逸/误选中其他mod）
- */
-let ignoreNextClickUntil = 0
-
 /** 单击：不触发选中效果，仅关闭已打开的右键菜单（避免误选中） */
 function handleClick() {
   if (isNoneSlot.value) return
   const now = performance.now()
-  if (contextMenuVisible.value || now < ignoreNextClickUntil) {
+  if (contextMenuVisible.value || now < ignoreNextClickUntil.value) {
     contextMenuVisible.value = false
     return
   }
@@ -354,71 +327,14 @@ async function handleDoubleClick() {
           ? t('mods.deselectGroup', '已取消该分组模组选择')
           : t('mods.disableAllInGroup', '已禁用该分组所有模组')
       )
-    } catch (e: any) {
-      ElMessage.error(t('mods.operationFailed', '操作失败') + ': ' + (e?.message || e))
+    } catch (e: unknown) {
+      ElMessage.error(t('mods.operationFailed', '操作失败') + ': ' + (e instanceof Error ? e.message : String(e)))
     }
     return
   }
   // 注意：双击的模组必定在当前选中分组内，无需额外切换分组
   // 双击直接触发启用（activate）= 右键菜单中的「启用」效果
   emit('activate', props.modIndex)
-}
-
-/**
- * 选择模组（右键菜单第一项）
- * 与双击激活走相同的 emit('activate') 路径，
- * 触发后端 select_mod 命令完成 selectedindex 持久化 + 按键模拟
- */
-function handleSelectMod() {
-  if (!mod.value || isNoneSlot.value) return
-  closeContextMenu()
-  emit('activate', props.modIndex)
-}
-
-/**
- * 切换模组启用/禁用状态
- * 调用后端toggle_mod_disabled命令，传入isMutex参数处理互斥组逻辑
- */
-async function handleToggleEnabled() {
-  if (!mod.value) return
-  closeContextMenu()
-  // 操作前捕获原禁用状态，用于生成操作后的提示文案（refresh 后会更新为操作后状态，不能直接拿来判断）
-  const wasDisabled = mod.value.modDisabled
-  try {
-    await toggleModDisabled(mod.value.modPath, mod.value.modDisabled, mod.value.isMutex)
-    // 标记需要更新模组数据（仅NormalGroup操作）
-    if (!mod.value.isMutex) {
-      modsStore.markNeedUpdate(mod.value.groupIndex)
-    }
-    await modsStore.refresh()
-    ElMessage.success(wasDisabled ? t('Enabled') : t('Disabled'))
-  } catch (e: any) {
-    ElMessage.error(t('Failed to enable mod') + ': ' + (e?.message || e))
-  }
-}
-
-/** 切换收藏状态 */
-async function handleToggleFavorite() {
-  if (!mod.value) return
-  closeContextMenu()
-  try {
-    await toggleFavorite(mod.value.modPath)
-    await modsStore.refresh()
-  } catch (e: any) {
-    logger.error('ModCard', 'Failed to toggle favorite', e)
-  }
-}
-
-/**
- * 跳转按键绑定页并设置目标模组（对齐 NRMM modKeybindProvider）
- * - 设置 keybindTargetMod 使 KeybindsView.selectedMod 优先显示当前模组
- * - 切换胶囊导航到 Keybinds 标签页
- */
-function handleOpenKeybind() {
-  if (!mod.value) return
-  closeContextMenu()
-  modsStore.setKeybindTargetMod(mod.value)
-  switchTab('keybinds')
 }
 
 /** 重命名模组 */
@@ -445,21 +361,6 @@ async function handleRename() {
       ElMessage.success(t('Mod renamed successfully'))
     }
   } catch (e) {
-  }
-}
-
-/** 在文件管理器中打开模组文件夹 */
-async function handleOpenFolder() {
-  if (!mod.value) return
-  closeContextMenu()
-  try {
-    await openModFolder(mod.value.modPath)
-  } catch (e: any) {
-    // 路径不存在错误 → 清除缓存+重读模组（自动处理，不弹错误提示）
-    const handled = await handlePathNotFoundError(e)
-    if (!handled) {
-      ElMessage.error(t('Failed to open mod folder.') + ': ' + (e?.message || e))
-    }
   }
 }
 

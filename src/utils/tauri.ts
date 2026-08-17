@@ -131,7 +131,7 @@ export async function saveSettings(settings: Partial<AppSettings>): Promise<void
  * 重置应用设置为默认值
  * 后端命令：reset_settings
  */
-export async function resetSettings(): Promise<any> {
+export async function resetSettings(): Promise<void> {
   return safeInvoke('reset_settings')
 }
 
@@ -573,11 +573,14 @@ export async function isSupportedArchive(path: string): Promise<boolean> {
  * 后端命令：import_mod_auto_cmd
  *
  * 自动解压并安装到当前选中分组
+ *
+ * 注意：该方法为遗留 API，当前批量导入统一使用 importItems()（import_item_cmd），
+ * 此处仅保留返回 void 的向后兼容签名。
  * @param archivePath 压缩包路径
  * @param modsPath 模组根路径
  * @param password 压缩包密码（可选）
  */
-export async function importModAuto(archivePath: string, modsPath: string, password?: string): Promise<any> {
+export async function importModAuto(archivePath: string, modsPath: string, password?: string): Promise<void> {
   return safeInvoke('import_mod_auto_cmd', { archivePath, modsPath, password })
 }
 

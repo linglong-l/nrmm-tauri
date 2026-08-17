@@ -57,11 +57,11 @@ async function handleClick() {
     try {
       const result = await modsStore.updateModData()
       updateOverlay?.show('completed', { result, durationMs: Date.now() - start })
-    } catch (e: any) {
-      const msg = typeof e === 'string' ? e : (e?.message ?? String(e))
+    } catch (e: unknown) {
+      const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))
       updateOverlay?.show('error', { error: msg })
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     logger.error('UpdateModDataReminder', 'Update mod data failed', e)
   }
 }

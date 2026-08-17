@@ -1,7 +1,7 @@
 <template>
   <div class="mod-grid-container" @click="handleContainerClick">
     <!-- 搜索栏：支持模糊搜索、键盘导航 -->
-    <SearchBar v-model:visible="searchVisible" v-model="searchQuery" :total-matches="totalMatches"
+    <SearchBar v-model:visible="searchVisible" :model-value="searchQuery" @update:model-value="updateSearchQuery" :total-matches="totalMatches"
       :current-index="currentMatchIndex" @next="nextMatch" @prev="prevMatch" @close="onSearchClose" />
 
     <!-- 模组网格内容区：支持拖拽滚动 -->
@@ -133,10 +133,9 @@ const visibleRowCount = computed(() => {
 
 /** 从 store 读取全局搜索状态 */
 const searchVisible = computed(() => modsStore.searchVisible)
-const searchQuery = computed({
-  get: () => modsStore.searchQuery,
-  set: (v: string) => { modsStore.searchQuery = v }
-})
+const searchQuery = computed(() => modsStore.searchQuery)
+/** 更新搜索关键词（直接写入 store，避免 computed setter 副作用） */
+function updateSearchQuery(v: string) { modsStore.searchQuery = v }
 const totalMatches = computed(() => modsStore.groupMatchPaths.length + modsStore.modMatchIndices.length)
 const currentMatchIndex = computed(() => modsStore.currentGlobalMatchIndex)
 

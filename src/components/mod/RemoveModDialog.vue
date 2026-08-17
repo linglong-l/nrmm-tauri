@@ -163,8 +163,8 @@ async function handleConfirm() {
   try {
     await removeMod(props.modPath)
     state.value = 'success'
-  } catch (e: any) {
-    const msg = typeof e === 'string' ? e : (e?.message ?? String(e))
+  } catch (e: unknown) {
+    const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))
     logger.error('RemoveModDialog', 'remove_mod failed', e)
     errorMessage.value = msg || 'Unknown error'
     state.value = 'error'

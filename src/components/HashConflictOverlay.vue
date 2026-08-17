@@ -208,9 +208,9 @@ async function show() {
     const res = await detectHashConflicts(settingsStore.currentModsPath)
     result.value = res
     state.value = 'completed'
-  } catch (e: any) {
+  } catch (e: unknown) {
     logger.error('HashConflictOverlay', 'detectHashConflicts failed', e)
-    errorMessage.value = e?.message || String(e)
+    errorMessage.value = e instanceof Error ? e.message : String(e)
     state.value = 'error'
   } finally {
     stopDots()

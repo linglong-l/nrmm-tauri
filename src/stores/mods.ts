@@ -755,9 +755,9 @@ export const useModsStore = defineStore('mods', () => {
         }
       }
       setActiveRecursive(group, modPath2)
-    } catch (e: any) {
+    } catch (e: unknown) {
       // 防抖命中时静默处理，不弹出错误提示
-      const errMsg = typeof e === 'string' ? e : (e?.message ?? String(e))
+      const errMsg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))
       if (errMsg === 'debounced') {
         logger.debug('ModsStore', 'activateModByIndex debounced, skipping')
         return
@@ -811,7 +811,7 @@ export const useModsStore = defineStore('mods', () => {
         logger.info('mods', `Disabled ${n} mods in mutex group ${groupPath}`)
       }
       await refresh()
-    } catch (e: any) {
+    } catch (e: unknown) {
       logger.error('mods', 'deselectOrDisableNoneSlot failed', e)
       throw e
     } finally {
