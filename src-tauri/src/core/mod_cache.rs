@@ -476,7 +476,7 @@ mod tests {
         
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
-        cache.set(TargetGame::Wuwa, &mods_path, result.clone());
+        cache.set(TargetGame::Wuwa, &mods_path, result);
         
         cache.invalidate_game(TargetGame::GenshinImpact);
         assert!(cache.get(TargetGame::GenshinImpact, &mods_path).is_none());
@@ -505,7 +505,7 @@ mod tests {
         let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
         
         let mut cache = ModCache::new();
-        cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
+        cache.set(TargetGame::GenshinImpact, &mods_path, result);
         
         assert!(cache.get(TargetGame::Wuwa, &mods_path).is_none());
         assert!(cache.get(TargetGame::GenshinImpact, &mods_path).is_some());

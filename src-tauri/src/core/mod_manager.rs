@@ -3315,7 +3315,7 @@ y = 2
         fs::create_dir_all(mod2.parent().unwrap()).unwrap();
         fs::write(&mod2, "").unwrap();
 
-        let ini_paths = vec![mod1.clone(), mod2.clone()];
+        let ini_paths = vec![mod1, mod2];
         let result = create_group_ini(&group_dir, 1, &ini_paths).unwrap();
         assert!(result.is_some());
 
@@ -4348,7 +4348,7 @@ endif
                 mod_scanner::strip_disabled_prefix(&new_name)
             )
         } else {
-            new_name.clone()
+            new_name
         };
 
         assert_eq!(

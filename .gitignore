@@ -80,3 +80,5 @@ SESSION_CONTEXT.md
 /tmp/
 /docs/
 /.workbuddy/memory/
+.gstack/
+deliverables/

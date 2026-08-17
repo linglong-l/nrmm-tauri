@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use anyhow::{Result, Context, bail};
 use std::fs;
 use regex::Regex;
+use once_cell::sync::Lazy;
 
 use crate::core::constants;
 use crate::models::mod_data::ErroredLines;
@@ -124,30 +125,35 @@ pub fn sanitize_condition_expression_public(expression: &str) -> String {
     sanitize_condition_expression(expression)
 }
 
+/// 匹配 `$managed_slot_id == $\modmanageragl\group_<数字>\<token>`
+static MANAGER_SLOT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\$managed_slot_id\s*==\s*\$\\modmanageragl\\group_\d+\\[A-Za-z0-9_]+").unwrap()
+});
+static PAREN_AND_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\(\s*&&\s*").unwrap());
+static PAREN_OR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\(\s*\|\|\s*").unwrap());
+static AND_PAREN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*&&\s*\)").unwrap());
+static OR_PAREN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*\|\|\s*\)").unwrap());
+static EMPTY_PAREN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\(\s*\)").unwrap());
+
 fn sanitize_condition_expression(expression: &str) -> String {
-    // 匹配 §managed_slot_id == $\\modmanageragl\\group_<数字>\\<token>，
+    // 匹配 `$managed_slot_id == $\modmanageragl\group_<数字>\<token>`，
     // token 可为 active_slot（NRMM）或数字编号（本项目历史注入）。
-    let manager_re = Regex::new(
-        r"\$managed_slot_id\s*==\s*\$\\modmanageragl\\group_\d+\\[A-Za-z0-9_]+",
-    )
-    .unwrap();
-    if !manager_re.is_match(expression) {
+    if !MANAGER_SLOT_RE.is_match(expression) {
         return expression.to_string();
     }
 
-    let mut expr = manager_re.replace_all(expression, "").trim().to_string();
+    let mut expr = MANAGER_SLOT_RE.replace_all(expression, "").trim().to_string();
 
     // "(&& x)" -> "(x)"
-    expr = Regex::new(r"\(\s*&&\s*").unwrap().replace_all(&expr, "(").trim().to_string();
+    expr = PAREN_AND_RE.replace_all(&expr, "(").trim().to_string();
     // "(|| x)" -> "(x)"
-    expr = Regex::new(r"\(\s*\|\|\s*").unwrap().replace_all(&expr, "(").trim().to_string();
+    expr = PAREN_OR_RE.replace_all(&expr, "(").trim().to_string();
     // "(x && )" -> "(x)"
-    expr = Regex::new(r"\s*&&\s*\)").unwrap().replace_all(&expr, ")").trim().to_string();
+    expr = AND_PAREN_RE.replace_all(&expr, ")").trim().to_string();
     // "(x || )" -> "(x)"
-    expr = Regex::new(r"\s*\|\|\s*\)").unwrap().replace_all(&expr, ")").trim().to_string();
+    expr = OR_PAREN_RE.replace_all(&expr, ")").trim().to_string();
     // "()" -> ""
-    expr = Regex::new(r"\(\s*\)").unwrap().replace_all(&expr, "").trim().to_string();
-    // 尾部悬空 "&&"（连续移除，避免残留）
+    expr = EMPTY_PAREN_RE.replace_all(&expr, "").trim().to_string();
     while expr.trim_end().ends_with("&&") {
         expr = expr.trim_end()[..expr.trim_end().len() - 2].trim().to_string();
     }

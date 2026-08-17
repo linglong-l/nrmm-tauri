@@ -808,7 +808,7 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         let groupname_path = root_path.join("groupname");
         read_or_create_marker_file(&groupname_path, &base_root_name)?
     } else {
-        base_root_name.clone()
+        base_root_name
     };
 
     // 规范化路径 visited 集合：防止 symlink/hardlink 导致循环或重复
@@ -830,8 +830,8 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     // 创建根分组
     let root_icon = find_icon_path(root_path)?;
     let root_group = ModGroupData {
-        name: root_display_name.clone(),
-        group_name: root_name.clone(),
+        name: root_display_name,
+        group_name: root_name,
         group_type: GroupType::MutexGroup,
         full_path: root_path.to_path_buf(),
         group_path: root_path.to_string_lossy().to_string(),
@@ -1049,7 +1049,7 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
     let display_name = if disabled {
         DISABLED_PREFIX_RE.replace(&dir_name, "").to_string()
     } else {
-        dir_name.clone()
+        dir_name
     };
 
     // NRMM 逻辑：互斥组下不创建 modname 文件，但若已存在则优先使用其内容作为展示名
@@ -1059,9 +1059,9 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or(display_name.clone())
+            .unwrap_or(display_name)
     } else {
-        display_name.clone()
+        display_name
     };
 
     // 检查 fav 文件
@@ -1307,7 +1307,7 @@ fn scan_group_directory_deep(dir_path: &Path, group_name: &str, group_type: Grou
         children: subgroups,
         has_child: has_children,
         mod_count: mods.len() as u32,
-        mod_paths: mod_paths.clone(),
+        mod_paths,
         mods: mods.clone(),
         ..Default::default()
     };
@@ -1487,7 +1487,7 @@ fn build_mod_data_deep(
     let display_name = if disabled {
         DISABLED_PREFIX_RE.replace(&dir_name, "").to_string()
     } else {
-        dir_name.clone()
+        dir_name
     };
     let modname_path = dir.join("modname");
     let mod_name = if modname_path.exists() {
@@ -1495,9 +1495,9 @@ fn build_mod_data_deep(
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or(display_name.clone())
+            .unwrap_or(display_name)
     } else {
-        display_name.clone()
+        display_name
     };
 
     let mut mod_ini_data: Vec<ModIniData> = Vec::with_capacity(8);           // 预分配 8 个 INI 数据，大多数模组只有少量 INI

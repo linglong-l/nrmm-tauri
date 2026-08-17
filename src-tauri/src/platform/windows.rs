@@ -11,6 +11,16 @@
 //! - 缓冲区大小固定为 MAX_PATH (260)，避免溢出
 //! - 句柄使用后调用 CloseHandle 释放
 //! - 检查句柄有效性后再使用
+//!
+//! ## Send/Sync 安全性
+//! - `SafeHWND`: HWND 是进程级窗口句柄，Win32 API 接受 HWND 的调用
+//!   （PostMessageW 等）均为线程安全；HWND 在窗口生命周期内有效
+//! - `WindowsKeySimulator`: 仅包含 SafeHWND，所有 Win32 调用线程安全
+//!
+//! ## 回调安全性
+//! - `enum_proc`: Win32 `EnumWindows` 在调用线程上同步执行回调，
+//!   无并发重入风险；回调内访问 `ENUM_WINDOWS_STATE` 的 Mutex 被外层
+//!   `find_game_window` 的锁获取/释放正确包裹（状态在回调前设置、回调后读取）
 
 use anyhow::{Result, anyhow, Context};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -26,7 +36,15 @@ use crate::sel_dbg;
 static ENUM_WINDOWS_STATE: Mutex<Option<(String, Option<isize>)>> = Mutex::new(None);
 
 struct SafeHWND(HWND);
+// SAFETY: HWND is a process-scoped window handle (isize). All Win32 API calls
+// that accept HWND are thread-safe for the lifetime of the window. Since we
+// only use HWND to send window messages (PostMessageW is thread-safe), and
+// the window is guaranteed to exist until the application exits, sending
+// SafeHWND across threads is safe.
 unsafe impl Send for SafeHWND {}
+// SAFETY: HWND is an opaque handle; &HWND is safe to share across threads
+// because Win32 API calls that accept HWND by value do not mutate the caller's
+// copy. PostMessageW is documented as thread-safe.
 unsafe impl Sync for SafeHWND {}
 
 /// Windows 按键模拟器
@@ -35,7 +53,13 @@ pub struct WindowsKeySimulator {
     target_hwnd: Option<SafeHWND>,
 }
 
+// SAFETY: WindowsKeySimulator contains only SafeHWND (already Send) and
+// uses Win32 API calls (SendInput/PostMessageW) that are thread-safe.
+// The struct is #[derive(Default)] and has no unsynchronized mutable state
+// that would be UB to share across threads.
 unsafe impl Send for WindowsKeySimulator {}
+// SAFETY: &WindowsKeySimulator provides only immutable access to SafeHWND;
+// all Win32 API calls through it are thread-safe as documented by MSDN.
 unsafe impl Sync for WindowsKeySimulator {}
 
 impl WindowsKeySimulator {
