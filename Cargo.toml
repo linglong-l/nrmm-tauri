@@ -4,10 +4,16 @@ members = [
 ]
 resolver = "2"
 
+# release 性能配置（2026-08-18 修订）：
+# - opt-level = 3：速度最大优化。原 "z"（最小体积）是 Tauri 模板默认，会禁用向量化/内联，
+#   对 INI 解析/序列化等 CPU 密集热路径损失显著（update_mod_data 实测受此拖累），体积换性能
+# - lto = true / codegen-units = 1：全程序 LTO + 单代码生成单元，跨 crate 内联
+# - panic = "unwind"：项目依赖 catch_unwind 做模组级/组级 panic 隔离（硬约束），禁止 abort
+# - strip = true / debug = false：去除调试符号控制体积
 [profile.release]
 debug = false
 strip = true
 lto = true
 panic = "unwind"
-opt-level = "z"
+opt-level = 3
 codegen-units = 1

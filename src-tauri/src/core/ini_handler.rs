@@ -564,7 +564,28 @@ impl IniFile {
         let file = fs::File::create(&tmp_path)
             .with_context(|| format!("Failed to create temp file: {:?}", tmp_path))?;
         let mut writer = BufWriter::new(file);
+        self.render(&mut writer)?;
+        writer.flush()?;
+        drop(writer);
 
+        fs::rename(&tmp_path, path)
+            .with_context(|| format!("Failed to rename temp file to {:?}", path))?;
+
+        Ok(())
+    }
+
+    /// 将 INI 内容序列化到指定 writer（[`Self::write_atomic`] 的渲染核心）。
+    ///
+    /// 格式与原内联实现逐字节一致：preamble 行 → 各段（`[name]` + 段内行，段间空行分隔，
+    /// 段尾 Empty 行剔除）→ 文件末尾条件空行（对齐 Dart `_getLiteralIni` 的 needsSeparator）。
+    ///
+    /// # 参数
+    /// - `writer`: 目标写入器
+    ///
+    /// # 返回
+    /// - `Ok(())`: 序列化完成
+    /// - `Err(e)`: 写入失败
+    fn render(&self, writer: &mut impl std::io::Write) -> Result<()> {
         for line in &self.preamble {
             writeln!(writer, "{}", line)?;
         }
@@ -603,13 +624,38 @@ impl IniFile {
             writeln!(writer)?;
         }
 
-        writer.flush()?;
-        drop(writer);
-
-        fs::rename(&tmp_path, path)
-            .with_context(|| format!("Failed to rename temp file to {:?}", path))?;
-
         Ok(())
+    }
+
+    /// 内容不变则跳过写入的原子写（[`Self::write_atomic`] 的幂等快速路径）。
+    ///
+    /// 性能关键（2026-08-18）：update_mod_data 重复运行时，管线输出与磁盘内容逐字节相同的
+    /// INI 占绝大多数；跳过写盘可省去每文件 create-temp + rename 两次系统调用与杀毒实时扫描
+    /// （实测 2.7 万 INI 的组处理阶段 ~30% 耗时在无变化写回上）。写入语义与
+    /// [`Self::write_atomic`] 完全一致（临时文件 + rename 原子替换），仅当序列化字节与
+    /// 现有文件字节完全相同时不写。文件不存在、读取失败均视为「有变化」走正常写入。
+    ///
+    /// # 参数
+    /// - `path`: 目标 INI 路径
+    ///
+    /// # 返回
+    /// - `Ok(true)`: 内容有变化，已原子写入
+    /// - `Ok(false)`: 内容未变化，已跳过写入
+    /// - `Err(e)`: 序列化或写入失败
+    pub fn write_atomic_skip_unchanged(&self, path: &Path) -> Result<bool> {
+        let mut buf: Vec<u8> = Vec::with_capacity(4096);
+        self.render(&mut buf)?;
+        match fs::read(path) {
+            Ok(existing) if existing == buf => Ok(false),
+            _ => {
+                let tmp_path = path.with_extension("ini.tmp");
+                fs::write(&tmp_path, &buf)
+                    .with_context(|| format!("Failed to write temp file: {:?}", tmp_path))?;
+                fs::rename(&tmp_path, path)
+                    .with_context(|| format!("Failed to rename temp file to {:?}", path))?;
+                Ok(true)
+            }
+        }
     }
 
     /// 对齐 Dart _getLiteralIni 的 needsSeparator 判定：

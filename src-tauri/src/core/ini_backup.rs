@@ -393,6 +393,8 @@ mod tests {
         fs::write(dir.path().join("nrmm_include.ini"), "n").unwrap();
         fs::write(dir.path().join("group_1.ini"), "g").unwrap();
         fs::write(dir.path().join("GROUP_12.ini"), "G").unwrap(); // 大写也命中
+        fs::write(dir.path().join("group_01.ini"), "g0").unwrap(); // 前导零变体
+        fs::write(dir.path().join("group_int.ini"), "gi").unwrap(); // 非数字后缀变体
 
         backup_ini_files(dir.path());
 
@@ -402,6 +404,8 @@ mod tests {
             "nrmm_include",
             "group_1",
             "GROUP_12",
+            "group_01",
+            "group_int",
         ] {
             assert!(
                 !dir.path().join(backup_name(name)).exists(),

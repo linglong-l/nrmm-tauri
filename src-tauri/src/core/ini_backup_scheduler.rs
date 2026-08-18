@@ -64,6 +64,8 @@ struct BackupScheduler {
     done_full: Mutex<HashSet<PathBuf>>,
     /// 优雅退出标记（测试用；生产常驻不置位）
     shutdown: AtomicBool,
+    /// 暂停标记：置位后 worker 不再取出新任务（已入队任务保留，不丢弃）
+    paused: AtomicBool,
 }
 
 static SCHEDULER: OnceLock<BackupScheduler> = OnceLock::new();
@@ -77,6 +79,7 @@ impl BackupScheduler {
             cv: Condvar::new(),
             done_full: Mutex::new(HashSet::new()),
             shutdown: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
         }
     }
 
@@ -100,10 +103,14 @@ impl BackupScheduler {
         self.cv.notify_one();
     }
 
-    /// 出队一个任务；队列空时等待直到有任务或 `shutdown`
+    /// 出队一个任务；队列空或调度器暂停时等待（condvar，不忙轮询），
+    /// 直到队列有任务且未暂停，或 `shutdown` 置位。
+    /// 暂停期间已入队任务保留在队列中，resume 后按原 FIFO 顺序继续消费。
     fn pop(&self) -> Option<BackupJob> {
         let mut q = self.queue.lock().unwrap_or_else(|p| p.into_inner());
-        while q.is_empty() && !self.shutdown.load(Ordering::Acquire) {
+        while (q.is_empty() || self.paused.load(Ordering::Acquire))
+            && !self.shutdown.load(Ordering::Acquire)
+        {
             q = self.cv.wait(q).unwrap_or_else(|p| p.into_inner());
         }
         if q.is_empty() {
@@ -135,6 +142,17 @@ impl BackupScheduler {
         self.shutdown.store(true, Ordering::Release);
         let _guard = self.queue.lock().unwrap_or_else(|p| p.into_inner());
         self.cv.notify_all();
+    }
+
+    /// 设置暂停标记；解除暂停时持有队列锁 notify_all——worker 在持锁状态下
+    /// 检查暂停标记并进入 wait，锁内唤醒可避免「worker 检查后、wait 前」的
+    /// 唤醒丢失竞态（pause 方向无需唤醒：等待中的 worker 醒来后发现暂停会继续等待）。
+    fn set_paused(&self, paused: bool) {
+        self.paused.store(paused, Ordering::Release);
+        if !paused {
+            let _guard = self.queue.lock().unwrap_or_else(|p| p.into_inner());
+            self.cv.notify_all();
+        }
     }
 }
 
@@ -182,6 +200,22 @@ pub fn enqueue_incremental(mod_root: PathBuf) {
     start();
     let sched = SCHEDULER.get().expect("scheduler must be started");
     sched.push_front(BackupJob::Incremental { mod_root });
+}
+
+/// 暂停备份调度器：worker 不再取出新任务，已入队任务保留在队列中不丢失（幂等）。
+///
+/// 用途：`update_mod_data` 等大批量 INI 写回操作期间，避免 `get_mods` 触发的
+/// 后台全量备份与更新流程产生并发 I/O 竞争。不要求线程池已启动
+/// （未启动时无消费者，仅记录暂停状态）。
+pub fn pause() {
+    SCHEDULER.get_or_init(BackupScheduler::new).set_paused(true);
+}
+
+/// 恢复备份调度器：唤醒所有等待的 worker 继续消费队列（幂等）。
+pub fn resume() {
+    SCHEDULER
+        .get_or_init(BackupScheduler::new)
+        .set_paused(false);
 }
 
 // ---------- 单元测试 ----------
@@ -298,5 +332,62 @@ mod tests {
         s.request_shutdown();
         let _ = worker_join.join();
         assert!(ok, "worker 应生成备份文件");
+    }
+
+    #[test]
+    fn pause_blocks_worker_until_resume() {
+        // 暂停后入队任务不被消费（队列任务不丢）；resume 后消费完成
+        static S: OnceLock<BackupScheduler> = OnceLock::new();
+        let s = S.get_or_init(BackupScheduler::new);
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("paused.ini"), "p").unwrap();
+        let backup = dir.path().join(backup_name("paused.ini"));
+
+        // 先暂停、再入队、最后启动 worker：worker 取任务前应阻塞等待
+        s.set_paused(true);
+        s.push_back(BackupJob::Full(dir.path().to_path_buf()));
+        let worker_join = thread::spawn({
+            let s = s as &'static BackupScheduler;
+            move || s.worker()
+        });
+
+        // 轮询断言窗口（300ms）：暂停期间任务不得执行
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !backup.exists(),
+            "暂停期间备份任务不应执行（备份文件不应存在）"
+        );
+
+        // resume 后任务应被消费完成
+        s.set_paused(false);
+        let ok = wait_until(|| backup.exists());
+        s.request_shutdown();
+        let _ = worker_join.join();
+        assert!(ok, "resume 后 worker 应消费完成队列任务");
+    }
+
+    #[test]
+    fn pause_resume_idempotent() {
+        // 全局 API：重复调用 pause/resume 不 panic，状态最终与最后一次调用一致
+        pause();
+        pause();
+        assert!(
+            SCHEDULER
+                .get()
+                .expect("pause 应已初始化调度器")
+                .paused
+                .load(std::sync::atomic::Ordering::Acquire),
+            "重复 pause 后应保持暂停"
+        );
+        resume();
+        resume();
+        assert!(
+            !SCHEDULER
+                .get()
+                .expect("resume 应已初始化调度器")
+                .paused
+                .load(std::sync::atomic::Ordering::Acquire),
+            "重复 resume 后应恢复运行"
+        );
     }
 }

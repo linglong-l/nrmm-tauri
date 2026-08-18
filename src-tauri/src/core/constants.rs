@@ -90,11 +90,15 @@ pub const INI_MANAGER_BACKUP_SUFFIX: &str = "ini_manager_backup";
 /// - `manager_group.ini` / `nrmm_include.ini`: NRMM 管理文件，每次 update 重写
 pub const INI_BACKUP_WHITELIST: &[&str] = &["desktop.ini", "manager_group.ini", "nrmm_include.ini"];
 
-/// group_N.ini 分组管理文件正则：NRMM 每次 update_mod_data 全量重写（delete 后重建）
-/// 约束对齐 mod_scanner 的 GROUP_N_RE：禁止前导零、禁止 group_0、数值位数 ≤ 9
+/// group_*.ini 分组管理文件正则（备份白名单专用）：NRMM 每次 update_mod_data 全量重写（delete 后重建）
+///
+/// 该正则仅用于 [`is_ini_backup_whitelisted`] 的备份跳过判定，**不参与模组扫描**；
+/// 因此刻意放宽为「`group_` 前缀 + 字母/数字后缀」，以覆盖 `group_01.ini`（前导零）、
+/// `group_0.ini`、`group_int.ini`（非数字后缀）等变体，避免此类管理/遗留文件被误备份。
+/// 与 mod_scanner 的严格 NormalGroup 识别（`GROUP_N_RE` 禁止前导零）互不影响。
 // SAFETY: Hardcoded valid regex literal; compilation cannot fail at runtime.
-static GROUP_N_INI_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^group_([1-9][0-9]{0,8})\.ini$").unwrap());
+static GROUP_MANAGEMENT_INI_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^group_[0-9a-z]+\.ini$").unwrap());
 
 /// 判断 ini 文件名是否命中备份白名单（不参与启动备份）
 ///
@@ -104,7 +108,7 @@ static GROUP_N_INI_RE: Lazy<Regex> =
 /// # 返回
 /// `true` 表示命中白名单，跳过备份：
 /// - 精确匹配 `INI_BACKUP_WHITELIST`（desktop.ini / manager_group.ini / nrmm_include.ini）
-/// - 匹配 `group_<数字>.ini`（NRMM 分组管理文件，每次 update 全量重写）
+/// - 匹配 `group_<后缀>.ini`（NRMM 分组管理文件及其变体，如 `group_1.ini`、`group_01.ini`、`group_int.ini`）
 /// - 以 `.ini_manager_backup` / `.ini_managed_backup` 结尾（备份文件自身，防递归再备份）
 #[inline]
 pub fn is_ini_backup_whitelisted(file_name: &str) -> bool {
@@ -112,7 +116,7 @@ pub fn is_ini_backup_whitelisted(file_name: &str) -> bool {
     if INI_BACKUP_WHITELIST.contains(&lower.as_str()) {
         return true;
     }
-    if GROUP_N_INI_RE.is_match(&lower) {
+    if GROUP_MANAGEMENT_INI_RE.is_match(&lower) {
         return true;
     }
     let manager_backup = format!(".{}", INI_MANAGER_BACKUP_SUFFIX);

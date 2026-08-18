@@ -1205,45 +1205,42 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
 
     let mut groups: Vec<ModGroupData> = Vec::with_capacity(32); // 预分配 32 个分组，覆盖绝大多数场景
     let mut all_mods: Vec<ModData> = Vec::with_capacity(256); // 预分配 256 个模组，减少扩容次数
-    let mut known_libraries = HashSet::new(); // 收集所有模组中定义的库
 
     let entries = fs::read_dir(&managed_folder)?;
 
-    for entry in entries {
-        let entry = entry?;
-        let ft = match entry.file_type() {
-            Ok(f) => f,
-            Err(_) => continue,
-        };
-        if !ft.is_dir() && !ft.is_symlink() {
-            continue;
-        }
-        let path = entry.path();
-
-        let dir_name = entry.file_name().to_string_lossy().to_string();
-
-        // 使用新正则过滤，仅处理 group_xx 目录
-        if is_normal_group_dir(&dir_name).is_none() {
-            continue;
-        }
-
-        let (group, mods) = scan_group_directory_deep(&path, &dir_name, GroupType::NormalGroup)?;
-
-        for mod_data in &mods {
-            for ini_data in &mod_data.mod_ini_data {
-                if let Ok(ini) = get_or_parse_ini(std::path::Path::new(ini_data.ini_path.as_str()))
-                {
-                    let libs = ini.defined_libraries();
-                    known_libraries.extend(libs);
-                }
+    // 收集严格 group_<int> 一级目录（与串行版同过滤条件），非 group 目录（# 互斥分组等）
+    // 不读、不写、不遍历——update_mod_data 对其零接触（2026-08-18 用户决策，对齐 NRMM 原版）
+    let group_dirs: Vec<(PathBuf, String)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let ft = entry.file_type().ok()?;
+            if !ft.is_dir() && !ft.is_symlink() {
+                return None;
             }
-        }
+            let dir_name = entry.file_name().to_string_lossy().to_string();
+            is_normal_group_dir(&dir_name)?;
+            Some((entry.path(), dir_name))
+        })
+        .collect();
 
+    // 分组并行扫描（对齐 scan_mods_light 的 par_iter 模式）：
+    // 每组任务独立（组内 BFS 自带 visited 路径池），结果收集后统一排序合并
+    let scan_results: Vec<Result<(ModGroupData, Vec<ModData>)>> = group_dirs
+        .par_iter()
+        .map(|(path, dir_name)| scan_group_directory_deep(path, dir_name, GroupType::NormalGroup))
+        .collect();
+
+    // 按分组 id 升序合并（BTreeMap 迭代序确定，组内保持扫描顺序），与串行版结果一致
+    let mut grouped: std::collections::BTreeMap<u32, (ModGroupData, Vec<ModData>)> =
+        std::collections::BTreeMap::new();
+    for result in scan_results {
+        let (group, mods) = result?;
+        grouped.insert(group.group_index(), (group, mods));
+    }
+    for (_, (group, mods)) in grouped {
         groups.push(group);
         all_mods.extend(mods);
     }
-
-    groups.sort_by_key(|g| g.group_index());
 
     let enabled = all_mods
         .iter()
@@ -1593,78 +1590,97 @@ fn build_mod_data_deep(
     let mut mod_namespace: Option<String> = None;
     let mut defined_libraries = HashSet::with_capacity(32); // 预分配 32 个库，覆盖大多数模组
 
-    for ini_path in &ini_files {
-        match get_or_parse_ini(ini_path) {
-            Ok(ini) => {
-                let mut keys = 0usize;
-                let mut textures = 0usize;
-                let mut shaders = 0usize;
-                let mut commands = 0usize;
-                let mut resources = 0usize;
+    // 禁用模组跳过内容解析（2026-08-18 性能优化）：update_mod_data 仅修改启用模组 INI，
+    // 禁用模组的统计字段/错误行无消费方（UI 走 scan_mods_light 路径），
+    // 仅保留路径信息（section 计数等置 0），避免首次运行的无效全量解析。
+    if disabled {
+        for ini_path in &ini_files {
+            let ini_filename = ini_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            mod_ini_data.push(ModIniData {
+                ini_path: ini_path.to_string_lossy().to_string(),
+                ini_filename,
+                file_relative_path: ini_path.to_string_lossy().to_string(),
+                ..Default::default()
+            });
+        }
+    } else {
+        for ini_path in &ini_files {
+            match get_or_parse_ini(ini_path) {
+                Ok(ini) => {
+                    let mut keys = 0usize;
+                    let mut textures = 0usize;
+                    let mut shaders = 0usize;
+                    let mut commands = 0usize;
+                    let mut resources = 0usize;
 
-                for section in &ini.sections {
-                    let sname = section.name.to_lowercase();
-                    if sname.starts_with("keypress")
-                        || (sname.starts_with("key")
-                            && !sname.starts_with("keyboard")
-                            && !sname.starts_with("keybind"))
-                    {
-                        keys += 1;
-                    } else if sname.starts_with("textureoverride") {
-                        textures += 1;
-                    } else if sname.starts_with("shaderoverride") {
-                        shaders += 1;
-                    } else if sname.starts_with("commandlist") {
-                        commands += 1;
-                    } else if sname.starts_with("resource") {
-                        resources += 1;
+                    for section in &ini.sections {
+                        let sname = section.name.to_lowercase();
+                        if sname.starts_with("keypress")
+                            || (sname.starts_with("key")
+                                && !sname.starts_with("keyboard")
+                                && !sname.starts_with("keybind"))
+                        {
+                            keys += 1;
+                        } else if sname.starts_with("textureoverride") {
+                            textures += 1;
+                        } else if sname.starts_with("shaderoverride") {
+                            shaders += 1;
+                        } else if sname.starts_with("commandlist") {
+                            commands += 1;
+                        } else if sname.starts_with("resource") {
+                            resources += 1;
+                        }
                     }
+
+                    total_sections += ini.sections.len();
+                    total_key_sections += keys;
+                    total_texture_sections += textures;
+                    total_shader_sections += shaders;
+                    total_command_lists += commands;
+                    total_resources += resources;
+
+                    if mod_namespace.is_none() {
+                        mod_namespace = namespace_handler::extract_namespace(&ini);
+                    }
+
+                    defined_libraries.extend(ini.defined_libraries());
+
+                    let known_libs = HashSet::new();
+                    let errors = ini.detect_errors(ini_path, &known_libs);
+                    all_errored_lines.extend(errors);
+
+                    let ini_filename = ini_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+
+                    mod_ini_data.push(ModIniData {
+                        ini_path: ini_path.to_string_lossy().to_string(),
+                        ini_filename,
+                        file_relative_path: ini_path.to_string_lossy().to_string(),
+                        section_count: ini.sections.len() as u32,
+                        key_sections: keys as u32,
+                        texture_override_sections: textures as u32,
+                        shader_override_sections: shaders as u32,
+                        command_list_sections: commands as u32,
+                        resource_sections: resources as u32,
+                        has_include: ini.has_include(),
+                        ..Default::default()
+                    });
                 }
-
-                total_sections += ini.sections.len();
-                total_key_sections += keys;
-                total_texture_sections += textures;
-                total_shader_sections += shaders;
-                total_command_lists += commands;
-                total_resources += resources;
-
-                if mod_namespace.is_none() {
-                    mod_namespace = namespace_handler::extract_namespace(&ini);
+                Err(e) => {
+                    log::warn!("Failed to parse INI {}: {}", ini_path.display(), e);
+                    all_errored_lines.push(ErroredLines {
+                        error_type: 3,
+                        error_message: format!("Parse error: {}", e),
+                        ..Default::default()
+                    });
                 }
-
-                defined_libraries.extend(ini.defined_libraries());
-
-                let known_libs = HashSet::new();
-                let errors = ini.detect_errors(ini_path, &known_libs);
-                all_errored_lines.extend(errors);
-
-                let ini_filename = ini_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-
-                mod_ini_data.push(ModIniData {
-                    ini_path: ini_path.to_string_lossy().to_string(),
-                    ini_filename,
-                    file_relative_path: ini_path.to_string_lossy().to_string(),
-                    section_count: ini.sections.len() as u32,
-                    key_sections: keys as u32,
-                    texture_override_sections: textures as u32,
-                    shader_override_sections: shaders as u32,
-                    command_list_sections: commands as u32,
-                    resource_sections: resources as u32,
-                    has_include: ini.has_include(),
-                    ..Default::default()
-                });
-            }
-            Err(e) => {
-                log::warn!("Failed to parse INI {}: {}", ini_path.display(), e);
-                all_errored_lines.push(ErroredLines {
-                    error_type: 3,
-                    error_message: format!("Parse error: {}", e),
-                    ..Default::default()
-                });
             }
         }
     }
@@ -1882,6 +1898,59 @@ mod tests {
     /// 测试辅助：在根目录下创建主 INI 文件（d3dx.ini）
     fn create_d3dx_ini(base: &Path) {
         fs::write(base.join("d3dx.ini"), "; test").unwrap();
+    }
+
+    /// 测试：深度扫描对禁用模组跳过内容解析（2026-08-18 性能优化）
+    ///
+    /// 构造启用 + 禁用（DISABLED_ 前缀）各一个模组，运行 scan_mods_deep 后断言：
+    /// 1. 禁用模组仍被发现（disabled=true，ini_path 保留——update 需要路径做状态展示）；
+    /// 2. 禁用模组的 section 计数为 0（未执行内容解析）；
+    /// 3. 启用模组的 section 计数正常（解析未受影响）。
+    #[test]
+    fn test_scan_deep_disabled_mod_skips_parse() {
+        let dir = setup_test_dir();
+        let group = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(
+            &group,
+            "EnabledMod",
+            "[TextureOverride]\nhash = 0xAAAA\n[CommandListX]\ny = 1\n",
+        );
+        create_mod_with_ini(
+            &group,
+            "DISABLED_DisabledMod",
+            "[TextureOverride]\nhash = 0xBBBB\n[CommandListY]\nz = 1\n",
+        );
+
+        let result = scan_mods_deep(dir.path()).expect("scan_mods_deep 失败");
+        assert_eq!(result.mods.len(), 2, "应发现启用与禁用两个模组");
+
+        let enabled = result
+            .mods
+            .iter()
+            .find(|m| !m.disabled)
+            .expect("应存在启用模组");
+        assert_eq!(
+            enabled.mod_ini_data[0].section_count, 2,
+            "启用模组应正常解析（2 个段）"
+        );
+
+        let disabled = result
+            .mods
+            .iter()
+            .find(|m| m.disabled)
+            .expect("应存在禁用模组");
+        assert!(
+            !disabled.mod_ini_data.is_empty() && !disabled.mod_ini_data[0].ini_path.is_empty(),
+            "禁用模组 INI 路径应保留"
+        );
+        assert_eq!(
+            disabled.mod_ini_data[0].section_count, 0,
+            "禁用模组应跳过内容解析（section 计数为 0）"
+        );
+        assert!(
+            disabled.errored_lines.is_empty(),
+            "禁用模组不应产生解析错误条目"
+        );
     }
 
     /// 测试：strip_disabled_prefix 一次移除连续的全部 DISABLED 前缀及分隔符
