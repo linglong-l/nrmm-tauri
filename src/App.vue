@@ -214,6 +214,10 @@ function applyScale() {
  * 请求通知权限后发送系统通知
  */
 async function sendStartupNotification() {
+  // dev 模式跳过启动通知：tauri dev 文件监视会在源码变化时重编译并重启应用
+  // （实测一轮格式化/检查可触发 1 分钟内十余次重启），每次重启都弹通知构成骚扰；
+  // 启动通知仅在正式构建（用户双击/安装启动）时发送
+  if (DEV_MODE) return
   try {
     let permissionGranted = await isPermissionGranted()
     if (!permissionGranted) {
