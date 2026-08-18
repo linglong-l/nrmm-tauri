@@ -14,7 +14,8 @@
     "ts:check": "npx tsc --noEmit",
     "vue:check": "npx vue-tsc --noEmit",
     "tsc:strict": "npx tsc --noEmit --strict",
-    "biome:check": "npx biome check ."
+    "biome:check": "npx biome check .",
+    "build:linux:zig": "bash scripts/build-linux-zig.sh"
   },
   "engines": {
     "node": ">=22.21.0"
