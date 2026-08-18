@@ -96,7 +96,7 @@ pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::Sc
     };
     if let Some(result) = cached {
         log::info!("[get_mods] Cache hit for {}", game.as_str());
-        crate::core::ini_backup::ensure_startup_ini_backup(mods_path.clone());
+        crate::core::ini_backup_scheduler::ensure_game_full_backup(mods_path.clone());
         return Ok(result);
     }
 
@@ -128,8 +128,8 @@ pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::Sc
         cache.set(game, &mods_path, result.clone());
     }
 
-    // 启动后首次扫描完成：触发一次性启动 INI 备份（fire-and-forget）
-    crate::core::ini_backup::ensure_startup_ini_backup(mods_path.clone());
+    // 用户主动加载该游戏：触发该游戏路径的全量 INI 备份（进程内每游戏一次，后台线程池执行）
+    crate::core::ini_backup_scheduler::ensure_game_full_backup(mods_path.clone());
 
     Ok(result)
 }

@@ -47,6 +47,8 @@
   cargo clippy --all-targets --all-features -- -D warnings -W clippy::pedantic -W clippy::nursery
   ```
 
+  > 说明：pedantic/nursery 为主观启发式组，已在 `lib.rs`/`main.rs`/集成测试 crate 顶部以 `#![allow(clippy::pedantic, clippy::nursery)]` 组级关闭（保留 `-D warnings` 把关真实缺陷）。**禁止**对 pedantic/nursery 使用 `cargo clippy --fix`（会产生破坏性大改），`--fix` 仅用于默认警告。clippy 门禁命令本身仍须 exit 0。
+
 - 依赖检查
 
   ```bash

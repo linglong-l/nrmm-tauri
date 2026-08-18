@@ -1487,9 +1487,9 @@ pub async fn import_mod_cmd(
         )
         .map_err(|e| e.to_string())
         .map(|result| {
-            // 新导入目录补做 INI 备份（幂等，白名单同样生效，错误仅记录日志）
+            // 新导入目录补做 INI 备份（幂等，白名单同样生效，后台线程池队首优先执行）
             if let ExtractResult::Success { ref mod_path, .. } = result {
-                crate::core::ini_backup::backup_ini_files(mod_path);
+                crate::core::ini_backup_scheduler::enqueue_incremental(mod_path.clone());
             }
             result
         })
@@ -1516,9 +1516,9 @@ pub async fn import_mod_auto_cmd(
         )
         .map_err(|e| e.to_string())
         .map(|result| {
-            // 新导入目录补做 INI 备份（幂等，白名单同样生效，错误仅记录日志）
+            // 新导入目录补做 INI 备份（幂等，白名单同样生效，后台线程池队首优先执行）
             if let ExtractResult::Success { ref mod_path, .. } = result {
-                crate::core::ini_backup::backup_ini_files(mod_path);
+                crate::core::ini_backup_scheduler::enqueue_incremental(mod_path.clone());
             }
             result
         })
@@ -1574,9 +1574,9 @@ pub async fn import_item_cmd(
             let res = import_item(&p, &target, req.password.as_deref());
             match res {
                 Ok(r) => {
-                    // 新导入目录补做 INI 备份（幂等，白名单同样生效，错误仅记录日志）
+                    // 新导入目录补做 INI 备份（幂等，白名单同样生效，后台线程池队首优先执行）
                     if let ExtractResult::Success { ref mod_path, .. } = r {
-                        crate::core::ini_backup::backup_ini_files(mod_path);
+                        crate::core::ini_backup_scheduler::enqueue_incremental(mod_path.clone());
                     }
                     outs.push(r);
                 }

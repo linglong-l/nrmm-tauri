@@ -116,6 +116,13 @@ pub fn run() {
         boot_start.elapsed().as_millis()
     );
 
+    // 一次性启动 INI 备份专用线程池（fire-and-forget；不阻塞启动）
+    crate::core::ini_backup_scheduler::start();
+    log::info!(
+        "[BOOT] T+{:>6}ms - INI 备份线程池就绪",
+        boot_start.elapsed().as_millis()
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())

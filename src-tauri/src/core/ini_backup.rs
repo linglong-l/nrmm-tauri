@@ -1,9 +1,10 @@
-//! INI 启动备份模块（防损坏冗余备份）
+//! INI 备份执行体（防损坏冗余备份）
 //!
-//! 应用启动后首次模组扫描完成时，后台单线程对 Mods 目录下的全部 INI 文件
-//! 执行一次全量冗余备份（后缀 `.ini_manager_backup`，与 NRMM 注入管线的
-//! `.ini_managed_backup` 区分），防止其他工具/本项目意外/用户误改导致 INI
-//! 为空或损坏；仅添加模组（导入）时对新导入目录补做备份。
+//! 本模块只提供**单次遍历备份**的执行体 `backup_ini_files`（后缀
+//! `.ini_manager_backup`，与 NRMM 注入管线的 `.ini_managed_backup` 区分），
+//! 防止其他工具/本项目意外/用户误改导致 INI 为空或损坏。
+//! **触发与调度由 [`crate::core::ini_backup_scheduler`] 负责**：用户加载某游戏时
+//! 对其 Mods 路径做全量备份（进程内每游戏一次），导入新模组时对新导入目录做增量备份。
 //!
 //! # 备份判定（v2：无视顶层分组）
 //! - 遍历不做任何分组语义特判（不区分 `_MANAGED_`/`group_xx`/互斥组/
@@ -25,12 +26,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::constants;
-
-/// 启动备份触发标志：每次进程生命周期仅执行一次启动全量备份
-static BACKUP_TRIGGERED: AtomicBool = AtomicBool::new(false);
 
 /// 单文件备份结果（仅模块内部计数用，不对外暴露）
 enum BackupOutcome {
@@ -42,43 +39,11 @@ enum BackupOutcome {
     Failed,
 }
 
-/// 确保启动 INI 备份仅执行一次（后台单线程触发入口）
-///
-/// 首次调用时通过 `swap` 置位 `BACKUP_TRIGGERED` 并在后台线程执行一次
-/// `backup_ini_files`（fire-and-forget）；后续调用直接返回，不重复执行。
-/// 供 `get_mods` 的缓存命中/扫描完成两个返回点挂载，两处都挂安全。
-///
-/// # 参数
-/// - `mods_path`: Mods 根目录路径（所有权移入后台线程）
-///
-/// # 返回
-/// 无返回值；后台任务的开始/结束与耗时仅记录日志，不上传任何错误
-pub fn ensure_startup_ini_backup(mods_path: PathBuf) {
-    if BACKUP_TRIGGERED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    crate::utils::spawn_safe(
-        "ini_startup_backup",
-        std::panic::AssertUnwindSafe(move || {
-            let start = std::time::Instant::now();
-            log::info!(
-                "[ini_backup] Startup INI backup started: {}",
-                mods_path.display()
-            );
-            backup_ini_files(&mods_path);
-            log::info!(
-                "[ini_backup] Startup INI backup finished in {}ms",
-                start.elapsed().as_millis()
-            );
-        }),
-    );
-}
-
 /// 遍历目录树，备份全部非白名单 INI 文件（无视顶层分组）
 ///
 /// 显式栈 DFS + canonicalize 去重（防 symlink 循环）+ 符号链接池。
 /// 遍历规则：不做任何目录名/分组特判，只要 ini 文件不在白名单内即备份。
-/// 启动全量备份与新导入目录补备份共用此入口。
+/// 由 [`crate::core::ini_backup_scheduler`] 调用（全量传游戏根、增量传新导入模组目录）。
 ///
 /// # 参数
 /// - `mods_path`: 遍历根目录（Mods 根或新导入模组目录）
@@ -332,23 +297,10 @@ fn backup_one_ini(ini_path: &Path, symlink_pool: &mut HashMap<PathBuf, PathBuf>)
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::{Duration, Instant};
 
     /// 便捷构造备份文件名：`<stem>.ini_manager_backup`
     fn backup_name(stem: &str) -> String {
         format!("{}.{}", stem, constants::INI_MANAGER_BACKUP_SUFFIX)
-    }
-
-    /// 等待谓词成立（50ms 轮询，默认最多 5s），用于异步 spawn_safe 线程的测试同步
-    fn wait_until<F: Fn() -> bool>(pred: F) -> bool {
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(5) {
-            if pred() {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        pred()
     }
 
     #[test]
@@ -545,34 +497,5 @@ mod tests {
             })
             .count();
         assert_eq!(count, 1, "幂等重跑后备份链接数量应稳定");
-    }
-
-    #[test]
-    fn test_ensure_startup_backup_once() {
-        // 复位全局 flag，保证测试独立（模块内可访问 private static）
-        BACKUP_TRIGGERED.store(false, Ordering::SeqCst);
-
-        // 目录 A：首次调用应产生备份
-        let dir_a = tempfile::tempdir().unwrap();
-        fs::write(dir_a.path().join("a.ini"), "a").unwrap();
-        ensure_startup_ini_backup(dir_a.path().to_path_buf());
-        let backup_a = dir_a.path().join(backup_name("a"));
-        assert!(
-            wait_until(|| backup_a.exists()),
-            "首次调用后（异步线程）目录 A 备份应出现"
-        );
-
-        // 目录 B：flag 已置位，再次调用不应产生新备份
-        let dir_b = tempfile::tempdir().unwrap();
-        fs::write(dir_b.path().join("b.ini"), "b").unwrap();
-        ensure_startup_ini_backup(dir_b.path().to_path_buf());
-        std::thread::sleep(Duration::from_millis(300));
-        assert!(
-            !dir_b.path().join(backup_name("b")).exists(),
-            "flag 已置位后再次调用不应执行备份"
-        );
-
-        // 结束复位，避免污染其他测试
-        BACKUP_TRIGGERED.store(false, Ordering::SeqCst);
     }
 }
