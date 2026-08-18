@@ -155,6 +155,9 @@ pub struct AppSettings {
     pub show_favorites_only: bool,
     /// 是否检查命名空间冲突
     pub check_namespace_conflict: bool,
+    /// 是否在启动时打开控制台窗口查看日志（默认 false）
+    #[serde(default)]
+    pub show_console_on_start: bool,
 }
 
 impl Default for AppSettings {
@@ -199,6 +202,7 @@ impl Default for AppSettings {
             show_errored_mods: false,
             show_favorites_only: false,
             check_namespace_conflict: true,
+            show_console_on_start: false,
         }
     }
 }

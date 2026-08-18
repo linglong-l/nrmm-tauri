@@ -6,6 +6,8 @@
 //! - 其他 crate 可以引用库功能
 //! - 符合 Rust 项目的最佳实践
 
+// release 构建使用 Windows GUI 子系统，避免双击启动时弹出控制台窗口；debug 保持 console 便于开发调试
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // 见 lib.rs：关闭主观的 pedantic / nursery 两组，保留 `-D warnings` 把关真实问题。
 #![allow(clippy::pedantic, clippy::nursery)]
 

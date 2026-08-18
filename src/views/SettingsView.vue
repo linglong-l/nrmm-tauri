@@ -182,6 +182,11 @@
             <el-switch v-model="settingsStore.simulateKeyOnSelection" active-color="#4a9eff" inactive-color="#555" @change="onSettingChange" />
           </div>
           <div class="setting-desc">{{ t('settings.simulateKeyOnSelectionDesc') }}</div>
+          <div class="block-row">
+            <span class="row-label">{{ t('settings.showConsoleOnStart') }}</span>
+            <el-switch v-model="settingsStore.settings.showConsoleOnStart" active-color="#4a9eff" inactive-color="#555" @change="onSettingChange" />
+          </div>
+          <div class="setting-desc">{{ t('settings.showConsoleOnStartDesc') }}</div>
         </div>
 
         <!-- 语言选择 -->

@@ -287,6 +287,8 @@ export interface AppSettings {
   showKeypressOnScreen: boolean;
   /** 选择时是否模拟按键 */
   simulateKeyOnSelection: boolean;
+  /** 是否在启动时打开控制台窗口查看日志（默认 false，重启后生效） */
+  showConsoleOnStart: boolean;
   /** 是否使用精确热键模式 */
   usePreciseHotkey: boolean;
   /** 是否交换取消按键绑定 */

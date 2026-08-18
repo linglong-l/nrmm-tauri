@@ -566,7 +566,9 @@
     "closeAndReload": "Close & Reload (F10)",
     "close": "Close",
     "simulateKeyOnSelection": "Simulate keys on selection",
-    "simulateKeyOnSelectionDesc": "Send key simulation to 3Dmigoto when selecting mods"
+    "simulateKeyOnSelectionDesc": "Send key simulation to 3Dmigoto when selecting mods",
+    "showConsoleOnStart": "Open console on start",
+    "showConsoleOnStartDesc": "Open a terminal window on launch to view live logs. Takes effect after restart"
   },
   "updateModData": {
     "title": "Manage Mods",

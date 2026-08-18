@@ -367,7 +367,9 @@
     "searchHotkey": "Pintasan Pencarian",
     "hotkeyActionWindow": "Beralih Jendela",
     "hotkeyHintWindow": "Beralih Jendela: Pintasan global, Alt+huruf untuk beralih visibilitas jendela",
-    "hotkeyHintSearch": "Pencarian: Pintasan dalam aplikasi, Alt+huruf untuk fokus kotak pencarian"
+    "hotkeyHintSearch": "Pencarian: Pintasan dalam aplikasi, Alt+huruf untuk fokus kotak pencarian",
+    "showConsoleOnStart": "Buka konsol saat mulai",
+    "showConsoleOnStartDesc": "Buka jendela terminal saat aplikasi dimulai untuk melihat log langsung. Berlaku setelah mulai ulang"
   },
   "keybinds": {
     "emptySelectMod": "Silakan pilih mod di tab Mod untuk melihat keybind.",

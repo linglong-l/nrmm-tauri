@@ -367,7 +367,9 @@
     "searchHotkey": "搜尋快捷鍵",
     "hotkeyActionWindow": "視窗切換",
     "hotkeyHintWindow": "視窗切換：全域快捷鍵，Alt+字母切換視窗顯隱",
-    "hotkeyHintSearch": "搜尋：視窗內快捷鍵，Alt+字母聚焦搜尋框"
+    "hotkeyHintSearch": "搜尋：視窗內快捷鍵，Alt+字母聚焦搜尋框",
+    "showConsoleOnStart": "啟動時打開控制台視窗",
+    "showConsoleOnStartDesc": "啟動應用時打開終端視窗即時查看日誌輸出，修改後重啟應用生效"
   },
   "keybinds": {
     "emptySelectMod": "請在「模組」標籤頁選擇一個模組以查看快捷鍵。",

@@ -89,6 +89,9 @@ pub fn run() {
     let boot_ts = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
     log::info!("[BOOT] ===== NRMM 启动开始 at {} =====", boot_ts);
 
+    // 控制台决策必须先于日志系统初始化：AttachConsole/AllocConsole 后标准流才对日志可见
+    platform::console::init_console();
+
     #[cfg(debug_assertions)]
     env_logger::Builder::new()
         .filter_level(log::LevelFilter::Debug)
@@ -108,6 +111,14 @@ pub fn run() {
         "[BOOT] T+{:>6}ms - 日志系统初始化完成",
         boot_start.elapsed().as_millis()
     );
+    // init_console 在日志系统之前执行，此处统一补记打点（提前打点会因 logger 未就绪而丢失）
+    log::info!(
+        "[BOOT] T+{:>6}ms - 控制台初始化完成",
+        boot_start.elapsed().as_millis()
+    );
+
+    // 进程级 panic hook：panic 信息落盘；release 不调用默认 hook（无控制台输出）
+    core::file_logger::install_panic_hook();
 
     // SAFETY: Settings initialization is critical for app startup; failure is unrecoverable.
     config::settings_store::init_settings().expect("Failed to initialize settings");

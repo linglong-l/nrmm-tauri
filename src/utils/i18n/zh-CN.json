@@ -567,7 +567,9 @@
     "closeAndReload": "关闭并重载 (F10)",
     "close": "关闭",
     "simulateKeyOnSelection": "模组选择时模拟按键",
-    "simulateKeyOnSelectionDesc": "选择模组时向 3Dmigoto 发送按键模拟"
+    "simulateKeyOnSelectionDesc": "选择模组时向 3Dmigoto 发送按键模拟",
+    "showConsoleOnStart": "启动时打开控制台窗口",
+    "showConsoleOnStartDesc": "启动应用时打开终端窗口实时查看日志输出，修改后重启应用生效"
   },
   "updateModData": {
     "title": "管理模组",

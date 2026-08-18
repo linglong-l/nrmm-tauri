@@ -14,6 +14,8 @@
 use crate::models::enums::TargetGame;
 use anyhow::Result;
 
+/// 控制台管理（跨平台：Windows 下负责 GUI 子系统的控制台附加/自建，其他平台空实现）
+pub mod console;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(target_os = "macos")]
