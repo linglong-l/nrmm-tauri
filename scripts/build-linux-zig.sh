@@ -87,8 +87,11 @@ if [ ! -d node_modules ]; then
 fi
 
 # ---------- 5. Tauri 构建（AppImage/deb/rpm，链接全程经 zig） ----------
+# 注意：不得用 `npm run tauri build -- --target X`——npm 会把 `--target` 当本身配置吞掉
+# （Unknown cli config --target），仅将三连作为位置参数传给 tauri，cargo 会报
+# "unexpected argument"。统一用 npx tauri 直传（2026-08-18 实测 Windows 侧确认，bash 同理）。
 echo "[build-linux-zig] 开始 tauri build（bundler: appimage/deb/rpm）..."
-npm run tauri build -- --target "$TARGET_TRIPLE"
+npx tauri build --target "$TARGET_TRIPLE"
 
 # ---------- 6. portable tar.gz（复用恢复的 build-portable.mjs） ----------
 node scripts/build-portable.mjs --target "$TARGET_TRIPLE" -o "$DIST_DIR"

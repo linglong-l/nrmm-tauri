@@ -124,8 +124,11 @@ if (-not (Test-Path "node_modules")) {
 }
 
 # ---------- 5. Tauri 构建（nsis + msi；显式 --target 保证 bundle 路径确定性） ----------
+# 注意：必须用 npx tauri 而非 `npm run tauri build -- --target X`——npm 会把脚本名后的
+# `--target` 当成本身配置吞掉（Unknown cli config --target），只把值当位置参数传给 tauri，
+# 导致 cargo 收到裸 triple 报 "unexpected argument"。npx 直传无此问题（2026-08-18 实测）。
 Write-Step "[5/7] Tauri 构建（targets: nsis + msi，tauri.windows.conf.json）"
-npm run tauri build -- --target $TargetTriple
+npx tauri build --target $TargetTriple
 if ($LASTEXITCODE -ne 0) { Write-Fail "tauri build 失败（exit=$LASTEXITCODE）" }
 
 # ---------- 6. portable zip ----------
