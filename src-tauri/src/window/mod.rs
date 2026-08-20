@@ -319,8 +319,27 @@ pub fn toggle_main_window_cmd(app: AppHandle) {
 /// * `app` - Tauri 应用句柄
 #[tauri::command]
 pub fn hard_quit_app(app: AppHandle) {
+    use crate::core::exit_log::{mark_clean_exit, record_exit, ExitReason};
+    use crate::core::operation_registry::{active_operations, has_active_operations};
     use crate::hotkey::HotkeyManager;
     use std::sync::Arc;
+
+    // 退出前检查：若存在重量级后台操作（更新模组数据 / 导入等），取消退出并记录调用时间点，
+    // 避免用户因等待过长而被迫强制终止程序（强制终止将无法干净记录退出）。
+    if has_active_operations() {
+        let ops = active_operations();
+        let detail = format!(
+            "用户点击退出时存在未完成的后台操作，已取消退出；活跃操作（及已运行秒数）={:?}",
+            ops
+        );
+        log::warn!("[exit] {}", detail);
+        record_exit(ExitReason::UserQuitCancelled, &detail);
+        return; // 不退出，待后台操作完成后再由用户点击退出
+    }
+
+    // 无活跃后台操作 → 干净退出：先标记干净退出（写入 run_state + 记录 user_quit），再退出。
+    mark_clean_exit(ExitReason::UserQuit);
+
     if let Some(hotkey_mgr) = app.try_state::<Arc<HotkeyManager>>() {
         hotkey_mgr.unregister_all();
     }

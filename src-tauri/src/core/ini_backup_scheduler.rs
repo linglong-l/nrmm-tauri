@@ -25,9 +25,12 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread::{self, available_parallelism};
 use std::{
     collections::{HashSet, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
+use std::time::Duration;
+
+use crate::core::file_lock::AdvisoryLock;
 use crate::core::ini_backup::backup_ini_files;
 
 /// 应用常驻后台线程数（file_watcher ×1 + 托盘常驻 ×1），备份池需为其让路
@@ -119,19 +122,29 @@ impl BackupScheduler {
         q.pop_front()
     }
 
-    /// worker 主循环：取任务 → catch_unwind 防护执行备份 → 继续
+    /// worker 主循环：取任务 → best-effort 跨进程锁 → catch_unwind 防护执行备份 → 继续
     fn worker(&'static self) {
         while let Some(job) = self.pop() {
             let path = job.root();
-            // 单个任务 panic 不影响线程池其它任务
-            if let Err(e) =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backup_ini_files(&path)))
-            {
-                log::error!(
-                    "[ini_backup] worker task panicked for {}: {:?}",
-                    path.display(),
-                    e
-                );
+            // 进程级 advisory lock（best-effort，短超时 2s）：与 update_mod_data / 导入共用同一
+            // 锁文件，确保跨进程文件操作互斥。备份为增量安全网，采用「获取失败即跳过」策略，
+            // 避免长久阻塞工作线程；同进程并发备份互不串行化，跨进程与本地 update/导入仍正确互斥。
+            match AdvisoryLock::acquire_blocking(
+                &lock_root_for_backup(&job),
+                Duration::from_secs(2),
+            ) {
+                Ok(Some(_lock)) => run_backup(&path), // _lock 在作用域内，备份期间持有锁
+                Ok(None) => {
+                    log::debug!("[ini_backup] 跳过备份（锁被占用超时）：{}", path.display())
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[ini_backup] 获取锁失败，降级为无锁备份：{} ({})",
+                        path.display(),
+                        e
+                    );
+                    run_backup(&path);
+                }
             }
         }
     }
@@ -153,6 +166,34 @@ impl BackupScheduler {
             let _guard = self.queue.lock().unwrap_or_else(|p| p.into_inner());
             self.cv.notify_all();
         }
+    }
+}
+
+/// 实际执行一次备份（带 panic 防护），供 [`BackupScheduler::worker`] 调用。
+fn run_backup(path: &Path) {
+    if let Err(e) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backup_ini_files(path)))
+    {
+        log::error!(
+            "[ini_backup] worker task panicked for {}: {:?}",
+            path.display(),
+            e
+        );
+    }
+}
+
+/// 推导备份任务应锁定的「游戏 Mods 根目录」：
+/// - `Full`：`mods_path` 即游戏 Mods 根，直接作为锁根；
+/// - `Incremental`：`mod_root` 形如 `<Mods>/group_int/<mod>`，取祖父目录（= Mods 根）。
+///   与 update_mod_data / 导入共用同一锁文件，实现跨进程互斥。
+fn lock_root_for_backup(job: &BackupJob) -> PathBuf {
+    match job {
+        BackupJob::Full(p) => p.clone(),
+        BackupJob::Incremental { mod_root } => mod_root
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| mod_root.clone()),
     }
 }
 

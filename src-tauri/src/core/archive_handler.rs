@@ -13,6 +13,7 @@
 
 use crate::core::file_watcher::FileWatcher;
 use crate::core::file_watcher::WatcherGuard;
+use crate::core::operation_registry::OperationGuard;
 use crate::core::resolution::{compute_limits, ResolutionLimits};
 use anyhow::{anyhow, Context, Result};
 use infer;
@@ -23,6 +24,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::State;
 use trash::delete;
 use walkdir::WalkDir;
@@ -363,7 +365,7 @@ pub fn paths_on_same_disk(a: &Path, b: &Path) -> bool {
 /// # 参数
 /// - `seven_zip_path`: 7z 可执行文件路径（系统 PATH 中的命令名或内置二进制完整路径）
 /// - `archive_path`: 压缩包路径
-/// - `target_dir`: 目标父目录（临时目录将创建在此目录下）
+/// - `tmp_parent`: 临时目录的父目录（解压临时区，如 `<Mods>/.tmp`）
 /// - `password`: 可选压缩包密码，`None` 表示尝试无密码解压
 ///
 /// # 返回
@@ -376,10 +378,10 @@ pub fn paths_on_same_disk(a: &Path, b: &Path) -> bool {
 fn extract_with_7z_cli(
     seven_zip_path: &Path,
     archive_path: &Path,
-    target_dir: &Path,
+    tmp_parent: &Path,
     password: Option<&str>,
 ) -> Result<PathBuf> {
-    let temp_dir = target_dir.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
+    let temp_dir = tmp_parent.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)?;
 
     let mut cmd = Command::new(seven_zip_path);
@@ -461,7 +463,7 @@ fn safe_join_entry(base: &Path, name: &str) -> std::result::Result<PathBuf, seve
 ///
 /// # 参数
 /// - `archive_path`: 7z 压缩包路径
-/// - `target_dir`: 目标父目录（临时目录将创建在此目录下）
+/// - `tmp_parent`: 临时目录的父目录（解压临时区，如 `<Mods>/.tmp`）
 /// - `password`: 可选压缩包密码
 ///
 /// # 返回
@@ -472,10 +474,10 @@ fn safe_join_entry(base: &Path, name: &str) -> std::result::Result<PathBuf, seve
 /// - `sevenz_rust::decompress_file_with_extract_fn` 解压失败
 fn extract_7z_internal(
     archive_path: &Path,
-    target_dir: &Path,
+    tmp_parent: &Path,
     password: Option<&str>,
 ) -> Result<PathBuf> {
-    let temp_dir = target_dir.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
+    let temp_dir = tmp_parent.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)?;
 
     log::info!(
@@ -529,7 +531,7 @@ fn extract_7z_internal(
 ///
 /// # 参数
 /// - `archive_path`: ZIP 压缩包路径
-/// - `target_dir`: 目标父目录（临时目录将创建在此目录下）
+/// - `tmp_parent`: 临时目录的父目录（解压临时区，如 `<Mods>/.tmp`）
 ///
 /// # 返回
 /// 成功时返回临时目录 `PathBuf`
@@ -538,8 +540,8 @@ fn extract_7z_internal(
 /// - 临时目录创建失败
 /// - 文件打开失败
 /// - `zip::ZipArchive::extract` 解压失败
-fn extract_zip_internal(archive_path: &Path, target_dir: &Path) -> Result<PathBuf> {
-    let temp_dir = target_dir.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
+fn extract_zip_internal(archive_path: &Path, tmp_parent: &Path) -> Result<PathBuf> {
+    let temp_dir = tmp_parent.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)?;
 
     log::info!(
@@ -565,7 +567,7 @@ fn extract_zip_internal(archive_path: &Path, target_dir: &Path) -> Result<PathBu
 ///
 /// # 参数
 /// - `archive_path`: RAR 压缩包路径
-/// - `target_dir`: 目标父目录（临时目录将创建在此目录下）
+/// - `tmp_parent`: 临时目录的父目录（解压临时区，如 `<Mods>/.tmp`）
 /// - `password`: 可选压缩包密码
 ///
 /// # 返回
@@ -576,10 +578,10 @@ fn extract_zip_internal(archive_path: &Path, target_dir: &Path) -> Result<PathBu
 /// - `unrar::Archive` 打开或解压失败
 fn extract_rar_internal(
     archive_path: &Path,
-    target_dir: &Path,
+    tmp_parent: &Path,
     password: Option<&str>,
 ) -> Result<PathBuf> {
-    let temp_dir = target_dir.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
+    let temp_dir = tmp_parent.join(format!(".extract_tmp_{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&temp_dir)?;
 
     log::info!(
@@ -640,7 +642,7 @@ fn extract_rar_internal(
 /// 无论使用哪一级解压，成功后均执行以下步骤：
 /// 1. **展平单层包裹目录**：`unwrap_single_folder_nesting` 处理压缩包内单根目录情况（循环展平 + 排除元数据文件）
 /// 2. **统计文件数 & 检查 INI**：`visit_files` 递归遍历
-/// 3. **移动到最终位置**：`unique_path` 处理重名，`move_directory_contents` 合并移动
+/// 3. **移动到最终位置**：`unique_mod_dir_name` 处理重名，`move_temp_to_target` 同盘原子移动
 /// 4. **清理临时目录**：`remove_dir_all`
 ///
 /// # 参数
@@ -672,11 +674,15 @@ pub fn extract_archive(
         });
     }
 
+    // 解压临时区：`<Mods>/.tmp`（隐藏 dotdir，扫描器自动跳过），与分组目录同处一卷，
+    // 保证后续「移动到分组目录」为同盘原子 rename（高效且原子，避免解压中断污染分组目录）。
+    let tmp_parent = extract_tmp_dir(target_dir);
+
     let mut last_error: Option<String> = None;
 
     // --- 第一级：系统 7z CLI ---
     if let Some(sys_7z) = get_system_7z_path() {
-        match extract_with_7z_cli(&sys_7z, archive_path, target_dir, password) {
+        match extract_with_7z_cli(&sys_7z, archive_path, &tmp_parent, password) {
             Ok(temp_dir) => {
                 log::info!(
                     "extract_archive: system 7z succeeded for {:?}",
@@ -699,7 +705,7 @@ pub fn extract_archive(
 
     // --- 第二级：内置打包 7z CLI ---
     if let Some(bundled_7z) = get_bundled_7z_path() {
-        match extract_with_7z_cli(&bundled_7z, archive_path, target_dir, password) {
+        match extract_with_7z_cli(&bundled_7z, archive_path, &tmp_parent, password) {
             Ok(temp_dir) => {
                 log::info!(
                     "extract_archive: bundled 7z succeeded for {:?}",
@@ -722,16 +728,16 @@ pub fn extract_archive(
 
     // --- 第三级：自实现解压（按格式分派） ---
     let internal_result = match archive_type {
-        ArchiveType::SevenZip => extract_7z_internal(archive_path, target_dir, password),
+        ArchiveType::SevenZip => extract_7z_internal(archive_path, &tmp_parent, password),
         ArchiveType::Zip => {
             if password.is_some() {
                 // 自实现 ZIP 不支持密码，直接返回错误
                 Err(anyhow!("ZIP password not supported by internal extractor"))
             } else {
-                extract_zip_internal(archive_path, target_dir)
+                extract_zip_internal(archive_path, &tmp_parent)
             }
         }
-        ArchiveType::Rar => extract_rar_internal(archive_path, target_dir, password),
+        ArchiveType::Rar => extract_rar_internal(archive_path, &tmp_parent, password),
         _ => unreachable!(),
     };
 
@@ -762,14 +768,91 @@ pub fn extract_archive(
     }
 }
 
-/// 解压后处理：扁平化、统计、移动、清理
+/// 解析目标分组目录对应的「游戏 Mods 根目录」（用于放置 `.tmp` 临时解压区）。
 ///
-/// 将 `extract_with_7z_cli` 或 internal 函数返回的临时目录内容处理后移动到最终位置。
+/// `target_dir` 形如 `<Mods>/_MANAGED_/group_X` → Mods 根为其祖父目录；
+/// 若层级不足则回退为 `target_dir` 自身。
+fn mods_root_of(target_dir: &Path) -> PathBuf {
+    target_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| target_dir.to_path_buf())
+}
+
+/// 解压临时区目录：`<Mods>/.tmp`（隐藏 dotdir，扫描器自动跳过），
+/// 与分组目录同处 Mods 卷，保证后续移动到分组目录为同盘原子 rename。
+fn extract_tmp_dir(target_dir: &Path) -> PathBuf {
+    mods_root_of(target_dir).join(".tmp")
+}
+
+/// 生成唯一模组目录名（Windows 资源管理器风格）：若 `base` 不存在返回 `base`，
+/// 否则依次尝试 `base (1)`、`base (2)` ... 直达找到不存在的名称。
+///
+/// 用于导入解压后移动到分组目录时的重名处理（对齐 `{modname} (1)` 语义）：
+/// 若目标分组目录下已存在同名模组，则对移动后的模组重命名以避免覆盖。
+fn unique_mod_dir_name(parent: &Path, base: &str) -> String {
+    if !parent.join(base).exists() {
+        return base.to_string();
+    }
+    let mut counter = 1u32;
+    loop {
+        let name = format!("{} ({})", base, counter);
+        if !parent.join(&name).exists() {
+            return name;
+        }
+        counter += 1;
+    }
+}
+
+/// 将解压临时目录整体移动到最终模组目录：同盘优先 `rename`（原子、高效），
+/// 失败回退 `copy_dir_deep` + 删除源。目标由调用方保证不冲突（unique_mod_dir_name）。
+fn move_temp_to_target(src: &Path, dst: &Path) -> Result<()> {
+    if dst.exists() {
+        // 防御性兜底：unique_mod_dir_name 已保证不冲突，此处仅清理残留
+        if dst.is_dir() {
+            fs::remove_dir_all(dst)?;
+        } else {
+            fs::remove_file(dst)?;
+        }
+    }
+    if paths_on_same_disk(src, dst) && fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    if src.is_dir() {
+        copy_dir_deep(src, dst)?;
+        let _ = fs::remove_dir_all(src);
+    } else {
+        fs::copy(src, dst)?;
+        let _ = fs::remove_file(src);
+    }
+    Ok(())
+}
+
+/// 清理解压临时区：仅当 `.tmp` 目录为空时删除，避免误删并发解压的其它临时目录。
+fn cleanup_extract_tmp(tmp_parent: Option<&Path>) {
+    if let Some(p) = tmp_parent {
+        if let Ok(mut entries) = fs::read_dir(p) {
+            if entries.next().is_none() {
+                let _ = fs::remove_dir(p);
+            }
+        }
+    }
+}
+
+/// 解压后处理：统计、原子移动到最终位置、展平、清理
+///
+/// 将 `extract_*` 返回的临时目录（位于 `<Mods>/.tmp`）整体同盘移动到分组目录下的
+/// 唯一模组目录（重名时 `{modname} (N)`），再展平单层包裹目录。
+///
+/// 移动发生在「解压完成之后」，且源（`.tmp`）与目的地（分组目录）同处 Mods 卷，
+/// 因此 rename 为同盘原子操作——即便移动瞬间进程崩溃，分组目录也只可能处于
+/// 「尚未移动」（干净）或「已完整移动」两种状态，不会出现半解压污染分组目录。
 ///
 /// # 参数
 /// - `archive_path`: 原始压缩包路径（用于提取模组名称）
-/// - `target_dir`: 目标父目录
-/// - `temp_dir`: 解压后的临时目录
+/// - `target_dir`: 目标分组目录（`.../Mods/_MANAGED_/group_X`）
+/// - `temp_dir`: 解压后的临时目录（位于 `<Mods>/.tmp`）
 ///
 /// # 返回
 /// `ExtractResult::Success` 包含最终安装路径、模组名称、INI 检查结果和文件数
@@ -778,7 +861,6 @@ fn finalize_extraction(
     target_dir: &Path,
     temp_dir: &Path,
 ) -> Result<ExtractResult> {
-    // 展平在最终模组目录上执行（见下方 unwrap_single_folder_nesting），此处直接使用临时目录
     let final_dir = temp_dir.to_path_buf();
 
     let mut has_ini = false;
@@ -799,10 +881,12 @@ fn finalize_extraction(
         .to_string_lossy()
         .to_string();
 
-    let target_mod_path = target_dir.join(&mod_name);
-    let target_mod_path = unique_path(&target_mod_path);
+    // 重名处理：目标分组目录下已存在同名模组时，重命名为 `{modname} (N)`
+    let final_name = unique_mod_dir_name(target_dir, &mod_name);
+    let target_mod_path = target_dir.join(&final_name);
 
-    move_directory_contents(&final_dir, &target_mod_path)?;
+    // 同盘原子移动到最终位置（解压完成后才移动，避免中断污染分组目录）
+    move_temp_to_target(&final_dir, &target_mod_path)?;
 
     // 展平单层包裹目录（对齐 Dart unwrapSingleFolderNesting）：压缩包内若仅包裹单一根目录，
     // 将其内容提升为模组目录直接内容
@@ -814,12 +898,12 @@ fn finalize_extraction(
         );
     }
 
-    // 清理临时目录
-    let _ = fs::remove_dir_all(temp_dir);
+    // 清理：temp_dir 已被 rename 移走；尝试删除空的 `.tmp` 父目录
+    cleanup_extract_tmp(temp_dir.parent());
 
     Ok(ExtractResult::Success {
         mod_path: target_mod_path,
-        mod_name,
+        mod_name: final_name,
         has_ini,
         file_count,
     })
@@ -1005,44 +1089,6 @@ fn unique_path(path: &Path) -> PathBuf {
     }
 }
 
-/// 递归移动目录内容（处理合并情况）
-///
-/// 将 `src` 目录下的所有内容（文件 + 子目录）移动到 `dst` 目录下。
-/// 如果 `dst` 中已存在同名文件/目录，则：
-/// - 文件：覆盖目标文件（先删除再 rename）
-/// - 目录：递归合并（`move_directory_contents` 后再尝试删除空源目录）
-///
-/// # 参数
-/// - `src`: 源目录
-/// - `dst`: 目标目录（会自动创建）
-///
-/// # Errors
-/// - `create_dir_all` 失败
-/// - `rename` 或 `remove_dir` 失败等 IO 错误
-fn move_directory_contents(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let target = dst.join(name);
-        if path.is_dir() {
-            if target.exists() {
-                move_directory_contents(&path, &target)?;
-                let _ = fs::remove_dir(&path);
-            } else {
-                fs::rename(&path, &target)?;
-            }
-        } else {
-            if target.exists() {
-                let _ = fs::remove_file(&target);
-            }
-            fs::rename(&path, &target)?;
-        }
-    }
-    Ok(())
-}
-
 /// 导入目录（已解压的模组目录）到分组——深层遍历复制（对齐 NRMM 多层文件夹导入）
 ///
 /// # 行为
@@ -1216,6 +1262,21 @@ pub fn import_item(
     target_group_dir: &Path,
     password: Option<&str>,
 ) -> Result<ExtractResult> {
+    // 跨进程建议锁：确保同一游戏 Mods 目录仅一个 NRMM 进程执行导入，避免文件竞争
+    // （与 update_mod_data / 备份共用同一锁文件，互斥覆盖整个游戏 Mods 根）。
+    let mods_root = mods_root_of(target_group_dir);
+    let _proc_lock = match crate::core::file_lock::AdvisoryLock::acquire_blocking(
+        &mods_root,
+        Duration::from_secs(30),
+    ) {
+        Ok(Some(l)) => l,
+        Ok(None) => return Err(anyhow!("另一个 NRMM 实例正在操作该游戏目录，请稍后再试")),
+        Err(e) => return Err(e),
+    };
+
+    // 重量级后台操作登记：供用户主动退出时检查「是否仍在导入」，若有则取消退出。
+    let _op_guard = OperationGuard::new("import_mod");
+
     let meta = fs::metadata(src_path)
         .map_err(|e| anyhow!("import_item: failed to stat {:?}: {}", src_path, e))?;
 
@@ -1324,6 +1385,20 @@ pub fn import_mod_auto(
             break path;
         }
     };
+
+    // 跨进程建议锁：与 import_item / update_mod_data / 备份共用同一锁文件
+    let mods_root = mods_root_of(&group_dir);
+    let _proc_lock = match crate::core::file_lock::AdvisoryLock::acquire_blocking(
+        &mods_root,
+        Duration::from_secs(30),
+    ) {
+        Ok(Some(l)) => l,
+        Ok(None) => return Err(anyhow!("另一个 NRMM 实例正在操作该游戏目录，请稍后再试")),
+        Err(e) => return Err(e),
+    };
+
+    // 重量级后台操作登记：供用户主动退出时检查「是否仍在导入」，若有则取消退出。
+    let _op_guard = OperationGuard::new("import_mod");
 
     import_mod(archive_path, &group_dir, password)
 }

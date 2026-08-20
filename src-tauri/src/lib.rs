@@ -78,6 +78,37 @@ fn report_frontend_ready(stage: String, frontend_ms: f64) {
 /// - 启动后台云数据刷新任务
 /// - 注册 Tauri 命令处理器
 ///
+/// 注册 Windows 控制台控制信号处理器：捕获 Ctrl+C / Ctrl+Break / 关闭控制台 / 注销 / 关机
+/// 等系统信号，记录 `SystemSignal` 类型的干净退出，随后终止进程。
+///
+/// 仅 Windows 平台有效（其他平台由 Tauri 运行循环与系统信号处理，本函数为空操作）。
+/// 不引入额外 crate：`windows` 依赖已具备 `Win32_System_Console` 能力。
+///
+/// # Safety
+/// 处理器为静态 `extern "system"` 函数指针，符合 `SetConsoleCtrlHandler` 契约；其内部仅做
+/// 日志记录与「标记干净退出 + 终止进程」，不参与任何 Rust 对象生命周期管理，故安全。
+#[cfg(windows)]
+#[allow(clippy::missing_safety_doc)]
+fn register_system_signal_handler() {
+    use windows::core::BOOL;
+    use windows::Win32::System::Console::SetConsoleCtrlHandler;
+
+    // SAFETY: 传入静态 extern 函数指针，符合 SetConsoleCtrlHandler 契约；
+    // 处理器内仅做无副作用的日志记录与标记后退出，不涉及 Rust 对象生命周期。
+    unsafe extern "system" fn handler(_ctrl_event: u32) -> BOOL {
+        // 收到系统信号即记录干净退出（标记 last_exit_clean=true，避免下次启动误判为强制终止）。
+        crate::core::exit_log::mark_clean_exit(crate::core::exit_log::ExitReason::SystemSignal);
+        log::info!("[exit] 收到系统控制台控制信号，记录 SystemSignal 并退出");
+        std::process::exit(0);
+    }
+
+    // SAFETY: 传入静态 extern 函数指针，符合 SetConsoleCtrlHandler 契约；
+    // 处理器线程由 OS 创建，仅执行日志与进程退出，不涉及 Rust 对象生命周期。
+    if let Err(e) = unsafe { SetConsoleCtrlHandler(Some(handler), true) } {
+        log::warn!("[exit] 注册系统信号处理器失败：{}", e);
+    }
+}
+
 /// 在应用关闭时阻止窗口真正关闭，仅隐藏窗口
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -119,6 +150,13 @@ pub fn run() {
 
     // 进程级 panic hook：panic 信息落盘；release 不调用默认 hook（无控制台输出）
     core::file_logger::install_panic_hook();
+
+    // 启动标记 / 跨启动推断强制终止：检测上一次是否未干净退出（崩溃/强制终止），若是则补记 Forced。
+    core::exit_log::mark_app_started();
+
+    // 注册系统信号（Ctrl+C 等）退出记录处理器（仅 Windows 有效；非 Windows 编译为空调用）。
+    #[cfg(windows)]
+    register_system_signal_handler();
 
     // SAFETY: Settings initialization is critical for app startup; failure is unrecoverable.
     config::settings_store::init_settings().expect("Failed to initialize settings");

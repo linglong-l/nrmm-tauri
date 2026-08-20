@@ -22,11 +22,13 @@
 
 use crate::core::constants;
 use crate::core::d3dxini_cache::D3DX_INI_CACHE;
+use crate::core::file_lock::AdvisoryLock;
 use crate::core::file_watcher::WatcherGuard;
 use crate::core::ini_handler::IniFile;
 use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::mod_scanner;
 use crate::core::namespace_handler;
+use crate::core::operation_registry::OperationGuard;
 use crate::models::enums::GroupType;
 use crate::models::enums::TargetGame;
 use crate::models::mod_data::{
@@ -35,12 +37,13 @@ use crate::models::mod_data::{
 };
 use crate::models::settings::AppSettings;
 use crate::sel_dbg;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use walkdir::WalkDir;
 
 // 文件监听器暂停守卫 `WatcherGuard` 已移至 `core::file_watcher` 模块
@@ -575,6 +578,15 @@ pub fn update_mod_data(
         game,
         game_mods_path
     );
+    // 进程级 advisory lock：确保同一游戏 Mods 目录的「更新」与其他 NRMM 实例的文件操作
+    // 互斥（进程级一致性）。阻塞等待至多 30s；若另有实例持有则取消本次更新并返回中文报错。
+    let _proc_lock = match AdvisoryLock::acquire_blocking(game_mods_path, Duration::from_secs(30)) {
+        Ok(Some(l)) => l,
+        Ok(None) => return Err(anyhow!("另一个 NRMM 实例正在操作该游戏目录，请稍后再试")),
+        Err(e) => return Err(e),
+    };
+    // 重量级后台操作登记：供用户主动退出时检查「是否仍在更新模组数据」，若有则取消退出。
+    let _op_guard = OperationGuard::new("update_mod_data");
     let _s = std::time::Instant::now();
     // 暂停文件监听器：update_mod_data 会对大量 INI / 标记文件执行写操作，
     // 若监听器保持活跃，防抖线程会在写入过程中并发触发增量扫描与缓存合并
