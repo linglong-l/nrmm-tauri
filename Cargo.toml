@@ -17,3 +17,11 @@ lto = true
 panic = "unwind"
 opt-level = 3
 codegen-units = 1
+
+# dev/test 依赖运行时加速（平台无关，2026-08-18）：
+# 依赖（registry/path 依赖，不含本工作区 crate）按 opt-level=2 编译，本 crate 保持
+# 默认 0 级以保留增量编译速度。背景：实测 dev 模式 update_mod_data 65.6s vs release
+# 41.9s，0 级依赖是差距来源之一；此设置收窄 dev 运行时差距且不拖慢 rust 增量重编译。
+# 注意：首次构建会以 2 级重编全部依赖（一次性成本，之后走缓存）。
+[profile.dev.package."*"]
+opt-level = 2

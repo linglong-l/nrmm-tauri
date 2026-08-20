@@ -1,0 +1,36 @@
+# =============================================================================
+# 各平台编译优化（平台差异化 rustflags，2026-08-18）
+#
+# 机制说明：Cargo 的 [profile.*] 是全局的、不支持按平台拆分；
+# 平台差异经本文件 target 段的 rustflags 实现。
+# 优先级：命令行 > 环境变量（如 build-linux-zig.sh 注入的 zig linker）> 本文件。
+# 本文件位于工作区根，cargo 无论从根目录还是 src-tauri/ 调起都会向上找到它。
+# =============================================================================
+
+# ---------- Linux x86_64（gnu）----------
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    # 仅链接实际使用的共享库，精简动态依赖列表（Ubuntu 等发行版默认构建惯例）
+    "-Clink-arg=-Wl,--as-needed",
+    # 全量 RELRO（GNU_RELRO + BIND_NOW）：GOT 在加载时一次性解析后置为只读，
+    # 发行版标准安全加固，零运行时代价
+    "-Clink-arg=-Wl,-z,relro",
+    "-Clink-arg=-Wl,-z,now",
+]
+# 兼容性：scripts/build-linux-zig.sh 通过 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER
+# 环境变量注入 zig cc wrapper（环境变量优先级高于本文件的 linker 键，此处刻意不设置
+# linker）；上述 -Wl 参数经 zig cc 透传给 lld，语法兼容。
+
+# ---------- Windows x86_64（MSVC）----------
+# 现状评估（2026-08-18）：主要优化已由根 Cargo.toml [profile.release] 覆盖
+# （opt-level=3 / lto=true / codegen-units=1），MSVC 链接器在 /LTCG（即 LTO）下
+# 默认已启用 /OPT:REF,ICF（死代码消除 + 相同代码折叠），显式添加收益趋零，且会
+# 禁用增量链接、拖慢日常 cargo test 的链接速度，故不添加任何 rustflags。
+#
+# 以下为可选的激进开关（按需取消注释，须自行承担发行基线变化的风险）：
+# [target.x86_64-pc-windows-msvc]
+# rustflags = [
+#     # 面向 2009 年后 CPU（SSE4.2/POPCNT），CPU 热路径有小幅收益；
+#     # 风险：Core 2 等更老 CPU 上会因非法指令崩溃（Win10 仍可运行于该类硬件）
+#     "-Ctarget-cpu=x86-64-v2",
+# ]
