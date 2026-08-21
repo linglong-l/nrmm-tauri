@@ -50,6 +50,15 @@ once_cell = "1"
 parking_lot = "0.12"
 rayon = "1.12"
 infer = "0.16"
+# 缩略图生成（WebView 内存优化）：解码模组预览图原图并缩放后落盘缓存，
+# 前端加载缩略图而非原图（100x140 显示区加载 4K 原图会解码出 8-33MB 位图，滚动浏览破 GB）
+image = { version = "0.25", default-features = false, features = [
+  "jpeg",
+  "png",
+  "webp",
+  "gif",
+  "bmp",
+] }
 sevenz-rust = "0.6"
 unrar = "0.5"
 trash = "5"

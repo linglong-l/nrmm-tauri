@@ -32,3 +32,4 @@ pub mod mod_scanner;
 pub mod namespace_handler;
 pub mod operation_registry;
 pub mod resolution;
+pub mod thumbnail;

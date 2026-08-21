@@ -10,17 +10,35 @@
  * - 树状导航：groups是顶层列表（NormalGroup + MutexGroup根节点），子分组通过children递归访问
  */
 import { defineStore } from 'pinia'
-import { ref, computed, reactive, watch } from 'vue'
+import { ref, computed, reactive, watch, shallowRef, triggerRef } from 'vue'
 import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, deselectGroupMod, disableAllModsInGroup } from '../utils/tauri'
 import { useSettingsStore } from './settings'
 import type { ModGroupData, ModData, TargetGame, UpdateResult } from '../types'
 import { logger } from '../utils/logger'
 
 export const useModsStore = defineStore('mods', () => {
-  /** 模组分组列表（顶层：NormalGroup + MutexGroup根节点） */
-  const groups = ref<ModGroupData[]>([])
-  /** 所有模组的扁平列表（包含所有分组的模组） */
-  const mods = ref<ModData[]>([])
+  /**
+   * 加载世代计数器（竞态防护，2026-08-19）
+   *
+   * loadMods/refresh 入口各自取号（++loadEpoch），await 返回后若发现自己的编号已非最新，
+   * 说明期间发生了新的加载/清空（如快速切换游戏、窗口显隐重入），本请求结果作废：
+   * 不落地数据、不复位 loading——避免「旧请求后完成覆盖新数据」「clearData 后旧结果落地」
+   * 两类数据加载异常（多入口：App.vue window-shown / target-game-switched、
+   * ModsView onMounted、updateModData 内部等）。
+   * clearData 亦使所有 in-flight 请求失效（切游戏时旧游戏数据不得落地）。
+   */
+  let loadEpoch = 0
+  /**
+   * 模组分组列表（顶层：NormalGroup + MutexGroup根节点）
+   *
+   * shallowRef（2026-08-19 性能优化）：万级模组（实测 14415）场景下深层 reactive 的
+   * proxy 化内存与开销显著；本 store 的更新模式为「整体替换赋值」（loadMods/refresh），
+   * 天然兼容 shallowRef。仅有的两处树内字段 mutate（activateModByIndex 的
+   * activeModIndex / isActive 乐观更新）显式调用 triggerRef 触发更新。
+   */
+  const groups = shallowRef<ModGroupData[]>([])
+  /** 所有模组的扁平列表（包含所有分组的模组），shallowRef 理由同上（整体替换赋值） */
+  const mods = shallowRef<ModData[]>([])
   /** 是否正在加载模组数据 */
   const loading = ref(false)
   /** 当前选中的分组路径（用于树状导航，唯一标识） */
@@ -500,9 +518,12 @@ export const useModsStore = defineStore('mods', () => {
   async function loadMods() {
     const s = useSettingsStore()
     if (!s.currentModsPath) return
+    const epoch = ++loadEpoch
     loading.value = true
     try {
       const result = await getMods(s.currentGame, s.currentModsPath)
+      // 竞态防护：await 期间若有新加载/清空（epoch 变化），本结果作废不落地
+      if (epoch !== loadEpoch) return
       groups.value = result.groups || []
       mods.value = result.mods || []
 
@@ -522,9 +543,15 @@ export const useModsStore = defineStore('mods', () => {
         restoreGroupSelection(found || groups.value[0])
       }
     } catch (e) {
-      logger.error('ModsStore', 'Failed to load mods', e)
+      // 过期请求的异常静默（新请求已接管）；当前请求的异常记录日志
+      if (epoch === loadEpoch) {
+        logger.error('ModsStore', 'Failed to load mods', e)
+      }
     } finally {
-      loading.value = false
+      // 仅当前请求可复位 loading：过期请求提前复位会导致新请求进行中加载态消失
+      if (epoch === loadEpoch) {
+        loading.value = false
+      }
     }
   }
 
@@ -558,9 +585,12 @@ export const useModsStore = defineStore('mods', () => {
   async function refresh() {
     const s = useSettingsStore()
     if (!s.currentModsPath) return
+    const epoch = ++loadEpoch
     loading.value = true
     try {
       const result = await refreshMods(s.currentGame, s.currentModsPath)
+      // 竞态防护：await 期间若有新加载/清空（epoch 变化），本结果作废不落地
+      if (epoch !== loadEpoch) return
       groups.value = result.groups || []
       mods.value = result.mods || []
 
@@ -589,9 +619,15 @@ export const useModsStore = defineStore('mods', () => {
         }
       }
     } catch (e) {
-      logger.error('ModsStore', 'Failed to refresh mods', e)
+      // 过期请求的异常静默（新请求已接管）；当前请求的异常记录日志
+      if (epoch === loadEpoch) {
+        logger.error('ModsStore', 'Failed to refresh mods', e)
+      }
     } finally {
-      loading.value = false
+      // 仅当前请求可复位 loading（同 loadMods 的竞态防护）
+      if (epoch === loadEpoch) {
+        loading.value = false
+      }
     }
   }
 
@@ -737,6 +773,8 @@ export const useModsStore = defineStore('mods', () => {
         const found = findGroupByPathInList(groups.value, groupPathMatch)
         if (found) {
           found.activeModIndex = retSelIdx
+          // shallowRef：树内字段 mutate 需显式触发更新
+          triggerRef(groups)
         } else {
           logger.warn('ModsStore', 'activeModIndex sync failed: group not found in tree', {
             groupPath: groupPathMatch,
@@ -755,6 +793,8 @@ export const useModsStore = defineStore('mods', () => {
         }
       }
       setActiveRecursive(group, modPath2)
+      // shallowRef：树内模组 isActive 乐观更新需显式触发 UI 刷新
+      triggerRef(groups)
     } catch (e: unknown) {
       // 防抖命中时静默处理，不弹出错误提示
       const errMsg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))
@@ -837,6 +877,8 @@ export const useModsStore = defineStore('mods', () => {
    * - 路径不存在刷新：保留选择，loadMods 后若分组仍存在则恢复，否则回退到第一个
    */
   function clearData() {
+    // 使所有 in-flight 加载/刷新失效：切游戏后旧游戏的响应不得落地（竞态防护）
+    loadEpoch++
     groups.value = []
     mods.value = []
     loading.value = false

@@ -34,6 +34,11 @@ export interface ImageLazyLoadOptions {
   staggerDelay?: number
 }
 
+/** loading 态停滞兜底超时（ms）：超过此时长仍未 loaded/error 则强制转 error，
+ * 终止骨架屏 infinite 动画，避免图片加载链路异常（资源缺失/回调丢失）导致
+ * 动画永久运行、渲染进程持续占用 CPU */
+const LOADING_TIMEOUT_MS = 8_000
+
 export interface ImageLazyLoadReturn {
   /** 图片加载状态映射：key 为模组索引，value 为状态 */
   states: Ref<Map<number, ImageLoadState>>
@@ -64,6 +69,8 @@ export function useImageLazyLoad(
   const pendingQueue: { index: number; element: HTMLElement }[] = []
   /** 队列处理定时器 */
   let processTimer: ReturnType<typeof setTimeout> | null = null
+  /** loading 态超时定时器映射（index → timer），loaded/error 时清除 */
+  const loadingTimers = new Map<number, ReturnType<typeof setTimeout>>()
 
   /**
    * 获取指定索引的加载状态
@@ -85,18 +92,40 @@ export function useImageLazyLoad(
     states.value = newMap
   }
 
-  /** 标记开始加载 */
+  /** 清除指定索引的 loading 超时定时器（终态到达时调用） */
+  function clearLoadingTimer(index: number) {
+    const t = loadingTimers.get(index)
+    if (t) {
+      clearTimeout(t)
+      loadingTimers.delete(index)
+    }
+  }
+
+  /** 标记开始加载（同时挂 8s 超时兜底：超时未达终态则强制转 error 终止骨架屏动画） */
   function markLoading(index: number) {
     setState(index, 'loading')
+    clearLoadingTimer(index)
+    loadingTimers.set(
+      index,
+      setTimeout(() => {
+        loadingTimers.delete(index)
+        // 仅当仍停留在 loading 时强制转 error（loaded/error 已到则不动）
+        if (getState(index) === 'loading') {
+          setState(index, 'error')
+        }
+      }, LOADING_TIMEOUT_MS)
+    )
   }
 
   /** 标记加载成功 */
   function markLoaded(index: number) {
+    clearLoadingTimer(index)
     setState(index, 'loaded')
   }
 
   /** 标记加载失败 */
   function markError(index: number) {
+    clearLoadingTimer(index)
     setState(index, 'error')
   }
 
@@ -169,6 +198,11 @@ export function useImageLazyLoad(
       clearTimeout(processTimer)
       processTimer = null
     }
+    // 清理全部 loading 超时定时器（防泄漏）
+    for (const t of loadingTimers.values()) {
+      clearTimeout(t)
+    }
+    loadingTimers.clear()
     pendingQueue.length = 0
     states.value = new Map()
   }

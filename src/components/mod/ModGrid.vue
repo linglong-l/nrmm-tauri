@@ -29,6 +29,7 @@
             v-for="colIdx in columnCount"
             :key="'card-' + virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1)"
             :mod="getModAtRowCol(virtualStartRow + rowIdx - 1, colIdx - 1)"
+            :isEmpty-slot="virtualSlotEmpty(virtualStartRow + rowIdx - 1, colIdx - 1)"
             :mod-index="virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1)"
             :class="virtualCardClasses(virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1))"
             :ref="el => setModRef(el, virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1))"
@@ -246,6 +247,22 @@ function virtualCardClasses(idx: number): Record<string, boolean> {
     'search-highlight': status === 'active',
     'search-hit': status === 'hit',
   }
+}
+
+/**
+ * 虚拟行渲染模式下某行列是否为网格对齐的空槽位（越界位置）
+ *
+ * 虚拟模式每行固定渲染 columnCount 个卡片，当分组模组数末尾不足一行时，
+ * 越界位置无模组数据（getModAtRowCol 返回 undefined），应标记为空槽位，
+ * 使 ModCard 渲染为加号空槽位样式而非空白可交互卡片（修复网格对齐渲染，
+ * 与全量模式的空槽位语义对齐）。
+ *
+ * @param rowBase 0-based 虚拟行号
+ * @param colBase 0-based 列号
+ * @returns true 表示空白槽位（需传 isEmpty-slot）
+ */
+function virtualSlotEmpty(rowBase: number, colBase: number): boolean {
+  return getModAtRowCol(rowBase, colBase) === undefined
 }
 
 /**

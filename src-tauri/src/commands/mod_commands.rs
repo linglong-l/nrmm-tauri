@@ -47,6 +47,15 @@ static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> =
 /// 锁包裹整个 spawn_blocking + .await 执行期，禁止并发重入。
 static UPDATE_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(AsyncMutex::default);
 
+/// 全局轻量扫描串行锁（singleflight，2026-08-19）。
+///
+/// `get_mods` cache miss 时并发调用（多入口：窗口显隐/切游戏/页面挂载）会各自执行
+/// 全量 light scan（实测 ~4s×N，日志证实并发两次 "Cache miss"），既浪费 CPU 又使
+/// 前端两次响应时序不定（叠加竞态）。拿锁后二次检查缓存（double-checked）：
+/// 等锁期间首个扫描者已回填缓存，后续调用直接取缓存——并发 N 次只扫一次。
+/// `refresh_mods`（强制重扫语义）同样串行以防并发重复扫描，但不跳过扫描。
+static SCAN_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(AsyncMutex::default);
+
 /// 选择模组命令的参数结构体
 ///
 /// 将 select_mod 命令的 9 个独立参数封装为单个结构体，
@@ -103,6 +112,21 @@ pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::Sc
     log::info!("[get_mods] Cache miss, scanning light...");
     let start = std::time::Instant::now();
 
+    // singleflight：串行化并发扫描。拿锁后二次检查缓存——等锁期间首个扫描者
+    // 已回填，直接取缓存免扫（并发 N 次 cache miss 只扫一次）
+    let _scan_guard = SCAN_LOCK.lock().await;
+    {
+        let cache = crate::core::mod_cache::MOD_CACHE.read();
+        if let Some(result) = cache.get(game, &mods_path) {
+            log::info!(
+                "[get_mods] concurrent scan deduplicated (cache filled by first caller), waited {}ms",
+                start.elapsed().as_millis()
+            );
+            crate::core::ini_backup_scheduler::ensure_game_full_backup(mods_path.clone());
+            return Ok(result);
+        }
+    }
+
     let scan_path = mods_path.clone();
     let result =
         tauri::async_runtime::spawn_blocking(move || -> Result<mod_scanner::ScanResult, String> {
@@ -155,6 +179,10 @@ pub async fn refresh_mods(
 
     log::info!("[refresh_mods] Scanning light...");
     let start = std::time::Instant::now();
+
+    // singleflight：与 get_mods 共用 SCAN_LOCK 串行，防止并发重复全量扫描
+    // （refresh 语义为强制重扫，不二次检查缓存，仅消除并发重复扫描）
+    let _scan_guard = SCAN_LOCK.lock().await;
 
     let scan_path = mods_path.clone();
     let result =

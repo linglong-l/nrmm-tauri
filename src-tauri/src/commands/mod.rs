@@ -3,6 +3,7 @@
 //! 本模块包含所有暴露给前端（WebView）调用的 Tauri 命令处理器：
 //! - `mod_commands`: 模组相关命令（扫描、切换、导入、收藏等）
 //! - `settings_commands`: 设置相关命令（读取、保存、路径选择等）
+//! - `thumbnail_commands`: 缩略图命令（预览图缩放缓存，WebView 内存优化）
 //!
 //! 所有命令都遵循 Tauri 的 command 约定：
 //! - 使用 #[tauri::command] 宏标记
@@ -11,3 +12,4 @@
 
 pub mod mod_commands;
 pub mod settings_commands;
+pub mod thumbnail_commands;

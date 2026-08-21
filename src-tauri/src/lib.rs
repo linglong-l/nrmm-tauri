@@ -355,6 +355,7 @@ pub fn run() {
             commands::mod_commands::enable_all_mods_in_group,
             commands::mod_commands::remove_group_ex,
             commands::mod_commands::simulate_f10,
+            commands::thumbnail_commands::get_thumbnail,
             hotkey::reregister_hotkeys,
             hotkey::unregister_hotkeys,
             hotkey::simulate_select_group,
