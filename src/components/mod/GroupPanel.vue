@@ -139,7 +139,6 @@ const groupedTree = computed<ModGroupData[]>(() => {
       groupType: 'normalGroup',
       hasChild: true,
       children: roleGroups,
-      childGroups: roleGroups,
       activeModIndex: -1,
       isVirtualRoot: true,
     }

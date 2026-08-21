@@ -106,11 +106,11 @@ pub struct ModData {
     /// 所有 INI 文件数据（深度扫描时填充）
     #[serde(default)]
     pub mod_ini_data: Vec<ModIniData>,
-    /// 完整路径
-    #[serde(default)]
+    /// 完整路径（前端零消费，跳过序列化以减小 IPC 载荷——F5 内存优化）
+    #[serde(default, skip_serializing)]
     pub full_path: PathBuf,
-    /// 父文件夹路径
-    #[serde(default)]
+    /// 父文件夹路径（前端零消费，同上）
+    #[serde(default, skip_serializing)]
     pub parent_folder: PathBuf,
     /// 预览图片路径
     #[serde(default)]
@@ -250,8 +250,8 @@ pub struct ModGroupData {
     pub group_index: u32,
     /// 分组内的模组列表
     pub mods: Vec<ModData>,
-    /// 模组路径列表
-    #[serde(default)]
+    /// 模组路径列表（前端零消费，跳过序列化；Rust 内部仍可用）
+    #[serde(default, skip_serializing)]
     pub mod_paths: Vec<PathBuf>,
     /// 模组数量
     pub mod_count: u32,
@@ -267,8 +267,8 @@ pub struct ModGroupData {
     pub has_child: bool,
     /// 子分组列表（兼容字段）
     pub children: Vec<ModGroupData>,
-    /// 子分组列表
-    #[serde(default)]
+    /// 子分组列表（与 children 完全重复的兼容字段，前端零消费，跳过序列化）
+    #[serde(default, skip_serializing)]
     pub child_groups: Vec<ModGroupData>,
     /// 当前激活的模组索引（-1 表示无选中）
     pub active_mod_index: i32,

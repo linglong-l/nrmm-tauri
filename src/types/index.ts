@@ -90,10 +90,6 @@ export interface ModData {
   modName: string;
   /** 显示名称（去掉DISABLED_前缀后的干净名称） */
   name?: string;
-  /** 模组完整绝对路径 */
-  fullPath?: string;
-  /** 父文件夹路径 */
-  parentFolder?: string;
   /** 预览图片本地路径（后端扫描时自动查找 icon.png/preview.png 等） */
   previewImagePath?: string;
   /** 解析后的INI配置数据，若无法解析则为null */
@@ -167,16 +163,12 @@ export interface ModGroupData {
   hasChild: boolean;
   /** 子分组列表 */
   children: ModGroupData[];
-  /** 子分组列表（后端字段别名） */
-  childGroups?: ModGroupData[];
   /** 当前激活的模组索引 */
   activeModIndex: number;
   /** 预览图片本地路径（后端扫描时自动查找 icon.png/preview.png 等） */
   previewImagePath?: string;
   /** 模组完整绝对路径 */
   fullPath?: string;
-  /** 模组路径列表（后端字段） */
-  modPaths?: string[];
   /**
    * UI层使用：是否是虚拟"Groups"根节点，
    * 用于把NormalGroup / ExclusiveSlot / CustomParallel收拢到一个虚拟父节点下展示。
