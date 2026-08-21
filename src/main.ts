@@ -19,6 +19,7 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import i18n from './utils/i18n'
 import { logger } from './utils/logger'
+import { isBrowserRefreshKey } from './utils/refreshGuard'
 
 console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - 所有import完成`)
 
@@ -73,6 +74,25 @@ document.addEventListener('selectstart', (e) => {
     e.preventDefault()
   }
 })
+
+/**
+ * 浏览器刷新键拦截（WebView F5 内存优化）
+ * F5/Ctrl+R 在 WebView 聚焦时触发整页 reload：旧文档堆+位图惰性回收叠加新文档
+ * 全量重建（实测峰值 1000MB+）。拦截之；刷新语义由全局热键 hotkey-refresh
+ * → modsStore.refresh() 承担（仅刷新数据不重载页面）。
+ * 输入框中不拦截（保留表单操作习惯），Ctrl+Shift+R / Ctrl+F5 强刷逃生门放行。
+ */
+document.addEventListener(
+  'keydown',
+  (e) => {
+    const target = e.target as HTMLElement | null
+    const tag = target?.tagName?.toLowerCase()
+    if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return
+    if (e.ctrlKey && e.shiftKey) return // Ctrl+Shift+R / Ctrl+F5 强刷放行（调试逃生门）
+    if (isBrowserRefreshKey(e)) e.preventDefault()
+  },
+  { capture: true },
+)
 
 /**
  * 三层错误兜底机制
