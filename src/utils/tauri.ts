@@ -162,6 +162,22 @@ export async function refreshMods(game: string, modsPath: string): Promise<ScanR
 }
 
 /**
+ * 获取模组预览图缩略图的本地缓存路径（不存在则后端生成）
+ * 后端命令：get_thumbnail
+ *
+ * WebView 内存优化：前端图片显示区仅 100×140px，直接加载原图会按原图分辨率
+ * 解码位图（1080p/4K 预览图单张 8~33MB）；缩略图（最长边按档位 JPEG）单张
+ * 位图十余 KB 级。缓存键含原图 mtime+size+档位，原图变化自动重新生成、档位独立。
+ *
+ * @param originalPath 原图绝对路径
+ * @param size 档位：'card'（默认，240px）| 'avatar'（64px，分组头像专用）
+ * @returns 缩略图缓存文件绝对路径（前端需再经 convertFileSrc 转换为可加载 URL）
+ */
+export async function getThumbnail(originalPath: string, size?: 'card' | 'avatar'): Promise<string> {
+  return safeInvoke<string>('get_thumbnail', { originalPath, size })
+}
+
+/**
  * 选中模组（写入INI，处理互斥组逻辑）
  * 后端命令：select_mod
  *

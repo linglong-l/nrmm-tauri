@@ -27,7 +27,7 @@
 
       <!-- 圆形头像 -->
       <div class="group-avatar" :class="{ 'virtual-avatar': isVirtualRoot }">
-        <img v-if="avatarUrl" :src="avatarUrl" class="avatar-image" :alt="displayName" />
+        <img v-if="avatarUrl" :src="avatarUrl" class="avatar-image" :alt="displayName" loading="lazy" decoding="async" draggable="false" />
         <span v-else class="avatar-text">{{ initialText }}</span>
       </div>
     </div>
@@ -67,7 +67,7 @@
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ArrowRight } from '@element-plus/icons-vue'
-import { convertFileSrc } from '@tauri-apps/api/core'
+import { useThumbnailUrl } from '@/composables/useThumbnailUrl'
 import type { ModGroupData } from '@/types'
 import { useModsStore } from '@/stores/mods'
 import HighlightText from '@/components/common/HighlightText.vue'
@@ -156,17 +156,19 @@ const initialText = computed(() => {
   return '?'
 })
 
-/** 分组头像URL：将previewImagePath转换为webview可访问的asset:// URL */
-const avatarUrl = computed(() => {
-  if (isVirtualRoot.value) return ''
-  const p = props.group.previewImagePath
-  if (!p) return ''
-  try {
-    return convertFileSrc(p)
-  } catch {
-    return ''
-  }
-})
+/**
+ * 分组头像URL：异步解析为缩略图 webview URL（WebView 内存优化 2026-08-19）
+ *
+ * 分组头像原图可能为高分辨率图片，直接加载会按原图分辨率解码位图；
+ * 改经后端头像档（64px）缩略图缓存（生成失败自动回退原图）。分组树常驻显示
+ * 且数量多（~百级），配合 <img loading="lazy"> 仅加载滚动进入视口的头像，
+ * 显著压缩首屏与浏览期的解码位图累积。
+ */
+const { url: avatarUrl } = useThumbnailUrl(
+  computed(() => (isVirtualRoot.value ? '' : props.group.previewImagePath ?? '')),
+  computed(() => true),
+  { size: 'avatar' }, // 头像档（64px），分组头像显示位 ~28px 无需大图
+)
 
 /**
  * 搜索时是否显示当前分组

@@ -39,14 +39,17 @@
           </div>
           <!-- 有图片URL：根据加载状态显示不同UI -->
           <template v-else>
-            <!-- 加载中/未加载：骨架屏脉冲动画 -->
-            <div v-if="imageState === 'idle' || imageState === 'loading'" class="image-placeholder skeleton-pulse">
+            <!-- 骨架屏：未进视口(idle)/加载中/缩略图未就绪（异步解析期与卡片复用切换期） -->
+            <div
+              v-if="imageState === 'idle' || imageState === 'loading' || !thumbUrl"
+              class="image-placeholder skeleton-pulse"
+            >
               <el-icon :size="48"><Picture /></el-icon>
             </div>
-            <!-- 隐式加载图片：visibility hidden 保持布局并触发浏览器加载 -->
+            <!-- 隐式加载缩略图：visibility hidden 保持布局并触发浏览器加载 -->
             <img
-              v-if="imageState === 'loading'"
-              :src="iconUrl"
+              v-if="imageState === 'loading' && thumbUrl"
+              :src="thumbUrl"
               class="mod-image mod-image-hidden"
               loading="eager"
               decoding="async"
@@ -54,10 +57,10 @@
               @load="onImageLoaded"
               @error="onImageError"
             />
-            <!-- 加载成功：淡入显示 -->
+            <!-- 加载成功：淡入显示缩略图 -->
             <img
-              v-else-if="imageState === 'loaded'"
-              :src="iconUrl"
+              v-else-if="imageState === 'loaded' && thumbUrl"
+              :src="thumbUrl"
               :alt="mod.modName"
               class="mod-image mod-image-fade-in"
               loading="lazy"
@@ -144,9 +147,9 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus, Setting, Check } from '@element-plus/icons-vue'
-import { convertFileSrc } from '@tauri-apps/api/core'
 import type { ModData } from '@/types'
 import { renameMod } from '@/utils/tauri'
+import { useThumbnailUrl } from '@/composables/useThumbnailUrl'
 import { useModsStore } from '@/stores/mods'
 import { useImageLazyLoad } from '@/composables/useImageLazyLoad'
 import { useModContextMenu } from '@/composables/useModContextMenu'
@@ -197,19 +200,14 @@ const isNoneSlot = computed(() => {
 })
 
 /**
- * 模组图标URL：将后端返回的本地文件路径转换为webview可访问的asset:// URL
+ * 模组是否有预览图（原图路径存在的信号，同步判断）
  * - 后端在扫描时自动查找 icon.png/preview.png 等图片，填入 previewImagePath
- * - convertFileSrc 将本地路径转换为 Tauri asset 协议 URL
- * - 无图标或非Tauri环境时返回空字符串，UI降级显示占位符
+ * - 空串表示无图，UI 降级显示占位符
+ * - 注意：仅作"有无图"门卫；实际加载走缩略图（见 thumbUrl）
  */
 const iconUrl = computed(() => {
   const p = mod.value?.previewImagePath
-  if (!p) return ''
-  try {
-    return convertFileSrc(p)
-  } catch {
-    return ''
-  }
+  return p ? p : ''
 })
 
 /** 图片容器 DOM 引用 */
@@ -225,6 +223,20 @@ const imageLazyLoad = useImageLazyLoad({
 const imageState = computed<ImageLoadState>(() => {
   return imageLazyLoad.states.value.get(props.modIndex) || 'idle'
 })
+
+/**
+ * 缩略图 webview URL（异步解析，WebView 内存优化 2026-08-19）
+ *
+ * 显示区仅 100×140px，直接加载原图会按原图分辨率解码位图（1080p/4K 预览图
+ * 单张 8~33MB，滚动浏览破 GB）。改经后端缩略图缓存（卡片档 240px JPEG），
+ * 并保持懒加载协同：仅图片进入视口（imageState 离开 idle）才解析；
+ * 生成失败自动回退原图 URL（行为不劣化）。
+ */
+const { url: thumbUrl } = useThumbnailUrl(
+  computed(() => mod.value?.previewImagePath ?? ''),
+  computed(() => imageState.value !== 'idle'),
+  { size: 'card' }, // 卡片档缩略图（240px），避免小显示区加载大图
+)
 
 /** 图片加载成功回调 */
 function onImageLoaded() {
