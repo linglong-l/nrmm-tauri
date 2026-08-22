@@ -20,7 +20,6 @@ use infer;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -497,6 +496,11 @@ fn extract_7z_internal(
         archive_path,
         &temp_dir,
         |entry, reader, _unsafe_path| {
+            // 跳过空名条目：sevenz-rust 自维护压缩产物可能含空名根/目录占位，
+            // 无法安全映射路径且无实际文件数据，跳过不丢失内容、无穿越风险。
+            if entry.name().is_empty() {
+                return Ok(true);
+            }
             // 安全修复（RUSTSEC-2026-0245）：忽略 decompress_impl 内部已 join 的
             // _unsafe_path（其用 dest.join(entry.name())，对含 `..` 的条目名会穿越），
             // 改用 entry.name() 重新做安全 join，仅保留 Normal 组件。
@@ -1403,10 +1407,15 @@ pub fn import_mod_auto(
     import_mod(archive_path, &group_dir, password)
 }
 
-/// 导出模组目录为压缩包（三级回退：用户 7z CLI → 打包 7z CLI → 自维护压缩）
+/// 导出模组目录为压缩包（三级回退：用户 7z CLI → 打包 7z CLI → 自维护 7z 压缩）
 ///
-/// 对齐用户要求：优先调用用户级 7z CLI 进行压缩，其次打包的 7z CLI，
-/// 最后采用自维护压缩逻辑（`.zip` 用 `zip` crate，`.7z` 用 `sevenz-rust`）。
+/// 对齐用户要求：优先调用用户级 7z CLI 进行压缩（默认 `-mx5` 均衡级别），
+/// 其次打包的 7z CLI，最后采用**自维护 7z 压缩**（`sevenz-rust`，仅 7z）。
+///
+/// 压缩能力分层（关键约束）：
+/// - 压缩默认用 7z CLI（用户级 → 打包级），自维护压缩**仅支持 `.7z`**。
+/// - 自维护层**不**提供 zip 压缩——若两级 7z CLI 均不可用，导出 zip 请先安装 7z CLI。
+/// - 解压能力不受影响：zip / rar / 7z 的自维护解压仍完整可用（仅压缩收紧）。
 ///
 /// 归档内容以模组目录自身为根（解压后得到 `mod_name/`），与导入时的
 /// `unwrap_single_folder_nesting` 展平逻辑形成对称闭环。
@@ -1458,7 +1467,9 @@ fn run_7z_add(seven_zip: &Path, archive: &Path, mod_dir: &Path, fmt: &str) -> Re
         fs::create_dir_all(parent)?;
     }
     let mut cmd = Command::new(seven_zip);
-    cmd.arg("a").arg("-y");
+    // -mx5 = 均衡（normal）压缩级别：速度与压缩率折中，符合「压缩默认采用均衡」要求。
+    // 注：解压（-mx 不影响）无需此参数；仅压缩场景生效。
+    cmd.arg("a").arg("-y").arg("-mx5");
     if fmt != "7z" && !fmt.is_empty() {
         cmd.arg(format!("-t{}", fmt));
     }
@@ -1474,56 +1485,27 @@ fn run_7z_add(seven_zip: &Path, archive: &Path, mod_dir: &Path, fmt: &str) -> Re
     }
 }
 
-/// 自维护压缩（第三级回退）
+/// 自维护压缩（第三级回退，**仅 7z 支持**）
 ///
-/// - `.zip`：使用 `zip` crate 创建 ZIP 归档
-/// - `.7z`：使用 `sevenz-rust` 创建 7z 归档
-/// - 其他格式：返回错误，提示安装 7z CLI
+/// 设计约束（压缩能力分层）：
+/// - 压缩默认走 7z CLI（用户级 → 打包级），兜底才是自维护。
+/// - **自维护压缩仅支持 `.7z`**（通过 `sevenz-rust`）：因项目仅维护 7z 的压缩实现。
+/// - `.zip` 压缩**不**在自维护层实现——若两级 7z CLI 均不可用，请用户安装 7z CLI。
+///   这避免引入第二套压缩实现（zip crate 仅用于解压回退，职责单一）。
+/// - `.rar` 本身不支持创建，任何层都不压缩 rar。
+///
+/// 解压能力不受影响：zip / rar / 7z 的自维护解压仍分别由 `zip`/`unrar`/`sevenz-rust` 提供。
 fn export_internal(mod_dir: &Path, archive_path: &Path, ext: &str) -> Result<()> {
     match ext {
-        "zip" => zip_directory(mod_dir, archive_path),
         "7z" => sevenz_rust::compress_to_path(mod_dir, archive_path)
             .map(|_| ())
             .map_err(|e| anyhow!("sevenz-rust 自维护压缩失败: {:?}", e)),
-        _ => Err(anyhow!(
-            "自维护压缩仅支持 .zip / .7z；导出 .{} 格式请安装 7z CLI",
-            ext
+        other => Err(anyhow!(
+            "自维护压缩仅支持 .7z（zip/rar 需安装 7z CLI 才能压缩 .{}）；导出 .{} 格式请安装 7z CLI",
+            other,
+            other
         )),
     }
-}
-
-/// 使用 `zip` crate 将目录压缩为 ZIP 归档（自维护压缩，第三级回退之一）
-///
-/// 归档内以模组目录名（`dir_name/`）为根，保留目录结构。
-fn zip_directory(dir: &Path, archive_path: &Path) -> Result<()> {
-    if let Some(parent) = archive_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let file = fs::File::create(archive_path)?;
-    let mut writer = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-
-    // 以 dir 的父目录为根，使归档内包含 `dir_name/...`
-    let root = dir.parent().unwrap_or(dir);
-    for entry in WalkDir::new(dir).follow_links(false).min_depth(1) {
-        let entry = entry?;
-        let path = entry.path();
-        let rel = match path.strip_prefix(root) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let rel_str = rel.to_string_lossy().replace('\\', "/");
-        if entry.file_type().is_dir() {
-            writer.add_directory(rel_str, options)?;
-        } else {
-            writer.start_file(rel_str, options)?;
-            let data = fs::read(path)?;
-            writer.write_all(&data)?;
-        }
-    }
-    writer.finish()?;
-    Ok(())
 }
 
 /// Tauri 命令：检查路径是否为支持的压缩包格式
@@ -1794,34 +1776,15 @@ mod tests {
     // ---------------- export_internal（第三级回退，确定性） ----------------
 
     #[test]
-    fn export_internal_zip_creates_valid_zip() {
+    fn export_internal_zip_compression_rejected() {
         let tmp = TempDir::new().unwrap();
         let mod_dir = make_mod_dir(tmp.path());
         let zip_path = tmp.path().join("MyMod.zip");
 
-        export_internal(&mod_dir, &zip_path, "zip").unwrap();
-
-        assert!(zip_path.exists());
-        let mut ar = zip::ZipArchive::new(fs::File::open(&zip_path).unwrap()).unwrap();
-        let names: Vec<String> = (0..ar.len())
-            .map(|i| ar.by_index(i).unwrap().name().to_string())
-            .collect();
-        assert!(
-            names.iter().any(|n| n.starts_with("MyMod/mod.ini")),
-            "names={:?}",
-            names
-        );
-        assert!(
-            names.iter().any(|n| n.contains("Textures/tex1.png")),
-            "names={:?}",
-            names
-        );
-
-        // 验证文件内容可读
-        let mut f = ar.by_name("MyMod/mod.ini").unwrap();
-        let mut buf = String::new();
-        f.read_to_string(&mut buf).unwrap();
-        assert!(buf.contains("handled = 1"));
+        // 自维护压缩仅支持 .7z；zip 压缩须在 7z CLI 层完成，此处应被拒绝且不产生文件
+        let res = export_internal(&mod_dir, &zip_path, "zip");
+        assert!(res.is_err(), "自维护 zip 压缩应被拒绝");
+        assert!(!zip_path.exists(), "不应生成 zip 文件");
     }
 
     #[test]
@@ -1866,5 +1829,109 @@ mod tests {
 
         let meta = fs::metadata(&out).unwrap();
         assert!(meta.len() > 0, "导出归档不应为空");
+    }
+
+    // ---------------- 智能解压（需求 2/3）：两条路径均实现单层包裹展平 ----------------
+
+    /// 构造用于导入测试的源模组（顶层单一目录包裹，模拟 Bandizip 式冗余顶层目录）
+    fn make_wrapped_archive_src(root: &Path) -> PathBuf {
+        let src = root.join("SrcMod");
+        fs::create_dir_all(src.join("MyMod").join("Textures")).unwrap();
+        fs::write(
+            src.join("MyMod").join("mod.ini"),
+            b"[Section]\nhandled = 1\n",
+        )
+        .unwrap();
+        fs::write(
+            src.join("MyMod").join("Textures").join("tex1.png"),
+            b"PNGDATA",
+        )
+        .unwrap();
+        src
+    }
+
+    /// 断言解压结果已展平：内容在 mod_path 直接可见，且无冗余 MyMod 包裹目录
+    fn assert_flattened(mod_path: &Path) {
+        assert!(mod_path.join("mod.ini").exists(), "应展平到直接内容");
+        assert!(
+            mod_path.join("Textures").join("tex1.png").exists(),
+            "子目录内容应上移"
+        );
+        assert!(!mod_path.join("MyMod").exists(), "冗余顶层目录应被去除");
+    }
+
+    #[test]
+    fn smart_extract_via_system_7z_cli_flatten_single_top_dir() {
+        // 仅当系统/打包 7z 可用时才执行端到端 CLI 路径；否则跳过（不视为失败）
+        let tmp = TempDir::new().unwrap();
+        let managed = tmp.path().join("Mods").join("_MANAGED_").join("group_1");
+        fs::create_dir_all(&managed).unwrap();
+
+        let src = make_wrapped_archive_src(tmp.path());
+        // 用 export_internal(.7z) 自维护压缩生成一个「顶层单目录包裹」的 7z（CLI 无密码路径可控）
+        let archive = tmp.path().join("SrcMod.7z");
+        export_internal(&src, &archive, "7z").unwrap();
+
+        let seven_zip = get_system_7z_path()
+            .or_else(get_bundled_7z_path)
+            .expect("需要 7z CLI 才能跑 CLI 端到端智能解压测试");
+        let _ = seven_zip; // 确认存在后再走 import_mod（其内部会再次查找）
+
+        let result = import_mod(&archive, &managed, None).unwrap();
+        match result {
+            ExtractResult::Success { mod_path, .. } => assert_flattened(&mod_path),
+            other => panic!("预期成功，得到 {:?}", other),
+        }
+    }
+
+    #[test]
+    fn smart_extract_via_internal_7z_flatten_single_top_dir() {
+        // 直接走自维护 7z 路径（不依赖系统 7z CLI），验证 finalize_extraction 展平逻辑
+        let tmp = TempDir::new().unwrap();
+        let managed = tmp.path().join("Mods").join("_MANAGED_").join("group_1");
+        fs::create_dir_all(&managed).unwrap();
+
+        let src = make_wrapped_archive_src(tmp.path());
+        let archive = tmp.path().join("SrcMod.7z");
+        export_internal(&src, &archive, "7z").unwrap();
+
+        // 直接使用自维护 7z 解压到 .tmp 临时区，再 finalize（与 extract_archive 第三级一致）
+        let tmp_parent = extract_tmp_dir(&managed);
+        let temp_dir = extract_7z_internal(&archive, &tmp_parent, None).unwrap();
+        let result = finalize_extraction(&archive, &managed, &temp_dir).unwrap();
+        match result {
+            ExtractResult::Success { mod_path, .. } => assert_flattened(&mod_path),
+            other => panic!("预期成功，得到 {:?}", other),
+        }
+    }
+
+    #[test]
+    fn smart_extract_keeps_multiple_top_entries_unflattened() {
+        // 顶层含多个目录 → 保持原结构，不展平
+        let tmp = TempDir::new().unwrap();
+        let managed = tmp.path().join("Mods").join("_MANAGED_").join("group_1");
+        fs::create_dir_all(&managed).unwrap();
+
+        let src = tmp.path().join("SrcMod");
+        fs::create_dir_all(src.join("FolderA")).unwrap();
+        fs::create_dir_all(src.join("FolderB")).unwrap();
+        fs::write(src.join("FolderA").join("a.txt"), b"a").unwrap();
+        fs::write(src.join("FolderB").join("b.txt"), b"b").unwrap();
+        let archive = tmp.path().join("SrcMod.7z");
+        export_internal(&src, &archive, "7z").unwrap();
+
+        let tmp_parent = extract_tmp_dir(&managed);
+        let temp_dir = extract_7z_internal(&archive, &tmp_parent, None).unwrap();
+        let result = finalize_extraction(&archive, &managed, &temp_dir).unwrap();
+        match result {
+            ExtractResult::Success { mod_path, .. } => {
+                assert!(mod_path.join("FolderA").join("a.txt").exists());
+                assert!(mod_path.join("FolderB").join("b.txt").exists());
+                // 未展平：保留 FolderA / FolderB 两层
+                assert!(mod_path.join("FolderA").exists());
+                assert!(mod_path.join("FolderB").exists());
+            }
+            other => panic!("预期成功，得到 {:?}", other),
+        }
     }
 }
