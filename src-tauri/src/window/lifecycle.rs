@@ -28,6 +28,8 @@ static BUSY_OPS: AtomicUsize = AtomicUsize::new(0);
 static FRONTEND_PENDING: AtomicBool = AtomicBool::new(false);
 /// 主窗口是否被运行时销毁过（前端启动时读取以跳过启动通知，读后清零）
 static DESTROYED_FLAG: AtomicBool = AtomicBool::new(false);
+/// 用户显式请求退出标志：托盘/硬退出置位，_un_置位表示窗口销毁触发的运行循环结束
+static USER_QUIT_FLAG: AtomicBool = AtomicBool::new(false);
 
 /// 窗口隐藏时调用：递增世代并启动分级回收计时线程
 ///
@@ -197,6 +199,25 @@ pub fn was_window_recreated() -> bool {
     DESTROYED_FLAG.swap(false, Ordering::SeqCst)
 }
 
+/// 标记用户显式请求退出（托盘/硬退出入口调用）
+///
+/// 用于在 `RunEvent::ExitRequested` 中区分退出来源：用户主动退出应放行，
+/// 而"首个窗口被 lifecycle 销毁触发的运行循环结束"应被阻止（进程需驻留托盘等待重建）。
+pub fn mark_user_quit() {
+    USER_QUIT_FLAG.store(true, Ordering::SeqCst);
+}
+
+/// 判断 RunEvent::ExitRequested 是否应被阻止。
+///
+/// # 规则
+/// - 用户显式退出（USER_QUIT_FLAG=true）→ 放行（返回 false）
+/// - 非用户退出（窗口销毁触发、run 循环空转）→ 阻止（返回 true）
+///
+/// 调用后清空 USER_QUIT_FLAG，避免一次 quit 后污染后续判定。
+pub fn should_prevent_exit_on_windows_closed() -> bool {
+    !USER_QUIT_FLAG.swap(false, Ordering::SeqCst)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +267,18 @@ mod tests {
         const _: () = assert!(HIDDEN_DESTROY_SECS > HIDDEN_CLEAR_DATA_SECS);
         const _: () = assert!(HIDDEN_CLEAR_DATA_SECS > 0);
         const _: () = assert!(DESTROY_RETRY_SECS > 0);
+    }
+
+    /// 用户显式退出放行：mark_user_quit 后 should_prevent_exit_on_windows_closed 返回 false
+    #[test]
+    fn user_quit_allows_exit() {
+        USER_QUIT_FLAG.store(false, Ordering::SeqCst);
+        // 未标记用户退出（窗口销毁触发）→ 应阻止
+        assert!(should_prevent_exit_on_windows_closed());
+        // 标记用户退出 → 应放行
+        mark_user_quit();
+        assert!(!should_prevent_exit_on_windows_closed());
+        // 状态已清空，下次（非用户退出）再阻止
+        assert!(should_prevent_exit_on_windows_closed());
     }
 }

@@ -353,6 +353,9 @@ pub fn hard_quit_app(app: AppHandle) {
     // 无活跃后台操作 → 干净退出：先标记干净退出（写入 run_state + 记录 user_quit），再退出。
     mark_clean_exit(ExitReason::UserQuit);
 
+    // 标记用户显式退出，避免被 run 循环的 ExitRequested 拦截（区分"窗口销毁触发退出"）
+    crate::window::lifecycle::mark_user_quit();
+
     if let Some(hotkey_mgr) = app.try_state::<Arc<HotkeyManager>>() {
         hotkey_mgr.unregister_all();
     }

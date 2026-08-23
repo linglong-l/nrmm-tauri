@@ -104,6 +104,8 @@ fn handle_quit(app: &AppHandle) {
     if let Some(hotkey_mgr) = app.try_state::<Arc<HotkeyManager>>() {
         hotkey_mgr.unregister_all();
     }
+    // 标记用户显式退出，避免被 run 循环的 ExitRequested 拦截（区分"窗口销毁触发退出"）
+    crate::window::lifecycle::mark_user_quit();
     app.exit(0);
 }
 

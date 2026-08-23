@@ -398,7 +398,20 @@ pub fn run() {
             window::lifecycle::was_window_recreated,
             platform::get_platform_info,
         ])
+        // 生命周期守护：阻止"首个窗口被 lifecycle 销毁"导致运行循环结束而退出进程。
+        // 应用需驻留托盘等待用户重新唤起（ensure_main_window 运行时重建）。
+        // 用户显式退出（托盘/硬退出，经 mark_user_quit）放行。
+        .build(tauri::generate_context!())
         // SAFETY: Standard Tauri run entry; failure means the application cannot start.
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if crate::window::lifecycle::should_prevent_exit_on_windows_closed() {
+                    log::info!(
+                        "[lifecycle] 窗口销毁触发运行循环结束，阻止进程退出（等待用户唤起重建）"
+                    );
+                    api.prevent_exit();
+                }
+            }
+        });
 }
