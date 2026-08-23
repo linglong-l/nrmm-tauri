@@ -32,7 +32,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -89,7 +89,10 @@ pub struct SelectModArgs {
 /// 优先从内存缓存返回，缓存未命中时执行轻量扫描。
 /// 这是 UI 初始化和列表展示的主要入口。
 #[tauri::command]
-pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::ScanResult, String> {
+pub async fn get_mods(
+    game: String,
+    mods_path: String,
+) -> Result<Arc<mod_scanner::ScanResult>, String> {
     log::debug!(
         "[commands::mod_commands] [get_mods] game={} mods_path={}",
         game,
@@ -155,7 +158,7 @@ pub async fn get_mods(game: String, mods_path: String) -> Result<mod_scanner::Sc
     // 用户主动加载该游戏：触发该游戏路径的全量 INI 备份（进程内每游戏一次，后台线程池执行）
     crate::core::ini_backup_scheduler::ensure_game_full_backup(mods_path.clone());
 
-    Ok(result)
+    Ok(Arc::new(result))
 }
 
 #[tauri::command]
@@ -173,7 +176,7 @@ pub fn check_mods_path_status(
 pub async fn refresh_mods(
     game: String,
     mods_path: String,
-) -> Result<mod_scanner::ScanResult, String> {
+) -> Result<Arc<mod_scanner::ScanResult>, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
@@ -209,7 +212,7 @@ pub async fn refresh_mods(
         cache.set(game, &mods_path, result.clone());
     }
 
-    Ok(result)
+    Ok(Arc::new(result))
 }
 
 /// 重量级更新模组数据（仅用户按钮触发）

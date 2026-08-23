@@ -11,7 +11,15 @@ use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
+
+/// 常驻缓存条目上限（LRU 淘汰阈值）。
+///
+/// 缓存仅保留最近交互的 3 个（游戏, 路径）结果；`set()` 插入后若超过该上限，
+/// 淘汰 `_timestamp` 最旧的条目，以限制多游戏扫描结果在常驻内存中的累积量。
+/// 被淘汰条目再次进入该游戏/路径时需触发一次全量重扫（~3-4s），内存优先。
+const MAX_CACHE_ENTRIES: usize = 3;
 
 /// 缓存键类型，由目标游戏和规范化后的 Mods 目录路径字符串组成的二元组。
 ///
@@ -22,9 +30,14 @@ type CacheKey = (TargetGame, String);
 /// 缓存条目，包含扫描结果和时间戳。
 #[derive(Debug, Clone)]
 struct CachedEntry {
-    /// 轻量扫描结果（`ScanResult` 结构体）。
-    result: ScanResult,
-    /// 缓存插入时间戳，当前仅用于调试或未来实现 LRU 淘汰策略时使用。
+    /// 轻量扫描结果（`Arc<ScanResult>`，缓存为唯一长期持有者）。
+    ///
+    /// 使用 `Arc` 使 `get()` 通过 `Arc::clone` 零拷贝共享给调用方（序列化/访问），
+    /// 避免对整树做深克隆。`subtree_replace` 需要对子字段就地改时用
+    /// `Arc::make_mut`：缓存仅唯一持有时原地可变（零拷贝），若调用方克隆了
+    /// Arc 则写时拷贝（语义安全）。
+    result: Arc<ScanResult>,
+    /// 缓存插入时间戳，用于 LRU 淘汰时选择最旧条目剔除。
     _timestamp: Instant,
 }
 
@@ -61,7 +74,7 @@ impl ModCache {
         }
     }
 
-    /// 查询缓存，命中返回克隆的 `ScanResult`。
+    /// 查询缓存，命中返回共享的 `Arc<ScanResult>`（零拷贝，共享内部数据）。
     ///
     /// # 参数
     /// - `game`: 目标游戏。
@@ -69,7 +82,7 @@ impl ModCache {
     ///
     /// # 返回
     ///
-    /// - `Some(ScanResult)`: 缓存命中，返回结果的克隆。
+    /// - `Some(Arc<ScanResult>)`: 缓存命中，返回结果的共享引用。
     /// - `None`: 缓存未命中。
     ///
     /// # Panics
@@ -79,9 +92,9 @@ impl ModCache {
     /// # Errors
     ///
     /// 此方法不会返回错误。
-    pub fn get(&self, game: TargetGame, mods_path: &Path) -> Option<ScanResult> {
+    pub fn get(&self, game: TargetGame, mods_path: &Path) -> Option<Arc<ScanResult>> {
         let key = Self::make_key(game, mods_path);
-        let result = self.cache.get(&key).map(|entry| entry.result.clone());
+        let result = self.cache.get(&key).map(|entry| Arc::clone(&entry.result));
         log::debug!(
             "[core::mod_cache] [get] game={:?} hit={}",
             game,
@@ -114,10 +127,25 @@ impl ModCache {
         self.cache.insert(
             key,
             CachedEntry {
-                result,
+                result: Arc::new(result),
                 _timestamp: Instant::now(),
             },
         );
+        // LRU 淘汰：超过上限时，按 _timestamp 淘汰最旧的溢出条目（逐次取全局最旧）。
+        // 仅影响 set 时的内存上限；invalidate_* 显式失效语义不变。
+        if self.cache.len() > MAX_CACHE_ENTRIES {
+            let overflow = self.cache.len() - MAX_CACHE_ENTRIES;
+            for _ in 0..overflow {
+                let oldest_key = self
+                    .cache
+                    .iter()
+                    .min_by_key(|(_, entry)| entry._timestamp)
+                    .map(|(k, _)| k.clone());
+                if let Some(k) = oldest_key {
+                    self.cache.remove(&k);
+                }
+            }
+        }
         // 清除该游戏的失效标记，表示缓存已更新
         self.invalidated_games.remove(&game);
         log::debug!(
@@ -335,9 +363,12 @@ impl ModCache {
             .map(|g| std::path::PathBuf::from(&g.full_path))
             .collect();
 
+        // Arc::make_mut：缓存是 Arc 的唯一长期持有者，通常原地可变（零拷贝）；
+        // 若调用方已通过 get() 克隆了该 Arc，则此处写时拷贝一份再改（语义安全）。
+        let owned = Arc::make_mut(&mut existing.result);
+
         // 将现有 groups 转为 BTreeMap（按 group_path 去重）
-        let mut existing_groups: BTreeMap<String, ModGroupData> = existing
-            .result
+        let mut existing_groups: BTreeMap<String, ModGroupData> = owned
             .groups
             .drain(..)
             .map(|g| (g.group_path.clone(), g))
@@ -346,11 +377,10 @@ impl ModCache {
         for g in partial_result.groups {
             existing_groups.insert(g.group_path.clone(), g);
         }
-        existing.result.groups = existing_groups.into_values().collect();
+        owned.groups = existing_groups.into_values().collect();
 
         // 将现有 mods 转为 BTreeMap（按 mod_path 去重）
-        let mut existing_mods: BTreeMap<String, ModData> = existing
-            .result
+        let mut existing_mods: BTreeMap<String, ModData> = owned
             .mods
             .drain(..)
             .map(|m| (m.mod_path.clone(), m))
@@ -365,20 +395,20 @@ impl ModCache {
         for m in partial_result.mods {
             existing_mods.insert(m.mod_path.clone(), m);
         }
-        existing.result.mods = existing_mods.into_values().collect();
+        owned.mods = existing_mods.into_values().collect();
 
         // 重算计数
-        existing.result.total_mods_count = existing.result.mods.len();
+        owned.total_mods_count = owned.mods.len();
         let (mut enabled, mut disabled) = (0usize, 0usize);
-        for m in &existing.result.mods {
+        for m in &owned.mods {
             if m.is_active {
                 enabled += 1;
             } else {
                 disabled += 1;
             }
         }
-        existing.result.enabled_mods_count = enabled;
-        existing.result.disabled_mods_count = disabled;
+        owned.enabled_mods_count = enabled;
+        owned.disabled_mods_count = disabled;
     }
 }
 
