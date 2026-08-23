@@ -271,7 +271,7 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
             *scanned_mods += 1;
 
             // 轻量扫描未解析 INI，需从模组目录查找 .ini 文件并按需解析
-            for ini_path in collect_mod_ini_files(&mod_data.full_path) {
+            for ini_path in collect_mod_ini_files(Path::new(mod_data.full_path.as_ref())) {
                 if let Ok(ini) = D3DX_INI_CACHE.write().get_or_parse(&ini_path) {
                     for (_section, hash) in ini.extract_hashes() {
                         *scanned_hashes += 1;

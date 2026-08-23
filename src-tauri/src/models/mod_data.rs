@@ -5,6 +5,7 @@
 use super::enums::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 按键绑定数据
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -106,12 +107,16 @@ pub struct ModData {
     /// 所有 INI 文件数据（深度扫描时填充）
     #[serde(default)]
     pub mod_ini_data: Vec<ModIniData>,
-    /// 完整路径（前端零消费，跳过序列化以减小 IPC 载荷——F5 内存优化）
+    /// 完整路径（前端零消费，跳过序列化以减小 IPC 载荷）
+    ///
+    /// 存储为 `Arc<str>`：同一模组的 `full_path` 在分组 `mods`、扁平 `mods`、
+    /// `mod_paths` 等多处副本间共享同一底层字符串，避免 `PathBuf` 克隆带来
+    /// 多余的整串堆分配（内存优化）。
     #[serde(default, skip_serializing)]
-    pub full_path: PathBuf,
+    pub full_path: Arc<str>,
     /// 父文件夹路径（前端零消费，同上）
     #[serde(default, skip_serializing)]
-    pub parent_folder: PathBuf,
+    pub parent_folder: Arc<str>,
     /// 预览图片路径
     #[serde(default)]
     pub preview_image_path: Option<PathBuf>,
@@ -197,8 +202,8 @@ impl Default for ModData {
             mod_name: String::new(),
             mod_ini: None,
             mod_ini_data: Vec::new(),
-            full_path: PathBuf::new(),
-            parent_folder: PathBuf::new(),
+            full_path: Arc::from(""),
+            parent_folder: Arc::from(""),
             preview_image_path: None,
             is_active: false,
             is_favorite: false,
@@ -251,8 +256,9 @@ pub struct ModGroupData {
     /// 分组内的模组列表
     pub mods: Vec<ModData>,
     /// 模组路径列表（前端零消费，跳过序列化；Rust 内部仍可用）
+    /// 元素为 `Arc<str>`，与各模组 `full_path` 共享底层字符串，避免重复整串分配。
     #[serde(default, skip_serializing)]
-    pub mod_paths: Vec<PathBuf>,
+    pub mod_paths: Vec<Arc<str>>,
     /// 模组数量
     pub mod_count: u32,
     /// 是否激活

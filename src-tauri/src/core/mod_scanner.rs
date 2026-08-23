@@ -31,6 +31,7 @@ use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// 支持的图标文件扩展名列表
@@ -397,8 +398,8 @@ pub fn sort_mods_light(mods: &mut [ModData]) {
             other => return other,
         }
 
-        let a_fav_path = a.full_path.join(constants::FAV_MARKER);
-        let b_fav_path = b.full_path.join(constants::FAV_MARKER);
+        let a_fav_path = Path::new(a.full_path.as_ref()).join(constants::FAV_MARKER);
+        let b_fav_path = Path::new(b.full_path.as_ref()).join(constants::FAV_MARKER);
         let a_time = a_fav_path.metadata().and_then(|m| m.modified()).ok();
         let b_time = b_fav_path.metadata().and_then(|m| m.modified()).ok();
         match (b_time, a_time) {
@@ -668,8 +669,8 @@ fn scan_normal_group_light(
             mod_path: path.to_string_lossy().to_string(),
             mod_name: mod_name.clone(),
             name: mod_name,
-            full_path: path.clone(),
-            parent_folder: dir_path.to_path_buf(),
+            full_path: Arc::from(path.to_string_lossy().as_ref()),
+            parent_folder: Arc::from(dir_path.to_string_lossy().as_ref()),
             preview_image_path: icon_path,
             is_active,
             is_favorite,
@@ -768,7 +769,7 @@ fn scan_normal_group_light(
         active_idx
     };
 
-    let mod_paths: Vec<PathBuf> = mods
+    let mod_paths: Vec<Arc<str>> = mods
         .iter()
         .filter(|m| m.name != "None")
         .map(|m| m.full_path.clone())
@@ -949,7 +950,9 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
             if let Some(pidx) = parent_idx {
                 // SAFETY: all_mods.push() was called immediately above; all_mods is guaranteed non-empty.
                 groups[pidx].mods.push(all_mods.last().unwrap().clone());
-                groups[pidx].mod_paths.push(current_path.clone());
+                groups[pidx]
+                    .mod_paths
+                    .push(all_mods.last().unwrap().full_path.clone());
                 groups[pidx].mod_count += 1;
             }
             global_mod_index += 1;
@@ -1141,8 +1144,14 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
         mod_path: mod_path.to_string_lossy().to_string(),
         mod_name: mod_name.clone(),
         name: mod_name,
-        full_path: mod_path.to_path_buf(),
-        parent_folder: mod_path.parent().unwrap_or(mod_path).to_path_buf(),
+        full_path: Arc::from(mod_path.to_string_lossy().as_ref()),
+        parent_folder: Arc::from(
+            mod_path
+                .parent()
+                .unwrap_or(mod_path)
+                .to_string_lossy()
+                .as_ref(),
+        ),
         preview_image_path: icon_path,
         is_active: false,
         is_favorite,
@@ -1366,7 +1375,7 @@ fn scan_group_directory_deep(
 
     let group_index: u32 = group_name.trim_start_matches("group_").parse().unwrap_or(0);
 
-    let mod_paths: Vec<PathBuf> = mods.iter().map(|m| m.full_path.clone()).collect();
+    let mod_paths: Vec<Arc<str>> = mods.iter().map(|m| m.full_path.clone()).collect();
 
     let has_children = !mods.is_empty() || !subgroups.is_empty();
     let group = ModGroupData {
@@ -1388,7 +1397,7 @@ fn scan_group_directory_deep(
     for (idx, mod_data) in mods.iter_mut().enumerate() {
         mod_data.group_index = group_index;
         mod_data.mod_index = idx as u32 + 1; // 1-based，对齐原版 NRMM
-        mod_data.mod_path = mod_data.full_path.to_string_lossy().to_string();
+        mod_data.mod_path = mod_data.full_path.as_ref().to_string();
         mod_data.mod_name = mod_data.name.clone();
         mod_data.mod_disabled = mod_data.disabled;
         if let Some(first_ini) = mod_data.mod_ini_data.first() {
@@ -1694,9 +1703,9 @@ fn build_mod_data_deep(
     Ok(ModData {
         name: mod_name.clone(),
         mod_name,
-        full_path: dir.to_path_buf(),
+        full_path: Arc::from(dir.to_string_lossy().as_ref()),
         mod_path: dir.to_string_lossy().to_string(),
-        parent_folder: dir.parent().unwrap_or(dir).to_path_buf(),
+        parent_folder: Arc::from(dir.parent().unwrap_or(dir).to_string_lossy().as_ref()),
         preview_image_path: icon_path,
         disabled,
         mod_disabled: disabled,

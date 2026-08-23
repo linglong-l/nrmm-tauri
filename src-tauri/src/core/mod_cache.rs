@@ -359,7 +359,7 @@ impl ModCache {
         // 其子树下未出现在 partial 中的旧 mod 视为已被删除（文件/目录被移除）。
         // 原合并策略只增改不删，导致删除模组后 UI 仍显示旧条目，直至全量重扫。
         for gp in &partial_roots {
-            existing_mods.retain(|_, m| !m.full_path.starts_with(gp));
+            existing_mods.retain(|_, m| !Path::new(m.full_path.as_ref()).starts_with(gp));
         }
         // 合并/覆盖 partial_result 的 mods
         for m in partial_result.mods {
