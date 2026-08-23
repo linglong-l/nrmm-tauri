@@ -122,45 +122,79 @@ fn destroy_hidden_main_window(app: &AppHandle) {
     );
 }
 
-/// 确保主窗口存在：不存在（被运行时销毁）则按 tauri.conf.json 等价配置重建
+/// 确保主窗口存在：不存在（被运行时销毁）则按 tauri.conf.json 等价配置重建，并显示/聚焦。
 ///
-/// 重建后经 window-state 插件恢复几何（不含 VISIBLE）；调用方负责 show/focus。
 /// URL 使用显式前端入口 `WebviewUrl::App("index.html")`（`WebviewUrl::default()`
 /// 亦解析为同一值），在 dev 模式解析到 devUrl、release 解析到打包资源。
-pub fn ensure_main_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
-    if let Some(w) = app.get_webview_window("main") {
-        return Some(w);
+///
+/// # 线程约束（修复运行时重建失败）
+/// `WebviewWindowBuilder::build()` 必须在**主线程**执行——Tauri 在 WebviewWindow
+/// 注册时需与主事件循环交互，从托盘/热键/命令线程直接调用会因等待主线程而挂起
+/// （实测：重建日志 "开始重建" 后无下文，窗口不出现，即 build 阻塞）。
+/// 因此本函数**从头到尾经 `run_on_main_thread` 在主线程内执行**：建窗 → 恢复几何
+/// → show/focus（`at_main=true` 时），全程同步、无跨线程等待、不会死锁。
+///
+/// # 参数
+/// - `app`: AppHandle
+/// - `at_main`: 是否立即显示并聚焦窗口（由 `show_main_window` 等调用方传入 true；
+///   纯"确保存在"场景可传 false 仅建窗不显示）
+///
+/// # 返回
+/// `true` 表示窗口已存在或已在本调用内完成重建+显示；`false` 表示建窗失败。
+pub fn ensure_main_window(app: &AppHandle, at_main: bool) -> bool {
+    // 窗口已存在：由调用方决定是否显示（此处不重复处理 show/focus）
+    if app.get_webview_window("main").is_some() {
+        return true;
     }
-    log::info!("[lifecycle] 主窗口不存在（运行时已销毁），开始重建");
-    let built =
-        tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-            .title("NRMM")
-            .inner_size(960.0, 640.0)
-            .min_inner_size(750.0, 500.0)
-            .decorations(false)
-            .transparent(true)
-            .shadow(true)
-            .center()
-            .resizable(true)
-            .focused(true)
-            .visible(false)
-            .build();
-    match built {
-        Ok(w) => {
-            use tauri_plugin_window_state::{StateFlags, WindowExt};
-            // WindowExt::restore_state(flags) 按该窗口自身 label 恢复几何（不含 VISIBLE）
-            let mut flags = StateFlags::all();
-            flags.remove(StateFlags::VISIBLE);
-            if let Err(e) = w.restore_state(flags) {
-                log::warn!("[lifecycle] 恢复窗口几何失败（使用居中默认）: {}", e);
+    log::info!("[lifecycle] 主窗口不存在（运行时已销毁），开始重建（主线程建窗）");
+    let app_for_main = app.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    if let Err(e) = app.run_on_main_thread(move || {
+        let result = tauri::WebviewWindowBuilder::new(
+            &app_for_main,
+            "main",
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("NRMM")
+        .inner_size(960.0, 640.0)
+        .min_inner_size(750.0, 500.0)
+        .decorations(false)
+        .transparent(true)
+        .shadow(true)
+        .center()
+        .resizable(true)
+        .focused(true)
+        .visible(false)
+        .build();
+        match result {
+            Ok(w) => {
+                // 恢复上次几何（不含 VISIBLE）
+                use tauri_plugin_window_state::{StateFlags, WindowExt};
+                let mut flags = StateFlags::all();
+                flags.remove(StateFlags::VISIBLE);
+                if let Err(ge) = w.restore_state(flags) {
+                    log::warn!("[lifecycle] 恢复窗口几何失败（使用居中默认）: {}", ge);
+                }
+                if at_main {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                    let _ = w.unminimize();
+                }
+                log::info!("[lifecycle] 主窗口重建成功");
+                let _ = tx.send(true);
             }
-            Some(w)
+            Err(e) => {
+                log::error!("[lifecycle] 重建主窗口失败: {}", e);
+                let _ = tx.send(false);
+            }
         }
-        Err(e) => {
-            log::error!("[lifecycle] 重建主窗口失败: {}", e);
-            None
-        }
+    }) {
+        log::error!("[lifecycle] 无法调度主线程建窗: {}", e);
+        return false;
     }
+    // run_on_main_thread 从非主线程调用时安全等待结果；本函数仅被
+    // 托盘/热键/命令线程调用（均非主线程），此处 recv 不会阻塞主线程、不会死锁。
+    rx.recv().unwrap_or(false)
 }
 
 /// 用户可见长操作的 RAII 计数守卫：构造 +1、Drop -1（panic 经 unwind 亦会 Drop）

@@ -237,11 +237,14 @@ pub fn center_window(window: &WebviewWindow) -> Result<()> {
 ///
 /// * `app` - Tauri 应用句柄
 pub fn show_main_window(app: &AppHandle) {
-    // 先确保主窗口存在（存在即复用；不存在表示运行时被回收，触发重建）
-    if let Some(window) = lifecycle::ensure_main_window(app) {
+    // 窗口存在则复用并显示；不存在则 ensure_main_window 在主线程重建并显示/聚焦
+    if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.unminimize();
+    } else {
+        // 重建（含 show/focus 在主线程完成）。若重建失败已在 lifecycle 内记日志。
+        let _ = lifecycle::ensure_main_window(app, true);
     }
     lifecycle::on_window_shown();
     let _ = app.emit("window-shown", ());
