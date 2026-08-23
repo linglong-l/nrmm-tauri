@@ -885,22 +885,27 @@ fn finalize_extraction(
         .to_string_lossy()
         .to_string();
 
+    // 展平单层包裹目录（对齐 Dart unwrapSingleFolderNesting）：压缩包内若仅包裹单一根目录，
+    // 将其内容提升为模组目录直接内容。
+    //
+    // ⚠️ 必须在「移动到最终位置之前」于 `.tmp` 暂存目录上执行：`.tmp` 隐藏目录被文件监视器
+    // 过滤（file_watcher 回调中的 `.tmp` 排除规则），不会触发轻量扫描写入 `modname` 等标记文件；
+    // 若改在移动到分组目录之后执行，监视器会在 300ms 防抖窗口内写入 `modname`，使顶层「相关条目」
+    // 不再是单一目录，导致展平判定失败、智能解压退化为常规解压并额外消耗 CPU（B 修复）。
+    if let Err(e) = unwrap_single_folder_nesting(&final_dir) {
+        log::warn!(
+            "finalize_extraction: 展平单层目录失败 {:?}: {}",
+            final_dir,
+            e
+        );
+    }
+
     // 重名处理：目标分组目录下已存在同名模组时，重命名为 `{modname} (N)`
     let final_name = unique_mod_dir_name(target_dir, &mod_name);
     let target_mod_path = target_dir.join(&final_name);
 
     // 同盘原子移动到最终位置（解压完成后才移动，避免中断污染分组目录）
     move_temp_to_target(&final_dir, &target_mod_path)?;
-
-    // 展平单层包裹目录（对齐 Dart unwrapSingleFolderNesting）：压缩包内若仅包裹单一根目录，
-    // 将其内容提升为模组目录直接内容
-    if let Err(e) = unwrap_single_folder_nesting(&target_mod_path) {
-        log::warn!(
-            "finalize_extraction: 展平单层目录失败 {:?}: {}",
-            target_mod_path,
-            e
-        );
-    }
 
     // 清理：temp_dir 已被 rename 移走；尝试删除空的 `.tmp` 父目录
     cleanup_extract_tmp(temp_dir.parent());
@@ -1138,6 +1143,10 @@ pub fn import_directory(src: &Path, target_group_dir: &Path) -> Result<PathBuf> 
         ));
     }
 
+    // 暂停文件监视器：深层复制期间高密度写入目标会触发监视器扫描并生成 `modname` 标记，
+    // 导致后续单层展平判定失败（B 修复）。守卫引用计数，函数退出自动恢复。
+    let _watch_guard = WatcherGuard::new();
+
     fs::create_dir_all(target_group_dir)?;
 
     let target = target_group_dir.join(&dir_name);
@@ -1341,6 +1350,10 @@ pub fn import_mod(
     group_dir: &Path,
     password: Option<&str>,
 ) -> Result<ExtractResult> {
+    // 暂停文件监视器：解压会把大量文件写入分组目录，监视器若实时扫描会写入 `modname` 等标记、
+    // 触发增量扫描管线，既浪费 CPU 也是在「先于移动执行展平」之前导致智能解压退化的诱因
+    // （B 修复）。守卫为引用计数，函数退出（含错误路径）自动恢复监听。
+    let _watch_guard = WatcherGuard::new();
     extract_archive(archive_path, group_dir, password)
 }
 
