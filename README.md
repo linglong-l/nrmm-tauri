@@ -2,11 +2,11 @@
 
 ## 基于 [No Reload Mod Manager](https://github.com/Aglglg/No-Reload-Mod-Manager)
 
-> XXMI 模组管理器（NR Mod Manager）的桌面客户端 v0.1.1
+> XXMI 模组管理器（NR Mod Manager）的桌面客户端 v0.4.0
 
-一款基于 Tauri 2 + Vue 3 的轻量级模组管理工具，为游戏玩家提供模组的浏览、启用/禁用、分组管理、收藏等核心功能。支持 Windows 11 和 Linux 平台。
+一款基于 Tauri 2 + Vue 3 的轻量级模组管理工具，为游戏玩家提供模组的浏览、启用/禁用、分组管理、收藏、压缩包导入与 INI 备份等核心功能。支持 Windows 与 Linux 平台。
 
-* 快捷键功能支持不完善 等于完全不支持，当然是所有快捷键啦
+* 游戏内按键模拟（NRMM 交互协议）目前仅在 Windows 完整支持；macOS 为占位实现尚未启用。
 
 ## 平台支持
 
@@ -15,7 +15,18 @@
 | Windows 11 | ✅ 已测试 | 完全支持 |
 | Linux | ✅ 已测试 | 通过条件编译支持，使用 xdg-open 打开文件管理器 |
 | Windows 10 | ⚠️ 未测试 | 可能兼容，但未进行测试 |
-| macOS | ❌ 不支持 | 未适配 macOS 平台 |
+| macOS | ❌ 不支持 | 仅占位实现，按键模拟/前台检测未实现 |
+
+## 支持的游戏
+
+| 游戏 | 枚举值 | 进程名 |
+|------|--------|--------|
+| 原神 | `GenshinImpact` | `GenshinImpact.exe` / `YuanShen.exe` |
+| 崩坏：星穹铁道 | `HonkaiStarRail` | `StarRail.exe` |
+| 鸣潮 | `Wuwa` | `Wuthering Waves.exe` / `WutheringWaves.exe` |
+| 绝区零 | `ZZZ` | `ZenlessZoneZero.exe` |
+| 崩坏3 | `HonkaiImpact3rd` | `BH3.exe` |
+| 明日方舟：终末地 | `ArknightsEndfield` | — |
 
 ## 技术栈
 
@@ -23,36 +34,47 @@
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| Vue 3 | 3.x | 前端框架，使用 `<script setup>` SFC |
-| TypeScript | 6.x | 类型安全的 JavaScript 超集 |
-| Vite | 6 | 构建工具与开发服务器 |
-| Pinia | 3 | 状态管理 |
-| Element Plus | 2 | UI 组件库 |
-| vue-i18n | 9 | 多语言国际化 |
+| Vue | ^3 | 前端框架，使用 `<script setup>` SFC |
+| TypeScript | ~6.0 | 类型安全的 JavaScript 超集 |
+| Vite | ^8.2 | 构建工具与开发服务器 |
+| Pinia | ^4 | 状态管理 |
+| Element Plus | ^2 | UI 组件库 |
+| vue-i18n | ^11 | 多语言国际化 |
 
 ### 后端
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
 | Rust | 1.96+ | 系统级编程语言 |
-| Tauri | 2 | 桌面应用框架（含 `tray-icon` feature） |
-| tokio | 1.x | 异步运行时 |
-| global-shortcut | - | Tauri 插件，全局热键 |
-| dialog | - | Tauri 插件，对话框 |
+| Tauri | ~2.11.5 | 桌面应用框架（tray-icon / rustls-tls / protocol-asset） |
+| tokio | ^1 | 异步运行时 |
+| rayon | 1.12 | 数据并行（扫描/解析多核加速） |
+| notify | 8.2 | 文件系统监听（300ms 防抖） |
+| serde / serde_json | ^1 | 序列化 |
+| anyhow | 1 | 错误处理 |
+| zip / sevenz-rust / unrar / infer | 8.6 / 0.6 / 0.5 / 0.16 | 压缩包解压与类型推断 |
+| trash | 5 | 回收站安全删除 |
+| image | 0.25 | 缩略图生成 |
+| reqwest | 0.13 | 云端数据 / 更新检查 |
+| parking_lot | 0.12 | 高效锁（RwLock/Mutex） |
 | `windows` crate | 0.62 | Win32 API（进程检测、键盘模拟、窗口控制） |
+| Tauri 插件 | shell / dialog / notification / updater / window-state / os / global-shortcut / opener | 系统能力集成 |
 
 ### 核心模块
 
-- **mod_manager**：模组扫描、启用/禁用、分组管理核心逻辑
-- **mod_manager/game_interaction**：NRMM 游戏交互协议（按键序列）
-- **commands**：Tauri IPC 命令注册与处理
-- **settings**：应用设置持久化（JSON 文件）
-- **window_manager**：窗口位置、尺寸、置顶状态管理
-- **hotkey**：全局热键注册与处理
-- **file_watcher**：文件系统监听（500ms 防抖）
-- **process**：目标游戏进程检测
-- **keypress_simulator**：通用键鼠模拟（无业务逻辑）
-- **task_queue**：异步任务队列（保证全局单一性）
+- **core/mod_manager**：模组扫描、启用/禁用、互斥/分组管理核心逻辑（`mod_scanner` / `mod_cache` / `incremental_updater` / `namespace_handler`）
+- **core/ini_handler**：INI 文件解析与重写（含 `error_normalizer` 错误归一化、`d3dxini_cache` / `mod_ini_cache` 结果缓存）
+- **core/archive_handler**：压缩包（7z/zip/rar）解压与目录导入（`.tmp` 临时区 + 同盘原子移动）
+- **core/ini_backup** / **ini_backup_scheduler**：INI 备份执行体与调度（白名单 + 幂等）
+- **core/file_lock** + **operation_registry**：OS 级 advisory lock 与后台操作注册表（跨进程互斥、退出保护）
+- **core/exit_log**：程序退出原因记录（正常/取消/信号/强杀）
+- **core/file_watcher**：文件系统监听（notify + 300ms 防抖）
+- **core/resolution** / **core/dll_capability**：分辨率解析与 DLL 能力检测
+- **core/thumbnail**：模组预览图缩略图生成（WebView 内存优化）
+- **commands**：Tauri IPC 命令注册与处理（`mod_commands` / `settings_commands` / `thumbnail_commands`）
+- **config**：应用路径与设置持久化（`app_paths` / `settings_store`）
+- **platform**：跨平台按键模拟与前台检测（windows / linux / macos 占位）
+- **window** / **tray** / **hotkey** / **updater** / **resources** / **cloud_data**：窗口、托盘、热键、更新、资源、云端数据
 
 ## 环境要求
 
@@ -191,7 +213,7 @@ npm run tauri build
 - ✅ 全局热键切换窗口（支持键盘与手柄）
 - ✅ 系统托盘菜单
 - ✅ 目标进程检测（仅在指定游戏运行时响应热键）
-- ✅ 文件系统监听（500ms 防抖）
+- ✅ 文件系统监听（300ms 防抖）
 - ✅ 设置导入/导出/重置
 - ✅ 在文件管理器中打开模组目录（支持 Windows 和 Linux）
 
@@ -199,106 +221,98 @@ npm run tauri build
 
 - ✅ 简体中文、繁体中文、English、Русский、Bahasa Indonesia
 
+### 数据与归档
+
+- ✅ 压缩包导入（7z / zip / rar，`.tmp` 临时区 + 同盘原子移动 + 重命名）
+- ✅ INI 备份（白名单 + 幂等，删除走回收站）
+- ✅ 增量更新模组数据（路径收敛 + 局部扫描 + 子树替换）
+- ✅ 进程级互斥锁（更新 / 导入 / 备份跨进程串行）
+- ✅ 退出原因记录（正常 / 取消 / 信号 / 强杀）
+- ✅ INI 流式读取（≤20MB 直读，更大分块读取，防内存峰值）
+
 ## 项目结构
 
 ```
 xxmi-nrmm/
-├── src/                          # Vue 前端
-│   ├── components/               # 通用组件
-│   │   ├── GameSelector.vue      # 游戏选择器组件
-│   │   ├── SideNav.vue           # 侧边导航栏组件
-│   │   ├── StatusBar.vue         # 状态栏组件
-│   │   ├── TitleBar.vue          # 标题栏组件
-│   │   └── index.ts              # 组件导出
-│   ├── composables/              # 组合式函数
-│   │   ├── useGame.ts            # 游戏状态管理封装
-│   │   ├── useSettings.ts        # 设置状态管理封装
-│   │   ├── useHotkey.ts          # 热键功能封装
-│   │   ├── useWindow.ts          # 窗口功能封装
-│   │   ├── useCloudData.ts       # 云数据功能封装
-│   │   └── useInvoke.ts          # 后端调用封装
-│   ├── locales/                  # 多语言配置
-│   │   └── index.ts              # i18n 初始化
-│   ├── pages/                    # 页面
-│   │   └── index/
-│   │       ├── index.vue         # 主页面（标签页容器）
-│   │       └── tabs/
-│   │           ├── ModsTab.vue   # 模组管理标签页（核心页面）
-│   │           └── GroupTreeNode.vue  # 分组树节点组件（递归渲染）
-│   ├── stores/                   # Pinia 状态管理
-│   │   ├── game.ts               # 游戏/模组数据 Store
-│   │   ├── settings.ts           # 应用设置 Store
-│   │   ├── hotkey.ts             # 热键状态 Store
-│   │   ├── ui.ts                 # UI 状态 Store
-│   │   ├── cloudData.ts          # 云数据 Store
-│   │   └── cloudDataStore.ts     # 云数据备用 Store
-│   ├── types/                    # TypeScript 类型定义
-│   │   └── index.ts              # 全局类型定义
-│   ├── utils/                    # 工具函数
-│   │   ├── cache.ts              # localStorage 缓存工具
-│   │   ├── constants.ts          # 常量定义
-│   │   ├── debounce.ts           # 通用防抖函数
-│   │   ├── events.ts             # 事件系统
-│   │   ├── format.ts             # 格式化工具（耗时等）
-│   │   ├── fuzzyMatch.ts         # 子序列模糊匹配
-│   │   ├── hotkeyValidator.ts    # 快捷键冲突检测
-│   │   ├── index.ts              # 工具导出
-│   │   ├── invoke.ts             # Tauri 后端调用封装
-│   │   └── logger.ts             # 前端日志工具
-│   ├── views/                    # 视图组件
-│   │   ├── SettingsView.vue      # 设置页面
-│   │   └── index.ts              # 视图导出
-│   ├── assets/                   # 静态资源
-│   │   ├── fonts/                # 自定义字体
-│   │   ├── images/               # 应用图标
-│   │   ├── keys_icon/            # 热键图标
-│   │   └── template_txt/         # 模板文件
-│   ├── utils/i18n/               # 翻译文件（i18n 实际加载目录）
+├── src/                          # Vue 3 + TypeScript 前端
 │   ├── App.vue                   # 应用根组件
-│   └── main.ts                   # 应用入口文件
+│   ├── main.ts                   # 应用入口
+│   ├── types/
+│   │   └── index.ts              # 全局类型定义
+│   ├── stores/                   # Pinia 状态管理
+│   │   ├── index.ts
+│   │   ├── mods.ts               # 模组数据 Store
+│   │   ├── settings.ts           # 设置 Store
+│   │   └── platform.ts           # 平台 Store
+│   ├── composables/              # 组合式函数
+│   │   ├── useDragScroll.ts
+│   │   ├── useImageLazyLoad.ts
+│   │   ├── useLoadingDots.ts
+│   │   ├── useModContextMenu.ts
+│   │   ├── useThumbnailUrl.ts
+│   │   └── useVirtualGrid.ts     # 虚拟滚动网格
+│   ├── components/
+│   │   ├── HashConflictOverlay.vue
+│   │   ├── UpdateModDataOverlay.vue
+│   │   ├── common/               # 通用组件（标题栏/搜索/对话框/窗口控制等）
+│   │   ├── mod/                  # 模组组件（卡片/网格/分组树/删除对话框）
+│   │   └── nav/                  # 导航组件（PillTabs）
+│   ├── views/                    # 页面视图
+│   │   ├── ModsView.vue          # 模组管理主页面
+│   │   ├── SettingsView.vue      # 设置页面
+│   │   └── KeybindsView.vue      # 快捷键页面
+│   ├── utils/                    # 工具函数
+│   │   ├── constants.ts
+│   │   ├── env.ts
+│   │   ├── html.ts
+│   │   ├── i18n/                 # 国际化（i18n 加载）
+│   │   ├── logger.ts
+│   │   ├── refreshGuard.ts
+│   │   └── tauri.ts              # Tauri 后端调用封装
+│   └── assets/                   # 静态资源（字体/图标/模板）
 │
 ├── src-tauri/                    # Rust 后端
-│   ├── capabilities/             # Tauri 权限配置
-│   │   └── default.json          # 默认权限配置
-│   ├── icons/                    # 应用图标（多尺寸）
-│   ├── src/
-│   │   ├── cloud_data/           # 云数据同步模块
-│   │   │   └── mod.rs
-│   │   ├── commands/             # Tauri Command 注册
-│   │   │   └── mod.rs            # 所有命令定义与处理
-│   │   ├── file_watcher/         # 文件监听模块
-│   │   │   └── mod.rs
-│   │   ├── hotkey/               # 全局热键模块
-│   │   │   └── mod.rs
-│   │   ├── ini_handler/          # INI 文件解析模块
-│   │   │   ├── mod.rs
-│   │   │   └── error_detection.rs
-│   │   ├── init_xx/              # XXMI 初始化与日志模块
-│   │   │   ├── logger.rs
-│   │   │   └── mod.rs
-│   │   ├── keypress_simulator/   # 通用键鼠模拟模块（无业务逻辑）
-│   │   │   └── mod.rs
-│   │   ├── mod_manager/          # 模组管理核心模块
-│   │   │   ├── mod.rs            # 扫描、启用/禁用、分组管理
-│   │   │   ├── path_utils.rs     # 路径操作工具
-│   │   │   └── game_interaction.rs # NRMM 游戏交互协议（按键序列）
-│   │   ├── process/              # 进程检测模块（纯工具）
-│   │   │   └── mod.rs
-│   │   ├── settings/             # 设置持久化模块
-│   │   │   └── mod.rs
-│   │   ├── task_queue/           # 任务队列模块（保证全局单一性）
-│   │   │   └── mod.rs
-│   │   ├── tray/                 # 系统托盘模块
-│   │   │   └── mod.rs
-│   │   ├── window_manager/       # 窗口状态管理模块
-│   │   │   └── mod.rs
-│   │   ├── lib.rs                # 库入口，命令注册与模块导出
-│   │   ├── main.rs               # 应用入口，启动流程
-│   │   └── state.rs              # 应用全局状态
-│   ├── Cargo.lock                # Rust 依赖锁定文件
-│   ├── Cargo.toml                # Rust 项目配置
+│   ├── ARCHITECTURE.md           # 项目架构文档
+│   ├── Cargo.toml / Cargo.lock   # Rust 项目配置与依赖锁定
 │   ├── build.rs                  # 构建脚本
-│   └── tauri.conf.json           # Tauri 配置文件
+│   ├── tauri.conf.json           # Tauri 配置
+│   ├── capabilities/             # Tauri 权限配置
+│   ├── icons/                    # 应用图标（多尺寸）
+│   ├── tests/                    # 集成测试（dataset_parity / deep_compare）
+│   └── src/
+│       ├── lib.rs                # 库入口：插件初始化、Tauri 命令注册
+│       ├── main.rs               # 二进制入口
+│       ├── debug.rs              # 调试辅助
+│       ├── commands/             # Tauri IPC 命令
+│       │   ├── mod_commands.rs       # 模组命令（扫描/切换/导入/收藏/更新）
+│       │   ├── settings_commands.rs  # 设置命令
+│       │   └── thumbnail_commands.rs # 缩略图命令
+│       ├── config/               # 路径与设置持久化
+│       │   ├── app_paths.rs
+│       │   └── settings_store.rs
+│       ├── core/                 # 核心业务逻辑
+│       │   ├── mod_manager.rs / mod_scanner.rs / mod_cache.rs
+│       │   ├── incremental_updater.rs / namespace_handler.rs
+│       │   ├── ini_handler.rs / error_normalizer.rs
+│       │   ├── d3dxini_cache.rs / mod_ini_cache.rs
+│       │   ├── archive_handler.rs        # 压缩包解压与导入
+│       │   ├── ini_backup.rs / ini_backup_scheduler.rs
+│       │   ├── file_lock.rs / operation_registry.rs
+│       │   ├── exit_log.rs / file_logger.rs / file_watcher.rs
+│       │   ├── resolution.rs / dll_capability.rs / thumbnail.rs
+│       │   ├── cloud_data.rs / constants.rs
+│       │   └── mod.rs
+│       ├── models/               # 数据模型
+│       │   ├── enums.rs          # TargetGame 等枚举
+│       │   ├── mod_data.rs
+│       │   └── settings.rs
+│       ├── platform/             # 跨平台（windows / linux / macos 占位）
+│       ├── window/               # 窗口管理
+│       ├── tray/                 # 系统托盘
+│       ├── hotkey/               # 全局热键
+│       ├── updater/              # 应用更新
+│       ├── resources/            # 嵌入资源
+│       └── utils/                # 工具函数
 │
 ├── public/                       # 静态资源（Vite 公共目录）
 ├── index.html                    # HTML 入口文件
@@ -307,7 +321,6 @@ xxmi-nrmm/
 ├── tsconfig.node.json            # TypeScript Node 配置
 ├── vite.config.ts                # Vite 配置
 ├── .gitignore                    # Git 忽略配置
-├── ARCHITECTURE.md               # 项目架构文档（详见 src-tauri/ARCHITECTURE.md）
 ├── LICENSE                       # 双授权说明（指向以下两份许可证）
 ├── LICENSE-MIT                   # MIT 许可证全文
 ├── LICENSE-APACHE                # Apache-2.0 许可证全文

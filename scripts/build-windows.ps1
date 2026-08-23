@@ -1,4 +1,5 @@
 #Requires -Version 5.1
+param([string]$TargetTriple = "x86_64-pc-windows-msvc")
 <#
 .SYNOPSIS
     NRMM Windows 手动构建脚本（与 build-linux-zig.sh 对等：手动编译 + 手动上传发布）。
@@ -20,15 +21,43 @@
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
     # 或 npm run build:windows
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -TargetTriple i686-pc-windows-msvc
+    # 交叉编译 32 位 x86 构建；仅打包匹配目标架构的 7z sidecar（x32 -> current）
 #>
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
-$TargetTriple = "x86_64-pc-windows-msvc"
+# $TargetTriple 由 param 块/用户传入；默认 x86_64-pc-windows-msvc（见脚本第一行 param）
 $DistDir = "dist-win"
 $ArchiveMirror = "https://www.7-zip.org/a"
+
+# 由目标 triple 派生的架构标识：i686 -> x32/i686，其余（含 x86_64/aarch64）-> x64/x86_64
+$ArchDir = if ($TargetTriple -like "i686*") { "x32" } else { "x64" }
+$ArchSuffix = if ($TargetTriple -like "i686*") { "i686" } else { "x86_64" }
+
+# ---------- 0. 更新签名密钥环境（确保 updater manifest 自动生成） ----------
+# Tauri 仅在构建时检测到 TAURI_SIGNING_PRIVATE_KEY 才会生成 latest.json 与签名更新包。
+# 若环境未设置，则从仓库内置 Key/Key.Private 载入；同时清除可能冲突的
+# TAURI_SIGNING_PRIVATE_KEY_PATH（二者在 `tauri signer sign` 子命令下互斥）。
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+    $keyPath = Join-Path $ProjectRoot "Key/Key.Private"
+    if (Test-Path $keyPath) {
+        $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content $keyPath -Raw).Trim()
+        Write-Ok "已从 Key/Key.Private 载入签名私钥"
+    } else {
+        Write-Warn2 "未设置 TAURI_SIGNING_PRIVATE_KEY 且 Key/Key.Private 缺失，updater manifest 将不会生成"
+    }
+}
+if ($env:TAURI_SIGNING_PRIVATE_KEY -and $env:TAURI_SIGNING_PRIVATE_KEY_PATH) {
+    Remove-Item env:TAURI_SIGNING_PRIVATE_KEY_PATH -ErrorAction SilentlyContinue
+}
+if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+    Write-Warn2 "TAURI_SIGNING_PRIVATE_KEY_PASSWORD 未设置（内置私钥已加密），签名可能失败"
+}
 
 # ---------- 辅助函数 ----------
 function Write-Step([string]$msg) { Write-Host "`n===== $msg =====" -ForegroundColor Cyan }
@@ -113,6 +142,20 @@ if (-not $missing) {
     Write-Ok "7z sidecar 已补齐"
 }
 
+# 按目标架构把匹配的 7z 二进制 staging 到 current/（tauri.windows.conf.json resources 指向 current/）。
+# 仅打包目标架构对应源目录：64 位构建 -> x64，32 位构建 -> x32。
+$stageSrc = Join-Path $sevenZipRoot $ArchDir
+$stageDst = Join-Path $sevenZipRoot "current"
+foreach ($f in @("7za.exe", "7za.dll", "7zxa.dll")) {
+    if (-not (Test-Path (Join-Path $stageSrc $f))) { Write-Fail "$ArchDir 缺失 $f（7z sidecar staging 失败）" }
+}
+if (Test-Path $stageDst) { Remove-Item -Recurse -Force $stageDst }
+New-Item -ItemType Directory -Force -Path $stageDst | Out-Null
+foreach ($f in @("7za.exe", "7za.dll", "7zxa.dll")) {
+    Copy-Item (Join-Path $stageSrc $f) (Join-Path $stageDst $f) -Force
+}
+Write-Ok "7z sidecar staged: $ArchDir -> current (target=$TargetTriple)"
+
 # ---------- 4. npm 依赖检查 ----------
 Write-Step "[4/7] npm 依赖检查"
 if (-not (Test-Path "node_modules")) {
@@ -157,11 +200,18 @@ function Copy-FirstFound([string]$destName, [string[]]$globs) {
     Write-Warn2 "未找到: $destName"
 }
 
-Copy-FirstFound "nrmm-rust-x86_64-setup.exe" @((Join-Path $bundleDir "nsis/*-setup.exe"))
-Copy-FirstFound "nrmm-rust-x86_64.msi"       @((Join-Path $bundleDir "msi/*.msi"))
-# updater manifest（Tauri v2 生成位置随版本可能为 bundle 根或 nsis/msi 子目录）
-Copy-FirstFound "latest-windows.json"        @((Join-Path $bundleDir "latest.json"), (Join-Path $bundleDir "*/latest.json"))
+Copy-FirstFound "nrmm-rust-$ArchSuffix-setup.exe" @((Join-Path $bundleDir "nsis/*-setup.exe"))
+Copy-FirstFound "nrmm-rust-$ArchSuffix.msi"       @((Join-Path $bundleDir "msi/*.msi"))
 # portable zip 已由 build-portable.mjs 直接输出到 dist-win/
+
+# ---------- 生成 updater manifest（latest.json）----------
+# 说明：Tauri 的 `tauri build` 不会写出 latest.json，也不会生成独立更新包；
+# 更新直接复用安装包本体，由本脚本现场签名（*.sig）并生成 manifest。
+Write-Step "[7b] 生成 updater manifest（latest.json）"
+$env:ARCH_SUFFIX = $ArchSuffix  # gen-latest-json.mjs 据此派生安装包名与平台键
+$genOut = node scripts/gen-latest-json.mjs 2>&1
+$genOut | ForEach-Object { Write-Host "  $_" }
+if (-not (Test-Path (Join-Path $DistDir "latest.json"))) { Write-Fail "latest.json 生成失败" }
 
 Write-Host ""
 Write-Host "===== 构建完成 =====" -ForegroundColor Cyan
