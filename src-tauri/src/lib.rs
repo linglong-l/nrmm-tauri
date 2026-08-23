@@ -314,9 +314,8 @@ pub fn run() {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
-                    let _ = window.hide();
-                    // 点击关闭按钮隐藏窗口时，通知前端清除模组数据
-                    let _ = window.app_handle().emit("window-hidden", ());
+                    // 统一定向 hide_main_window：内部含隐藏 + 生命周期分级回收计时 + emit window-hidden
+                    crate::window::hide_main_window(window.app_handle());
                 }
             }
         })
@@ -395,6 +394,8 @@ pub fn run() {
             window::toggle_main_window_cmd,
             window::hard_quit_app,
             window::get_foreground_process_name,
+            window::lifecycle::set_frontend_pending_info,
+            window::lifecycle::was_window_recreated,
             platform::get_platform_info,
         ])
         // SAFETY: Standard Tauri run entry; failure means the application cannot start.

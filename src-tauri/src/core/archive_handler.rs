@@ -1621,6 +1621,7 @@ pub async fn import_item_cmd(
     watcher: State<'_, Arc<Mutex<FileWatcher>>>,
     req: ImportItemRequest,
 ) -> Result<Vec<ExtractResult>, String> {
+    let _busy = crate::window::lifecycle::BusyOpGuard::new();
     // 路径边界校验（R1）：target_group_dir 必须位于任一已配置 mods_root 内
     // items 是用户选择的源文件/压缩包，路径任意，不校验
     let mut req = req;

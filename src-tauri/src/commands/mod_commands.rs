@@ -218,6 +218,7 @@ pub async fn update_mod_data(
     game: String,
     mods_path: String,
 ) -> Result<mod_manager::UpdateResult, String> {
+    let _busy = crate::window::lifecycle::BusyOpGuard::new();
     log::debug!(
         "[commands::mod_commands] [update_mod_data] game={} mods_path={}",
         game,
@@ -277,6 +278,7 @@ pub async fn update_mod_data(
 pub async fn detect_hash_conflicts(
     mods_path: String,
 ) -> Result<mod_manager::HashConflictResult, String> {
+    let _busy = crate::window::lifecycle::BusyOpGuard::new();
     let mods_path = PathBuf::from(mods_path);
     log::info!(
         "[detect_hash_conflicts] Starting full hash conflict scan: {}",
@@ -948,6 +950,7 @@ pub fn open_group_folder(group_path: String) -> Result<(), String> {
 /// 恢复所有INI文件备份
 #[tauri::command]
 pub async fn restore_all_inis(mods_path: String) -> Result<mod_manager::RestoredCount, String> {
+    let _busy = crate::window::lifecycle::BusyOpGuard::new();
     let path = PathBuf::from(&mods_path);
 
     let result = tauri::async_runtime::spawn_blocking(
@@ -1014,6 +1017,7 @@ pub async fn save_customizations(
     game: String,
     mods_path: String,
 ) -> Result<mod_manager::SaveCustomizationsResult, String> {
+    let _busy = crate::window::lifecycle::BusyOpGuard::new();
     let game = parse_game(&game)?;
     let path = PathBuf::from(&mods_path);
 

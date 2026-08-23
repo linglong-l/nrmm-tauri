@@ -55,30 +55,55 @@ rustup target list --installed | grep -q "^$TARGET_TRIPLE" || {
 # ---------- 2. zig cc wrapper（锁 glibc 符号版本，对 cargo/tauri 透明） ----------
 WRAPPER_DIR="$(mktemp -d)"
 trap 'rm -rf "$WRAPPER_DIR"' EXIT
+ZIG_ARCH="${TARGET_TRIPLE%%-*}"          # x86_64 / i686 / aarch64...
 ZIG_CC="$WRAPPER_DIR/zig-cc-glibc"
 cat > "$ZIG_CC" <<EOF
 #!/usr/bin/env bash
 # 由 build-linux-zig.sh 生成：以指定 glibc 符号版本调用 zig cc 作为 linker
-exec zig cc -target x86_64-linux-gnu.${GLIBC_VERSION} "\$@"
+exec zig cc -target ${ZIG_ARCH}-linux-gnu.${GLIBC_VERSION} "\$@"
 EOF
 chmod +x "$ZIG_CC"
-export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER="$ZIG_CC"
+# CARGO_TARGET_<TRIPLE>_LINKER 的变量名需按 triple 大写化（- -> _）。若此前未导出（默认 undefined），
+# 由这里导出，tauri/cargo 即会经 zig 链接（trigger 一次即可贯穿整个构建）。
+TRIPLE_ENV="$(echo "$TARGET_TRIPLE" | tr 'a-z' 'A-Z' | tr '-' '_')"
+export "CARGO_TARGET_${TRIPLE_ENV}_LINKER=$ZIG_CC"
 
 # AppImage 构建兜底（FUSE 不可用环境解压运行 AppImage 工具；跳过 linuxdeploy 内置 strip）
 export APPIMAGE_EXTRACT_AND_RUN=1
 export NO_STRIP=1
 
 # ---------- 3. 7z Linux sidecar 检查/下载（目录被 gitignore，新检出环境需自补） ----------
-SEVENZIP_DIR="src-tauri/binaries/7z/7z2602-linux-x64"
-SEVENZIP_TAR="7z2602-linux-x64.tar.xz"
-if [ ! -f "$SEVENZIP_DIR/7zz" ] || [ ! -f "$SEVENZIP_DIR/7zzs" ]; then
+# 按目标架构选择官方 tar.xz 并 staging 到 current/（tauri.linux.conf.json resources 指向
+# 7z2602-linux-current/，7zz/7zzs 须为匹配架构版本）。注意：官方 32 位包名为 x86（非 x32/i686）。
+Z7_ARCH_DIR="src-tauri/binaries/7z/7z2602-linux-current"
+case "$ZIG_ARCH" in
+  x86_64) SEVENZIP_TAR="7z2602-linux-x64.tar.xz"  ;;
+  i686)   SEVENZIP_TAR="7z2602-linux-x86.tar.xz"  ;;
+  *) fail "不支持的架构: $ZIG_ARCH（7z Linux sidecar 仅提供 x86_64 / i686）" ;;
+esac
+SEVENZIP_SRC="src-tauri/binaries/7z/7z2602-linux-$ZIG_ARCH"
+if [ ! -f "$SEVENZIP_SRC/7zz" ] || [ ! -f "$SEVENZIP_SRC/7zzs" ]; then
   echo "[build-linux-zig] 下载 7z Linux sidecar ($SEVENZIP_TAR)..."
-  mkdir -p "$SEVENZIP_DIR"
+  mkdir -p "$SEVENZIP_SRC"
   curl -fSL --retry 3 -o "/tmp/$SEVENZIP_TAR" "$ARCHIVE_MIRROR/$SEVENZIP_TAR" \
-    || fail "下载 $SEVENZIP_TAR 失败（可用 ARCHIVE_MIRROR 环境变量换镜像）"
-  tar -xJf "/tmp/$SEVENZIP_TAR" -C "$SEVENZIP_DIR"
+    || fail "下载 $SEVENZIP_TAR 失败（可用 ARCHIVE_MIRROR 环境变量换镜像），或手动放置该包并解压后将其 7zz/7zzs 放到 $SEVENZIP_SRC/ 重试"
+  tar -xJf "/tmp/$SEVENZIP_TAR" -C "$SEVENZIP_SRC"
   rm -f "/tmp/$SEVENZIP_TAR"
+  # 官方包结构各版本可能把 7zz/7zzs 放在顶层或子目录，这里统一定位并提升到 $SEVENZIP_SRC 顶层
+  for f in 7zz 7zzs; do
+    SRC_FILE="$(find "$SEVENZIP_SRC" -type f -name "$f" | head -1 || true)"
+    [ -n "$SRC_FILE" ] && cp "$SRC_FILE" "$SEVENZIP_SRC/$f"
+  done
 fi
+[ -f "$SEVENZIP_SRC/7zz" ] && [ -f "$SEVENZIP_SRC/7zzs" ] \
+  || fail "7z sidecar 不完整：$SEVENZIP_SRC/7zz、7zzs 缺失"
+
+# staging 到 current/：先清空再复制匹配架构的 7zz/7zzs
+rm -rf "$Z7_ARCH_DIR"
+mkdir -p "$Z7_ARCH_DIR"
+cp "$SEVENZIP_SRC/7zz"  "$Z7_ARCH_DIR/7zz"
+cp "$SEVENZIP_SRC/7zzs" "$Z7_ARCH_DIR/7zzs"
+echo "[build-linux-zig] 7z sidecar staged: $ZIG_ARCH -> current (target=$TARGET_TRIPLE)"
 
 # ---------- 4. 前端依赖 ----------
 if [ ! -d node_modules ]; then

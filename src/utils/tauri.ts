@@ -514,6 +514,30 @@ export async function unregisterHotkeys(): Promise<void> {
 }
 
 /**
+ * 上报前端是否有模态框处于待处理状态
+ * 后端命令：set_frontend_pending_info
+ *
+ * 用于窗口空闲回收：后端在隐藏窗口并检测到无待处理模态框后才执行数据清理，
+ * 避免回收时毁掉用户尚未确认的弹窗状态。
+ * @param pending 当前是否存在待处理的模态框
+ */
+export async function setFrontendPendingInfo(pending: boolean): Promise<void> {
+  return safeInvoke('set_frontend_pending_info', { pending })
+}
+
+/**
+ * 查询本次前端冷启动是否源于窗口运行时重建
+ * 后端命令：was_window_recreated
+ *
+ * 返回 true 读后清零，表示前端实例由后端在窗口隐藏回收数据后重新创建。
+ * 用于判断跳过「重建冷启动」的启动系统通知，避免重复骚扰。
+ * @returns 是否为窗口运行时重建
+ */
+export async function wasWindowRecreated(): Promise<boolean> {
+  return safeInvoke<boolean>('was_window_recreated')
+}
+
+/**
  * 启动文件监听器
  * 后端命令：start_file_watcher
  *

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "NRMM",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "identifier": "com.ye.nrmm",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -37,12 +37,9 @@
     "active": true,
     "targets": ["nsis", "msi"],
     "resources": {
-      "binaries/7z/7z2602-Windows/x64/7za.exe": "7z/7z2602-Windows/x64/7za.exe",
-      "binaries/7z/7z2602-Windows/x64/7za.dll": "7z/7z2602-Windows/x64/7za.dll",
-      "binaries/7z/7z2602-Windows/x64/7zxa.dll": "7z/7z2602-Windows/x64/7zxa.dll",
-      "binaries/7z/7z2602-Windows/x32/7za.exe": "7z/7z2602-Windows/x32/7za.exe",
-      "binaries/7z/7z2602-Windows/x32/7za.dll": "7z/7z2602-Windows/x32/7za.dll",
-      "binaries/7z/7z2602-Windows/x32/7zxa.dll": "7z/7z2602-Windows/x32/7zxa.dll"
+      "binaries/7z/7z2602-Windows/current/7za.exe": "7z/7z2602-Windows/current/7za.exe",
+      "binaries/7z/7z2602-Windows/current/7za.dll": "7z/7z2602-Windows/current/7za.dll",
+      "binaries/7z/7z2602-Windows/current/7zxa.dll": "7z/7z2602-Windows/current/7zxa.dll"
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper" },

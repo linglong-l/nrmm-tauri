@@ -37,7 +37,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { logger } from '@/utils/logger'
 import { DEV_MODE } from '@/utils/env'
-import { switchTargetGame, checkModCacheValid, isFileWatcherRunning, currentWatchedPath } from '@/utils/tauri'
+import { switchTargetGame, checkModCacheValid, isFileWatcherRunning, currentWatchedPath, wasWindowRecreated } from '@/utils/tauri'
+import { startPendingNoticeObserver } from '@/utils/pendingNotice'
 import type { TargetGame, OverlayController } from '@/types'
 
 /**
@@ -121,6 +122,11 @@ let unlistenTargetGame: (() => void) | null = null
  */
 let unlistenWindowHidden: (() => void) | null = null
 /**
+ * 窗口隐藏 120s 后清空模组数据事件（window-hidden-clear-data）的取消监听函数
+ * 用于在组件卸载时移除 Tauri 事件监听
+ */
+let unlistenWindowHiddenClear: (() => void) | null = null
+/**
  * 窗口显示事件（window-shown）的取消监听函数
  * 用于在组件卸载时移除 Tauri 事件监听
  */
@@ -138,6 +144,11 @@ let unlistenWindowShowWithGame: (() => void) | null = null
  * 重置时机：window-shown 事件处理完后重置为 false
  */
 let gameSwitchPending = false
+/**
+ * 前端冷启动是否源于窗口运行时重建（后端 was_window_recreated 读后清零）
+ * 重建冷启动时跳过启动系统通知，避免用户隐藏窗口后再次弹通知构成骚扰。
+ */
+let windowRecreated = false
 
 /**
  * 通用：切换目标游戏并刷新模组（window-show-with-game / 菜单选择 / 托盘都走这里）
@@ -217,7 +228,9 @@ async function sendStartupNotification() {
   // dev 模式跳过启动通知：tauri dev 文件监视会在源码变化时重编译并重启应用
   // （实测一轮格式化/检查可触发 1 分钟内十余次重启），每次重启都弹通知构成骚扰；
   // 启动通知仅在正式构建（用户双击/安装启动）时发送
-  if (DEV_MODE) return
+  // windowRecreated 为 true 时表示本次冷启动源于窗口运行时重建（用户隐藏窗口回收后
+  // 重新拉起），同样跳过通知，避免用户隐藏窗口后再次弹启动通知构成骚扰
+  if (DEV_MODE || windowRecreated) return
   try {
     let permissionGranted = await isPermissionGranted()
     if (!permissionGranted) {
@@ -271,6 +284,14 @@ onMounted(async () => {
   }
   reportBootStage('settings-loaded')
 
+  // 读取「前端冷启动是否源于窗口运行时重建」标记（读后后端清零）
+  // 重建冷启动时不重复弹启动系统通知；非 Tauri 环境（浏览器调试）忽略
+  try {
+    windowRecreated = await wasWindowRecreated()
+  } catch {
+    // 非 Tauri 环境忽略
+  }
+
   // 应用已保存的视觉设置
   applyBackground()
   applyScale()
@@ -279,6 +300,9 @@ onMounted(async () => {
   // 等待DOM首次渲染完成
   await nextTick()
   reportBootStage('first-nexttick')
+
+  // DOM 挂载后启动模态框待处理状态监视（上报后端窗口空闲回收决策）
+  startPendingNoticeObserver()
 
   // 发送启动通知（用户可感知的"启动完成"信号）
   const notifyStart = performance.now()
@@ -325,6 +349,17 @@ onMounted(async () => {
     logger.warn('App', 'Failed to register window-hidden listener', e)
   }
 
+  // 监听窗口隐藏 120s 后清空模组数据事件：释放前端内存（保留后端缓存与文件监控）
+  // 触发时机：窗口隐藏超过 120s 且无待处理模态框，后端回收模组数据后 emit
+  try {
+    unlistenWindowHiddenClear = await listen('window-hidden-clear-data', async () => {
+      logger.info('App', 'window hidden 120s -> clearing mod data (cache kept)')
+      modsStore.clearData()
+    })
+  } catch (e) {
+    logger.warn('App', 'Failed to register window-hidden-clear-data listener', e)
+  }
+
   // 监听窗口显示事件：检查缓存有效性 + 监控状态，决定是否重扫
   // 缓存校验流程：
   //   1. 如果 gameSwitchPending 为 true，说明已通过 window-show-with-game 事件处理，直接跳过
@@ -369,6 +404,15 @@ onMounted(async () => {
               if (!actualNormalized.endsWith(expectedManaged.slice(-12))) {
                 await modsStore.startWatching()
               }
+            }
+            // 数据已被 120s 清空（window-hidden-clear-data）但后端缓存仍有效：
+            // 直接重载模组数据恢复 UI，避免留下空界面
+            if (modsStore.groups.length === 0) {
+              await modsStore.loadMods()
+              nextTick(() => {
+                modsFocusTick.value++
+              })
+              return
             }
             // 兜底校验：缓存命中时 selectedGroupPath 应已保留，但若数据异常则回退到第一个分组
             if (modsStore.groups.length > 0) {
@@ -422,7 +466,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   // 清理所有 Tauri 事件监听器，防止组件卸载后回调仍被执行导致内存泄漏或状态异常
-  // 依次清理：target-game-switched / window-hidden / window-shown / window-show-with-game
+  // 依次清理：target-game-switched / window-hidden / window-hidden-clear-data / window-shown / window-show-with-game
   if (unlistenTargetGame) {
     unlistenTargetGame()
     unlistenTargetGame = null
@@ -430,6 +474,10 @@ onBeforeUnmount(() => {
   if (unlistenWindowHidden) {
     unlistenWindowHidden()
     unlistenWindowHidden = null
+  }
+  if (unlistenWindowHiddenClear) {
+    unlistenWindowHiddenClear()
+    unlistenWindowHiddenClear = null
   }
   if (unlistenWindowShown) {
     unlistenWindowShown()

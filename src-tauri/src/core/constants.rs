@@ -167,12 +167,14 @@ pub const SEVEN_Z_EXECUTABLE: &str = "7zz";
 pub const SEVEN_Z_EXECUTABLE: &str = "7zz";
 
 /// Windows 平台内置 7-Zip 相对路径（相对于 exe 或 resources/）
+/// `current/` 为构建脚本按编译架构（x64 或 x32）填充的中转目录，架构中立
 #[cfg(target_os = "windows")]
-pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-Windows/x64/7za.exe";
+pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-Windows/current/7za.exe";
 
 /// Linux 平台内置 7-Zip 相对路径（相对于 exe 或 resources/）
+/// `7z2602-linux-current` 为构建脚本按编译架构填充的中转目录，架构中立
 #[cfg(target_os = "linux")]
-pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-linux-x64/7zz";
+pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-linux-current/7zz";
 
 /// macOS 平台内置 7-Zip 相对路径（相对于 exe 或 resources/）
 #[cfg(target_os = "macos")]

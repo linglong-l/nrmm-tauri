@@ -8,6 +8,8 @@
 //! - hard_quit: 强制退出（绕过关闭拦截，注销热键后退出）
 //! - 主窗口快捷函数（show_main_window 等）
 
+pub mod lifecycle;
+
 use anyhow::Result;
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, WebviewWindow};
 
@@ -25,6 +27,10 @@ use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, WebviewWindo
 /// 成功返回 `Ok(())`，失败返回错误信息字符串
 #[tauri::command]
 pub fn show_window(app: AppHandle, window_name: String) -> Result<(), String> {
+    if window_name == "main" {
+        show_main_window(&app);
+        return Ok(());
+    }
     if let Some(w) = app.get_webview_window(&window_name) {
         w.show().map_err(|e| e.to_string())?;
         w.set_focus().map_err(|e| e.to_string())?;
@@ -45,6 +51,10 @@ pub fn show_window(app: AppHandle, window_name: String) -> Result<(), String> {
 /// 成功返回 `Ok(())`，失败返回错误信息字符串
 #[tauri::command]
 pub fn hide_window(app: AppHandle, window_name: String) -> Result<(), String> {
+    if window_name == "main" {
+        hide_main_window(&app);
+        return Ok(());
+    }
     if let Some(w) = app.get_webview_window(&window_name) {
         w.hide().map_err(|e| e.to_string())?;
     }
@@ -227,11 +237,13 @@ pub fn center_window(window: &WebviewWindow) -> Result<()> {
 ///
 /// * `app` - Tauri 应用句柄
 pub fn show_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    // 先确保主窗口存在（存在即复用；不存在表示运行时被回收，触发重建）
+    if let Some(window) = lifecycle::ensure_main_window(app) {
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.unminimize();
     }
+    lifecycle::on_window_shown();
     let _ = app.emit("window-shown", ());
 }
 
@@ -247,6 +259,8 @@ pub fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
+    // 触发分级回收计时（清空数据 / 超时销毁）与前端通知
+    lifecycle::on_window_hidden(app);
     let _ = app.emit("window-hidden", ());
 }
 
@@ -258,16 +272,15 @@ pub fn hide_main_window(app: &AppHandle) {
 ///
 /// * `app` - Tauri 应用句柄
 pub fn toggle_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        if window.is_visible().unwrap_or(false) {
-            let _ = window.hide();
-            let _ = app.emit("window-hidden", ());
-        } else {
-            let _ = window.show();
-            let _ = window.set_focus();
-            let _ = window.unminimize();
-            let _ = app.emit("window-shown", ());
-        }
+    // 窗口不存在→visible=false→走显示分支（show_main_window 内含重建感知）
+    let visible = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    if visible {
+        hide_main_window(app);
+    } else {
+        show_main_window(app);
     }
 }
 

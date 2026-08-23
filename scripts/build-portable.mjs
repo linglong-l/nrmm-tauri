@@ -2,9 +2,9 @@
 /**
  * build-portable.mjs
  *
- * 生成免安装（portable）分发包：
- *   - Windows: nrmm-rust-portable-x86_64.zip
- *   - Linux:   nrmm-rust-portable-x86_64.tar.gz
+ * 生成免安装（portable）分发包（压缩包名按目标架构 x86_64/i686 派生）：
+ *   - Windows: nrmm-rust-portable-<arch>.zip
+ *   - Linux:   nrmm-rust-portable-<arch>.tar.gz
  *
  * 零第三方依赖，使用系统命令（Windows: PowerShell/Compress-Archive；Linux: tar）。
  *
@@ -39,7 +39,9 @@ const cli = parseArgs(process.argv.slice(2));
 function detectTarget() {
   const p = process.platform, a = process.arch;
   if (p === 'win32' && a === 'x64') return 'x86_64-pc-windows-msvc';
+  if (p === 'win32' && a === 'ia32') return 'i686-pc-windows-msvc';
   if (p === 'linux' && a === 'x64') return 'x86_64-unknown-linux-gnu';
+  if (p === 'linux' && a === 'ia32') return 'i686-unknown-linux-gnu';
   if (p === 'darwin' && a === 'x64') return 'x86_64-apple-darwin';
   if (p === 'darwin' && a === 'arm64') return 'aarch64-apple-darwin';
   console.error(`[portable] 无法自动检测平台 ${p}-${a}，请用 --target 指定`);
@@ -47,6 +49,7 @@ function detectTarget() {
 }
 
 const TARGET = cli.target || detectTarget();
+const archSuffix = TARGET.startsWith('i686') ? 'i686' : 'x86_64';
 const OUT_DIR = cli.outDir
   ? resolve(PROJECT_ROOT, cli.outDir)
   : resolve(PROJECT_ROOT, 'dist');
@@ -155,8 +158,8 @@ if (fileCount === 0) {
 
 // ---------- 2. 压缩 ----------
 const archiveName = isWindows
-  ? 'nrmm-rust-portable-x86_64.zip'
-  : 'nrmm-rust-portable-x86_64.tar.gz';
+  ? `nrmm-rust-portable-${archSuffix}.zip`
+  : `nrmm-rust-portable-${archSuffix}.tar.gz`;
 const archivePath = resolve(OUT_DIR, archiveName);
 
 console.log(`[portable] 创建压缩包: ${archiveName}`);
