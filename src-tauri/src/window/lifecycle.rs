@@ -1,13 +1,19 @@
-//! 窗口生命周期分级回收（空闲内存优化，2026-08-21）
+//! 窗口生命周期分级回收（空闲内存优化，2026-08-23 修订为空白页占位方案）
 //!
-//! 窗口隐藏后 WebView2（JS 堆 + 解码位图）完整驻留，空闲进程 ~250MB。
-//! 分级回收：
+//! 窗口隐藏后 WebView（JS 堆 + DOM + 图片缓存）完整驻留。分级回收：
 //! - 隐藏 120s：emit `window-hidden-clear-data`，前端清空模组数据（后端缓存/监控保留）
-//! - 隐藏 300s：无待显示信息（无进行中用户可见操作 + 前端无未关闭模态框）时
-//!   销毁主窗口释放 WebView 全部内存，托盘/热键唤起时运行时重建
+//! - 隐藏 300s：无待显示信息（无进行中用户可见操作 + 前端无未关闭模态框）时，
+//!   **导航 WebView 至 about:blank 空白页占位**——窗口保留（事件监听器全部有效），
+//!   JS 上下文整体销毁释放前端内存（预期 WebView 部分低至 ~40MB），
+//!   同时清空后端 MOD_INI_CACHE（深扫解析结果常驻的大头）
+//!
+//! 方案沿革：曾采用「销毁窗口 + 运行时重建」，但热键/托盘 handler 均在主线程
+//! 运行（global-hotkey WndProc 同步分发），而 wry 明文约束 build() 必须从独立
+//! 线程调用——主线程重建必然死锁（实测主线程冻结连带托盘菜单失效），故弃用。
 //!
 //! 线程模型：计时线程使用 `std::thread::spawn`（项目硬约束：窗口事件回调、
 //! 托盘回调禁止 tokio）。AppHandle 为 Send+Sync+Clone，跨线程持有安全。
+//! `navigate` 底层走 send_user_message（主线程内联/非主线程投递），均不阻塞。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -15,9 +21,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// 隐藏后清空前端模组数据的延迟（秒）
 pub const HIDDEN_CLEAR_DATA_SECS: u64 = 120;
-/// 隐藏后销毁窗口的延迟（秒）
+/// 隐藏后空白页回收 WebView 的延迟（秒）
 pub const HIDDEN_DESTROY_SECS: u64 = 300;
-/// 销毁条件不满足（busy/模态框）时的重试间隔（秒）
+/// 回收条件不满足（busy/模态框）时的重试间隔（秒）
 const DESTROY_RETRY_SECS: u64 = 60;
 
 /// 显隐世代计数器：每次隐藏或显示递增，陈旧计时线程据此静默退出
@@ -26,9 +32,14 @@ static GENERATION: AtomicU64 = AtomicU64::new(0);
 static BUSY_OPS: AtomicUsize = AtomicUsize::new(0);
 /// 前端是否存在未关闭的模态对话框（ElMessageBox）
 static FRONTEND_PENDING: AtomicBool = AtomicBool::new(false);
-/// 主窗口是否被运行时销毁过（前端启动时读取以跳过启动通知，读后清零）
+/// WebView 是否被空白页回收过（前端冷启动时读取以跳过启动通知，读后清零）
 static DESTROYED_FLAG: AtomicBool = AtomicBool::new(false);
-/// 用户显式请求退出标志：托盘/硬退出置位，_un_置位表示窗口销毁触发的运行循环结束
+/// 空白页回收前记录的主页面 URL（恢复导航依据）
+///
+/// 必须成功记录后才执行 blank 导航（记录失败则放弃本次回收），
+/// 确保恢复路径永远有据可依。
+static MAIN_PAGE_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// 用户显式请求退出标志：托盘/硬退出置位，未置位表示非用户来源的退出请求
 static USER_QUIT_FLAG: AtomicBool = AtomicBool::new(false);
 
 /// 窗口隐藏时调用：递增世代并启动分级回收计时线程
@@ -49,7 +60,7 @@ pub fn on_window_shown() {
     GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
-/// 分级回收计时线程主体：T+120s 清数据 → T+300s 起（含重试）销毁
+/// 分级回收计时线程主体：T+120s 清数据 → T+300s 起（含重试）空白页回收
 fn hidden_timer(app: AppHandle, gen: u64) {
     // 第一级：清空前端模组数据
     std::thread::sleep(Duration::from_secs(HIDDEN_CLEAR_DATA_SECS));
@@ -62,7 +73,7 @@ fn hidden_timer(app: AppHandle, gen: u64) {
     );
     let _ = app.emit("window-hidden-clear-data", ());
 
-    // 第二级：销毁窗口（不足条件则每 DESTROY_RETRY_SECS 重试）
+    // 第二级：空白页回收 WebView（不足条件则每 DESTROY_RETRY_SECS 重试）
     std::thread::sleep(Duration::from_secs(
         HIDDEN_DESTROY_SECS - HIDDEN_CLEAR_DATA_SECS,
     ));
@@ -71,7 +82,7 @@ fn hidden_timer(app: AppHandle, gen: u64) {
             return;
         }
         if can_destroy() {
-            destroy_hidden_main_window(&app);
+            blank_hidden_webview(&app);
             return;
         }
         log::info!(
@@ -94,107 +105,87 @@ fn is_stale(gen: u64, app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// 销毁条件：无进行中用户可见操作 且 前端无未关闭模态框
+/// 回收条件：无进行中用户可见操作 且 前端无未关闭模态框
 fn can_destroy() -> bool {
     BUSY_OPS.load(Ordering::SeqCst) == 0 && !FRONTEND_PENDING.load(Ordering::SeqCst)
 }
 
-/// 销毁隐藏的主窗口：先持久化几何（排除 VISIBLE），再 destroy（绕过 CloseRequested 拦截）
-fn destroy_hidden_main_window(app: &AppHandle) {
+/// 空白页回收：记录主页 URL → 导航 about:blank → 清空 INI 解析缓存。
+///
+/// - 主页 URL 必须先成功记录（恢复依据）；记录失败则放弃本次回收（下次重试）。
+/// - `navigate` 仅触发导航不等待加载，任何线程调用均不阻塞。
+/// - DESTROYED_FLAG 置位供 `was_window_recreated` 查询（前端冷启动跳过启动通知）
+///   与 `restore_webview_if_blank` 恢复判定；标志清零由前端查询（读后清）完成。
+fn blank_hidden_webview(app: &AppHandle) {
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
-    use tauri_plugin_window_state::{AppHandleExt as _, StateFlags};
-    // AppHandleExt 提供 save_window_state(flags)：保存所有已跟踪窗口状态
-    let mut flags = StateFlags::all();
-    flags.remove(StateFlags::VISIBLE); // 不把“隐藏”写入冷启动可见性
-    if let Err(e) = app.save_window_state(flags) {
-        log::warn!("[lifecycle] 保存窗口状态失败（继续销毁）: {}", e);
+    // 1) 记录主页 URL（失败放弃，保证恢复有据）
+    let main_url = match win.url() {
+        Ok(u) => u.to_string(),
+        Err(e) => {
+            log::warn!("[lifecycle] 获取主页 URL 失败，放弃本次空白页回收: {}", e);
+            return;
+        }
+    };
+    if let Ok(mut slot) = MAIN_PAGE_URL.lock() {
+        *slot = Some(main_url);
     }
-    DESTROYED_FLAG.store(true, Ordering::SeqCst);
-    if let Err(e) = win.destroy() {
-        log::error!("[lifecycle] 销毁主窗口失败: {}", e);
+    // 2) 导航空白页（销毁 JS 上下文，释放前端堆/位图）
+    let blank = tauri::Url::parse("about:blank").expect("静态合法 URL");
+    if let Err(e) = win.navigate(blank) {
+        log::error!("[lifecycle] 导航空白页失败: {}", e);
         return;
     }
+    DESTROYED_FLAG.store(true, Ordering::SeqCst);
+    // 3) 一并清空后端深度解析 INI 缓存（空闲内存大头）
+    let cleared = crate::core::mod_ini_cache::clear_ini_cache();
     log::info!(
-        "[lifecycle] 主窗口已销毁（隐藏超 {}s），托盘/热键唤起时将重建",
-        HIDDEN_DESTROY_SECS
+        "[lifecycle] WebView 已导航空白页占位（隐藏超 {}s），INI 缓存清空 {} 条；唤起时恢复页面",
+        HIDDEN_DESTROY_SECS,
+        cleared
     );
 }
 
-/// 确保主窗口存在：不存在（被运行时销毁）则按 tauri.conf.json 等价配置重建，并显示/聚焦。
-///
-/// URL 使用显式前端入口 `WebviewUrl::App("index.html")`（`WebviewUrl::default()`
-/// 亦解析为同一值），在 dev 模式解析到 devUrl、release 解析到打包资源。
-///
-/// # 线程约束（修复运行时重建失败）
-/// `WebviewWindowBuilder::build()` 必须在**主线程**执行——Tauri 在 WebviewWindow
-/// 注册时需与主事件循环交互，从托盘/热键/命令线程直接调用会因等待主线程而挂起
-/// （实测：重建日志 "开始重建" 后无下文，窗口不出现，即 build 阻塞）。
-/// 因此本函数**从头到尾经 `run_on_main_thread` 在主线程内执行**：建窗 → 恢复几何
-/// → show/focus（`at_main=true` 时），全程同步、无跨线程等待、不会死锁。
+/// 空白页占位恢复：若 WebView 处于回收态则导航回主页面（前端冷启动）。
 ///
 /// # 参数
-/// - `app`: AppHandle
-/// - `at_main`: 是否立即显示并聚焦窗口（由 `show_main_window` 等调用方传入 true；
-///   纯"确保存在"场景可传 false 仅建窗不显示）
+/// - `win`: 主窗口引用（调用方已确认存在）
 ///
 /// # 返回
-/// `true` 表示窗口已存在或已在本调用内完成重建+显示；`false` 表示建窗失败。
-pub fn ensure_main_window(app: &AppHandle, at_main: bool) -> bool {
-    // 窗口已存在：由调用方决定是否显示（此处不重复处理 show/focus）
-    if app.get_webview_window("main").is_some() {
-        return true;
-    }
-    log::info!("[lifecycle] 主窗口不存在（运行时已销毁），开始重建（主线程建窗）");
-    let app_for_main = app.clone();
-    let (tx, rx) = std::sync::mpsc::channel::<bool>();
-    if let Err(e) = app.run_on_main_thread(move || {
-        let result = tauri::WebviewWindowBuilder::new(
-            &app_for_main,
-            "main",
-            tauri::WebviewUrl::App("index.html".into()),
-        )
-        .title("NRMM")
-        .inner_size(960.0, 640.0)
-        .min_inner_size(750.0, 500.0)
-        .decorations(false)
-        .transparent(true)
-        .shadow(true)
-        .center()
-        .resizable(true)
-        .focused(true)
-        .visible(false)
-        .build();
-        match result {
-            Ok(w) => {
-                // 恢复上次几何（不含 VISIBLE）
-                use tauri_plugin_window_state::{StateFlags, WindowExt};
-                let mut flags = StateFlags::all();
-                flags.remove(StateFlags::VISIBLE);
-                if let Err(ge) = w.restore_state(flags) {
-                    log::warn!("[lifecycle] 恢复窗口几何失败（使用居中默认）: {}", ge);
-                }
-                if at_main {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                    let _ = w.unminimize();
-                }
-                log::info!("[lifecycle] 主窗口重建成功");
-                let _ = tx.send(true);
-            }
-            Err(e) => {
-                log::error!("[lifecycle] 重建主窗口失败: {}", e);
-                let _ = tx.send(false);
-            }
-        }
-    }) {
-        log::error!("[lifecycle] 无法调度主线程建窗: {}", e);
+/// `true` 表示本次触发了恢复导航（页面加载中，调用方照常 show/focus）；
+/// `false` 表示非回收态或恢复失败（失败时保持现状并记日志，下次唤起重试）。
+///
+/// 注意：不清零 DESTROYED_FLAG——由前端冷启动查询 `was_window_recreated`
+/// （读后清零）完成；恢复导航失败时标志保持，下次唤起再次尝试恢复。
+pub fn restore_webview_if_blank(win: &tauri::WebviewWindow) -> bool {
+    if !DESTROYED_FLAG.load(Ordering::SeqCst) {
         return false;
     }
-    // run_on_main_thread 从非主线程调用时安全等待结果；本函数仅被
-    // 托盘/热键/命令线程调用（均非主线程），此处 recv 不会阻塞主线程、不会死锁。
-    rx.recv().unwrap_or(false)
+    let main_url = match MAIN_PAGE_URL.lock() {
+        Ok(slot) => slot.clone(),
+        Err(_) => None,
+    };
+    let Some(url_str) = main_url else {
+        log::error!("[lifecycle] 回收态但主页 URL 记录缺失，无法恢复");
+        return false;
+    };
+    match tauri::Url::parse(&url_str) {
+        Ok(u) => match win.navigate(u) {
+            Ok(()) => {
+                log::info!("[lifecycle] WebView 从空白页恢复，导航回主页面");
+                true
+            }
+            Err(e) => {
+                log::error!("[lifecycle] 恢复导航失败: {}", e);
+                false
+            }
+        },
+        Err(e) => {
+            log::error!("[lifecycle] 记录的主页 URL 无法解析（{}）: {}", url_str, e);
+            false
+        }
+    }
 }
 
 /// 用户可见长操作的 RAII 计数守卫：构造 +1、Drop -1（panic 经 unwind 亦会 Drop）
@@ -225,9 +216,10 @@ pub fn set_frontend_pending_info(pending: bool) {
     FRONTEND_PENDING.store(pending, Ordering::SeqCst);
 }
 
-/// 查询主窗口是否因隐藏超时被运行时销毁过（读后清零）
+/// 查询 WebView 是否因隐藏超时被空白页回收过（读后清零）
 ///
-/// 用途：前端冷启动时读取，true 则跳过“启动成功”系统通知（避免每次唤醒弹通知）
+/// 用途：前端冷启动（空白页恢复）时读取，true 则跳过“启动成功”系统通知
+/// （避免每次唤醒弹通知）
 #[tauri::command]
 pub fn was_window_recreated() -> bool {
     DESTROYED_FLAG.swap(false, Ordering::SeqCst)
@@ -236,7 +228,8 @@ pub fn was_window_recreated() -> bool {
 /// 标记用户显式请求退出（托盘/硬退出入口调用）
 ///
 /// 用于在 `RunEvent::ExitRequested` 中区分退出来源：用户主动退出应放行，
-/// 而"首个窗口被 lifecycle 销毁触发的运行循环结束"应被阻止（进程需驻留托盘等待重建）。
+/// 非用户来源的退出请求则阻止（进程驻留托盘；空白页方案下窗口不销毁，
+/// 此防护保留作兜底）。
 pub fn mark_user_quit() {
     USER_QUIT_FLAG.store(true, Ordering::SeqCst);
 }

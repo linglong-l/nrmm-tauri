@@ -45,6 +45,18 @@ export interface UseThumbnailUrlOptions {
 const thumbUrlCache = new Map<string, string>()
 
 /**
+ * 清空模块级缩略图 URL 缓存
+ *
+ * 窗口空闲回收模组数据（window-hidden-clear-data）时调用，释放全部
+ * 原图路径→webview URL 的字符串映射；下次显示重新经后端缓存解析，开销极低。
+ * 注意：Chromium 的 RSS 不会因 JS 堆释放立即回落（分配器惰性归还），
+ * 前端内存的实质回落依赖 300s 空白页回收（JS 上下文整体销毁）。
+ */
+export function clearThumbnailUrlCache(): void {
+  thumbUrlCache.clear()
+}
+
+/**
  * 异步解析原图路径对应的缩略图 webview URL
  *
  * @param originalPath 原图绝对路径（空串表示无图）

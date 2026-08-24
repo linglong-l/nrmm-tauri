@@ -110,7 +110,13 @@ pub fn invalidate_ini(path: &Path) {
     MOD_INI_CACHE.write().inner.remove(&norm);
 }
 
-/// 清空全部缓存（如切换游戏目录、重置配置时调用）。
-pub fn clear_ini_cache() {
-    MOD_INI_CACHE.write().inner.clear();
+/// 清空全部缓存（如切换游戏目录、重置配置、窗口空闲回收时调用）。
+///
+/// # 返回
+/// 清空前缓存中的条目数量（供调用方记录日志评估释放规模）。
+pub fn clear_ini_cache() -> usize {
+    let mut cache = MOD_INI_CACHE.write();
+    let n = cache.inner.len();
+    cache.inner.clear();
+    n
 }

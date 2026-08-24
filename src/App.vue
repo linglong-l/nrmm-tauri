@@ -39,6 +39,7 @@ import { logger } from '@/utils/logger'
 import { DEV_MODE } from '@/utils/env'
 import { switchTargetGame, checkModCacheValid, isFileWatcherRunning, currentWatchedPath, wasWindowRecreated } from '@/utils/tauri'
 import { startPendingNoticeObserver } from '@/utils/pendingNotice'
+import { clearThumbnailUrlCache } from '@/composables/useThumbnailUrl'
 import type { TargetGame, OverlayController } from '@/types'
 
 /**
@@ -355,6 +356,7 @@ onMounted(async () => {
     unlistenWindowHiddenClear = await listen('window-hidden-clear-data', async () => {
       logger.info('App', 'window hidden 120s -> clearing mod data (cache kept)')
       modsStore.clearData()
+      clearThumbnailUrlCache() // 释放模块级缩略图 URL 缓存
     })
   } catch (e) {
     logger.warn('App', 'Failed to register window-hidden-clear-data listener', e)
