@@ -271,6 +271,41 @@ pub async fn update_mod_data(
     Ok(result)
 }
 
+/// 同步原版 NRMM「需要更新模组数据」标记（跨应用状态双向同步）
+///
+/// 本项目与原版 NRMM（Flutter + shared_preferences）共用同一套 Mods 目录，
+/// 通过该命令把本项目的更新状态写入 NRMM 的 `shared_preferences.json`：
+/// - 前端启用/禁用模组后调用 `needed=true`（与原版 showUpdateModSnackbar 一致）
+/// - `update_mod_data` 成功后调用 `needed=false`（与原版 manageMods 完成一致）
+///
+/// 这样在本项目更新完模组数据后，重新打开原版 NRMM 不会再显示「未更新」。
+/// 仅在 Windows 上真实读写 NRMM 配置文件，Linux 上为无操作。
+///
+/// # 参数
+/// - `game`: 目标游戏标识（如 "genshin"、"wuwa"，经 [`parse_game`] 解析）
+/// - `needed`: 是否需要更新模组数据；`true` 置位，`false` 清除
+///
+/// # 返回
+/// 同步成功（或非 Windows 平台无操作）返回 `Ok(())`；写文件失败返回错误描述
+#[tauri::command]
+pub async fn sync_nrmm_update_flag(game: String, needed: bool) -> Result<(), String> {
+    let game = parse_game(&game)?;
+    log::debug!(
+        "[commands::mod_commands] [sync_nrmm_update_flag] game={} needed={}",
+        game.as_str(),
+        needed
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::core::nrmm_prefs::sync_update_needed(game, needed)
+    })
+    .await
+    .map_err(|e| {
+        log::error!("[sync_nrmm_update_flag] spawn_blocking join error: {}", e);
+        crate::core::error_normalizer::join_error_to_ui()
+    })??;
+    Ok(())
+}
+
 /// 检测 hash 冲突命令
 ///
 /// 全量扫描所有模组 INI 中的 hash 值，返回冲突列表。

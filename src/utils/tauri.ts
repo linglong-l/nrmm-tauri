@@ -582,6 +582,31 @@ export async function updateModData(game: string, modsPath: string): Promise<Upd
 }
 
 /**
+ * 同步原版 NRMM「需要更新模组数据」标记
+ * 后端命令：sync_nrmm_update_flag
+ *
+ * 本项目与原版 NRMM 共用同一套 Mods 目录，通过该命令把本项目的更新状态
+ * 双向同步到 NRMM（Flutter shared_preferences）持久化文件：
+ * - 启用/禁用模组后传 `true`（与原版 showUpdateModSnackbar 一致）
+ * - update_mod_data 成功后传 `false`（与原版 manageMods 完成一致）
+ *
+ * 仅 Windows 生效，Linux 上为无操作；失败返回 null（不阻断主流程）。
+ *
+ * @param game 目标游戏标识（如 'GenshinImpact'、'Wuwa'）
+ * @param needed 是否需要更新模组数据
+ * @returns Promise<boolean> 同步成功（或非 Windows 无操作）时返回 true，失败返回 false
+ */
+export async function syncNrmmUpdateFlag(game: string, needed: boolean): Promise<boolean> {
+  try {
+    await safeInvoke<void>('sync_nrmm_update_flag', { game, needed })
+    return true
+  } catch (e) {
+    logger.warn('Tauri', 'syncNrmmUpdateFlag failed (non-blocking)', e)
+    return false
+  }
+}
+
+/**
  * 检测 hash 冲突（全量扫描，用户主动触发）
  * 后端命令：detect_hash_conflicts
  *

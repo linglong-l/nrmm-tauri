@@ -30,6 +30,7 @@ pub mod mod_ini_cache;
 pub mod mod_manager;
 pub mod mod_scanner;
 pub mod namespace_handler;
+pub mod nrmm_prefs;
 pub mod operation_registry;
 pub mod resolution;
 pub mod thumbnail;

@@ -11,7 +11,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed, reactive, watch, shallowRef, triggerRef } from 'vue'
-import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, deselectGroupMod, disableAllModsInGroup } from '../utils/tauri'
+import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, deselectGroupMod, disableAllModsInGroup, syncNrmmUpdateFlag } from '../utils/tauri'
 import { useSettingsStore } from './settings'
 import type { ModGroupData, ModData, TargetGame, UpdateResult } from '../types'
 import { logger } from '../utils/logger'
@@ -441,6 +441,9 @@ export const useModsStore = defineStore('mods', () => {
         [groupIndex]: true
       }
     }
+    // 双向同步：把「需要更新模组数据」写为 true 到原版 NRMM 持久化标记，
+    // 与原版 NRMM showUpdateModSnackbar 行为一致（fire-and-forget，不阻断主流程）
+    void syncNrmmUpdateFlag(s.currentGame, true)
   }
 
   /**
@@ -453,6 +456,9 @@ export const useModsStore = defineStore('mods', () => {
     // 清除所有分组级标记
     needUpdatePerGroup.value = {}
     needReloadManual.value = false
+    // 双向同步：清除原版 NRMM 持久化标记，避免其残留「未更新」提示
+    // （与原版 NRMM manageMods 完成行为一致，fire-and-forget）
+    void syncNrmmUpdateFlag(s.currentGame, false)
   }
 
   /**
