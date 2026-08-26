@@ -143,6 +143,26 @@ impl super::KeySimulator for WindowsKeySimulator {
         Ok(())
     }
 
+    fn simulate_combo(&mut self, keys: &[u16]) -> Result<()> {
+        // 对齐 NRMM `_simulateMultipleKeypresses` 时序：
+        // 逐键按下（30ms 间隔）→ 保持 50ms → 逆序抬起（30ms 间隔）
+        // 使用全局 SendInput（send_key_down_only/up），与 simulate_f10 同路径，
+        // 不经过 dispatch_* 的 PostMessage 定向发送
+        if keys.is_empty() {
+            return Ok(());
+        }
+        for &k in keys {
+            send_key_down_only(VIRTUAL_KEY(k))?;
+            thread::sleep(Duration::from_millis(30));
+        }
+        thread::sleep(Duration::from_millis(50));
+        for &k in keys.iter().rev() {
+            send_key_up_only(VIRTUAL_KEY(k))?;
+            thread::sleep(Duration::from_millis(30));
+        }
+        Ok(())
+    }
+
     fn simulate_select_full(&mut self, group_idx: u32, mod_idx: u32) -> Result<()> {
         let start = std::time::Instant::now();
         // 注意：NRMM 约定 x = 模组索引(mod_idx)，y = 分组索引(group_idx)

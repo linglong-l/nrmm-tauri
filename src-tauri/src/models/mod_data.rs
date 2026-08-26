@@ -18,6 +18,53 @@ pub struct KeybindData {
     pub extension: String,
 }
 
+/// 按键切换（Keybind Simulation）单个按键条目
+///
+/// 对应 NRMM `keybinds_tab.dart` 的 `KeyData`：`key = <combo>`（主键）或
+/// `back = <combo>`（反向键）。`line_index` 为原始 INI 中的行号，写回时原位定位。
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KeybindEntry {
+    /// true = `key =`，false = `back =`
+    pub is_main_key: bool,
+    /// combo 原始值（如 `no_modifiers 5`）
+    pub value: String,
+    /// 原始 INI 中的行号（0-based，写回定位用）
+    pub line_index: usize,
+}
+
+/// 按键切换：单个 `[KeyXXX]` 段（`XXX` 为段别名，如 Top/Shoulder）
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KeybindSection {
+    /// 去 `Key` 前缀后的段名（如 `Top`）
+    pub section: String,
+    /// 段头是否带 `;+;` 前缀（NRMM 禁用标记）
+    pub disabled: bool,
+    /// 段头行号（0-based，写回定位用）
+    pub section_line_index: usize,
+    /// 段内按键条目（`key =` 与 `back =` 混合，保持原始顺序）
+    pub keys: Vec<KeybindEntry>,
+}
+
+/// 按键切换：一个 INI 文件的按键段集合
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KeybindFile {
+    /// INI 文件绝对路径
+    pub file_path: String,
+    /// 该文件的按键段列表
+    pub sections: Vec<KeybindSection>,
+}
+
+/// 保存按键切换的结果
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveKeybindResult {
+    /// 是否存在重复段名（大小写不敏感 + namespace 后缀，对齐 NRMM saveKeys）
+    pub duplicate_sections: bool,
+}
+
 /// INI 错误行信息
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]

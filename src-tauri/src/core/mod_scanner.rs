@@ -529,8 +529,18 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
         all_mods.extend(ms);
     }
 
-    // 按 group_index 排序
-    groups.sort_by_key(|g| g.group_index());
+    // 排序（对齐 NRMM：group_xx 角色分组永远置顶，按 int 数字序；互斥分组按名称字符串序）
+    // 注意：互斥分组根的 group_index 恒为 0，不能作为排序键（会把互斥组顶到最前）
+    groups.sort_by(|a, b| {
+        let a_mutex = a.group_type == GroupType::MutexGroup;
+        let b_mutex = b.group_type == GroupType::MutexGroup;
+        match (a_mutex, b_mutex) {
+            (false, true) => CmpOrdering::Less,
+            (true, false) => CmpOrdering::Greater,
+            (false, false) => a.group_index.cmp(&b.group_index),
+            (true, true) => a.group_name.cmp(&b.group_name),
+        }
+    });
 
     let (mut total, mut enabled, mut disabled) = (0usize, 0usize, 0usize);
     for m in &all_mods {

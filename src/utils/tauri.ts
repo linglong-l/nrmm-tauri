@@ -10,7 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame } from '../types'
+import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult } from '../types'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from './logger'
@@ -852,4 +852,45 @@ export async function enableAllModsInGroup(groupPath: string): Promise<number> {
  */
 export async function removeGroupEx(groupPath: string, isGroupXx: boolean): Promise<void> {
   return safeInvoke('remove_group_ex', { groupPath, isGroupXx })
+}
+
+/**
+ * 读取模组的全部按键段（按键切换功能，对齐 NRMM loadKeys）
+ * 后端命令：read_mod_keybinds
+ *
+ * 递归收集 mod 目录下所有 INI，解析每个文件的 `[KeyXXX]` 段，
+ * 返回带行号的结构（供渲染与写回定位）。
+ * @param modPath 模组文件夹路径（绝对路径）
+ * @returns 按键段集合（按文件分组）
+ */
+export async function readModKeybinds(modPath: string): Promise<KeybindFile[]> {
+  return safeInvoke<KeybindFile[]>('read_mod_keybinds', { modPath })
+}
+
+/**
+ * 保存编辑后的按键段（按键切换功能，对齐 NRMM saveKeys）
+ * 后端命令：save_mod_keybinds
+ *
+ * 对每个文件重新读取原始行 → 按传入行号原位改写 → 原子写回。
+ * @param modPath 模组文件夹路径（绝对路径）
+ * @param files 编辑后的按键段集合（含行号）
+ * @returns 保存结果（是否检测到重复段名）
+ */
+export async function saveModKeybinds(
+  modPath: string,
+  files: KeybindFile[]
+): Promise<SaveKeybindResult> {
+  return safeInvoke<SaveKeybindResult>('save_mod_keybinds', { modPath, files })
+}
+
+/**
+ * 模拟组合键（按键切换功能，对齐 NRMM simulateKeysFromKeySections）
+ * 后端命令：simulate_keys
+ *
+ * 解析 combo 字符串（如 `no_modifiers 5`、`alt 5`、`ctrl shift F10`）
+ * 并通过平台按键模拟器发送。非法按键 / 超长组合会抛错。
+ * @param combo 组合键字符串（ini 中的原始值）
+ */
+export async function simulateKeys(combo: string): Promise<void> {
+  return safeInvoke('simulate_keys', { combo })
 }

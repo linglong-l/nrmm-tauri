@@ -51,6 +51,15 @@ pub trait KeySimulator: Send + Sync {
     fn simulate_select_mod(&mut self) -> Result<()>;
     /// 模拟 F10 按键（3Dmigoto 重载快捷键）
     fn simulate_f10(&mut self) -> Result<()>;
+    /// 模拟组合键序列（按键切换功能，对齐 NRMM `simulateKeysFromKeySections`）
+    ///
+    /// `keys` 为已解析的虚拟键码序列（由 `core::key_combo::parse_combo` 产出）。
+    /// 默认实现返回不支持错误；Windows 使用 SendInput 全局输入队列实现。
+    fn simulate_combo(&mut self, _keys: &[u16]) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "keypress combo simulation not supported on this platform"
+        ))
+    }
     /// 模拟选择分组（带光标坐标绑定）
     /// x, y 为目标光标位置（屏幕坐标），用于将光标移动到 3Dmigoto 内置菜单对应位置
     /// 默认实现 fallback 到无坐标版本

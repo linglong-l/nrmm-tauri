@@ -896,6 +896,8 @@ export const useModsStore = defineStore('mods', () => {
     for (const key of Object.keys(selectedModIndicesByGroup)) {
       delete selectedModIndicesByGroup[key]
     }
+    // 清空按键绑定页目标模组（切游戏后旧模组不残留，对齐 NRMM setModDir 的游戏匹配校验）
+    keybindTargetMod.value = null
   }
 
   /**
@@ -1020,6 +1022,7 @@ export const useModsStore = defineStore('mods', () => {
     currentGroupMods,
     selectedMod,
     filteredMods,
+    keybindTargetMod,
     selectGroup,
     loadMods,
     refresh,

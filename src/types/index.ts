@@ -45,6 +45,52 @@ export interface KeybindData {
 }
 
 /**
+ * 按键切换（Keybind Simulation）单个按键条目
+ * 对应后端 `KeybindEntry`（NRMM `KeyData`）：
+ * `key = <combo>`（主键）或 `back = <combo>`（反向键）
+ */
+export interface KeybindEntry {
+  /** true = `key =`，false = `back =` */
+  isMainKey: boolean;
+  /** combo 原始值（如 `no_modifiers 5`） */
+  value: string;
+  /** 原始 INI 中的行号（0-based，写回定位用） */
+  lineIndex: number;
+}
+
+/**
+ * 按键切换：单个 `[KeyXXX]` 段（XXX 为段别名，如 Top/Shoulder）
+ */
+export interface KeybindSection {
+  /** 去 `Key` 前缀后的段名（如 `Top`） */
+  section: string;
+  /** 段头是否带 `;+;` 前缀（NRMM 禁用标记） */
+  disabled: boolean;
+  /** 段头行号（0-based，写回定位用） */
+  sectionLineIndex: number;
+  /** 段内按键条目（key 与 back 混合，保持原始顺序） */
+  keys: KeybindEntry[];
+}
+
+/**
+ * 按键切换：一个 INI 文件的按键段集合
+ */
+export interface KeybindFile {
+  /** INI 文件绝对路径 */
+  filePath: string;
+  /** 该文件的按键段列表 */
+  sections: KeybindSection[];
+}
+
+/**
+ * 保存按键切换的结果
+ */
+export interface SaveKeybindResult {
+  /** 是否存在重复段名（大小写不敏感 + namespace 后缀） */
+  duplicateSections: boolean;
+}
+
+/**
  * INI解析错误行信息
  */
 export interface ErroredLines {

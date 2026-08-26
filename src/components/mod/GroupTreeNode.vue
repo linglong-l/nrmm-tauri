@@ -26,7 +26,15 @@
       <div v-else class="expand-placeholder"></div>
 
       <!-- 圆形头像 -->
-      <div class="group-avatar" :class="{ 'virtual-avatar': isVirtualRoot }">
+      <div
+        class="group-avatar"
+        :class="{
+          'virtual-avatar': isVirtualRoot,
+          'avatar-mutex': isMutexGroup,
+          'avatar-group-xx': isGroupXxGroup && !isVirtualRoot,
+          'avatar-disabled': !!props.group.groupDisabled,
+        }"
+      >
         <img v-if="avatarUrl" :src="avatarUrl" class="avatar-image" :alt="displayName" loading="lazy" decoding="async" draggable="false" />
         <span v-else class="avatar-text">{{ initialText }}</span>
       </div>
@@ -102,6 +110,11 @@ const depth = computed(() => props.depth ?? 0)
 
 /** 是否是虚拟Groups根节点（仅UI用，不响应选择/右键菜单） */
 const isVirtualRoot = computed(() => props.group.isVirtualRoot === true)
+
+/** 是否互斥分组（自定义分组，非 group_int 目录） */
+const isMutexGroup = computed(() => props.group.groupType === 'mutexGroup')
+/** 是否 group_xx 角色分组（NormalGroup / ExclusiveSlot / CustomParallel，非互斥） */
+const isGroupXxGroup = computed(() => props.group.groupType !== 'mutexGroup')
 
 /** 是否有子分组 */
 const hasChildren = computed(() => props.group.hasChild && props.group.children && props.group.children.length > 0)
@@ -273,7 +286,13 @@ function onContextMenu(e: MouseEvent) {
 }
 
 .group-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.2);
+  filter: brightness(1);
+}
+
+.group-item.disabled:hover {
+  background: rgba(255, 255, 255, 0.08);
+  filter: brightness(1);
 }
 
 .group-item:focus-visible {
@@ -285,8 +304,13 @@ function onContextMenu(e: MouseEvent) {
   background: rgba(74, 158, 255, 0.12);
 }
 
+.group-item.disabled.active {
+  background: rgba(74, 158, 255, 0.12);
+  filter: brightness(1);
+}
+
 .group-item.disabled {
-  opacity: 0.4;
+  filter: brightness(0.6);
 }
 
 .expand-btn {
@@ -340,6 +364,22 @@ function onContextMenu(e: MouseEvent) {
 .group-item.active .group-avatar {
   border-color: #4a9eff;
   box-shadow: 0 0 12px rgba(74, 158, 255, 0.5);
+}
+
+/* 分组图片边框状态色（对齐 NRMM，宽度沿用 2px）：
+   - group_xx 角色分组：固定 #7F7F7F（无启用/禁用状态）
+   - 互斥分组：启用 #7F7F7F / 禁用 #A22C24（淡红）
+   - 选中时保持蓝色高亮（.group-item.active 优先） */
+.group-item:not(.active) .group-avatar.avatar-group-xx {
+  border-color: #7f7f7f;
+}
+
+.group-item:not(.active) .group-avatar.avatar-mutex {
+  border-color: #7f7f7f;
+}
+
+.group-item:not(.active) .group-avatar.avatar-mutex.avatar-disabled {
+  border-color: #a22c24;
 }
 
 .group-item.has-children .group-avatar {

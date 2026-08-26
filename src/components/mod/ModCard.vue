@@ -489,7 +489,7 @@ onUnmounted(() => {
 
 /* 悬停：轻微放大 + 白色边框提示当前位置 */
 .mod-card:hover:not(.no-scale):not(.is-empty) {
-  transform: scale(1.02);
+  transform: scale(1.03);
 }
 .mod-card:hover:not(.no-scale):not(.is-empty) .card-image {
   border-color: #ffffff;
