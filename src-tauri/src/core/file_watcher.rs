@@ -15,7 +15,7 @@ use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -208,6 +208,16 @@ fn classify_overflow_roots(dirty: &[PathBuf], managed_path: &Path) -> Vec<PathBu
     }
 }
 
+/// 判断批次世代是否已过期（C4 世代校验）
+///
+/// `stored_gen` 为防抖批次捕获创建时的世代快照，`current_gen` 为当前世代计数。
+/// 当两者不一致时说明批次属于旧监听（期间 `start_watching` 再次被调用、世代已递增，
+/// 例如切换游戏），静默丢弃整批，防止 `subtree_replace` 把旧路径数据合入新游戏、
+/// 或 emit 跨游戏事件。
+fn is_generation_stale(stored_gen: u64, current_gen: u64) -> bool {
+    stored_gen != current_gen
+}
+
 /// 未溢出路径的精确增量合并：脏目录经 [`IncrementalUpdater::consolidate`] 合并根路径
 /// （复用既有算法：规范化、共同前缀、向上收敛到 group/mod 目录粒度）。
 ///
@@ -276,8 +286,16 @@ pub struct FileWatcher {
     /// mpsc channel 的发送端（仅承载唤醒信号，事件本体走 `EventRingBuffer`）。
     /// 保持所有权防止 channel 关闭（drop 后接收端收到 `Disconnected`，防抖线程退出）。
     _tx: Option<mpsc::Sender<()>>,
-    /// 防抖处理线程的句柄，停止监控时需 `join` 等待线程正常退出，避免资源泄漏。
+    /// 防抖处理线程句柄。`spawn_safe` 不返回 `JoinHandle`（内部丢弃），故恒为 `None`。
+    /// 线程退出依赖 channel `Disconnected`；批次正确性由 `generation` 世代校验保证，
+    /// 无需在此保存句柄 `join`。
     _debounce_thread: Option<std::thread::JoinHandle<()>>,
+    /// 监听世代计数（C4）：每次 `start_watching` 递增，防抖线程捕获创建时的世代快照，
+    /// drain 后、写缓存/emit 前校验世代。
+    /// 切换游戏（旧线程已有 [channel] 中 un-drain 批次、正在 rayon 扫描）时，
+    /// 新 `start_watching` 递增世代使旧批次过期，整批静默丢弃，
+    /// 防止 `subtree_replace(current_game, 旧路径, partial)` 合入错误条目 + 跨游戏 emit。
+    generation: Arc<AtomicU64>,
 }
 
 impl Default for FileWatcher {
@@ -299,6 +317,7 @@ impl FileWatcher {
             paused: Arc::new(AtomicBool::new(false)),
             _tx: None,
             _debounce_thread: None,
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -348,6 +367,11 @@ impl FileWatcher {
     pub fn start_watching(&mut self, app_handle: AppHandle, game_mods_path: &Path) -> Result<()> {
         // 先停止之前的监控，避免重复监控
         self.stop_watching();
+
+        // 递增监听世代（C4）：本批次捕获的世代快照若在后续被再次 start_watching 覆盖，
+        // 则该批次属旧监听（切换游戏），drain 后校验时静默丢弃，防跨游戏合并错误。
+        let gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let generation_clone = self.generation.clone();
 
         let managed_path = game_mods_path.join(constants::MANAGED_FOLDER);
         if !managed_path.exists() {
@@ -446,6 +470,16 @@ impl FileWatcher {
                                 continue;
                             }
 
+                            // 暂停检查前置（C11）：暂停期间不入 drain——事件保留在 ring，
+                            // 恢复后仍会处理（原实现在 drain 后丢弃 = 外部工具在此窗口写入
+                            // Mods 目录的变更既不触发增量也不失效缓存，MOD_CACHE 永久陈旧；
+                            // 且避免 start/stop 无条件重置实例暂停标志而吞掉前端显式暂停意图）
+                            let paused_global = WATCHER_PAUSED.load(Ordering::Acquire) > 0;
+                            let paused_local = paused_clone.load(Ordering::SeqCst);
+                            if paused_global || paused_local {
+                                continue;
+                            }
+
                             // 防抖到期：drain 环形队列（脏目录 + 溢出标志）
                             let (dirty_dirs, overflow) = ring_debounce
                                 .lock()
@@ -455,10 +489,15 @@ impl FileWatcher {
                                 continue;
                             }
 
-                            // 检查暂停标志（全局引用计数 + 实例级），任一为 true 则丢弃本轮
-                            let paused_global = WATCHER_PAUSED.load(Ordering::Acquire) > 0;
-                            let paused_local = paused_clone.load(Ordering::SeqCst);
-                            if paused_global || paused_local {
+                            // 世代校验（C4）：start_watching 递增世代后，本批次属旧监听
+                            // （切换游戏）→ 静默丢弃整批，防止合入错误游戏条目 + 跨游戏 emit
+                            let current_generation = generation_clone.load(Ordering::SeqCst);
+                            if is_generation_stale(gen, current_generation) {
+                                log::debug!(
+                                    "[file_watcher] 丢弃过期世代 {} 批次（当前 {}）",
+                                    gen,
+                                    current_generation
+                                );
                                 continue;
                             }
 
@@ -572,7 +611,6 @@ impl FileWatcher {
         self._tx = Some(tx);
         self._debounce_thread = None;
         self.watched_path = Some(managed_path);
-        self.paused.store(false, Ordering::SeqCst);
 
         Ok(())
     }
@@ -581,19 +619,20 @@ impl FileWatcher {
     ///
     /// 1. drop `watcher`（`Option::take` → 释放 notify 资源，自动调用 `unwatch` 停止 OS 级别监控）
     /// 2. drop `_tx`（关闭 channel 发送端，防抖线程 `recv_timeout` 收到 `Disconnected` 退出循环）
-    /// 3. `join` 防抖线程（`JoinHandle::join` 等待线程正常退出，避免资源泄漏和僵尸线程）
-    /// 4. 清空 `watched_path`、`updater`，重置实例级暂停标志
+    /// 3. 防抖线程无需 `join`：`spawn_safe` 不返回 `JoinHandle`（`_debounce_thread` 恒 `None`），
+    ///    线程退出由 channel `Disconnected` 保证；批次正确性由 `generation` 世代校验兜底
+    /// 4. 清空 `watched_path`、`updater`（不重置实例级暂停标志——暂停意图由前端显式 `resume` 取消，C11）
     pub fn stop_watching(&mut self) {
         // drop watcher 会自动调用 unwatch
         self.watcher = None;
         // drop tx 会导致 rx 端收到 Disconnected，防抖线程退出循环
         self._tx = None;
-        // 等待防抖线程结束，避免资源泄漏
+        // 防抖线程退出由 channel `Disconnected` 保证；`spawn_safe` 不返回句柄，故此处恒不触发
+        // （保留以显式表达意图；批次正确性由 `generation` 世代校验兜底，见 `generation` 字段）
         if let Some(handle) = self._debounce_thread.take() {
             let _ = handle.join();
         }
         self.watched_path = None;
-        self.paused.store(false, Ordering::SeqCst);
     }
 
     /// 判断是否正在监控某个目录
@@ -872,5 +911,23 @@ mod tests {
         // _MANAGED_ 根自身
         let dirty3 = vec![managed.to_path_buf()];
         assert!(classify_overflow_roots(&dirty3, managed).is_empty());
+    }
+
+    /// C4 世代校验：批次世代与当前世代一致则非过期，否则过期静默丢弃
+    ///
+    /// 同一监听内（未再调用 `start_watching`）世代保持一致 → 不丢弃；
+    /// 切换游戏触发 `start_watching`（世代递增）后，旧监听批次捕获的快照过时 → 丢弃。
+    #[test]
+    fn generation_stale_check() {
+        // 同一监听内：世代一致 → 不过期
+        assert!(!is_generation_stale(1, 1));
+        assert!(!is_generation_stale(5, 5));
+        // 旧监听批次：当前世代已推进（start_watching 再次递增）→ 过期
+        assert!(is_generation_stale(1, 2));
+        assert!(is_generation_stale(5, 6));
+        // 世代回退不应发生，但判定同样视为不一致（防御）
+        assert!(is_generation_stale(6, 5));
+        // 初始世代越界场景（不可能出现，逻辑防御）
+        assert!(is_generation_stale(0, 1));
     }
 }

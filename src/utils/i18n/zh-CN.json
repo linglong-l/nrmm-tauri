@@ -2,6 +2,8 @@
   "Settings": "设置",
   "Keybinds": "按键切换",
   "Mods": "模组",
+  "Mods load failed": "模组加载失败",
+  "Retry": "重试",
   "Add mods": "添加模组",
   "Add group": "添加分组",
   "Refresh": "刷新",

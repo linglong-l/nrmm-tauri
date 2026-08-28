@@ -2,6 +2,8 @@
   "Settings": "Setelan",
   "Keybinds": "Keybind",
   "Mods": "Mod",
+  "Mods load failed": "Gagal memuat mod",
+  "Retry": "Coba lagi",
   "Add mods": "Tambah mod",
   "Add group": "Tambah grup",
   "Refresh": "Refresh",

@@ -65,9 +65,9 @@ fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
         MAX_DIRECT_READ_BYTES / (1024 * 1024),
         path
     );
-    let mut reader = BufReader::with_capacity(READ_BUFFER_CAPACITY, file);
+    let mut reader: BufReader<fs::File> = BufReader::with_capacity(READ_BUFFER_CAPACITY, file);
     let mut out: Vec<u8> = Vec::with_capacity(MAX_DIRECT_READ_BYTES as usize);
-    let mut chunk = vec![0u8; MAX_DIRECT_READ_BYTES as usize];
+    let mut chunk: Vec<u8> = vec![0u8; MAX_DIRECT_READ_BYTES as usize];
     loop {
         let mut total = 0usize;
         // 单次 read 至多填充一个完整 chunk（≤ 20MB），避免一次性读取超大字节量
@@ -86,6 +86,99 @@ fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
         out.extend_from_slice(&chunk[..total]);
     }
     Ok(out)
+}
+
+/// 源文件编码（写回策略依据）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceEncoding {
+    /// 文件本身是合法 UTF-8（含或不含 BOM）。
+    Utf8,
+    /// 文件非 UTF-8，已按 GB18030（覆盖 GBK/GB2312）无损解码为 Unicode。
+    Gbk,
+}
+
+/// 统一 INI 读取管线的源编码信息，供 [`write_utf8_atomic`] 决定写回策略。
+#[derive(Debug, Clone, Copy)]
+pub struct SourceEncodingInfo {
+    /// 源文件实际编码。
+    pub encoding: SourceEncoding,
+    /// 源文件是否带 UTF-8 BOM（`EF BB BF`）。
+    pub had_bom: bool,
+}
+
+/// 统一 INI 读取管线（C6）：先判断后读取。
+///
+/// 1. 合法 UTF-8（含或不含 BOM）→ 直通，`encoding == Utf8`，字节不被改写；
+/// 2. 非 UTF-8 → 按 GB18030（覆盖 GBK/GB2312）解码为 Unicode 再编码为 UTF-8，
+///    `encoding == Gbk`。既非 UTF-8 也无法按 GB18030 解码的字节以 U+FFFD 替换并
+///    `log::warn`（全数据集统一 UTF-8 决策，不拒绝写回）。
+///
+/// 返回值中的字符串**不含** UTF-8 BOM 前缀；`had_bom` 交由 [`write_utf8_atomic`]
+/// 决定写回是否补回 BOM。
+///
+/// # Errors
+/// 文件无法读取时返回对应 `std::io::Error`。
+pub fn read_ini_safe(path: &Path) -> std::io::Result<(String, SourceEncodingInfo)> {
+    let bytes = fs::read(path)?;
+    let (had_bom, body) = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        (true, &bytes[3..])
+    } else {
+        (false, &bytes[..])
+    };
+    match std::str::from_utf8(body) {
+        Ok(s) => Ok((
+            s.to_string(),
+            SourceEncodingInfo {
+                encoding: SourceEncoding::Utf8,
+                had_bom,
+            },
+        )),
+        Err(_) => {
+            let (decoded, _, had_errors) = encoding_rs::GB18030.decode(body);
+            if had_errors {
+                log::warn!(
+                    "[ini_handler] read_ini_safe: 文件含既非 UTF-8 亦无法按 GB18030 解码的字节，已按 U+FFFD 替换：{:?}",
+                    path
+                );
+            } else {
+                // 埋点 #6：GBK→Unicode→UTF-8 无损转换记录（全数据集统一 UTF-8 决策可审计）
+                log::info!(
+                    "[ini_handler] read_ini_safe: 非 UTF-8 文件无损转换（GB18030→UTF-8，{} 字节，BOM={}）：{:?}",
+                    body.len(),
+                    had_bom,
+                    path
+                );
+            }
+            Ok((
+                decoded.into_owned(),
+                SourceEncodingInfo {
+                    encoding: SourceEncoding::Gbk,
+                    had_bom,
+                },
+            ))
+        }
+    }
+}
+
+/// 统一 UTF-8 写回（C6）：保留源 BOM 策略 + 原子写。
+///
+/// `content` 为已就绪的 UTF-8 文本；`info.encoding == Gbk` 表示本次是转换写回，
+/// `info.had_bom` 为真时在内容前置 UTF-8 BOM 前缀。通过 `crate::utils::atomic_write`
+/// 原子落盘（同目录临时文件 + rename），进程任一时刻退出都不产生半成品目标文件。
+///
+/// # Errors
+/// 创建临时文件、写入或替换失败时返回对应 `std::io::Error`。
+pub fn write_utf8_atomic(
+    path: &Path,
+    content: &str,
+    info: SourceEncodingInfo,
+) -> std::io::Result<()> {
+    let mut buf = Vec::with_capacity(content.len() + 3);
+    if info.had_bom {
+        buf.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+    }
+    buf.extend_from_slice(content.as_bytes());
+    crate::utils::atomic_write(path, &buf)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1367,28 +1460,41 @@ impl IniFile {
             return;
         }
 
-        // 阶段1：清理所有 condition 行的旧管理器表达式
+        // 阶段1：清理所有 condition/disabled condition 行的旧管理器表达式
+        // （同时记录原行型与用户注释，重写时保留 `;-;` 禁用行型并还原注释）
         struct CleanedCond {
             index: usize,
             disabled: bool,
             value: String,
+            comment: Option<String>,
+            was_disabled_kv: bool,
         }
         let mut cleaned: Vec<CleanedCond> = Vec::new();
         for (i, line) in section.lines.iter().enumerate() {
-            if let IniLine::KeyValue {
-                key,
-                value,
-                disabled,
-                ..
-            } = line
-            {
-                if key.eq_ignore_ascii_case("condition") {
-                    cleaned.push(CleanedCond {
-                        index: i,
-                        disabled: *disabled,
-                        value: sanitize_condition_expression(value),
-                    });
-                }
+            let (key, value, disabled, comment, was_disabled_kv) = match line {
+                IniLine::KeyValue {
+                    key,
+                    value,
+                    disabled,
+                    comment,
+                    ..
+                } => (key, value, *disabled, comment.clone(), false),
+                IniLine::DisabledKeyValue {
+                    key,
+                    value,
+                    comment,
+                    ..
+                } => (key, value, true, comment.clone(), true),
+                _ => continue,
+            };
+            if key.eq_ignore_ascii_case("condition") {
+                cleaned.push(CleanedCond {
+                    index: i,
+                    disabled,
+                    value: sanitize_condition_expression(value),
+                    comment,
+                    was_disabled_kv,
+                });
             }
         }
 
@@ -1415,13 +1521,23 @@ impl IniFile {
                 } else {
                     format!("({}) && {}", rhs, condition_var)
                 };
-                section.lines[cond.index] = IniLine::KeyValue {
-                    key: "condition".to_string(),
-                    value: new_value,
-                    disabled: cond.disabled,
-                    comment: None,
-                    indent: 0,
+                // 按原行型重建：DisabledKeyValue 保留 `;-;` 禁用前缀，并还原用户注释
+                let new_line = if cond.was_disabled_kv {
+                    IniLine::DisabledKeyValue {
+                        key: "condition".to_string(),
+                        value: new_value,
+                        comment: cond.comment.clone(),
+                    }
+                } else {
+                    IniLine::KeyValue {
+                        key: "condition".to_string(),
+                        value: new_value,
+                        disabled: cond.disabled,
+                        comment: cond.comment.clone(),
+                        indent: 0,
+                    }
                 };
+                section.lines[cond.index] = new_line;
             }
         }
     }
@@ -2299,6 +2415,64 @@ key = value
     }
 
     #[test]
+    fn test_inject_key_condition_preserves_comment_and_disabled_line() {
+        // 重写 condition 行时：KeyValue 保留用户注释；DisabledKeyValue（`;-;` 行）保留
+        // 禁用行型、注释，并清理旧管理器表达式后追加新条件。
+        let ini_content = r#"[KeyDefault]
+condition = $Key1 == 1  ; 用户注释
+;-;condition = $managed_slot_id == $\modmanageragl\group_1\active_slot  ; 禁用注释
+"#;
+        let f = write_temp_ini(ini_content);
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.inject_slot_conditions(1, 0);
+
+        // 注入 [Constants] 段在 index 0，Key 段被推到 index 1
+        let lines = &ini.sections[1].lines;
+
+        // 活跃 condition 行：保留注释并追加管理器表达式
+        let active = lines.iter().find_map(|l| match l {
+            IniLine::KeyValue {
+                key,
+                value,
+                comment,
+                ..
+            } if key.eq_ignore_ascii_case("condition") => Some((value.clone(), comment.clone())),
+            _ => None,
+        });
+        let (active_val, active_comment) = active.expect("active condition line should exist");
+        assert_eq!(active_comment.as_deref(), Some("用户注释"));
+        assert!(active_val.contains("$Key1 == 1"));
+        assert!(active_val.contains("$managed_slot_id"));
+
+        // 禁用 condition 行（DisabledKeyValue）：行型保留、注释保留、旧管理器表达式被清理（不嵌套）
+        let disabled = lines
+            .iter()
+            .filter_map(|l| match l {
+                IniLine::DisabledKeyValue {
+                    key,
+                    value,
+                    comment,
+                } if key.eq_ignore_ascii_case("condition") => {
+                    Some((value.clone(), comment.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            disabled.len(),
+            1,
+            "should keep exactly one disabled condition line"
+        );
+        let (dis_val, dis_comment) = &disabled[0];
+        assert_eq!(dis_comment.as_deref(), Some("禁用注释"));
+        // 清理后为空 → 直接替换为新注入的单一管理器表达式（无嵌套累积）
+        assert_eq!(
+            dis_val,
+            "$managed_slot_id == $\\modmanageragl\\group_1\\active_slot"
+        );
+    }
+
+    #[test]
     fn test_sanitize_condition_expression() {
         // 清理 NRMM 格式（active_slot）的旧表达式
         let expr = "$Key1 == 1 && $managed_slot_id == $\\modmanageragl\\group_1\\active_slot";
@@ -2491,6 +2665,80 @@ key = value
                 if key == "name" && value == "中文测试")),
             "中文值应原样保留"
         );
+    }
+
+    // ========== C6 统一编码管线（read_ini_safe / write_utf8_atomic） ==========
+    #[test]
+    fn test_read_ini_safe_gbk_roundtrip() {
+        // GBK 字节 [0xC4, 0xE3, 0xBA, 0xC3] 即 "你好"
+        let f = tempfile::NamedTempFile::with_suffix(".ini").unwrap();
+        fs::write(f.path(), [0xC4, 0xE3, 0xBA, 0xC3]).unwrap();
+        let (content, info) = read_ini_safe(f.path()).unwrap();
+        assert_eq!(content, "你好");
+        assert_eq!(info.encoding, SourceEncoding::Gbk);
+        assert!(!info.had_bom);
+    }
+
+    #[test]
+    fn test_read_ini_safe_utf8_bom_variants() {
+        // 带 BOM：had_bom = true，内容直通（不含 BOM 前缀）
+        let f1 = tempfile::NamedTempFile::with_suffix(".ini").unwrap();
+        let mut with_bom = vec![0xEF, 0xBB, 0xBF];
+        with_bom.extend_from_slice("你好".as_bytes());
+        fs::write(f1.path(), &with_bom).unwrap();
+        let (c1, i1) = read_ini_safe(f1.path()).unwrap();
+        assert_eq!(c1, "你好");
+        assert_eq!(i1.encoding, SourceEncoding::Utf8);
+        assert!(i1.had_bom);
+
+        // 无 BOM：had_bom = false，内容直通
+        let f2 = tempfile::NamedTempFile::with_suffix(".ini").unwrap();
+        fs::write(f2.path(), b"hello\n").unwrap();
+        let (c2, i2) = read_ini_safe(f2.path()).unwrap();
+        assert_eq!(c2, "hello\n");
+        assert_eq!(i2.encoding, SourceEncoding::Utf8);
+        assert!(!i2.had_bom);
+    }
+
+    #[test]
+    fn test_write_utf8_atomic_preserves_bom_and_cleans_tmp() {
+        let f = tempfile::NamedTempFile::with_suffix(".ini").unwrap();
+        let info = SourceEncodingInfo {
+            encoding: SourceEncoding::Gbk,
+            had_bom: true,
+        };
+        write_utf8_atomic(f.path(), "你好", info).unwrap();
+        let bytes = fs::read(f.path()).unwrap();
+        assert!(
+            bytes.starts_with(&[0xEF, 0xBB, 0xBF]),
+            "had_bom=true 应写出 UTF-8 BOM"
+        );
+        assert_eq!(&bytes[3..], "你好".as_bytes(), "主体内容应为 UTF-8");
+
+        // 原子写：同目录临时文件应被清理，无残留
+        let file_name = f
+            .path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("temp file name");
+        let tmp = f.path().with_file_name(format!("{file_name}.tmp_write"));
+        assert!(!tmp.exists(), "原子写后临时文件应被清理");
+    }
+
+    #[test]
+    fn test_write_utf8_atomic_without_bom() {
+        let f = tempfile::NamedTempFile::with_suffix(".ini").unwrap();
+        let info = SourceEncodingInfo {
+            encoding: SourceEncoding::Utf8,
+            had_bom: false,
+        };
+        write_utf8_atomic(f.path(), "hello", info).unwrap();
+        let bytes = fs::read(f.path()).unwrap();
+        assert!(
+            !bytes.starts_with(&[0xEF, 0xBB, 0xBF]),
+            "had_bom=false 不应写 BOM"
+        );
+        assert_eq!(bytes, b"hello");
     }
 
     // ========== remove_old_managed_content（旧 NRMM 内容清理，含 Comment 型头注释） ==========

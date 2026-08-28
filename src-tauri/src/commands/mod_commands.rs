@@ -39,12 +39,17 @@ use tokio::sync::Mutex as AsyncMutex;
 static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// 全局 `update_mod_data` 串行锁（H1）。
+/// 「_MANAGED_ 写操作全局锁」（H1；C12 复用并扩展）。
 ///
-/// `update_mod_data` 内部会写 `_MANAGED_` 目录（delete_group_ini_files /
-/// create_group_ini / tmp rename 竞态），双击 / 连点可并发两次 update 同时写
-/// 同一目标，导致半成品 INI 进入 group INI 或命名冲突。用异步 Mutex 强制串行，
-/// 锁包裹整个 spawn_blocking + .await 执行期，禁止并发重入。
+/// 凡会写 `_MANAGED_` 目录（delete_group_ini_files / create_group_ini / tmp
+/// rename / selectedindex 等）的写操作以此异步 Mutex 强制串行：
+/// - `update_mod_data`（H1）：双击 / 连点可并发两次 update 同时写同一目标，
+///   导致半成品 INI 进入 group INI 或命名冲突。锁包裹整个 spawn_blocking +
+///   .await 执行期，禁止并发重入。
+/// - `select_mod` / `switch_mod`（C12）：update 批量写入期间用户点选模组，
+///   switch_mod 全量扫描会读到 update 写到一半的中间态目录树，并交错写
+///   selectedindex。select_mod 在命令体入口获取该锁，与 update / 导入互斥，
+///   同样跨 await 持锁（tokio Mutex 守卫可跨 .await 持有，不阻塞 worker）。
 static UPDATE_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(AsyncMutex::default);
 
 /// 全局轻量扫描串行锁（singleflight，2026-08-19）。
@@ -348,6 +353,10 @@ pub async fn detect_hash_conflicts(
 /// 选择模组（支持互斥组）
 #[tauri::command]
 pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult, String> {
+    // 「_MANAGED_ 写操作全局锁」（C12）：select/switch 与 update/导入互斥，
+    // 防止 update 批量写入期间全量扫描读到中间态，并交错写 selectedindex。
+    // 命令体入口即获取，跨下方两个分支的所有 spawn_blocking + .await 持锁。
+    let _update_guard = UPDATE_LOCK.lock().await;
     let SelectModArgs {
         game,
         mods_path,

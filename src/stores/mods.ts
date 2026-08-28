@@ -41,6 +41,8 @@ export const useModsStore = defineStore('mods', () => {
   const mods = shallowRef<ModData[]>([])
   /** 是否正在加载模组数据 */
   const loading = ref(false)
+  /** 最近一次加载失败的错误信息（C18：非竞态过期时置位；success/clearData 时清空） */
+  const loadError = ref<string | null>(null)
   /** 当前选中的分组路径（用于树状导航，唯一标识） */
   const selectedGroupPath = ref<string>('')
   /** 当前选中的模组索引（在分组内） */
@@ -532,6 +534,8 @@ export const useModsStore = defineStore('mods', () => {
       if (epoch !== loadEpoch) return
       groups.value = result.groups || []
       mods.value = result.mods || []
+      // C18：加载成功后清空失败反馈
+      loadError.value = null
 
       // 清空之前的分组选中记录，用后端返回的 activeModIndex 初始化
       for (const key of Object.keys(selectedModIndicesByGroup)) {
@@ -552,6 +556,9 @@ export const useModsStore = defineStore('mods', () => {
       // 过期请求的异常静默（新请求已接管）；当前请求的异常记录日志
       if (epoch === loadEpoch) {
         logger.error('ModsStore', 'Failed to load mods', e)
+        // C18：非竞态过期时提供可见失败反馈；路径不存在类错误走既有 handlePathNotFoundError 恢复流程，不弹错误提示
+        const msg = e instanceof Error ? e.message : String(e)
+        loadError.value = msg.includes('[PATH_NOT_FOUND]') ? null : msg
       }
     } finally {
       // 仅当前请求可复位 loading：过期请求提前复位会导致新请求进行中加载态消失
@@ -898,6 +905,8 @@ export const useModsStore = defineStore('mods', () => {
     }
     // 清空按键绑定页目标模组（切游戏后旧模组不残留，对齐 NRMM setModDir 的游戏匹配校验）
     keybindTargetMod.value = null
+    // C18：清空加载失败反馈（clearData 后旧错误不残留）
+    loadError.value = null
   }
 
   /**
@@ -961,10 +970,13 @@ export const useModsStore = defineStore('mods', () => {
     logger.debug('ModsStore', 'updateModData started')
     const s = useSettingsStore()
     if (!s.currentModsPath) return null
+    const startEpoch = loadEpoch // 防护起点：await 期间可能发生 clearData（窗口隐藏清空）/切游戏
     isUpdatingModData.value = true
     loading.value = true
     try {
       const lastResult = await tauriUpdateModData(s.currentGame, s.currentModsPath)
+      // 竞态防护（C14）：更新期间数据已被清空/切换（epoch 变化）→ 不回灌加载（刚释放的内存不再拉回）
+      if (startEpoch !== loadEpoch) return lastResult
       needReloadManual.value = lastResult.needReloadManual
       updateResult.value = lastResult
 
@@ -1008,6 +1020,7 @@ export const useModsStore = defineStore('mods', () => {
     groups,
     mods,
     loading,
+    loadError,
     selectedGroupPath,
     selectedModIndex,
     searchQuery,

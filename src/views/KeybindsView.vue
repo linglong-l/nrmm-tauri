@@ -45,7 +45,6 @@
                 :key="ei"
                 class="keybind-value"
                 :class="{ 'is-back': !entry.isMainKey }"
-                @click.stop="onKeyClick(entry, card.section)"
               >
                 <input
                   v-if="isEditing"
@@ -55,7 +54,17 @@
                   spellcheck="false"
                   @click.stop
                 />
-                <span v-else class="keybind-value-text">{{ entry.value }}</span>
+                <template v-else>
+                  <span
+                    v-for="(token, ti) in splitKeys(entry.value)"
+                    :key="ti"
+                    class="key-chip"
+                    :class="{ 'key-chip--directive': isDirectiveToken(token) }"
+                    :title="isDirectiveToken(token) ? undefined : t('Click keybind to simulate keypress')"
+                    @click.stop="onKeyClick(token, card.section)"
+                    >{{ token }}</span
+                  >
+                </template>
               </div>
             </div>
           </div>
@@ -93,16 +102,18 @@
  * - 「禁用/启用所有按键切换」批量写入 `;+;` 前缀
  * - 页面底部 debug 面板（mod 路径 / 文件/段/键统计 / 最近错误），便于排查异常
  */
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { readModKeybinds, saveModKeybinds, simulateKeys, simulateF10 } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'
+import { useSettingsStore } from '@/stores/settings'
 import { logger } from '@/utils/logger'
 import { useDragScroll } from '@/composables/useDragScroll'
-import type { KeybindEntry, KeybindFile, KeybindSection } from '@/types'
+import type { KeybindFile, KeybindSection } from '@/types'
 
 const { t } = useI18n()
 const modsStore = useModsStore()
+const settingsStore = useSettingsStore()
 
 /** 滚动容器DOM引用 */
 const scrollRef = ref<HTMLElement | null>(null)
@@ -133,6 +144,54 @@ const allDisabled = computed(() => {
   const all = keybindFiles.value.flatMap((f) => f.sections)
   return all.length > 0 && all.every((s) => s.disabled)
 })
+
+/**
+ * 跨渲染引擎的离屏渲染释放（WebKitGTK / Chromium 两类引擎均生效）
+ * - Chromium / WebView2：支持 `content-visibility`，离屏卡切到 `content-visibility:hidden` 跳过布局/绘制并回收占用。
+ * - WebKitGTK / WebKit：不支持 `content-visibility`，退化为 `contain:strict` + 占位高度，离屏时释放布局/绘制。
+ * 由 IntersectionObserver 统一驱动 `.is-offscreen` 类，避免依赖任一引擎的专属特性。
+ */
+let offscreenIO: IntersectionObserver | null = null
+
+/** 清除全部离屏标记（编辑模式下保持卡片可见，确保行内输入框可交互） */
+function clearOffscreen() {
+  scrollRef.value
+    ?.querySelectorAll('.keybind-card.is-offscreen')
+    .forEach((el) => el.classList.remove('is-offscreen'))
+}
+
+/** 重建离屏观察器（卡片 DOM 随 keybindFiles 重建时需重新挂载） */
+function setupOffscreenObserver() {
+  if (!scrollRef.value) return
+  offscreenIO?.disconnect()
+  offscreenIO = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        const el = e.target as HTMLElement
+        // 编辑模式：保持卡片可见，避免行内输入框被离屏隐藏
+        if (isEditing.value) {
+          el.classList.remove('is-offscreen')
+          continue
+        }
+        if (e.isIntersecting) el.classList.remove('is-offscreen')
+        else el.classList.add('is-offscreen')
+      }
+    },
+    { root: scrollRef.value, rootMargin: '240px 0px', threshold: 0 }
+  )
+  scrollRef.value
+    .querySelectorAll('.keybind-card')
+    .forEach((el) => offscreenIO!.observe(el))
+}
+
+// 数据变化（keybindFiles 重新赋值）后，卡片 DOM 重建，重新挂载观察器
+watch(
+  () => keybindFiles.value,
+  async () => {
+    await nextTick()
+    setupOffscreenObserver()
+  }
+)
 
 /**
  * 监听目标模组路径：首次进入或路径变化时拉取按键数据
@@ -169,27 +228,46 @@ const allDisabled = computed(() => {
 )
 
 /**
- * 点击整张按键卡片 → 模拟该段第一个 key（主 key）
+ * 点击整张按键卡片 → 模拟该段首个 key 的完整组合键
+ * （保留 `alt 5` 等真正组合键语义：整卡点击按整段发送）
  * 条件：非编辑模式 + 开关开启 + 段未禁用（对齐 NRMM _KeyCard 的 onPressed 判定）
  */
 async function onCardClick(card: { file: KeybindFile; section: KeybindSection }) {
   const entry = card.section.keys[0]
   if (!entry) return
-  await onKeyClick(entry, card.section)
-}
-
-/**
- * 点击按键值行 → 模拟该行组合键（多 key 段内每个 key/back 独立可点）
- * 条件：非编辑模式 + 开关开启 + 段未禁用（对齐 NRMM _KeyCard 的 onPressed 判定）
- */
-async function onKeyClick(entry: KeybindEntry, section: KeybindSection) {
-  if (isEditing.value || !simulateEnabled.value || section.disabled) return
+  if (isEditing.value || !simulateEnabled.value || card.section.disabled) return
   try {
-    await simulateKeys(entry.value)
+    await simulateKeys(entry.value, settingsStore.currentGame)
   } catch (e) {
     logger.warn('KeybindsView', 'simulateKeys failed', entry.value, e)
     ElMessage.error(t('Invalid keys'))
   }
+}
+
+/**
+ * 点击单个按键 → 模拟该按键对应的按键字符（每个 key 单独发送）
+ * 条件：非编辑模式 + 开关开启 + 段未禁用 + token 非 `no_*` 指令
+ * 对齐需求：每个 key 均为单独按键，向后端传递按键对应的按键字符。
+ */
+async function onKeyClick(token: string, section: KeybindSection) {
+  if (isEditing.value || !simulateEnabled.value || section.disabled) return
+  if (isDirectiveToken(token)) return // no_modifiers 等指令不是按键，不模拟
+  try {
+    await simulateKeys(token, settingsStore.currentGame)
+  } catch (e) {
+    logger.warn('KeybindsView', 'simulateKeys failed', token, e)
+    ElMessage.error(t('Invalid keys'))
+  }
+}
+
+/** 将组合键字符串拆分为独立 token（每个 token 渲染为一个单独按键） */
+function splitKeys(value: string): string[] {
+  return value.split(/\s+/).filter((t) => t.length > 0)
+}
+
+/** 是否为 `no_*` 指令 token（修饰语义，非实际按键） */
+function isDirectiveToken(token: string): boolean {
+  return token.toLowerCase().startsWith('no_')
 }
 
 /**
@@ -199,6 +277,7 @@ async function onKeyClick(entry: KeybindEntry, section: KeybindSection) {
 async function onEditOrSave() {
   if (!isEditing.value) {
     isEditing.value = true
+    clearOffscreen() // 编辑模式下所有卡片保持可见，行内输入框可交互
     return
   }
   await saveAndReload()
@@ -240,6 +319,7 @@ async function saveAndReload() {
         confirmButtonText: t('Reload'),
         cancelButtonText: t('keybinds.cancel', 'Cancel'),
         type: 'info',
+        customClass: 'app-confirm-box',
         distinguishCancelAndClose: true,
       }
     )
@@ -256,6 +336,12 @@ async function saveAndReload() {
 
 onMounted(async () => {
   await nextTick()
+  setupOffscreenObserver()
+})
+
+onBeforeUnmount(() => {
+  offscreenIO?.disconnect()
+  offscreenIO = null
 })
 </script>
 
@@ -332,16 +418,19 @@ onMounted(async () => {
   gap: 14px;
 }
 
-/* 按键容器：无背景色、宽度自适应内容、高度固定、整卡可点击，hover 轻微放大 + 蓝色边框 */
+/* 按键容器：无背景色、宽高均自适应内容、整卡可点击，hover 轻微放大 + 蓝色边框
+   content-visibility:auto → 离屏卡片跳过布局/绘制，浏览器在空闲时自动回收其渲染占用，
+   优先保障滚动/大量卡片时的渲染性能；contain-intrinsic-size 用估算高度兜底，避免滚动条跳动。 */
 .keybind-card {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   width: fit-content; /* 宽度自适应内容 */
-  height: 88px; /* 高度固定 */
-  min-width: 110px; /* 防过窄（如单个字符 section） */
-  padding: 2px 4px;
+  height: auto; /* 高度自适应内容 */
+  min-width: 64px; /* 防过窄（如单个字符 section） */
+  min-height: 44px; /* 保底可读高度，避免极端窄卡片挤压 */
+  padding: 6px 10px;
   background: transparent;
   border: 2px solid transparent; /* 常态不可见，hover 变蓝（避免布局跳动） */
   border-radius: 12px;
@@ -366,8 +455,26 @@ onMounted(async () => {
   cursor: default;
 }
 
+/* 跨渲染引擎的离屏渲染释放：由 JS(IntersectionObserver) 统一切换 .is-offscreen，
+   不依赖单一引擎专属特性，WebKitGTK 与 Chromium 均生效。 */
+/* Chromium / WebView2：支持 content-visibility，离屏彻底跳过布局/绘制并回收占用 */
+@supports (content-visibility: auto) {
+  .keybind-card.is-offscreen {
+    content-visibility: hidden;
+    contain-intrinsic-size: auto 72px;
+  }
+}
+/* WebKitGTK / WebKit：无 content-visibility，退化为尺寸包含 + 占位高度，
+   离屏时释放布局/绘制（尺寸固定避免回滚跳动） */
+@supports not (content-visibility: auto) {
+  .keybind-card.is-offscreen {
+    contain: strict;
+    height: 72px;
+  }
+}
+
 .keybind-section {
-  margin-bottom: 6px;
+  padding: 4px 2px 6px 2px;
   width: 100%;
   text-align: center;
 }
@@ -380,32 +487,58 @@ onMounted(async () => {
   white-space: pre-wrap;
 }
 
-/* 按键值：每行一个（key 与 back 分行） */
+/* 按键值：每行一个（key 与 back 分行），内部按键横向排列居中 */
 .keybind-value {
   width: 100%;
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 6px;
 }
 
 .keybind-value + .keybind-value {
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
-/* 按键值文本：白色字体、无背景色、自动换行（整卡可点，行内不再单独按钮） */
-.keybind-value-text {
-  padding: 2px 4px;
+
+/* 单个按键：独立可点击按键（每个 key 一个），黑色面 + 白字 + 蓝色高亮
+   背景 #1a1a1a 复用项目统一黑色面板，与下拉框/ message-box 风格一致 */
+.key-chip {
+  width: 80%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 4px 10px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  color: var(--text-muted, rgba(255, 255, 255, 0.72));
-  white-space: pre-wrap;
-  word-break: break-word;
-  text-align: center;
-  line-height: 1.4;
-  transition: color 0.15s ease;
+  font-size: 13px;
+  line-height: 1.2;
+  color: #ffffff;
+  background: #1a1a1a;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
 }
 
-.keybind-card:hover:not(.disabled):not(.editing) .keybind-value-text {
-  color: #fff;
+.key-chip:hover:not(.key-chip--directive) {
+  border-color: #4a9eff;
+  background: #242424;
+}
+
+.key-chip:active:not(.key-chip--directive) {
+  transform: scale(0.94);
+}
+
+/* no_modifiers 等指令 token：非按键，仅作提示，不可点击 */
+.key-chip--directive {
+  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+  background: transparent;
+  border-color: transparent;
+  cursor: default;
+  pointer-events: none;
+  font-size: 11px;
 }
 
 /* 编辑模式输入框 */

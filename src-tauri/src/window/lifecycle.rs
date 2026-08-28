@@ -82,7 +82,7 @@ fn hidden_timer(app: AppHandle, gen: u64) {
             return;
         }
         if can_destroy() {
-            blank_hidden_webview(&app);
+            blank_hidden_webview(&app, gen);
             return;
         }
         log::info!(
@@ -95,9 +95,17 @@ fn hidden_timer(app: AppHandle, gen: u64) {
     }
 }
 
+/// 世代是否已过期（期间发生过显隐）
+///
+/// 供计时线程各处（含 TOCTOU 二次校验）判断当前世代是否仍有效，
+/// 单独抽取以便无窗口环境下单元测试世代校验逻辑。
+fn generation_stale(gen: u64) -> bool {
+    gen != GENERATION.load(Ordering::SeqCst)
+}
+
 /// 世代过期（期间发生过显隐）或窗口已可见 → 计时作废
 fn is_stale(gen: u64, app: &AppHandle) -> bool {
-    if gen != GENERATION.load(Ordering::SeqCst) {
+    if generation_stale(gen) {
         return true;
     }
     app.get_webview_window("main")
@@ -116,10 +124,20 @@ fn can_destroy() -> bool {
 /// - `navigate` 仅触发导航不等待加载，任何线程调用均不阻塞。
 /// - DESTROYED_FLAG 置位供 `was_window_recreated` 查询（前端冷启动跳过启动通知）
 ///   与 `restore_webview_if_blank` 恢复判定；标志清零由前端查询（读后清）完成。
-fn blank_hidden_webview(app: &AppHandle) {
+fn blank_hidden_webview(app: &AppHandle, gen: u64) {
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
+    // 二次校验（TOCTOU 补丁）：检查与执行之间用户可能已唤起窗口——
+    // 世代过期或窗口已可见则放弃本次回收（下轮重试）
+    if generation_stale(gen) {
+        return;
+    }
+    // 窗口已可见则放弃本次回收
+    if win.is_visible().unwrap_or(true) {
+        // 查询失败视为可见（保守）
+        return;
+    }
     // 1) 记录主页 URL（失败放弃，保证恢复有据）
     let main_url = match win.url() {
         Ok(u) => u.to_string(),
@@ -307,5 +325,20 @@ mod tests {
         assert!(!should_prevent_exit_on_windows_closed());
         // 状态已清空，下次（非用户退出）再阻止
         assert!(should_prevent_exit_on_windows_closed());
+    }
+
+    /// TOCTOU 世代校验：世代一致才允许回收，显隐递增后旧世代视为过期
+    #[test]
+    fn generation_stale_tracks_generation() {
+        let base = GENERATION.load(Ordering::SeqCst);
+        // 与当前世代一致 → 未过期（可执行二次校验后的导航）
+        assert!(!generation_stale(base));
+        // 显隐使世代递增，旧世代视为过期 → 放弃本次回收（下一轮重试）
+        GENERATION.store(base + 1, Ordering::SeqCst);
+        assert!(generation_stale(base));
+        // 新世代不再过期
+        assert!(!generation_stale(base + 1));
+        // 清理，避免污染其它测试
+        GENERATION.store(base, Ordering::SeqCst);
     }
 }

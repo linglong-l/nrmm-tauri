@@ -291,7 +291,11 @@ pub fn parse_combo(combo: &str) -> Result<Vec<u16>, String> {
     }
 
     // SHIFT 移到末尾
-    let shift_keys: Vec<u16> = key_codes.iter().copied().filter(|k| is_shift_key(*k)).collect();
+    let shift_keys: Vec<u16> = key_codes
+        .iter()
+        .copied()
+        .filter(|k| is_shift_key(*k))
+        .collect();
     key_codes.retain(|k| !is_shift_key(*k));
     key_codes.extend(shift_keys);
 
@@ -372,15 +376,24 @@ mod tests {
     #[test]
     fn parse_combo_shift_moved_to_end() {
         assert_eq!(parse_combo("SHIFT 5").unwrap(), vec![0x35, 0x10]);
-        assert_eq!(parse_combo("shift ctrl F10").unwrap(), vec![0x11, 0x79, 0x10]);
+        assert_eq!(
+            parse_combo("shift ctrl F10").unwrap(),
+            vec![0x11, 0x79, 0x10]
+        );
         assert_eq!(parse_combo("no_ctrl shift F10").unwrap(), vec![0x79, 0x10]);
-        assert_eq!(parse_combo("lshift rshift a").unwrap(), vec![0x41, 0xA0, 0xA1]);
+        assert_eq!(
+            parse_combo("lshift rshift a").unwrap(),
+            vec![0x41, 0xA0, 0xA1]
+        );
     }
 
     #[test]
     fn parse_combo_skips_no_prefix() {
         assert_eq!(parse_combo("no_ctrl").unwrap(), Vec::<u16>::new());
-        assert_eq!(parse_combo("no_modifiers no_ctrl no_alt 5").unwrap(), vec![0x35]);
+        assert_eq!(
+            parse_combo("no_modifiers no_ctrl no_alt 5").unwrap(),
+            vec![0x35]
+        );
     }
 
     #[test]

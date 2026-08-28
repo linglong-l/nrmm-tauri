@@ -22,9 +22,10 @@ vi.mock('../utils/tauri', () => ({
   selectMod: vi.fn(),
   switchFileWatcher: vi.fn(),
   stopFileWatcher: vi.fn(),
-  updateModData: vi.fn(),
+  updateModData: (...args: unknown[]) => updateModDataMock(...(args as [])),
   deselectGroupMod: vi.fn(),
   disableAllModsInGroup: vi.fn(),
+  syncNrmmUpdateFlag: vi.fn(),
 }))
 vi.mock('./settings', () => ({
   useSettingsStore: () => settingsState,
@@ -33,9 +34,23 @@ vi.mock('./settings', () => ({
 // mock 声明需先于被导入模块（vi.mock 提升保证执行顺序，变量声明提升由 vitest 处理）
 const getModsMock = vi.fn()
 const refreshModsMock = vi.fn()
+const updateModDataMock = vi.fn()
 
 import { useModsStore } from './mods'
-import type { ModGroupData } from '@/types'
+import type { ModGroupData, UpdateResult } from '@/types'
+
+/** 构造最小更新结果（needReloadManual=false 正常完成） */
+function fakeUpdateResult(): UpdateResult {
+  return {
+    totalGroups: 0,
+    totalMods: 0,
+    enabledMods: 0,
+    disabledMods: 0,
+    processedMods: 0,
+    errors: [],
+    needReloadManual: false,
+  }
+}
 
 /** 构造最小分组数据（不同 tag 标记便于断言来源） */
 function fakeGroups(tag: string, count: number): ModGroupData[] {
@@ -54,6 +69,7 @@ describe('mods store 加载竞态防护（epoch）', () => {
     setActivePinia(createPinia())
     getModsMock.mockReset()
     refreshModsMock.mockReset()
+    updateModDataMock.mockReset()
     settingsState.currentModsPath = '/mods/GI'
     settingsState.currentGame = 'GI'
   })
@@ -134,5 +150,90 @@ describe('mods store 加载竞态防护（epoch）', () => {
 
     // refresh（旧）后完成 → 过期作废；loadMods（新）结果生效
     expect(store.groups.map((g) => g.name)).toEqual(['load-1'])
+  })
+
+  it('C14 更新期间 clearData（隐藏清数据）后不得回灌 loadMods', async () => {
+    const store = useModsStore()
+
+    // 挂起的重量级更新（模拟 tauri update_mod_data 进行中）
+    let resolveUpdate: (v: UpdateResult) => void = () => {}
+    const pending = new Promise<UpdateResult>((r) => (resolveUpdate = r))
+    updateModDataMock.mockReturnValueOnce(pending)
+
+    const p = store.updateModData() // 不 await：更新仍在进行
+    // 更新进行中窗口隐藏 → window-hidden-clear-data 触发 clearData（loadEpoch++、清空数据）
+    store.clearData()
+    // 更新终于完成
+    resolveUpdate(fakeUpdateResult())
+    await p
+
+    // C14 修复前：updateModData 返回后无条件 loadMods → getMods 被再次调用（击穿内存回收设计）
+    // C14 修复后：epoch 已变化 → 跳过 loadMods，刚释放的数据不再拉回内存
+    expect(getModsMock).not.toHaveBeenCalled()
+    expect(store.groups).toEqual([]) // 数据保持清空状态
+    expect(store.isUpdatingModData).toBe(false) // 更新状态仍正常复位
+  })
+
+  it('C14b 更新正常完成（未清空）仍会调用 loadMods 刷新数据', async () => {
+    const store = useModsStore()
+
+    let resolveUpdate: (v: UpdateResult) => void = () => {}
+    const pending = new Promise<UpdateResult>((r) => (resolveUpdate = r))
+    updateModDataMock.mockReturnValueOnce(pending)
+    // 正常路径下 loadMods 应被调用，getMods 仅被此一次调用
+    getModsMock.mockResolvedValueOnce({ groups: fakeGroups('updated', 1), mods: [] })
+
+    const p = store.updateModData()
+    resolveUpdate(fakeUpdateResult())
+    await p
+
+    expect(getModsMock).toHaveBeenCalledTimes(1)
+    expect(store.groups.map((g) => g.name)).toEqual(['updated-1'])
+    expect(store.isUpdatingModData).toBe(false)
+  })
+})
+
+describe('mods store 加载失败反馈（C18）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    getModsMock.mockReset()
+    refreshModsMock.mockReset()
+    updateModDataMock.mockReset()
+    settingsState.currentModsPath = '/mods/GI'
+    settingsState.currentGame = 'GI'
+  })
+
+  it('C18 加载失败（非竞态过期）时置位 loadError', async () => {
+    const store = useModsStore()
+    getModsMock.mockRejectedValueOnce(new Error('read dir denied'))
+    await store.loadMods()
+    expect(store.loadError).toBe('read dir denied')
+  })
+
+  it('C18 加载成功后清空 loadError', async () => {
+    const store = useModsStore()
+    getModsMock.mockRejectedValueOnce(new Error('boom'))
+    await store.loadMods()
+    expect(store.loadError).toBe('boom')
+
+    getModsMock.mockResolvedValueOnce({ groups: fakeGroups('ok', 1), mods: [] })
+    await store.loadMods()
+    expect(store.loadError).toBeNull()
+  })
+
+  it('C18 路径不存在错误（[PATH_NOT_FOUND]）不置位 loadError', async () => {
+    const store = useModsStore()
+    getModsMock.mockRejectedValueOnce(new Error('[PATH_NOT_FOUND] Mods folder moved or uninstalled'))
+    await store.loadMods()
+    expect(store.loadError).toBeNull()
+  })
+
+  it('C18 clearData 清空 loadError', async () => {
+    const store = useModsStore()
+    getModsMock.mockRejectedValueOnce(new Error('boom'))
+    await store.loadMods()
+    expect(store.loadError).toBe('boom')
+    store.clearData()
+    expect(store.loadError).toBeNull()
   })
 })

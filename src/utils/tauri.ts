@@ -889,8 +889,9 @@ export async function saveModKeybinds(
  *
  * 解析 combo 字符串（如 `no_modifiers 5`、`alt 5`、`ctrl shift F10`）
  * 并通过平台按键模拟器发送。非法按键 / 超长组合会抛错。
- * @param combo 组合键字符串（ini 中的原始值）
+ * @param combo 组合键字符串（ini 中的原始值，或单个按键 token）
+ * @param game 当前目标游戏（可选，对齐 simulate_f10 的定向发送语义）
  */
-export async function simulateKeys(combo: string): Promise<void> {
-  return safeInvoke('simulate_keys', { combo })
+export async function simulateKeys(combo: string, game?: string): Promise<void> {
+  return safeInvoke('simulate_keys', { combo, game })
 }

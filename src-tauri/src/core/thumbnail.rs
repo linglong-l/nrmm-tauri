@@ -23,6 +23,11 @@ const THUMB_JPEG_QUALITY: u8 = 80;
 /// 缓存目录文件数上限：超过后删除最旧一半（按 mtime），防止缓存目录无限膨胀
 const MAX_THUMB_FILES: usize = 5000;
 
+/// tmp 文件名全局原子序号：与 pid 组合保证多进程/多线程并发首 generation
+/// 时各线程写唯一 tmp 文件，避免 `File::create` 互相 truncate / 交错写
+/// 导致 rename 发布残缺 JPEG。
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// 缩略图档位：按前端显示区尺寸分档，避免"小显示位加载大图"的解码浪费
 ///
 /// - `Card`: 模组卡片 100×140（@2x DPR = 200×280），240 留少量余量
@@ -191,6 +196,16 @@ pub fn decode_by_header(path: &Path) -> anyhow::Result<image::DynamicImage> {
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("解码 {} 失败: {:?}", path.display(), path)))
 }
 
+/// 生成唯一的临时文件名（`{key}.{pid}.{seq}.tmp`）。
+///
+/// tmp 文件名全局原子序号（与 pid 组合保证多进程/多线程唯一）：并发的首 generation
+/// 各线程写唯一 tmp 文件，防止 `File::create` 互相 truncate 导致交错写入、最后
+/// rename 发布残缺 JPEG。
+fn unique_tmp_name(dir: &Path, key: &str) -> PathBuf {
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dir.join(format!("{}.{}.{}.tmp", key, std::process::id(), seq))
+}
+
 /// 获取（或生成）原图的缩略图缓存文件路径。
 ///
 /// 流程：
@@ -215,7 +230,8 @@ pub fn get_or_create_thumbnail(
     let dir = resolve_cache_dir(cache_dir_override);
     fs::create_dir_all(&dir).with_context(|| format!("创建缩略图缓存目录失败: {:?}", dir))?;
 
-    let thumb_path = dir.join(format!("{}.jpg", cache_key(original, size.max_edge())));
+    let key = cache_key(original, size.max_edge());
+    let thumb_path = dir.join(format!("{}.jpg", key));
     if thumb_path.exists() {
         return Ok(thumb_path);
     }
@@ -231,8 +247,9 @@ pub fn get_or_create_thumbnail(
         img.to_rgb8()
     };
 
-    // 原子写缓存（tmp + rename：进程退出不产生半成品文件）
-    let tmp_path = dir.join(format!("{}.tmp", cache_key(original, max_edge)));
+    // 原子写缓存（唯一 tmp + rename：进程退出不产生半成品文件；并发首 generation
+    // 各线程写不同 tmp 文件，避免互相 truncate / 交错写发布残缺 JPEG）
+    let tmp_path = unique_tmp_name(&dir, &key);
     {
         let file = fs::File::create(&tmp_path)
             .with_context(|| format!("创建缩略图临时文件失败: {:?}", tmp_path))?;
@@ -560,5 +577,17 @@ mod tests {
         assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
         // FNV-1a 64 "a" = 0xaf63dc4c8601ec8c
         assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+    }
+
+    /// unique_tmp_name 两次生成结果互不相等（保证并发首 generation 不写同一 tmp）
+    #[test]
+    fn unique_tmp_name_suffixes_differ() {
+        let dir = Path::new("/tmp/cache");
+        let a = unique_tmp_name(dir, "abc123");
+        let b = unique_tmp_name(dir, "abc123");
+        assert_ne!(
+            a, b,
+            "两次生成的 tmp 文件名应互不相等（避免并发截断同一文件）"
+        );
     }
 }

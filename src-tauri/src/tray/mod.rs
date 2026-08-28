@@ -95,7 +95,8 @@ fn handle_game_switch(app: &AppHandle, game: TargetGame) {
 /// 处理应用退出操作
 ///
 /// 先注销所有全局快捷键，释放系统热键资源，
-/// 然后直接调用 exit 退出进程，绕过窗口关闭拦截。
+/// 再走统一退出管线（活跃操作检查 + 干净退出记录 + 用户退出标记 + exit），
+/// 与 `hard_quit_app` 命令路径保持一致（导入进行中退出不再被硬杀）。
 ///
 /// # 参数
 ///
@@ -104,9 +105,7 @@ fn handle_quit(app: &AppHandle) {
     if let Some(hotkey_mgr) = app.try_state::<Arc<HotkeyManager>>() {
         hotkey_mgr.unregister_all();
     }
-    // 标记用户显式退出，避免被 run 循环的 ExitRequested 拦截（区分"窗口销毁触发退出"）
-    crate::window::lifecycle::mark_user_quit();
-    app.exit(0);
+    crate::window::quit_pipeline(app);
 }
 
 /// 创建系统托盘图标及菜单

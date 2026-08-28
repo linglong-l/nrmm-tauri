@@ -4,12 +4,12 @@
 //! 缓存键为 (TargetGame, 规范化路径字符串)，值为轻量扫描结果 ScanResult。
 //! 使用 parking_lot::RwLock 保证线程安全的并发读写。
 
-use crate::core::mod_scanner::ScanResult;
+use crate::core::mod_scanner::{group_order_cmp, recount_mods, ScanResult};
 use crate::models::enums::TargetGame;
-use crate::models::mod_data::{ModData, ModGroupData};
+use crate::models::mod_data::ModData;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
@@ -321,11 +321,12 @@ impl ModCache {
     ///
     /// # 合并策略
     ///
-    /// - **groups**：通过 `BTreeMap` 按 `group_path` 去重。
-    ///   已存在相同 `groupPath` 的组则整体替换，不存在则追加。
-    /// - **mods**：通过 `BTreeMap` 按 `mod_path` 去重。
-    ///   已存在相同 `modPath` 的 mod 则替换，否则追加。
-    /// - 合并后重算 `total_mods_count` / `enabled_mods_count` / `disabled_mods_count`。
+    /// - **groups**：就地合并，按 `group_path`（路径等价、大小写不敏感）原位替换；
+    ///   不存在则追加。合并后按全量扫描一致的规则排序（NormalGroup 数值序 / MutexGroup 名称序）。
+    /// - **mods**：扁平列表仅保留真实模组（跳过 None 空槽位），按 `full_path`（路径等价、
+    ///   大小写不敏感）原位替换；partial 分组子树下未出现的旧 mod 视为删除（删除传播）。
+    /// - 合并后按全量轻量扫描同口径重算 `total_mods_count` / `enabled_mods_count` / `disabled_mods_count`
+    ///   （排除 None；enabled = `!disabled && !mod_disabled`）。
     ///
     /// # 参数
     /// - `game`: 目标游戏。
@@ -367,48 +368,76 @@ impl ModCache {
         // 若调用方已通过 get() 克隆了该 Arc，则此处写时拷贝一份再改（语义安全）。
         let owned = Arc::make_mut(&mut existing.result);
 
-        // 将现有 groups 转为 BTreeMap（按 group_path 去重）
-        let mut existing_groups: BTreeMap<String, ModGroupData> = owned
-            .groups
-            .drain(..)
-            .map(|g| (g.group_path.clone(), g))
-            .collect();
-        // 合并/覆盖 partial_result 的 groups
-        for g in partial_result.groups {
-            existing_groups.insert(g.group_path.clone(), g);
+        // 将现有 groups 就地合并：按 group_path（路径等价、大小写不敏感）原位替换，
+        // 避免 BTreeMap 按字典序破坏分组数值序、或大小写路径差异产生重复分组。
+        for pg in partial_result.groups {
+            match owned
+                .groups
+                .iter()
+                .position(|g| path_string_eq(&g.group_path, &pg.group_path))
+            {
+                Some(i) => owned.groups[i] = pg,
+                None => owned.groups.push(pg),
+            }
         }
-        owned.groups = existing_groups.into_values().collect();
+        // 合并后按与全量轻量扫描一致的规则排序（NormalGroup 置顶数值序 / MutexGroup 名称序）
+        owned.groups.sort_by(group_order_cmp);
 
-        // 将现有 mods 转为 BTreeMap（按 mod_path 去重）
-        let mut existing_mods: BTreeMap<String, ModData> = owned
+        // 扁平 mods 就地合并：None 空槽位仅存于 groups[i].mods 内用于槽位展示，不进扁平列表；
+        // 其余 mod 按 full_path（路径等价、大小写不敏感）原位替换，否则追加。
+        let partial_mods: Vec<ModData> = partial_result
             .mods
-            .drain(..)
-            .map(|m| (m.mod_path.clone(), m))
+            .into_iter()
+            .filter(|m| m.name != "None" && m.mod_path != "None")
             .collect();
         // 删除传播：partial 扫描粒度到分组，partial 中出现的分组代表该子树当前完整状态，
         // 其子树下未出现在 partial 中的旧 mod 视为已被删除（文件/目录被移除）。
-        // 原合并策略只增改不删，导致删除模组后 UI 仍显示旧条目，直至全量重扫。
         for gp in &partial_roots {
-            existing_mods.retain(|_, m| !Path::new(m.full_path.as_ref()).starts_with(gp));
+            owned
+                .mods
+                .retain(|m| !Path::new(m.full_path.as_ref()).starts_with(gp));
         }
-        // 合并/覆盖 partial_result 的 mods
-        for m in partial_result.mods {
-            existing_mods.insert(m.mod_path.clone(), m);
-        }
-        owned.mods = existing_mods.into_values().collect();
-
-        // 重算计数
-        owned.total_mods_count = owned.mods.len();
-        let (mut enabled, mut disabled) = (0usize, 0usize);
-        for m in &owned.mods {
-            if m.is_active {
-                enabled += 1;
-            } else {
-                disabled += 1;
+        // 合并/覆盖 partial 的真实模组
+        for pm in partial_mods {
+            match owned
+                .mods
+                .iter()
+                .position(|m| path_string_eq(m.full_path.as_ref(), pm.full_path.as_ref()))
+            {
+                Some(i) => owned.mods[i] = pm,
+                None => owned.mods.push(pm),
             }
         }
+
+        // 重算计数（与全量轻量扫描同口径：排除 None；enabled = !disabled && !mod_disabled）
+        let (total, enabled, disabled) = recount_mods(&owned.mods);
+        owned.total_mods_count = total;
         owned.enabled_mods_count = enabled;
         owned.disabled_mods_count = disabled;
+
+        log::debug!(
+            "[mod_cache] subtree_replace 合并守卫 | groups={} mods={} total={} enabled={} disabled={}",
+            owned.groups.len(),
+            owned.mods.len(),
+            owned.total_mods_count,
+            owned.enabled_mods_count,
+            owned.disabled_mods_count,
+        );
+    }
+}
+
+/// 路径字符串等价比较（Windows 下大小写不敏感，其他平台精确比较）。
+///
+/// 用于增量合并时按路径原位识别分组/模组，避免大小写路径差异产生重复条目。
+/// 语义对齐 `mod_manager::path_eq_ignore_case`。
+fn path_string_eq(a: &str, b: &str) -> bool {
+    #[cfg(windows)]
+    {
+        a.to_lowercase() == b.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
     }
 }
 
@@ -605,6 +634,106 @@ mod tests {
         assert!(
             updated.mods.iter().any(|m| m.mod_name == "TestMod"),
             "未删除的模组应保留"
+        );
+    }
+
+    /// 测试：subtree_replace 合并后计数与扁平列表需与全量轻量扫描口径一致。
+    ///
+    /// 回归场景：原实现 groups 用 BTreeMap 按字典序合并破坏数值分组顺序、扁平 mods 含 None
+    /// 空槽位、enabled 用 is_active 冒充 disabled 语义 → 计数/排序/扁平列表与全量扫描不一致。
+    #[test]
+    fn subtree_replace_matches_light_scan_semantics() {
+        use crate::core::mod_scanner::scan_partial_path;
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().to_path_buf();
+        let managed = dir.path().join("_MANAGED_");
+        fs::create_dir_all(managed.join("group_2").join("EnabledMod")).unwrap();
+        fs::write(
+            managed.join("group_2").join("EnabledMod").join("mod.ini"),
+            "[Section]\nx=1\n",
+        )
+        .unwrap();
+        fs::create_dir_all(managed.join("group_2").join("DISABLED_Off")).unwrap();
+        fs::write(
+            managed.join("group_2").join("DISABLED_Off").join("mod.ini"),
+            "[Section]\nx=1\n",
+        )
+        .unwrap();
+        fs::create_dir_all(managed.join("group_10").join("ModB")).unwrap();
+        fs::write(
+            managed.join("group_10").join("ModB").join("mod.ini"),
+            "[Section]\nx=1\n",
+        )
+        .unwrap();
+
+        let mut cache = ModCache::new();
+        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        // 前置：全量扁平 mods 不含 None，计数口径（total/enabled/disabled）
+        assert!(full.mods.iter().all(|m| m.name != "None"));
+        assert_eq!(
+            (
+                full.total_mods_count,
+                full.enabled_mods_count,
+                full.disabled_mods_count
+            ),
+            (3, 2, 1)
+        );
+        cache.set(TargetGame::GenshinImpact, &mods_path, full);
+
+        // 局部重扫 group_10 并合并
+        let g10 = managed.join("group_10");
+        let partial = scan_partial_path(&mods_path, &g10).unwrap();
+        cache.subtree_replace(TargetGame::GenshinImpact, &mods_path, partial);
+
+        let updated = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+        // 计数与全量口径一致
+        assert_eq!(
+            (
+                updated.total_mods_count,
+                updated.enabled_mods_count,
+                updated.disabled_mods_count
+            ),
+            (3, 2, 1)
+        );
+        // 扁平 mods 无 None，且仅为三个真实模组
+        assert!(updated.mods.iter().all(|m| m.name != "None"));
+        assert_eq!(updated.mods.len(), 3);
+        // 分组顺序为数值序：group_2（索引 2）在 group_10（索引 10）前
+        let idx: Vec<u32> = updated.groups.iter().map(|g| g.group_index).collect();
+        assert_eq!(idx, vec![2, 10]);
+    }
+
+    /// 测试：subtree_replace 遇到仅大小写不同的 group_path 时原位替换，不产生重复分组。
+    ///
+    /// 回归场景：原实现按 group_path 字典序 key 去重，大小写路径差异被当作不同分组追加，
+    /// 产生重复分组。修复后按路径等价（大小写不敏感）比较原位替换。
+    #[test]
+    fn subtree_replace_no_duplicate_group_on_case_diff() {
+        use crate::core::mod_scanner::scan_partial_path;
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().to_path_buf();
+        let g2 = dir.path().join("_MANAGED_").join("group_2");
+        fs::create_dir_all(g2.join("ModB")).unwrap();
+        fs::write(g2.join("ModB").join("mod.ini"), "[Section]\nx=1\n").unwrap();
+
+        let mut cache = ModCache::new();
+        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        cache.set(TargetGame::GenshinImpact, &mods_path, full);
+
+        // 构造仅大小写不同的 partial（group_path 大写化，模拟 Windows 大小写不敏感路径差异）
+        let mut partial = scan_partial_path(&mods_path, &g2).unwrap();
+        for g in partial.groups.iter_mut() {
+            g.group_path = g.group_path.to_uppercase();
+        }
+        cache.subtree_replace(TargetGame::GenshinImpact, &mods_path, partial);
+
+        let updated = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+        // 不应因大小写差异产生重复分组
+        assert_eq!(updated.groups.len(), 1, "大小写路径差异不应产生重复分组");
+        // 原位替换后 group_path 保持大写形态（仅一处，未被追加为第二项）
+        assert_eq!(
+            updated.groups[0].group_path,
+            updated.groups[0].group_path.to_uppercase()
         );
     }
 }

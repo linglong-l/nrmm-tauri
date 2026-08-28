@@ -2,6 +2,8 @@
   "Settings": "Settings",
   "Keybinds": "Keybinds",
   "Mods": "Mods",
+  "Mods load failed": "Mods load failed",
+  "Retry": "Retry",
   "Add mods": "Add mods",
   "Add group": "Add group",
   "Refresh": "Refresh",

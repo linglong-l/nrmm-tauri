@@ -21,9 +21,8 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 /// 匹配 `[KeyXXX]` 段（捕获 XXX 作为段别名，大小写不敏感；NRMM loadKeys 等价）
-static KEY_SECTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^\s*\[Key([^\]\r\n]*)").expect("valid key section regex")
-});
+static KEY_SECTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^\s*\[Key([^\]\r\n]*)").expect("valid key section regex"));
 /// 匹配 `key = <combo>`（主键）
 static KEY_VALUE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^\s*key\s*=\s*(.+)").expect("valid key value regex"));
@@ -199,7 +198,11 @@ fn get_namespace_lowercase(lines: &[String], file_path: &str) -> String {
         if trimmed.starts_with(';') {
             continue;
         }
-        if trimmed.to_lowercase().replace(' ', "").starts_with("namespace=") {
+        if trimmed
+            .to_lowercase()
+            .replace(' ', "")
+            .starts_with("namespace=")
+        {
             if let Some(idx) = trimmed.find('=') {
                 namespace = trimmed[idx + 1..].trim().to_lowercase();
             }
@@ -233,8 +236,7 @@ fn apply_keybind_edits(lines: &mut [String], sections: &[KeybindSection]) {
         };
 
         // 2) key/back 行
-        let key_line_indices: HashSet<usize> =
-            section.keys.iter().map(|k| k.line_index).collect();
+        let key_line_indices: HashSet<usize> = section.keys.iter().map(|k| k.line_index).collect();
         for key in &section.keys {
             if key.line_index >= lines.len() {
                 continue;
@@ -249,7 +251,11 @@ fn apply_keybind_edits(lines: &mut [String], sections: &[KeybindSection]) {
 
         // 3) 段体其他行（段头之后直到下一个 `[` 段头）
         let mut section_end = lines.len();
-        for (j, l) in lines.iter().enumerate().skip(section.section_line_index + 1) {
+        for (j, l) in lines
+            .iter()
+            .enumerate()
+            .skip(section.section_line_index + 1)
+        {
             let l = l.trim_end_matches('\r');
             let effective = l.strip_prefix(";+;").unwrap_or(l);
             if effective.trim_start().starts_with('[') {
@@ -286,7 +292,9 @@ pub async fn read_mod_keybinds(mod_path: String) -> Result<Vec<KeybindFile>, Str
     tauri::async_runtime::spawn_blocking(move || -> Result<Vec<KeybindFile>, String> {
         let root = PathBuf::from(&mod_path);
         if !root.is_dir() {
-            return Err(format!("[PATH_NOT_FOUND] mod directory does not exist: {mod_path}"));
+            return Err(format!(
+                "[PATH_NOT_FOUND] mod directory does not exist: {mod_path}"
+            ));
         }
 
         let ini_files = collect_ini_files(&root);
@@ -331,7 +339,9 @@ pub async fn save_mod_keybinds(
     tauri::async_runtime::spawn_blocking(move || -> Result<SaveKeybindResult, String> {
         let root = PathBuf::from(&mod_path);
         if !root.is_dir() {
-            return Err(format!("[PATH_NOT_FOUND] mod directory does not exist: {mod_path}"));
+            return Err(format!(
+                "[PATH_NOT_FOUND] mod directory does not exist: {mod_path}"
+            ));
         }
 
         let mut duplicate_sections = false;
@@ -372,11 +382,23 @@ pub async fn save_mod_keybinds(
 ///
 /// 解析 combo 字符串（如 `no_modifiers 5`、`alt 5`、`ctrl shift F10`）并
 /// 通过平台按键模拟器发送。非法按键 / 超长组合返回错误。
+///
+/// `game`：当前目标游戏（可选）。传入时解析其进程名并定位游戏窗口，
+/// 使按键模拟对齐 `simulate_f10` 的「定向对应游戏」语义——按键经由全局输入队列
+/// （3Dmigoto 键盘钩子拦截）送达对应游戏，确保 mod 热键真正触发。
 #[tauri::command]
-pub async fn simulate_keys(combo: String) -> Result<(), String> {
+pub async fn simulate_keys(combo: String, game: Option<String>) -> Result<(), String> {
     let keys = key_combo::parse_combo(&combo)?;
     tauri::async_runtime::spawn_blocking(move || {
         let mut sim = get_key_simulator();
+        // 定向到对应游戏（对齐 simulate_f10）：解析游戏进程名并定位其窗口
+        if let Some(game_str) = game {
+            if let Ok(game_enum) = crate::hotkey::parse_game(&game_str) {
+                if let Some(first_pn) = game_enum.process_names().first() {
+                    let _ = sim.set_target_process(first_pn);
+                }
+            }
+        }
         sim.simulate_combo(&keys).map_err(|e| e.to_string())
     })
     .await
@@ -551,10 +573,15 @@ mod tests {
     fn collect_ini_files_keeps_root_with_disabled_prefix() {
         // 回归：mod 目录名带 DISABLED 前缀（禁用模组）时，root 自身不被过滤，
         // 其内部 ini 仍可发现（对齐 NRMM：disabled 检查基于 mod 根内相对路径）
-        let dir = std::env::temp_dir().join(format!("keybind_disabled_root_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("keybind_disabled_root_{}", std::process::id()));
         let mod_dir = dir.join("DISABLED荧-冬狩夜巡NSFW切换");
         std::fs::create_dir_all(&mod_dir).unwrap();
-        std::fs::write(mod_dir.join("merged.ini"), "[KeyTop]\nkey = no_modifiers 5\n").unwrap();
+        std::fs::write(
+            mod_dir.join("merged.ini"),
+            "[KeyTop]\nkey = no_modifiers 5\n",
+        )
+        .unwrap();
 
         let files = collect_ini_files(&mod_dir);
         let names: Vec<String> = files

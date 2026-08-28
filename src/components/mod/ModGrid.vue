@@ -8,11 +8,19 @@
     <div ref="gridContentRef" class="grid-content">
       <!-- 空状态：无模组时显示提示 -->
       <div v-if="displayMods.length === 0 && !loading" class="empty-state">
-        <el-icon :size="64" class="empty-icon">
-          <FolderOpened />
-        </el-icon>
-        <p class="empty-text">{{ t('mods.noMods') }}</p>
-        <p class="empty-hint">{{ t('Drag & Drop mod folders here to add mods to this group (1 folder = 1 mod).') }}</p>
+        <!-- 加载失败：显示错误信息+重试（C18，避免误导性的「无模组」提示） -->
+        <div v-if="modsStore.loadError" class="load-error-state">
+          <p class="error-title">{{ t('Mods load failed') }}</p>
+          <p class="error-detail">{{ modsStore.loadError }}</p>
+          <el-button size="small" @click="modsStore.loadMods()">{{ t('Retry') }}</el-button>
+        </div>
+        <template v-else>
+          <el-icon :size="64" class="empty-icon">
+            <FolderOpened />
+          </el-icon>
+          <p class="empty-text">{{ t('mods.noMods') }}</p>
+          <p class="empty-hint">{{ t('Drag & Drop mod folders here to add mods to this group (1 folder = 1 mod).') }}</p>
+        </template>
       </div>
 
       <!-- 虚拟行渲染模式（模组数 > 阈值） -->
@@ -272,7 +280,11 @@ function virtualSlotEmpty(rowBase: number, colBase: number): boolean {
  * @param index 索引
  */
 function setModRef(el: Element | ComponentPublicInstance | null, index: number) {
-  if (!el) return
+  if (!el) {
+    // 卸载回调：清理槽位，防止虚拟滚动 detached DOM 被 modRefs 持有（C7 内存泄漏）
+    modRefs.value[index] = null
+    return
+  }
   // 组件实例取其根 DOM（$el），原生元素直接使用；统一收窄为 HTMLElement
   const domEl: HTMLElement = '$el' in el ? (el.$el as HTMLElement) : (el as HTMLElement)
   modRefs.value[index] = domEl
@@ -550,6 +562,31 @@ watch(modsFocusTick, () => {
   max-width: 400px;
   margin: 0;
   line-height: 1.5;
+}
+
+/* 加载失败状态（C18）：样式对齐现有空态 */
+.load-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+}
+
+.error-title {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0;
+  color: var(--danger, #f56c6c);
+}
+
+.error-detail {
+  font-size: 13px;
+  text-align: center;
+  max-width: 400px;
+  margin: 0;
+  line-height: 1.5;
+  word-break: break-all;
 }
 
 .search-highlight {

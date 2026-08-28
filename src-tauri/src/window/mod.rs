@@ -326,17 +326,30 @@ pub fn toggle_main_window_cmd(app: AppHandle) {
     toggle_main_window(&app);
 }
 
+/// 统一退出管线：活跃操作检查 → 干净退出记录 → 用户退出标记 → 退出。
+/// 供 `hard_quit_app` 命令与托盘退出共用（行为一致性由路径收敛保证）。
+pub fn quit_pipeline(app: &tauri::AppHandle) {
+    if crate::core::operation_registry::has_active_operations() {
+        log::warn!("[quit] 存在活跃后台操作，取消本次退出（托盘/命令路径一致）");
+        return;
+    }
+    crate::core::exit_log::mark_clean_exit(crate::core::exit_log::ExitReason::UserQuit);
+    crate::window::lifecycle::mark_user_quit();
+    app.exit(0);
+}
+
 /// 强制退出应用（绕过窗口关闭拦截）
 ///
 /// 先注销所有全局快捷键，然后直接调用 exit 退出进程，
 /// 避免 on_window_event CloseRequested 中的 prevent_close 导致无法退出。
+/// 干净退出记录与用户退出标记由 `quit_pipeline` 统一负责。
 ///
 /// # 参数
 ///
 /// * `app` - Tauri 应用句柄
 #[tauri::command]
 pub fn hard_quit_app(app: AppHandle) {
-    use crate::core::exit_log::{mark_clean_exit, record_exit, ExitReason};
+    use crate::core::exit_log::{record_exit, ExitReason};
     use crate::core::operation_registry::{active_operations, has_active_operations};
     use crate::hotkey::HotkeyManager;
     use std::sync::Arc;
@@ -354,16 +367,11 @@ pub fn hard_quit_app(app: AppHandle) {
         return; // 不退出，待后台操作完成后再由用户点击退出
     }
 
-    // 无活跃后台操作 → 干净退出：先标记干净退出（写入 run_state + 记录 user_quit），再退出。
-    mark_clean_exit(ExitReason::UserQuit);
-
-    // 标记用户显式退出，避免被 run 循环的 ExitRequested 拦截（区分"窗口销毁触发退出"）
-    crate::window::lifecycle::mark_user_quit();
-
+    // 无活跃后台操作 → 先注销全局快捷键，再走统一退出管线（干净退出记录 + 用户退出标记 + exit）。
     if let Some(hotkey_mgr) = app.try_state::<Arc<HotkeyManager>>() {
         hotkey_mgr.unregister_all();
     }
-    app.exit(0);
+    quit_pipeline(&app);
 }
 
 /// 获取当前前台窗口的进程名

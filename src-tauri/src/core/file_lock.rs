@@ -53,12 +53,12 @@ impl AdvisoryLock {
             .create_new(true)
             .open(&lock_path)
         {
-            Ok(mut f) => {
+            Ok(f) => {
                 let pid = process::id();
                 let ts = now_secs();
-                let _ = writeln!(f, "pid={}", pid);
-                let _ = writeln!(f, "ts={}", ts);
-                let _ = f.flush();
+                // 一次 write_all 完整内容；失败即清理锁文件并返回 Err
+                //（不产生空锁孤儿，避免其他进程误判为孤儿而接管，破坏互斥）
+                let f = Self::write_lock_content(f, &lock_path, pid, ts)?;
                 Ok(Some(AdvisoryLock {
                     lock_path,
                     _handle: Some(f),
@@ -74,6 +74,23 @@ impl AdvisoryLock {
             }
             Err(e) => Err(e).with_context(|| format!("Failed to create lock file {:?}", lock_path)),
         }
+    }
+
+    /// 写入锁文件内容（PID 与时间戳）；失败时先关闭句柄、清理锁文件并返回 `Err`。
+    ///
+    /// 原实现用多次 `writeln!` 并忽略失败——磁盘满时会残留内容残缺的「空锁孤儿」，
+    /// 持锁者自认持锁，其他进程却读不到 PID/时间戳而判其过期接管，导致互斥失效。
+    /// 此处以一次 `write_all` 写入完整内容，任一步失败即回滚删除锁文件，保证不遗留空锁。
+    /// 成功时归还所属句柄（供 `AdvisoryLock` 持有至释放）。
+    fn write_lock_content<W: Write>(mut f: W, path: &Path, pid: u32, ts: u64) -> Result<W> {
+        let content = format!("pid={}\nts={}\n", pid, ts);
+        let result = f.write_all(content.as_bytes()).and_then(|_| f.flush());
+        if let Err(e) = result {
+            drop(f); // Windows 上需先关闭占用句柄才能删除锁文件
+            let _ = fs::remove_file(path);
+            return Err(anyhow::anyhow!("写入锁文件失败并已清理: {}", e));
+        }
+        Ok(f)
     }
 
     /// 带重试的阻塞获取：在超时内周期性重试；超时仍未获取返回 `None`。
@@ -160,4 +177,38 @@ fn process_alive(_pid: u32) -> bool {
     // 非 Windows 平台无 libc 依赖，无法精确探测 PID；交由 `is_stale` 的时间戳阈值判定。
     // 返回 true 表示「默认视为存活」，从而仅当超过时间戳阈值才接管，避免误抢活跃锁。
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{self, Write};
+
+    /// 恒失败写入器：无需真实磁盘故障即可稳定触发写入错误路径（对应磁盘满等写失败场景）。
+    struct ErrorWriter;
+
+    impl Write for ErrorWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("注入写入失败"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("注入写入失败"))
+        }
+    }
+
+    /// 写入失败时必须返回 `Err`，且已创建的锁文件被清理（不残留「空锁孤儿」）。
+    #[test]
+    fn write_failure_cleans_up_lock_file_and_returns_err() {
+        let tmp = tempfile::TempDir::new().expect("创建临时测试目录失败");
+        let lock_path = tmp.path().join(".nrmm_process.lock");
+        // 预置真实锁文件，验证失败路径确会删除磁盘上的锁文件。
+        std::fs::write(&lock_path, "bogus").expect("预置锁文件失败");
+
+        let res = AdvisoryLock::write_lock_content(ErrorWriter, &lock_path, 1234, 99);
+        assert!(res.is_err(), "写入失败应返回 Err 而非静默忽略");
+        assert!(
+            !lock_path.exists(),
+            "写入失败后锁文件应被清理，不得残留空锁孤儿"
+        );
+    }
 }

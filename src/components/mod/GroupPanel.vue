@@ -381,7 +381,8 @@ async function handleAddSubGroupAutoNamed() {
       {
         confirmButtonText: t('common.confirm'),
         cancelButtonText: t('common.cancel'),
-        type: 'info'
+        type: 'info',
+        customClass: 'app-confirm-box'
       }
     )
     await createSubfolder(parentPath, sanitizedName)
@@ -491,7 +492,8 @@ async function handleRemoveGroup() {
       {
         confirmButtonText: t('common.confirm'),
         cancelButtonText: t('common.cancel'),
-        type: 'warning'
+        type: 'warning',
+        customClass: 'app-confirm-box'
       }
     )
     if (contextGroup.value.groupPath) {
@@ -582,6 +584,7 @@ async function handleAddSubGroup() {
         cancelButtonText: t('common.cancel'),
         type: 'info',
         showClose: true,
+        customClass: 'app-confirm-box',
       }
     )
 

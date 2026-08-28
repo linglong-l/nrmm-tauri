@@ -1074,6 +1074,10 @@ fn process_single_mod(
             }
         }
 
+        // C6：INI 读取入口预检转换——非 UTF-8（GBK/GB18030）先无损转 UTF-8 原子写回，
+        // 使 parse 读到一致 UTF-8，`write_atomic_skip_unchanged` 的字节比较不再误判。
+        ensure_ini_utf8(&ini_path);
+
         match get_or_parse_ini(&ini_path) {
             Ok(mut ini) => {
                 // 错误检测
@@ -1351,6 +1355,8 @@ pub fn auto_modify_duplicate_namespace(enabled_mods: &[&ModData]) {
             let mut ini_paths: Vec<PathBuf> = Vec::new();
             for ini_data in &m.mod_ini_data {
                 let p = PathBuf::from(&ini_data.ini_path);
+                // C6：预检转换，保证 namespace 判定与后续 rename 写回均基于一致 UTF-8
+                ensure_ini_utf8(&p);
                 if let Ok(ini) = get_or_parse_ini(&p) {
                     if let Some(ns) = namespace_handler::extract_namespace(&ini) {
                         namespaces_in_mod.insert(ns);
@@ -1614,34 +1620,41 @@ fn fix_non_managed_crash_lines(
     );
 }
 
+/// C6 统一编码管线预检：若源文件非 UTF-8，先按 GB18030（覆盖 GBK/GB2312）无损解码
+/// 为 UTF-8 并原子写回，使后续任何 `get_or_parse_ini` / INI 写回链路读取到一致的 UTF-8。
+/// UTF-8 文件仅读取不改写（零副作用），保证纯 UTF-8 数据集字节级不变。
+fn ensure_ini_utf8(path: &Path) {
+    let (converted, info) = match crate::core::ini_handler::read_ini_safe(path) {
+        Ok(t) => t,
+        Err(e) => {
+            log::warn!("[mod_manager] ensure_ini_utf8: 读取失败 {:?}: {}", path, e);
+            return;
+        }
+    };
+    if info.encoding == crate::core::ini_handler::SourceEncoding::Gbk {
+        if let Err(e) = crate::core::ini_handler::write_utf8_atomic(path, &converted, info) {
+            log::warn!(
+                "[mod_manager] ensure_ini_utf8: 转换写回失败 {:?}: {}",
+                path,
+                e
+            );
+        }
+    }
+}
+
 /// 对齐 Dart `_fixNonManagedModsCrashLine`：将指定行号、行内容的崩溃行注释掉。
 ///
 /// 规则：行号有效、该行 trim 后小写与记录一致、且尚未以 `;-;` 开头时，
 /// 前缀 `;-;`（`;-;<trimmed>`），其余行保持不变。返回是否发生修改。
 ///
-/// # 编码安全（修复：防止回写损坏）
-/// 原实现用 `force_read_as_utf8`（有损解码）读取后整体回写：非 UTF-8 文件
-/// （如 GBK 编码）会被替换为 U+FFFD 永久损坏，且 UTF-8 BOM 与 CRLF 换行会被丢弃。
-/// 现改为：
-/// - 非 UTF-8 文件直接跳过修复（记录日志），拒绝任何形式的损坏性回写；
-/// - 保留 UTF-8 BOM（若有）；
-/// - 保留原文件换行风格（CRLF 与 LF）与末尾换行符。
+/// # 编码安全（C6：统一 UTF-8 决策）
+/// 此前非 UTF-8（如 GBK/GB18030）文件被直接跳过修复；现统一编码——先经
+/// `read_ini_safe` 无损转换为 UTF-8，命中崩溃行时前置 `;-;` 并保留
+/// BOM/CRLF/末尾换行后原子写回（不再拒绝，全数据集统一 UTF-8）。
 fn comment_crash_lines_in_file(path: &Path, crash_lines: &[(u32, String)]) -> bool {
-    let bytes = match fs::read(path) {
-        Ok(b) => b,
+    let (content, info) = match crate::core::ini_handler::read_ini_safe(path) {
+        Ok(t) => t,
         Err(_) => return false,
-    };
-    let had_bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
-    let body = if had_bom { &bytes[3..] } else { &bytes[..] };
-    let content = match std::str::from_utf8(body) {
-        Ok(s) => s,
-        Err(_) => {
-            log::warn!(
-                "[mod_manager] 跳过非 UTF-8 文件的崩溃行修复（避免回写损坏文件）：{:?}",
-                path
-            );
-            return false;
-        }
     };
     let crlf = content.contains("\r\n");
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
@@ -1663,12 +1676,7 @@ fn comment_crash_lines_in_file(path: &Path, crash_lines: &[(u32, String)]) -> bo
         if content.ends_with('\n') {
             out.push_str(if crlf { "\r\n" } else { "\n" });
         }
-        let mut buf = Vec::with_capacity(out.len() + 3);
-        if had_bom {
-            buf.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-        }
-        buf.extend_from_slice(out.as_bytes());
-        if atomic_write_file(path, &buf).is_ok() {
+        if crate::core::ini_handler::write_utf8_atomic(path, &out, info).is_ok() {
             return true;
         }
     }
@@ -3040,7 +3048,20 @@ fn collect_mod_ini_files(mod_dir: &Path) -> Vec<PathBuf> {
 /// 4. 移除前 4 个空格缩进
 /// 5. 若有修改则写回文件
 fn restore_single_ini(ini_path: &Path) -> Result<()> {
-    let content = IniFile::force_read_as_utf8(ini_path)?;
+    // C6：写回转换前先二进制备份原文件（atomic_copy 字节级保真），已有备份则复用；
+    // 再经统一编码管线读取（非 UTF-8 无损转为 UTF-8）。
+    let backup_path = ini_path.with_extension(constants::BACKUP_EXTENSION);
+    if !backup_path.exists() {
+        if let Err(e) = crate::utils::atomic_copy(ini_path, &backup_path) {
+            log::warn!(
+                "[restore_single_ini] 备份失败 {:?} -> {:?}: {}",
+                ini_path,
+                backup_path,
+                e
+            );
+        }
+    }
+    let (content, info) = crate::core::ini_handler::read_ini_safe(ini_path)?;
     let raw_lines: Vec<&str> = content.lines().collect();
     let mut lines: Vec<String> = raw_lines.iter().map(|s| s.to_string()).collect();
     let mut modified = false;
@@ -3139,7 +3160,7 @@ fn restore_single_ini(ini_path: &Path) -> Result<()> {
             .map(|s| s.as_str())
             .collect::<Vec<&str>>()
             .join("\n");
-        atomic_write_file(ini_path, new_content.as_bytes())?;
+        crate::core::ini_handler::write_utf8_atomic(ini_path, &new_content, info)?;
     }
 
     Ok(())
@@ -4523,17 +4544,19 @@ endif
         );
         assert!(text.contains("\r\nkey = 1\r\n"), "未命中行应原样保留");
 
-        // 2) 非 UTF-8 文件（含 GBK 字节）：跳过修复，文件字节不得被改写
+        // 2) 非 UTF-8 文件（含 GBK 字节）：C6 统一编码——先无损转 UTF-8 再注释崩溃行
         let gbk_path = dir.path().join("gbk.ini");
+        // GBK 字节：\xb2\xe2\xca\xd4 = "测试"
         let gbk_bytes: Vec<u8> = b"[Section]\r\ndrawindexed = 5\r\n\xb2\xe2\xca\xd4\r\n".to_vec();
         fs::write(&gbk_path, &gbk_bytes).unwrap();
         let changed2 =
             comment_crash_lines_in_file(&gbk_path, &[(2, "drawindexed = 5".to_string())]);
-        assert!(!changed2, "非 UTF-8 文件应跳过修复");
-        assert_eq!(
-            fs::read(&gbk_path).unwrap(),
-            gbk_bytes,
-            "非 UTF-8 文件字节不得被改写"
+        assert!(changed2, "非 UTF-8 文件应转换并修复崩溃行");
+        let out_text = String::from_utf8(fs::read(&gbk_path).unwrap()).unwrap();
+        assert!(
+            out_text.contains(";-;drawindexed = 5") && out_text.contains("测试"),
+            "GBK 内容应无损转为 UTF-8 并注释崩溃行:\n{:?}",
+            out_text
         );
 
         // 3) LF 无 BOM 文件：正常修复且保留末尾换行

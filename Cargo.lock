@@ -2825,6 +2825,7 @@ dependencies = [
  "core-foundation",
  "core-graphics",
  "dirs",
+ "encoding_rs",
  "env_logger",
  "image",
  "infer 0.16.0",

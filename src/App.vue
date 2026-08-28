@@ -146,6 +146,12 @@ let unlistenWindowShowWithGame: (() => void) | null = null
  */
 let gameSwitchPending = false
 /**
+ * 自发切换目标游戏的时间戳（C13 幂等去重依据）
+ * applyDetectedGameSwitch 主动切换时记录，后端 target-game-switched 事件回弹
+ * 在 ~2s 内且 game 与当前一致时视为回声，跳过二次加载，避免双重 IPC/序列化/内存峰值
+ */
+let lastSwitchedBySelf = 0
+/**
  * 前端冷启动是否源于窗口运行时重建（后端 was_window_recreated 读后清零）
  * 重建冷启动时跳过启动系统通知，避免用户隐藏窗口后再次弹通知构成骚扰。
  */
@@ -166,6 +172,7 @@ let windowRecreated = false
  * @param markPending 是否标记 gameSwitchPending（true 时 window-shown 会跳过重复加载）
  */
 async function applyDetectedGameSwitch(game: TargetGame, markPending = true): Promise<void> {
+  lastSwitchedBySelf = Date.now()   // C13：标记自发切换，抑制后端事件回弹的二次加载
   if (markPending) gameSwitchPending = true
 
   // 先同步更新前端游戏状态（确保 currentModsPath 立即切换到新游戏）
@@ -328,6 +335,12 @@ onMounted(async () => {
     unlistenTargetGame = await listen<TargetGame>('target-game-switched', async (event) => {
       const game = event.payload
       logger.info('App', `Target game switched to: ${game}`)
+      // 幂等去重（C13）：短时间内自发切换的事件回声且 game 与当前一致 → 本地已加载，跳过
+      const isEchoOfSelfSwitch = Date.now() - lastSwitchedBySelf < 2000 && game === settingsStore.currentGame
+      if (isEchoOfSelfSwitch) {
+        logger.debug('App', 'target-game-switched 为自发切换回声，跳过二次加载', { game })
+        return
+      }
       settingsStore.switchGame(game)
       // 切换游戏后如在模组页面需要重新加载模组和文件监听
       if (activeTab.value === 'mods') {
@@ -591,5 +604,62 @@ img {
 
 :not(input):not(textarea):not(.allow-context-menu) {
   -webkit-touch-callout: none;
+}
+
+/* ===== ElMessageBox.confirm 项目风格统一 =====
+   仅作用于 confirm 对话框（通过 customClass: 'app-confirm-box' 限定作用域），
+   复用 App.vue :root 设计令牌（--app-radius / --accent-* / --text-*），
+   不引入第三方库，纯 CSS 覆盖、零运行时开销。 */
+.app-confirm-box.el-message-box {
+  /* 将项目调色板注入 Element Plus 内部变量，驱动按钮/图标/文字 */
+  --el-color-primary: var(--accent-primary);
+  --el-color-warning: var(--accent-warning);
+  --el-color-success: var(--accent-success);
+  --el-color-danger: var(--accent-danger);
+  --el-color-info: var(--accent-info);
+  --el-text-color-primary: var(--text-primary);
+  --el-text-color-regular: var(--text-secondary);
+  --el-border-color: rgba(255, 255, 255, 0.12);
+  --el-border-radius-base: 8px;
+  --el-bg-color: #1a1a1a;
+  --el-fill-color-blank: #1a1a1a;
+
+  background: #1a1a1a;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--app-radius);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  padding: 20px 24px 16px;
+}
+.app-confirm-box.el-message-box .el-message-box__header {
+  padding: 0 0 6px;
+}
+.app-confirm-box.el-message-box .el-message-box__title {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 16px;
+}
+.app-confirm-box.el-message-box .el-message-box__content {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 4px 0;
+}
+.app-confirm-box.el-message-box .el-message-box__message {
+  color: var(--text-secondary);
+}
+.app-confirm-box.el-message-box .el-message-box__btns {
+  padding-top: 14px;
+}
+/* 取消按钮：复用项目幽灵风格（透明底 + 细边框 + 悬停淡白） */
+.app-confirm-box.el-message-box .el-button--default {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+}
+.app-confirm-box.el-message-box .el-button--default:hover,
+.app-confirm-box.el-message-box .el-button--default:focus {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--text-primary);
 }
 </style>

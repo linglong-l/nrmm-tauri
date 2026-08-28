@@ -136,7 +136,7 @@
               <el-select
                 v-model="settingsStore.settings.windowHotkey"
                 class="field-select"
-                popper-class="settings-select-dropdown"
+                popper-class="settings-select-dropdown hotkey-dropdown"
                 placeholder="Alt+D"
                 @change="onSettingChange"
               >
@@ -146,7 +146,6 @@
                 <el-option label="Alt+E" value="Alt+E" />
                 <el-option label="Alt+R" value="Alt+R" />
                 <el-option label="Alt+T" value="Alt+T" />
-                <el-option :label="t('settings.none')" value="none" />
               </el-select>
             </div>
             <div class="hotkey-cell">
@@ -154,14 +153,13 @@
               <el-select
                 v-model="settingsStore.settings.gamepadHotkeyToggle"
                 class="field-select"
-                popper-class="settings-select-dropdown"
+                popper-class="settings-select-dropdown hotkey-dropdown"
                 placeholder="LB+RB"
                 @change="onSettingChange"
               >
                 <el-option label="LB+RB" value="LB+RB" />
                 <el-option label="LB+Start" value="LB+Start" />
                 <el-option label="RB+Back" value="RB+Back" />
-                <el-option :label="t('settings.none')" value="" />
               </el-select>
             </div>
           </div>
@@ -195,8 +193,8 @@
             <span class="row-label">{{ t('settings.language') }}</span>
             <el-select
               v-model="settingsStore.settings.language"
-              class="field-select"
-              popper-class="settings-select-dropdown"
+              class="field-select lang-select"
+              popper-class="settings-select-dropdown lang-dropdown"
               @change="handleLanguageChange"
             >
               <el-option :label="t('common.languageZhCN', '简体中文')" value="zh-CN" />
@@ -576,7 +574,7 @@ async function doRestore(paths: string[]) {
         confirmButtonText: t('common.confirm', '确定'),
         cancelButtonText: t('common.cancel', '取消'),
         type: 'warning',
-        customClass: 'restore-confirm-dialog',
+        customClass: 'restore-confirm-dialog app-confirm-box',
       }
     )
   } catch {
@@ -773,7 +771,6 @@ onBeforeUnmount(() => {
   transition: opacity 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
 }
 .settings-view :deep(.el-button:hover) {
-  opacity: 0.6;
   background: #848484 !important;
   border-color: #9a9a9a !important;
 }
@@ -787,7 +784,7 @@ onBeforeUnmount(() => {
 .settings-scroll {
   flex: 1;
   overflow-y: auto;
-  padding: 20px 24px 108px;
+  padding: 20px 24px 10px;
 }
 
 .settings-container {
@@ -911,11 +908,9 @@ onBeforeUnmount(() => {
   background: #848484 !important;
   border: 2px solid #848484 !important;
   color: var(--text-primary) !important;
-  opacity: 0.4;
   /* 胶囊：44px / 2 */
   border-radius: 22px !important;
   box-shadow: none !important;
-  transition: opacity 0.2s ease, background-color 0.2s ease, border-color 0.2s ease, transform 0.08s ease;
   /* 文字精确居中 */
   display: inline-flex !important;
   align-items: center !important;
@@ -926,8 +921,8 @@ onBeforeUnmount(() => {
 }
 
 .big-main-btn:hover {
-  opacity: 0.4;
-  background: #848484 !important;
+  transform: scale(1.02);
+  background: #ffffff;
   border-color: #ffffff !important;
 }
 
@@ -1034,8 +1029,9 @@ onBeforeUnmount(() => {
 .field-select {
   min-width: 180px;
   background: transparent !important;
+  color: #ffffff;
   /* 变量层统一覆盖ElementPlus默认圆角，确保多层嵌套节点都为胶囊 */
-  --el-bg-color: transparent;
+  --el-bg-color: rgba(255, 255, 255, 0.8);
   --el-fill-color-blank: transparent;
   --el-select-bg-color: transparent;
   --el-input-bg-color: transparent;
@@ -1048,7 +1044,49 @@ onBeforeUnmount(() => {
   overflow: visible;
 }
 
+/* 按键/手柄切换下拉框：黑色背景 + 白色字体（仅作用于 hotkey-row 内的两个 select，不影响语言等其它下拉） */
+.hotkey-row .field-select,
+.hotkey-row .field-select :deep(.el-select),
+.hotkey-row .field-select :deep(.el-select__wrapper),
+.hotkey-row .field-select :deep(.el-input__wrapper) {
+  background: #1a1a1a !important;
+}
+.hotkey-row .field-select :deep(.el-select__wrapper:hover),
+.hotkey-row .field-select :deep(.el-input__wrapper:hover) {
+  background: #242424 !important;
+}
+.hotkey-row .field-select :deep(.el-select__wrapper.is-focused),
+.hotkey-row .field-select :deep(.el-select__wrapper.is-focus) {
+  background: #202020 !important;
+}
+/* 占位符（含默认 "Alt+D"）与选中项均为白色 */
+.hotkey-row .field-select :deep(.el-select__placeholder),
+.hotkey-row .field-select :deep(.el-select__selected-item) {
+  color: #ffffff !important;
+}
+
+/* 语言下拉框：黑色背景 + 白色字体（仅作用于 .lang-select，不影响其它下拉） */
+.lang-select,
+.lang-select :deep(.el-select),
+.lang-select :deep(.el-select__wrapper),
+.lang-select :deep(.el-input__wrapper) {
+  background: #1a1a1a !important;
+  color: #ffffff !important;
+}
+.lang-select :deep(.el-select__wrapper:hover) {
+  background: #242424 !important;
+}
+.lang-select :deep(.el-select__wrapper.is-focused),
+.lang-select :deep(.el-select__wrapper.is-focus) {
+  background: #202020 !important;
+}
+.lang-select :deep(.el-select__placeholder),
+.lang-select :deep(.el-select__selected-item) {
+  color: #ffffff !important;
+}
+
 .field-select :deep(.el-select) {
+  color: #ffffff;
   background: transparent !important;
   --el-bg-color: transparent;
   --el-fill-color-blank: transparent;
@@ -1271,7 +1309,7 @@ onBeforeUnmount(() => {
 }
 
 .normal-btn:hover {
-  opacity: 0.6;
+  transform: scale(1.02);
   background: #848484 !important;
   background-color: #848484 !important;
   border-color: #9a9a9a !important;
@@ -1381,6 +1419,8 @@ onBeforeUnmount(() => {
   background: transparent;
   --el-popper-border-color: #848484;
   --el-popper-border-radius: 8px;
+  /* 覆盖 EP 内部浅色填充变量，防止首选项/末次悬停回落为白色背景 */
+  --el-fill-color-light: rgba(132, 132, 132, 0.16);
   border-radius: 8px !important;
 }
 .settings-select-dropdown .el-select-dropdown {
@@ -1392,9 +1432,11 @@ onBeforeUnmount(() => {
 }
 /* 选项item也要有轻微底纹，边界更可见 */
 .settings-select-dropdown .el-select-dropdown__item {
-  color: #e5e7eb;
+  color: #ffffff;
 }
+/* 命中 .hover / .is-hovering(键盘首选项/末次悬停) / :hover 三种态，避免首选项或末次悬停被渲染成白色背景 */
 .settings-select-dropdown .el-select-dropdown__item.hover,
+.settings-select-dropdown .el-select-dropdown__item.is-hovering,
 .settings-select-dropdown .el-select-dropdown__item:hover {
   background: rgba(132, 132, 132, 0.16);
   color: #ffffff;
@@ -1403,6 +1445,24 @@ onBeforeUnmount(() => {
   background: rgba(74, 158, 255, 0.18);
   color: #ffffff;
   font-weight: 600;
+}
+
+/* 按键/手柄切换下拉弹层：黑色背景（通过额外 popper-class="hotkey-dropdown" 命中，仅作用于该两个下拉） */
+.hotkey-dropdown.el-popper,
+.hotkey-dropdown.el-popper.is-light {
+  background: #1a1a1a !important;
+}
+.hotkey-dropdown .el-select-dropdown {
+  background: #1a1a1a !important;
+}
+
+/* 语言下拉弹层：黑色背景（通过额外 popper-class="lang-dropdown" 命中，仅作用于语言下拉） */
+.lang-dropdown.el-popper,
+.lang-dropdown.el-popper.is-light {
+  background: #1a1a1a !important;
+}
+.lang-dropdown .el-select-dropdown {
+  background: #1a1a1a !important;
 }
 
 /* 还原结果对话框：右下角关闭按钮（蓝色字体、胶囊框、无背景色，悬停淡蓝色背景） */

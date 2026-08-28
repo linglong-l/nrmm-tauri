@@ -19,6 +19,7 @@
 
 use crate::core::constants;
 use crate::core::file_watcher::WatcherGuard;
+use crate::core::ini_handler::IniFile;
 use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::namespace_handler;
 use crate::models::enums::{GroupType, ModsPathStatus, TargetGame};
@@ -383,6 +384,47 @@ pub fn create_empty_slot_mod(group_index: u32) -> ModData {
     }
 }
 
+/// 统一重算模组计数，口径与全量轻量扫描一致。
+///
+/// 排除 `None` 空槽位（`name == "None"`），以 `!disabled && !mod_disabled` 判定启用。
+/// 供全量扫描与增量合并（`mod_cache::subtree_replace`）共用，保证两处计数一致。
+///
+/// # 返回
+///
+/// `(total, enabled, disabled)`，均为 `name != "None"` 的活跃模组计数。
+pub(crate) fn recount_mods(mods: &[ModData]) -> (usize, usize, usize) {
+    let mut total = 0usize;
+    let mut enabled = 0usize;
+    let mut disabled = 0usize;
+    for m in mods {
+        if m.name == "None" {
+            continue;
+        }
+        total += 1;
+        if !m.disabled && !m.mod_disabled {
+            enabled += 1;
+        } else {
+            disabled += 1;
+        }
+    }
+    (total, enabled, disabled)
+}
+
+/// 分组排序比较（对齐 NRMM）：NormalGroup 角色分组永远置顶、按整数索引序；
+/// MutexGroup 互斥分组按名称字符串序。
+///
+/// 供全量扫描与增量合并（`mod_cache::subtree_replace`）共用分组排序规则。
+pub(crate) fn group_order_cmp(a: &ModGroupData, b: &ModGroupData) -> CmpOrdering {
+    let a_mutex = a.group_type == GroupType::MutexGroup;
+    let b_mutex = b.group_type == GroupType::MutexGroup;
+    match (a_mutex, b_mutex) {
+        (false, true) => CmpOrdering::Less,
+        (true, false) => CmpOrdering::Greater,
+        (false, false) => a.group_index.cmp(&b.group_index),
+        (true, true) => a.group_name.cmp(&b.group_name),
+    }
+}
+
 /// 统一排序模组列表：禁用在后→收藏在前→最新收藏→自然排序
 pub fn sort_mods_light(mods: &mut [ModData]) {
     mods.sort_by(|a, b| {
@@ -529,31 +571,14 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
         all_mods.extend(ms);
     }
 
+    // 扁平 mods 列表不含 None 空槽位（None 仅存在于 groups[i].mods 内，用于槽位选择展示）
+    all_mods.retain(|m| m.name != "None");
+
     // 排序（对齐 NRMM：group_xx 角色分组永远置顶，按 int 数字序；互斥分组按名称字符串序）
     // 注意：互斥分组根的 group_index 恒为 0，不能作为排序键（会把互斥组顶到最前）
-    groups.sort_by(|a, b| {
-        let a_mutex = a.group_type == GroupType::MutexGroup;
-        let b_mutex = b.group_type == GroupType::MutexGroup;
-        match (a_mutex, b_mutex) {
-            (false, true) => CmpOrdering::Less,
-            (true, false) => CmpOrdering::Greater,
-            (false, false) => a.group_index.cmp(&b.group_index),
-            (true, true) => a.group_name.cmp(&b.group_name),
-        }
-    });
+    groups.sort_by(group_order_cmp);
 
-    let (mut total, mut enabled, mut disabled) = (0usize, 0usize, 0usize);
-    for m in &all_mods {
-        if m.name == "None" {
-            continue;
-        }
-        total += 1;
-        if !m.disabled && !m.mod_disabled {
-            enabled += 1;
-        } else {
-            disabled += 1;
-        }
-    }
+    let (total, enabled, disabled) = recount_mods(&all_mods);
 
     let elapsed = start.elapsed().as_millis();
     log::info!(
@@ -1627,70 +1652,18 @@ fn build_mod_data_deep(
             });
         }
     } else {
+        // 两阶段深扫（任务 C2）：跨 INI 库引用（A INI 的 `run` 等引用 B INI 声明的
+        // ORFix/TexFx 库名）必须在检测前先汇总全部 `defined_libraries`，否则
+        // `detect_errors` 恒以 `HashSet::new()` 判定，把所有跨库引用误报为
+        // NON EXISTENT LIB（error_type=5）。解析仍走 `mod_ini_cache`，缓存命中零重解析。
+
+        // 阶段一（收集）：解析并暂存所有 INI，汇总全局 known_libraries。
+        let mut parsed_inis: Vec<(PathBuf, IniFile)> = Vec::with_capacity(ini_files.len());
         for ini_path in &ini_files {
             match get_or_parse_ini(ini_path) {
                 Ok(ini) => {
-                    let mut keys = 0usize;
-                    let mut textures = 0usize;
-                    let mut shaders = 0usize;
-                    let mut commands = 0usize;
-                    let mut resources = 0usize;
-
-                    for section in &ini.sections {
-                        let sname = section.name.to_lowercase();
-                        if sname.starts_with("keypress")
-                            || (sname.starts_with("key")
-                                && !sname.starts_with("keyboard")
-                                && !sname.starts_with("keybind"))
-                        {
-                            keys += 1;
-                        } else if sname.starts_with("textureoverride") {
-                            textures += 1;
-                        } else if sname.starts_with("shaderoverride") {
-                            shaders += 1;
-                        } else if sname.starts_with("commandlist") {
-                            commands += 1;
-                        } else if sname.starts_with("resource") {
-                            resources += 1;
-                        }
-                    }
-
-                    total_sections += ini.sections.len();
-                    total_key_sections += keys;
-                    total_texture_sections += textures;
-                    total_shader_sections += shaders;
-                    total_command_lists += commands;
-                    total_resources += resources;
-
-                    if mod_namespace.is_none() {
-                        mod_namespace = namespace_handler::extract_namespace(&ini);
-                    }
-
                     defined_libraries.extend(ini.defined_libraries());
-
-                    let known_libs = HashSet::new();
-                    let errors = ini.detect_errors(ini_path, &known_libs);
-                    all_errored_lines.extend(errors);
-
-                    let ini_filename = ini_path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-
-                    mod_ini_data.push(ModIniData {
-                        ini_path: ini_path.to_string_lossy().to_string(),
-                        ini_filename,
-                        file_relative_path: ini_path.to_string_lossy().to_string(),
-                        section_count: ini.sections.len() as u32,
-                        key_sections: keys as u32,
-                        texture_override_sections: textures as u32,
-                        shader_override_sections: shaders as u32,
-                        command_list_sections: commands as u32,
-                        resource_sections: resources as u32,
-                        has_include: ini.has_include(),
-                        ..Default::default()
-                    });
+                    parsed_inis.push((ini_path.clone(), ini));
                 }
                 Err(e) => {
                     log::warn!("Failed to parse INI {}: {}", ini_path.display(), e);
@@ -1701,6 +1674,68 @@ fn build_mod_data_deep(
                     });
                 }
             }
+        }
+
+        // 阶段二（检测）：带汇总后的全局 known_libraries 逐个 INI 物化错误并构建统计/ModIniData。
+        for (ini_path, ini) in &parsed_inis {
+            let mut keys = 0usize;
+            let mut textures = 0usize;
+            let mut shaders = 0usize;
+            let mut commands = 0usize;
+            let mut resources = 0usize;
+
+            for section in &ini.sections {
+                let sname = section.name.to_lowercase();
+                if sname.starts_with("keypress")
+                    || (sname.starts_with("key")
+                        && !sname.starts_with("keyboard")
+                        && !sname.starts_with("keybind"))
+                {
+                    keys += 1;
+                } else if sname.starts_with("textureoverride") {
+                    textures += 1;
+                } else if sname.starts_with("shaderoverride") {
+                    shaders += 1;
+                } else if sname.starts_with("commandlist") {
+                    commands += 1;
+                } else if sname.starts_with("resource") {
+                    resources += 1;
+                }
+            }
+
+            total_sections += ini.sections.len();
+            total_key_sections += keys;
+            total_texture_sections += textures;
+            total_shader_sections += shaders;
+            total_command_lists += commands;
+            total_resources += resources;
+
+            if mod_namespace.is_none() {
+                mod_namespace = namespace_handler::extract_namespace(ini);
+            }
+
+            let errors = ini.detect_errors(ini_path, &defined_libraries);
+            all_errored_lines.extend(errors);
+
+            let ini_filename = ini_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            mod_ini_data.push(ModIniData {
+                ini_path: ini_path.to_string_lossy().to_string(),
+                ini_filename,
+                file_relative_path: ini_path.to_string_lossy().to_string(),
+                section_count: ini.sections.len() as u32,
+                key_sections: keys as u32,
+                texture_override_sections: textures as u32,
+                shader_override_sections: shaders as u32,
+                command_list_sections: commands as u32,
+                resource_sections: resources as u32,
+                has_include: ini.has_include(),
+                ..Default::default()
+            });
         }
     }
 
@@ -1969,6 +2004,53 @@ mod tests {
         assert!(
             disabled.errored_lines.is_empty(),
             "禁用模组不应产生解析错误条目"
+        );
+    }
+
+    /// 测试：深扫两阶段库收集，跨 INI 引用已声明库不误报（error_type=5）
+    ///
+    /// 构造同一模组目录下的两个 INI：a.ini 通过 `run` 引用 b.ini 声明的
+    /// ShaderOverride 库，同时再引用一个完全未声明的库。断言：
+    /// 1. 引用已声明库（应合计为全局 known_libraries）不产生 NON EXISTENT LIB（error_type=5）；
+    /// 2. 引用未声明库仍产生 error_type=5。
+    #[test]
+    fn test_deep_cross_ini_library_reference_resolution() {
+        let dir = setup_test_dir();
+        let group = create_group_dir(dir.path(), "group_1");
+        let mod_path = group.join("MyMod");
+        fs::create_dir_all(&mod_path).unwrap();
+        // a.ini：引用 b.ini 声明的库 + 一个未声明库
+        fs::write(
+            mod_path.join("a.ini"),
+            "[ShaderOverrideShaderA]\nhash = 0xAAA\nrun = ShaderOverrideShaderB\nrun = ShaderOverrideMissingLib\n",
+        )
+        .unwrap();
+        // b.ini：声明 ShaderOverrideShaderB 库
+        fs::write(
+            mod_path.join("b.ini"),
+            "[ShaderOverrideShaderB]\nhash = 0xBBB\n",
+        )
+        .unwrap();
+
+        let result = scan_mods_deep(dir.path()).expect("scan_mods_deep 失败");
+        assert_eq!(result.mods.len(), 1, "应发现一个模组");
+        let mod_data = &result.mods[0];
+
+        let type5_errors: Vec<&String> = mod_data
+            .errored_lines
+            .iter()
+            .filter(|e| e.error_type == 5)
+            .map(|e| &e.error_message)
+            .collect();
+
+        assert_eq!(
+            type5_errors.len(),
+            1,
+            "仅未声明库应产出 NON EXISTENT LIB，实际: {type5_errors:?}"
+        );
+        assert!(
+            type5_errors[0].contains("ShaderOverrideMissingLib"),
+            "应仅报未声明库，实际: {type5_errors:?}"
         );
     }
 
