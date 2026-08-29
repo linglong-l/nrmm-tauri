@@ -2,9 +2,10 @@
 /**
  * build-portable.mjs
  *
- * 生成免安装（portable）分发包（压缩包名按目标架构 x86_64/i686 派生）：
- *   - Windows: nrmm-rust-portable-<arch>.zip
- *   - Linux:   nrmm-rust-portable-<arch>.tar.gz
+ * 生成免安装（portable）分发包（压缩包名按 nrmm-tauri_<版本>_x64-<系统> 规范派生）：
+ *   - Windows: nrmm-tauri_<ver>_x64-Win.zip
+ *   - Linux:   nrmm-tauri_<ver>_x64-Linux.tar.gz        （默认含内置 7z，推荐）
+ *   - Linux:   nrmm-tauri_<ver>_x64-Linux-no7z.tar.gz   （--no-7z：单程序版，不含 7z）
  *
  * 零第三方依赖，使用系统命令（Windows: PowerShell/Compress-Archive；Linux: tar）。
  *
@@ -12,13 +13,13 @@
  *   node scripts/build-portable.mjs                # 自动检测平台，输出到 dist/
  *   node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o dist-win
  *   node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o dist
+ *   node scripts/build-portable.mjs --no-7z        # 单程序版（不含内置 7z）
  */
 
-import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, cpSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, cpSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync, spawnSync } from 'node:child_process';
-import { Buffer } from 'node:buffer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,11 +27,12 @@ const PROJECT_ROOT = resolve(__dirname, '..');
 
 // ---------- CLI 参数 ----------
 function parseArgs(argv) {
-  const args = { target: '', outDir: '' };
+  const args = { target: '', outDir: '', no7z: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--target') args.target = argv[++i] || '';
     else if (a === '-o' || a === '--output') args.outDir = argv[++i] || '';
+    else if (a === '--no-7z') args.no7z = true;
   }
   return args;
 }
@@ -39,17 +41,15 @@ const cli = parseArgs(process.argv.slice(2));
 function detectTarget() {
   const p = process.platform, a = process.arch;
   if (p === 'win32' && a === 'x64') return 'x86_64-pc-windows-msvc';
-  if (p === 'win32' && a === 'ia32') return 'i686-pc-windows-msvc';
   if (p === 'linux' && a === 'x64') return 'x86_64-unknown-linux-gnu';
-  if (p === 'linux' && a === 'ia32') return 'i686-unknown-linux-gnu';
-  if (p === 'darwin' && a === 'x64') return 'x86_64-apple-darwin';
-  if (p === 'darwin' && a === 'arm64') return 'aarch64-apple-darwin';
-  console.error(`[portable] 无法自动检测平台 ${p}-${a}，请用 --target 指定`);
+  console.error(`[portable] 当前仅支持 x86_64（${p}-${a}），请用 --target 指定`);
   process.exit(1);
 }
 
 const TARGET = cli.target || detectTarget();
-const archSuffix = TARGET.startsWith('i686') ? 'i686' : 'x86_64';
+const isWindows = TARGET.includes('windows-msvc');
+const osToken = isWindows ? 'Win' : 'Linux';
+const archToken = 'x64'; // 当前仅支持 x86_64
 const OUT_DIR = cli.outDir
   ? resolve(PROJECT_ROOT, cli.outDir)
   : resolve(PROJECT_ROOT, 'dist');
@@ -66,9 +66,13 @@ function detectReleaseDir() {
   return candidates[0];
 }
 const RELEASE_DIR = detectReleaseDir();
-const isWindows = TARGET.includes('windows-msvc');
 const exeExt = isWindows ? '.exe' : '';
-const mainExe = `nrmm-rust${exeExt}`;
+const mainExe = `nrmm-tauri${exeExt}`;
+
+// 版本号（与 package.json 一致，作为命名规范的根基）
+const pkgVersion = JSON.parse(
+  readFileSync(resolve(PROJECT_ROOT, 'package.json'), 'utf8')
+).version;
 
 console.log(`[portable] Target:  ${TARGET}`);
 console.log(`[portable] Release: ${RELEASE_DIR}`);
@@ -108,7 +112,7 @@ function addDirContents(srcDir, destBase) {
 console.log('[portable] 收集文件...');
 copyTo(join(RELEASE_DIR, mainExe), mainExe);
 
-// Windows DLL
+// Windows DLL（vcruntime 等随 cargo build 落盘于 release 目录）
 if (isWindows) {
   for (const ent of readdirSync(RELEASE_DIR, { withFileTypes: true })) {
     if (ent.isFile() && ent.name.toLowerCase().endsWith('.dll') && ent.name.toLowerCase() !== mainExe.toLowerCase()) {
@@ -117,34 +121,64 @@ if (isWindows) {
   }
 }
 
-// Tauri resources 目录（如果有 sidecar/resources 配置）
-const resDir = join(RELEASE_DIR, 'resources');
-if (existsSync(resDir)) addDirContents(resDir, 'resources');
+// ---------- 内置 7z（便携版落在 exe_dir/7z/，与 get_bundled_7z_path 探测一致）----------
+// 资源由 Tauri bundler 注入到各安装包，但 portable 不走 bundle，需手动拷贝。
+// 默认含 7z（推荐）；--no-7z 时跳过，产出单程序版（回退仅支持 zip/7z/rar，优先系统 7z）。
+if (!cli.no7z) {
+  console.log('[portable] 拷贝内置 7z 到 stage/7z/ ...');
+  if (isWindows) {
+    const srcRoot = resolve(PROJECT_ROOT, 'src-tauri/binaries/7z/7z2602-Windows-x64');
+    for (const f of ['7za.exe', '7za.dll', '7zxa.dll']) {
+      copyTo(join(srcRoot, f), join('7z', f));
+    }
+  } else {
+    const srcRoot = resolve(PROJECT_ROOT, 'src-tauri/binaries/7z/7z2602-linux-x64');
+    copyTo(join(srcRoot, '7zz'), join('7z', '7zz'));
+  }
+} else {
+  console.log('[portable] --no-7z：跳过内置 7z（单程序版）');
+}
 
-// README
+// README（含 7z 可删说明与回退提示）
+const sevenZipNote = cli.no7z
+  ? [
+      '',
+      '内置 7z：本版本未附带内置 7z。解压回退仅支持 zip/7z/rar，且优先使用系统已安装的 7z。',
+      '若需完整归档格式支持，请改用附带 7z 的 tar.gz 版本，或在系统 PATH 安装 7-Zip。',
+      ''
+    ]
+  : [
+      '',
+      '内置 7z：本目录含 7z/ 子目录（Windows: 7za.exe + dll；Linux: 7zz）。',
+      '  该 7z 可删除，但不建议——删除后解压回退仅支持 zip/7z/rar，且会优先调用系统已安装的 7z；',
+      '  若系统未安装 7z，再回退到内置纯 Rust 解压（支持格式更少）。',
+      ''
+    ];
 const readmeContent = isWindows
   ? [
-      'nrmm-rust 免安装版（Portable）',
+      'nrmm-tauri 免安装版（Portable）',
       '',
       '使用方法：',
       '  1. 解压到任意目录',
-      '  2. 双击 nrmm-rust.exe 运行',
-      '  3. 配置文件保存在 %LOCALAPPDATA%\\nrmm-rust\\',
+      '  2. 双击 nrmm-tauri.exe 运行',
+      '  3. 配置文件保存在 %LOCALAPPDATA%\\nrmm-tauri\\',
       '',
       '注意：本版本不写入注册表、不创建开始菜单/桌面快捷方式。',
       '卸载方法：直接删除本文件夹即可。',
+      ...sevenZipNote,
       ''
     ].join('\r\n')
   : [
-      'nrmm-rust Portable',
+      'nrmm-tauri Portable',
       '',
       'Usage:',
       '  1. Extract to any directory',
-      '  2. chmod +x nrmm-rust && ./nrmm-rust',
-      '  3. Config stored in ~/.local/share/nrmm-rust/',
+      '  2. chmod +x nrmm-tauri && ./nrmm-tauri',
+      '  3. Config stored in ~/.local/share/nrmm-tauri/',
       '',
       'Note: This build does not install to system paths.',
       'To remove, simply delete this folder.',
+      ...sevenZipNote,
       ''
     ].join('\n');
 writeFileSync(join(stageDir, 'README.txt'), readmeContent, 'utf8');
@@ -157,9 +191,12 @@ if (fileCount === 0) {
 }
 
 // ---------- 2. 压缩 ----------
+const baseName = `nrmm-tauri_${pkgVersion}_${archToken}-${osToken}`;
 const archiveName = isWindows
-  ? `nrmm-rust-portable-${archSuffix}.zip`
-  : `nrmm-rust-portable-${archSuffix}.tar.gz`;
+  ? `${baseName}.zip`
+  : cli.no7z
+    ? `${baseName}-no7z.tar.gz`
+    : `${baseName}.tar.gz`;
 const archivePath = resolve(OUT_DIR, archiveName);
 
 console.log(`[portable] 创建压缩包: ${archiveName}`);

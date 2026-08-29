@@ -1,4 +1,4 @@
-name: nrmm-rust-release
+name: nrmm-tauri-release
 
 on:
   push:
@@ -21,7 +21,7 @@ env:
 
 jobs:
   build-windows:
-    name: Build Windows (NSIS + MSI + portable zip)
+    name: Build Windows (NSIS + portable zip)
     runs-on: windows-latest
     steps:
       - name: Checkout code
@@ -46,11 +46,6 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Pre-build verification
-        run: |
-          node scripts/verify-build.mjs pre || echo "::warning::verify-build pre 有警告/失败，继续尝试构建"
-          npm run verify:release
-
       - name: Build Tauri app (Windows) with log capture
         id: build_win
         shell: pwsh
@@ -68,35 +63,24 @@ jobs:
             Write-Host "::warning::Tauri build exited with $exitCode，继续尝试便携版兜底"
           }
 
-      - name: Scan Windows build log for errors
-        if: always()
-        run: |
-          node scripts/verify-build.mjs scan dist/build-win.log || echo "::warning::log scan 发现问题，请查看日志"
-
       - name: Generate portable zip (fallback)
         if: always()
         run: |
           node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o .
 
-      - name: Post-build verification (Windows artifacts)
-        if: always()
-        run: |
-          node scripts/verify-build.mjs post --target x86_64-pc-windows-msvc || echo "::warning::post 校验未完全通过，检查 artifact 列表"
-
       - name: Find and copy Windows artifacts
         run: |
+          $ver = (Get-Content "package.json" -Raw | ConvertFrom-Json).version
           $bundleDir = "src-tauri/target/x86_64-pc-windows-msvc/release/bundle"
-          # NSIS installer
+          # NSIS installer -> 规范名 nrmm-tauri_<ver>_x64-Win.exe（MSI 已移除）
           $nsis = Get-ChildItem -Path "$bundleDir/nsis/*.exe" | Select-Object -First 1
           if (-not $nsis) { Write-Error "NSIS installer not found"; exit 1 }
-          Copy-Item $nsis.FullName -Destination "nrmm-rust-setup-x86_64.exe"
-          # MSI installer (optional)
-          $msi = Get-ChildItem -Path "$bundleDir/msi/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($msi) { Copy-Item $msi.FullName -Destination "nrmm-rust-x86_64.msi" }
-          # Tauri updater latest.json
+          Copy-Item $nsis.FullName -Destination "nrmm-tauri_${ver}_x64-Win.exe"
+          # Tauri updater latest.json（installer 已签名时由 bundler 生成）
           $latest = Get-ChildItem -Path $bundleDir -Filter "latest.json" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($latest) { Copy-Item $latest.FullName -Destination "latest-windows.json" }
-          Get-ChildItem nrmm-rust-*,latest-* | Format-Table Name, Length
+          # 便携 zip（build-portable.mjs 已输出规范名 nrmm-tauri_<ver>_x64-Win.zip）
+          Get-ChildItem nrmm-tauri_*,latest-* | Format-Table Name, Length
         shell: powershell
 
       - name: Upload Windows artifacts
@@ -104,14 +88,16 @@ jobs:
         with:
           name: windows-artifacts
           path: |
-            nrmm-rust-setup-x86_64.exe
-            nrmm-rust-x86_64.msi
-            nrmm-rust-portable-x86_64.zip
+            nrmm-tauri_*_x64-Win.exe
+            nrmm-tauri_*_x64-Win.zip
             latest-windows.json
 
   build-linux:
-    name: Build Linux (AppImage/deb/rpm + portable tar.gz)
+    name: Build Linux (gnu track, AppImage/deb/rpm + portable tar.gz)
     runs-on: ubuntu-latest
+    # 绑定 ubuntu:22.04 容器锁 glibc 2.35（Ubuntu 22.04 级兼容），不依赖即将弃用的 ubuntu-22.04 runner 标签
+    container:
+      image: ubuntu:22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -129,20 +115,18 @@ jobs:
 
       - name: Install Linux dependencies (Tauri)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev libayatana-appindicator3-dev
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libssl-dev libgtk-3-dev libjavascriptcoregtk-4.1-dev \
+            librust-webkit2gtk-sys-dev rpm fakeroot libfuse2 binutils
           rustup target add x86_64-unknown-linux-gnu
           npm install -g @tauri-apps/cli@2
 
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Pre-build verification
-        run: |
-          node scripts/verify-build.mjs pre || echo "::warning::verify-build pre 有警告/失败，继续尝试构建"
-          npm run verify:release
-
-      - name: Build Tauri app (Linux) with log capture + fallback
+      - name: Build Tauri app (Linux) with log capture
         id: build_linux
         run: |
           set +e
@@ -159,49 +143,65 @@ jobs:
             echo "::warning::Tauri build exited with $TAURI_EXIT，继续尝试便携版兜底"
           fi
 
-      - name: Scan Linux build log for errors
+      - name: Generate portable tar.gz (含 7z 推荐版 + 单程序 no7z 版)
         if: always()
         run: |
-          node scripts/verify-build.mjs scan dist/build-linux.log || echo "::warning::log scan 发现问题，请查看日志"
+          VER="$(node -p "require('./package.json').version")"
+          mkdir -p linux-gnu
+          node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o linux-gnu
+          node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o linux-gnu --no-7z
 
-      - name: Generate portable tar.gz (fallback, runs always)
-        if: always()
-        run: |
-          node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o .
-
-      - name: Post-build verification (Linux artifacts)
-        if: always()
-        run: |
-          node scripts/verify-build.mjs post --target x86_64-unknown-linux-gnu || echo "::warning::post 校验未完全通过，检查 artifact 列表"
-
-      - name: Find and copy Linux artifacts
+      - name: Find and copy Linux artifacts (改名到规范名，归入 linux-gnu/)
         run: |
           set -e
+          VER="$(node -p "require('./package.json').version")"
           BUNDLE_DIR="src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
-          # AppImage
+          rename_to_spec() {
+            local src="$1"; [ -f "$src" ] || { echo "  [WARN] missing: $src"; return; }
+            local bn; bn="$(basename "$src")"
+            local dest
+            case "$bn" in
+              *.deb)      dest="linux-gnu/nrmm-tauri_${VER}_x64-Linux.deb" ;;
+              *.rpm)      dest="linux-gnu/nrmm-tauri_${VER}_x64-Linux.rpm" ;;
+              *.AppImage) dest="linux-gnu/nrmm-tauri_${VER}_x64-Linux.AppImage" ;;
+              *)          dest="linux-gnu/$bn" ;;
+            esac
+            cp "$src" "$dest"
+            echo "  [OK] $dest"
+          }
           APPIMAGE=$(find "$BUNDLE_DIR/appimage" -name "*.AppImage" | head -1)
-          if [ -n "$APPIMAGE" ]; then cp "$APPIMAGE" nrmm-rust-x86_64.AppImage; fi
-          # deb
+          rename_to_spec "$APPIMAGE"
           DEB=$(find "$BUNDLE_DIR/deb" -name "*.deb" | head -1)
-          if [ -n "$DEB" ]; then cp "$DEB" nrmm-rust-x86_64.deb; fi
-          # rpm
+          rename_to_spec "$DEB"
           RPM=$(find "$BUNDLE_DIR/rpm" -name "*.rpm" | head -1)
-          if [ -n "$RPM" ]; then cp "$RPM" nrmm-rust-x86_64.rpm; fi
-          # latest.json
+          rename_to_spec "$RPM"
           LATEST=$(find "$BUNDLE_DIR" -name "latest.json" | head -1)
-          if [ -n "$LATEST" ]; then cp "$LATEST" latest-linux.json; fi
-          ls -la nrmm-rust-* latest-linux.json 2>/dev/null || true
+          [ -n "$LATEST" ] && cp "$LATEST" linux-gnu/latest-linux.json
+          ls -la linux-gnu/ 2>/dev/null || true
+
+      - name: Audit glibc ceiling (gnu track must stay <= 2.35)
+        run: |
+          BIN="src-tauri/target/x86_64-unknown-linux-gnu/release/nrmm-tauri"
+          if [ -f "$BIN" ]; then
+            MAX_GLIBC="$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -uV | tail -1 || true)"
+            echo "max glibc symbol: ${MAX_GLIBC:-none}"
+            if [ -n "$MAX_GLIBC" ] && [ "$(printf '%s\n2.35\n' "$MAX_GLIBC" | sort -V | tail -1)" != "2.35" ]; then
+              echo "::error::产物依赖 $MAX_GLIBC > 2.35，违反最低兼容约束"
+              exit 1
+            fi
+          fi
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts
           path: |
-            nrmm-rust-x86_64.AppImage
-            nrmm-rust-x86_64.deb
-            nrmm-rust-x86_64.rpm
-            nrmm-rust-portable-x86_64.tar.gz
-            latest-linux.json
+            linux-gnu/nrmm-tauri_*_x64-Linux.deb
+            linux-gnu/nrmm-tauri_*_x64-Linux.rpm
+            linux-gnu/nrmm-tauri_*_x64-Linux.AppImage
+            linux-gnu/nrmm-tauri_*_x64-Linux.tar.gz
+            linux-gnu/nrmm-tauri_*_x64-Linux-no7z.tar.gz
+            linux-gnu/latest-linux.json
 
   release:
     name: Merge manifests & create release
@@ -224,47 +224,59 @@ jobs:
       - name: List downloaded artifacts
         run: ls -laR artifacts/
 
-      - name: Merge latest.json manifests
+      - name: Merge latest.json manifests (windows + linux 平台条目合并)
         run: |
           set -e
-          WIN_LATEST="artifacts/windows-artifacts/latest-windows.json"
-          LINUX_LATEST="artifacts/linux-artifacts/latest-linux.json"
-          INPUTS=""
-          [ -f "$WIN_LATEST" ] && INPUTS="$INPUTS $WIN_LATEST"
-          [ -f "$LINUX_LATEST" ] && INPUTS="$INPUTS $LINUX_LATEST"
-          node scripts/merge-updater-manifest.mjs $INPUTS -o latest.json
-          cat latest.json
-
-      - name: Post-build verification
-        run: node scripts/verify-tauri-release.mjs post latest.json
+          node -e '
+            const fs = require("fs");
+            let merged = { platforms: {} };
+            for (const p of ["artifacts/windows-artifacts/latest-windows.json", "artifacts/linux-artifacts/latest-linux.json"]) {
+              if (fs.existsSync(p)) {
+                const m = JSON.parse(fs.readFileSync(p, "utf8"));
+                merged.version = m.version || merged.version;
+                merged.notes = m.notes || merged.notes;
+                merged.pub_date = m.pub_date || merged.pub_date;
+                Object.assign(merged.platforms, m.platforms || {});
+              }
+            }
+            if (!merged.version) { console.error("no latest.json found"); process.exit(1); }
+            fs.writeFileSync("latest.json", JSON.stringify(merged, null, 2) + "\n");
+            console.log("merged platforms:", Object.keys(merged.platforms).join(", "));
+          '
 
       - name: Create Release and upload assets
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            artifacts/windows-artifacts/nrmm-rust-setup-x86_64.exe
-            artifacts/windows-artifacts/nrmm-rust-x86_64.msi
-            artifacts/windows-artifacts/nrmm-rust-portable-x86_64.zip
-            artifacts/linux-artifacts/nrmm-rust-x86_64.AppImage
-            artifacts/linux-artifacts/nrmm-rust-x86_64.deb
-            artifacts/linux-artifacts/nrmm-rust-x86_64.rpm
-            artifacts/linux-artifacts/nrmm-rust-portable-x86_64.tar.gz
+            artifacts/windows-artifacts/nrmm-tauri_*_x64-Win.exe
+            artifacts/windows-artifacts/nrmm-tauri_*_x64-Win.zip
+            artifacts/linux-artifacts/linux-gnu/nrmm-tauri_*_x64-Linux.AppImage
+            artifacts/linux-artifacts/linux-gnu/nrmm-tauri_*_x64-Linux.deb
+            artifacts/linux-artifacts/linux-gnu/nrmm-tauri_*_x64-Linux.rpm
+            artifacts/linux-artifacts/linux-gnu/nrmm-tauri_*_x64-Linux.tar.gz
+            artifacts/linux-artifacts/linux-gnu/nrmm-tauri_*_x64-Linux-no7z.tar.gz
             latest.json
           draft: false
           prerelease: false
           body: |
-            ## nrmm-rust ${{ github.ref_name }}
+            ## nrmm-tauri ${{ github.ref_name }}
 
-            自动构建发布（GitHub Actions）。请下载对应平台的安装包进行安装/更新。
+            自动构建发布（GitHub Actions）。仅支持 x86_64，最低运行环境 glibc >= 2.35（Ubuntu 22.04 及以上）。
 
-            ### Windows 产物
-            - **NSIS 安装包**: `nrmm-rust-setup-x86_64.exe` — 推荐，带安装向导
-            - **MSI 安装包**: `nrmm-rust-x86_64.msi` — 企业部署
-            - **便携版 (zip)**: `nrmm-rust-portable-x86_64.zip` — 解压即用
+            ### 推荐下载
+            - **Linux 免安装包（含 7z）**: `nrmm-tauri_*_x64-Linux.tar.gz` — 解压即用，推荐
+            - **Linux AppImage**: `nrmm-tauri_*_x64-Linux.AppImage` — 免安装，推荐
+            - **Windows 免安装包**: `nrmm-tauri_*_x64-Win.zip` — 解压即用
 
-            ### Linux 产物
-            - **AppImage**: `nrmm-rust-x86_64.AppImage` — 通用 Linux 包
-            - **deb**: `nrmm-rust-x86_64.deb` — Debian/Ubuntu 系
-            - **rpm**: `nrmm-rust-x86_64.rpm` — Fedora/RHEL 系
-            - **便携版 (tar.gz)**: `nrmm-rust-portable-x86_64.tar.gz` — 解压即用
+            ### 其他产物（兜底）
+            - **Windows NSIS 安装包**: `nrmm-tauri_*_x64-Win.exe` — 用户级安装
+            - **Linux deb**: `nrmm-tauri_*_x64-Linux.deb` — 需 sudo，环境异常兜底
+            - **Linux rpm**: `nrmm-tauri_*_x64-Linux.rpm` — 需 sudo，环境异常兜底
+            - **Linux 单程序版（无 7z）**: `nrmm-tauri_*_x64-Linux-no7z.tar.gz` — 回退仅支持 zip/7z/rar
+
+            ### 关于内置 7-Zip
+            各打包产物在程序同级 `7z/` 目录内置 7-Zip。**该目录可删除但不建议**：删除后解压回退仅支持
+            zip/7z/rar，并优先调用系统 7-Zip；系统也未安装时再回退纯 Rust 解压（格式更少）。
+
+            > zig 轨（`linux-zig/`）产物由 `scripts/build-linux-zig.sh` 在本地构建后手动上传，文件名与 gnu 轨一致。

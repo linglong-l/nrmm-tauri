@@ -35,11 +35,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis"],
     "resources": {
-      "binaries/7z/7z2602-Windows/current/7za.exe": "7z/7z2602-Windows/current/7za.exe",
-      "binaries/7z/7z2602-Windows/current/7za.dll": "7z/7z2602-Windows/current/7za.dll",
-      "binaries/7z/7z2602-Windows/current/7zxa.dll": "7z/7z2602-Windows/current/7zxa.dll"
+      "binaries/7z/7z2602-Windows-x64/7za.exe": "7z/7za.exe",
+      "binaries/7z/7z2602-Windows-x64/7za.dll": "7z/7za.dll",
+      "binaries/7z/7z2602-Windows-x64/7zxa.dll": "7z/7zxa.dll"
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper" },
@@ -47,12 +47,6 @@
         "displayLanguageSelector": true,
         "installMode": "currentUser",
         "languages": ["English", "SimpChinese"]
-      },
-      "wix": {
-        "language": {
-          "en-US": {},
-          "zh-CN": {}
-        }
       }
     },
     "icon": [

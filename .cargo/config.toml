@@ -28,9 +28,9 @@ rustflags = [
 # 禁用增量链接、拖慢日常 cargo test 的链接速度，故不添加任何 rustflags。
 #
 # 以下为可选的激进开关（按需取消注释，须自行承担发行基线变化的风险）：
-# [target.x86_64-pc-windows-msvc]
-# rustflags = [
-#     # 面向 2009 年后 CPU（SSE4.2/POPCNT），CPU 热路径有小幅收益；
-#     # 风险：Core 2 等更老 CPU 上会因非法指令崩溃（Win10 仍可运行于该类硬件）
-#     "-Ctarget-cpu=x86-64-v2",
-# ]
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    # 面向 2009 年后 CPU（SSE4.2/POPCNT），CPU 热路径有小幅收益；
+    # 风险：Core 2 等更老 CPU 上会因非法指令崩溃（Win10 仍可运行于该类硬件）
+    "-Ctarget-cpu=x86-64-v2",
+]

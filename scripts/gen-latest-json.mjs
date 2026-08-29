@@ -43,7 +43,7 @@ if (!/^\d+\.\d+\.\d+/.test(VERSION)) {
   console.error(`[latest] ERROR: 非法版本号 "${VERSION}"`);
   process.exit(1);
 }
-const PRODUCT = pkg.name || 'nrmm-rust';
+const PRODUCT = pkg.name || 'nrmm-tauri';
 // 目标架构后缀（由 build-windows.ps1 透传）；默认 x86_64，i686 构建时传 i686
 const archSuffix = process.env.ARCH_SUFFIX || 'x86_64';
 
@@ -79,8 +79,9 @@ const NOTES = process.env.UPDATE_NOTES || `NRMM ${VERSION} 更新。`;
 const PUB_DATE = new Date().toISOString();
 
 // ---------- Windows 安装包（NSIS setup.exe 是 updater 目标） ----------
-// 仅引用一个 windows-${archSuffix} 条目；NSIS 被动安装（installMode: passive）即基于此 setup.exe。
-const PRIMARY = `nrmm-rust-${archSuffix}-setup.exe`;
+// 仅引用一个 windows-${archSuffix} 条目；NSIS 用户级安装（installMode: currentUser）即基于此 setup.exe。
+// 安装包名按规范 nrmm-tauri_<版本>_x64-Win.exe。
+const PRIMARY = `nrmm-tauri_${VERSION}_x64-Win.exe`;
 const artifactPath = join(DIST, PRIMARY);
 if (!existsSync(artifactPath)) {
   console.error(`[latest] ERROR: 找不到 Windows 安装包: ${artifactPath}`);

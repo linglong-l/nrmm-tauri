@@ -1,5 +1,5 @@
 [package]
-name = "nrmm-rust"
+name = "nrmm-tauri"
 version = "0.5.0"
 description = "A Tauri App"
 authors = ["ye"]
@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [lib]
-name = "xxmi_nrmm_lib"
+name = "nrmm_tauri_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]

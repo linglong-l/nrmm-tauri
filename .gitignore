@@ -45,6 +45,9 @@ Desktop.ini
 # Rust debug symbols
 *.pdb
 
+# Python Venv
+.venv/
+
 # Python cache
 __pycache__/
 .mypy_cache/
@@ -71,9 +74,6 @@ latest.json
 # CI / signing secrets（防止误提交公钥/私钥/密码）
 /Key/
 target/
-/resource/*
-/resource/7z/
-src-tauri/binaries/
 AGENTS.md
 clippy_output.txt
 SESSION_CONTEXT.md
@@ -83,3 +83,4 @@ SESSION_CONTEXT.md
 .gstack/
 deliverables/
 /nrmm_recover_tmp/
+.Inventory/

@@ -166,19 +166,25 @@ pub const SEVEN_Z_EXECUTABLE: &str = "7zz";
 #[cfg(target_os = "macos")]
 pub const SEVEN_Z_EXECUTABLE: &str = "7zz";
 
-/// Windows 平台内置 7-Zip 相对路径（相对于 exe 或 resources/）
-/// `current/` 为构建脚本按编译架构（x64 或 x32）填充的中转目录，架构中立
+/// Windows 平台内置 7-Zip 相对路径（相对于 exe 目录）
+///
+/// 所有打包产物（NSIS 用户安装 / portable zip）都将 7z 落在 `exe_dir/7z/` 下，
+/// 与 `tauri.windows.conf.json` 的 resources 映射（`7z/7za.exe` 等）保持一致。
+/// 解析逻辑见 `archive_handler::get_bundled_7z_path`。
 #[cfg(target_os = "windows")]
-pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-Windows/current/7za.exe";
+pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7za.exe";
 
-/// Linux 平台内置 7-Zip 相对路径（相对于 exe 或 resources/）
-/// `7z2602-linux-current` 为构建脚本按编译架构填充的中转目录，架构中立
+/// Linux 平台内置 7-Zip 相对路径（相对于 exe 目录）
+///
+/// deb/rpm 资源装在 `/usr/lib/<productName>/7z/`，AppImage 装在
+/// `$APPDIR/usr/lib/<productName>/7z/`，portable 与系统安装均落在 `exe_dir/7z/`。
+/// 解析逻辑见 `archive_handler::get_bundled_7z_path`。
 #[cfg(target_os = "linux")]
-pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-linux-current/7zz";
+pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7zz";
 
-/// macOS 平台内置 7-Zip 相对路径（相对于 exe 或 resources/）
+/// macOS 平台内置 7-Zip 相对路径（相对于 exe 目录 / `../Resources`）
 #[cfg(target_os = "macos")]
-pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7z2602-mac/7zz";
+pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7zz";
 
 /// 临时解压目录名（在系统临时目录下）
 pub const TEMP_EXTRACT_DIR: &str = "nrmm_extract";

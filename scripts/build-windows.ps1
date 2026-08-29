@@ -12,19 +12,16 @@ param([string]$TargetTriple = "x86_64-pc-windows-msvc")
       3. 7z Windows sidecar 检查/下载（binaries 目录被 gitignore，新检出环境自补：
          7zr.exe 引导 + 7z2602-extra.7z 解压，布局与 tauri.windows.conf.json resources 映射一致）
       4. npm 依赖检查（缺失时 npm ci）
-      5. Tauri 构建（nsis + msi，显式 --target 保证产物路径确定性）
-      6. portable zip（复用 build-portable.mjs，含主程序 + DLL + resources）
-      7. 收集产物到 dist-win/：安装包 / msi / portable zip / latest.json（updater manifest）
+      5. Tauri 构建（nsis，显式 --target 保证产物路径确定性；已移除 msi）
+      6. portable zip（复用 build-portable.mjs，含主程序 + DLL + 内置 7z，命名为规范名）
+      7. 收集产物到 dist-win/：安装包 / portable zip / latest.json（updater manifest）
 
     构建完成后请手动上传 dist-win/ 内容到 Gitee Release（tag: v*.*.*）。
+    产物文件名按 nrmm-tauri_<版本>_x64-Win.<ext> 规范；Windows 仅支持 x86_64。
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
     # 或 npm run build:windows
-
-.EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -TargetTriple i686-pc-windows-msvc
-    # 交叉编译 32 位 x86 构建；仅打包匹配目标架构的 7z sidecar（x32 -> current）
 #>
 
 $ErrorActionPreference = "Stop"
@@ -36,7 +33,6 @@ $DistDir = "dist-win"
 $ArchiveMirror = "https://www.7-zip.org/a"
 
 # 由目标 triple 派生的架构标识：i686 -> x32/i686，其余（含 x86_64/aarch64）-> x64/x86_64
-$ArchDir = if ($TargetTriple -like "i686*") { "x32" } else { "x64" }
 $ArchSuffix = if ($TargetTriple -like "i686*") { "i686" } else { "x86_64" }
 
 # ---------- 0. 更新签名密钥环境（确保 updater manifest 自动生成） ----------
@@ -48,7 +44,8 @@ if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
     if (Test-Path $keyPath) {
         $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content $keyPath -Raw).Trim()
         Write-Ok "已从 Key/Key.Private 载入签名私钥"
-    } else {
+    }
+    else {
         Write-Warn2 "未设置 TAURI_SIGNING_PRIVATE_KEY 且 Key/Key.Private 缺失，updater manifest 将不会生成"
     }
 }
@@ -61,8 +58,8 @@ if (-not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
 
 # ---------- 辅助函数 ----------
 function Write-Step([string]$msg) { Write-Host "`n===== $msg =====" -ForegroundColor Cyan }
-function Write-Ok([string]$msg)   { Write-Host "  [OK] $msg" -ForegroundColor Green }
-function Write-Warn2([string]$msg){ Write-Host "  [WARN] $msg" -ForegroundColor Yellow }
+function Write-Ok([string]$msg) { Write-Host "  [OK] $msg" -ForegroundColor Green }
+function Write-Warn2([string]$msg) { Write-Host "  [WARN] $msg" -ForegroundColor Yellow }
 function Write-Fail([string]$msg) { Write-Host "  [FAIL] $msg" -ForegroundColor Red; exit 1 }
 
 # ---------- 1. 前置工具检查 ----------
@@ -94,11 +91,11 @@ $cargoVersion = (Select-String -Path "src-tauri/Cargo.toml" -Pattern '^version\s
     Select-Object -First 1).Matches[0].Groups[1].Value
 
 $versions = [ordered]@{
-    "package.json"             = $pkgVersion
-    "src-tauri/Cargo.toml"     = $cargoVersion
-    "src-tauri/tauri.conf.json"     = $confBase.version
+    "package.json"                      = $pkgVersion
+    "src-tauri/Cargo.toml"              = $cargoVersion
+    "src-tauri/tauri.conf.json"         = $confBase.version
     "src-tauri/tauri.windows.conf.json" = $confWin.version
-    "src-tauri/tauri.linux.conf.json"  = $confLinux.version
+    "src-tauri/tauri.linux.conf.json"   = $confLinux.version
 }
 $mismatch = $versions.GetEnumerator() | Where-Object { $_.Value -ne $pkgVersion }
 if ($mismatch) {
@@ -112,15 +109,15 @@ Write-Ok "五处版本号一致: $pkgVersion"
 
 # ---------- 3. 7z Windows sidecar 检查/下载 ----------
 Write-Step "[3/7] 7z Windows sidecar 检查"
-$sevenZipRoot = "src-tauri/binaries/7z/7z2602-Windows"
+$sevenZipRoot = "src-tauri/binaries/7z/7z2602-Windows-x64"
 $required = @(
-    "x64/7za.exe", "x64/7za.dll", "x64/7zxa.dll",
-    "x32/7za.exe", "x32/7za.dll", "x32/7zxa.dll"
+    "7za.exe", "7za.dll", "7zxa.dll"
 )
 $missing = $required | Where-Object { -not (Test-Path (Join-Path $sevenZipRoot $_)) }
 if (-not $missing) {
-    Write-Ok "7z sidecar 完整（x64/x32）"
-} else {
+    Write-Ok "7z sidecar 完整（无需下载补齐）"
+}
+else {
     Write-Warn2 "缺失: $($missing -join ', ')，开始下载补齐（7zr.exe 引导 + 7z2602-extra.7z）"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $tmp = Join-Path $env:TEMP "nrmm-7z-bootstrap"
@@ -142,19 +139,8 @@ if (-not $missing) {
     Write-Ok "7z sidecar 已补齐"
 }
 
-# 按目标架构把匹配的 7z 二进制 staging 到 current/（tauri.windows.conf.json resources 指向 current/）。
-# 仅打包目标架构对应源目录：64 位构建 -> x64，32 位构建 -> x32。
-$stageSrc = Join-Path $sevenZipRoot $ArchDir
-$stageDst = Join-Path $sevenZipRoot "current"
-foreach ($f in @("7za.exe", "7za.dll", "7zxa.dll")) {
-    if (-not (Test-Path (Join-Path $stageSrc $f))) { Write-Fail "$ArchDir 缺失 $f（7z sidecar staging 失败）" }
-}
-if (Test-Path $stageDst) { Remove-Item -Recurse -Force $stageDst }
-New-Item -ItemType Directory -Force -Path $stageDst | Out-Null
-foreach ($f in @("7za.exe", "7za.dll", "7zxa.dll")) {
-    Copy-Item (Join-Path $stageSrc $f) (Join-Path $stageDst $f) -Force
-}
-Write-Ok "7z sidecar staged: $ArchDir -> current (target=$TargetTriple)"
+# 注：tauri.windows.conf.json 的 resources 已直接指向 7z2602-Windows-x64/（无需再 staging 到 current/），
+# 因此 7z 二进制就地位于 $sevenZipRoot，Tauri 构建时直接打包。
 
 # ---------- 4. npm 依赖检查 ----------
 Write-Step "[4/7] npm 依赖检查"
@@ -162,7 +148,8 @@ if (-not (Test-Path "node_modules")) {
     Write-Host "  安装 npm 依赖（npm ci）..."
     npm ci
     if ($LASTEXITCODE -ne 0) { Write-Fail "npm ci 失败" }
-} else {
+}
+else {
     Write-Ok "node_modules 存在"
 }
 
@@ -183,7 +170,7 @@ if ($LASTEXITCODE -ne 0) { Write-Fail "portable 打包失败" }
 Write-Step "[7/7] 收集产物到 $DistDir/"
 # workspace 根 target 优先，回退 src-tauri/target（与 build-portable.mjs 探测逻辑一致）
 $releaseDir = @("target/$TargetTriple/release", "src-tauri/target/$TargetTriple/release") |
-    Where-Object { Test-Path $_ } | Select-Object -First 1
+Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $releaseDir) { Write-Fail "找不到 release 目录（target/ 与 src-tauri/target/ 均无）" }
 $bundleDir = Join-Path $releaseDir "bundle"
 
@@ -200,9 +187,9 @@ function Copy-FirstFound([string]$destName, [string[]]$globs) {
     Write-Warn2 "未找到: $destName"
 }
 
-Copy-FirstFound "nrmm-rust-$ArchSuffix-setup.exe" @((Join-Path $bundleDir "nsis/*-setup.exe"))
-Copy-FirstFound "nrmm-rust-$ArchSuffix.msi"       @((Join-Path $bundleDir "msi/*.msi"))
-# portable zip 已由 build-portable.mjs 直接输出到 dist-win/
+# 安装包改名到规范名：nrmm-tauri_<版本>_x64-Win.exe（msi 已移除）
+Copy-FirstFound "nrmm-tauri_${pkgVersion}_x64-Win.exe" @((Join-Path $bundleDir "nsis/*-setup.exe"))
+# portable zip 已由 build-portable.mjs 直接输出到 dist-win/（nrmm-tauri_<版本>_x64-Win.zip）
 
 # ---------- 生成 updater manifest（latest.json）----------
 # 说明：Tauri 的 `tauri build` 不会写出 latest.json，也不会生成独立更新包；

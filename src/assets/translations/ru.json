@@ -412,7 +412,7 @@
   "Updater.restartNow": "Restart Now",
   "Updater.later": "Later",
   "Updater.downloadProgress": "Downloaded {downloaded} / {total}",
-  "Updater.about": "About nrmm-rust",
+  "Updater.about": "About nrmm-tauri",
   "Updater.version": "Version",
   "Updater.buildDate": "Build Date",
   "Updater.openUpdateDialog": "Check for Updates",

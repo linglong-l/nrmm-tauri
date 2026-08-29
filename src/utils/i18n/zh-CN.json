@@ -459,7 +459,7 @@
   "Updater.restartNow": "立即重启",
   "Updater.later": "稍后",
   "Updater.downloadProgress": "已下载 {downloaded} / {total}",
-  "Updater.about": "关于 nrmm-rust",
+  "Updater.about": "关于 nrmm-tauri",
   "Updater.version": "版本",
   "Updater.buildDate": "构建时间",
   "Updater.openUpdateDialog": "检查更新",

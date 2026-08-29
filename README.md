@@ -91,9 +91,12 @@
 
 ### Linux 特定要求
 
-- **libwebkit2gtk-4.0-dev**：WebView 组件依赖
-- **libappindicator3-dev**：系统托盘依赖
+- **libwebkit2gtk-4.1-dev**：WebView 组件依赖（Tauri 2 要求 4.1，非 4.0）
+- **libayatana-appindicator3-dev**：系统托盘依赖
+- **librsvg2-dev**：图标渲染依赖
 - **xdg-utils**：文件管理器打开功能
+- **最低运行环境**：glibc >= 2.35（Ubuntu 22.04 及以上）；低于此版本的发行版无法运行。
+  gnu 轨需在 Ubuntu 22.04 环境构建；zig 轨可在任意较新 Linux 用 `scripts/build-linux-zig.sh` 锁定 glibc 2.35 构建。
 
 ## 开发
 
@@ -113,15 +116,44 @@ npm run build
 
 ## 构建发布版本
 
-```bash
-# Windows 构建
-npm run tauri build
+产物统一命名规范：`nrmm-tauri_<版本>_x64-<系统>.<ext>`，**仅支持 x86_64**（不兼容 x86_32 / x32 / aarch64，不做交叉编译）。
 
-# Linux 构建（需先安装系统依赖）
-npm run tauri build
+| 平台 | 产物 | 包名 | 安装作用域 | 说明 |
+|------|------|------|-----------|------|
+| Windows | NSIS 安装包 | `nrmm-tauri_<ver>_x64-Win.exe` | 用户级（currentUser） | 双击安装，不写系统目录 |
+| Windows | 免安装包 | `nrmm-tauri_<ver>_x64-Win.zip` | 用户级 | 解压即用，含内置 7z |
+| Linux | deb | `nrmm-tauri_<ver>_x64-Linux.deb` | 系统（需 sudo） | 兜底，避免用户环境异常 |
+| Linux | rpm | `nrmm-tauri_<ver>_x64-Linux.rpm` | 系统（需 sudo） | 兜底，避免用户环境异常 |
+| Linux | AppImage | `nrmm-tauri_<ver>_x64-Linux.AppImage` | 用户级 | 推荐，免安装 |
+| Linux | 免安装包（含 7z） | `nrmm-tauri_<ver>_x64-Linux.tar.gz` | 用户级 | **推荐**，解压即用 |
+| Linux | 单程序版（无 7z） | `nrmm-tauri_<ver>_x64-Linux-no7z.tar.gz` | 用户级 | 回退仅支持 zip/7z/rar |
+
+> 优先推荐使用 **AppImage** 或 **含 7z 的 tar.gz 免安装包**（用户级、零安装、可放任意目录）。
+> deb/rpm 需系统级安装（sudo），仅作为用户环境异常（如无法运行 AppImage / 缺少 FUSE）时的兜底。
+
+### 关于内置 7-Zip
+
+所有打包产物（Windows 免安装包 / Linux tar.gz / NSIS / deb / rpm / AppImage）都将 7-Zip 落在程序同级的 `7z/` 目录下。
+**该 `7z/` 目录可以删除，但不建议**：删除后解压回退链仅支持 `zip / 7z / rar` 三种格式，且会优先调用系统已安装的 7-Zip；
+若系统也未安装 7-Zip，则再回退到内置的纯 Rust 解压（支持格式更少、性能较弱）。建议保留以获得完整归档支持。
+
+### 构建命令
+
+```bash
+# Windows（NSIS 安装包 + 免安装 zip）：
+powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
+
+# Linux — gnu 轨（在 Ubuntu 22.04 环境，glibc >= 2.35）：
+npm run tauri build -- --target x86_64-unknown-linux-gnu
+node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o dist-linux/gnu
+node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o dist-linux/gnu --no-7z
+
+# Linux — zig 轨（任意较新 Linux，zig 锁 glibc 2.35；产出与 gnu 轨同名，置于 dist-linux/zig/）：
+bash scripts/build-linux-zig.sh
 ```
 
-产物位于 `src-tauri/target/release/bundle/`，支持 MSI、NSIS（Windows）和 deb/rpm（Linux）等安装包格式。
+产物位于 `src-tauri/target/release/bundle/`（Tauri 安装包）与 `dist-linux/{gnu, zig}/`、`dist-win/`（免安装包与 manifest）。
+gnu 轨与 zig 轨文件名完全相同，发布到 Release 时分别归入 `linux-gnu/` 与 `linux-zig/` 子目录以免互相覆盖。
 
 ## 多语言
 

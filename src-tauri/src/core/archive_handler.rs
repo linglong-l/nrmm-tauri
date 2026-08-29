@@ -244,22 +244,33 @@ fn get_system_7z_path() -> Option<PathBuf> {
 /// 仅搜索应用 bundle 内的 7z 二进制，不检查系统 PATH。
 /// 用于三级回退链的第二级：打包在应用中的 7z CLI 作为备用方案。
 ///
-/// 搜索位置：
-/// 1. 应用程序 `resources/` 目录下的 `SEVEN_Z_BUILTIN_PATH`
-/// 2. 应用程序目录下的 `SEVEN_Z_BUILTIN_PATH`
-/// 3. macOS 的 `../Resources` 目录下的 `SEVEN_Z_BUILTIN_PATH`
+/// 所有安装包默认将 7z 落在 `exe_dir/7z/` 下（portable / NSIS 用户安装 / 系统安装皆同），
+/// 因此第一优先探测 `exe_dir/7z/<EXE>`。其余位置覆盖各 bundle 形态：
+/// 1. `exe_dir/7z/<EXE>`            —— portable、NSIS（用户目录）、deb/rpm（`exe_dir`=/usr/lib/<productName>）
+/// 2. `exe_dir/resources/7z/<EXE>`  —— 防御性：资源若落入 `resources/` 子目录
+/// 3. `exe_dir/../lib/nrmm-tauri/7z/<EXE>` —— AppImage（二进制在 /usr/bin，资源在 /usr/lib）
+/// 4. `exe_dir/../Resources/7z/<EXE>` —— macOS
+/// 5. `$APPDIR/.../7z/<EXE>`        —— AppImage 显式（APPDIR 环境变量）
 ///
 /// # 返回
 /// `Some(PathBuf)` 表示找到内置 7z，`None` 表示未找到
 fn get_bundled_7z_path() -> Option<PathBuf> {
     let builtin = crate::core::constants::SEVEN_Z_BUILTIN_PATH;
+    let product_name = "nrmm-tauri";
     if let Ok(exe_dir) = std::env::current_exe() {
         if let Some(exe_dir) = exe_dir.parent() {
-            let candidates = [
-                exe_dir.join("resources").join(builtin),
+            let mut candidates = vec![
                 exe_dir.join(builtin),
+                exe_dir.join("resources").join(builtin),
+                exe_dir.join("../lib").join(product_name).join(builtin),
                 exe_dir.join("../Resources").join(builtin),
             ];
+            // AppImage：二进制位于 $APPDIR/usr/bin，资源位于 $APPDIR/usr/lib/<productName>
+            if let Ok(appdir) = std::env::var("APPDIR") {
+                let appdir = std::path::Path::new(&appdir);
+                candidates.push(appdir.join("usr/lib").join(product_name).join(builtin));
+                candidates.push(appdir.join(builtin));
+            }
             for candidate in &candidates {
                 if candidate.exists() {
                     log::debug!("get_bundled_7z_path: found builtin 7z at {:?}", candidate);

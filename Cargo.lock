@@ -2817,7 +2817,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nrmm-rust"
+name = "nrmm-tauri"
 version = "0.5.0"
 dependencies = [
  "anyhow",
