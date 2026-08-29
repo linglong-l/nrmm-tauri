@@ -57,8 +57,10 @@ src-tauri/WixTools/
 
 # TypeScript
 *.tsbuildinfo
-auto-imports.d.ts
-components.d.ts
+# NOTE: auto-imports.d.ts 与 components.d.ts 由 unplugin-auto-import 生成，
+# 但 vue-tsc 在 vite 生成它们之前就运行，故必须纳入版本控制，否则全新 clone 构建必失败。
+# auto-imports.d.ts
+# components.d.ts
 
 # Tauri build artifacts / local release outputs
 dist-win/
