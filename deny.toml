@@ -1,0 +1,18 @@
+[licenses]
+# 明确允许这些与 MIT/Apache-2.0 完美兼容的宽松协议
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "ISC",
+    "MPL-2.0",      # 弱传染性，允许闭源调用，但修改该库本身需开源
+    "Zlib",
+    "Unicode-3.0",
+]
+
+# 明确禁止会“传染”你的开源项目的强 Copyleft 协议
+deny = ["GPL-3.0", "AGPL-3.0", "GPL-2.0"]
+
+# 遇到没有声明许可证的依赖，直接拦截（防止法律风险）
+unlicensed = "deny"
