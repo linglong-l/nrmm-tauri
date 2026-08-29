@@ -26,6 +26,10 @@
 #   zig（全局 PATH）、rustup + stable、node >= 22、objdump（binutils）、
 #   libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
 #   libsoup-3.0-dev libfuse2 patchelf rpm fakeroot
+#   以及 build-essential（提供 g++ / libstdc++-dev / libgcc）—— 必须！unrar 是 C++，
+#   zig 的 lld 通过 -lstdc++ 链接 libstdc++.so（dev 软链接）；缺失时链接阶段会报
+#   "undefined symbol: std::__cxx11::basic_string*" 与 "__cpu_model"。
+#   全新环境若未安装：sudo apt-get install -y build-essential
 #
 # 用法：
 #   bash scripts/build-linux-zig.sh                 # 默认 glibc 2.35，输出 dist-linux/zig/
