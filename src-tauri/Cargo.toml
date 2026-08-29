@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [lib]
-name = "nrmm_tauri_lib"
+name = "xxmi_nrmm_lib"
 crate-type = ["cdylib", "rlib"]
 
 [build-dependencies]
