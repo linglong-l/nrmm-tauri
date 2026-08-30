@@ -53,8 +53,8 @@
           <el-icon><FolderOpened /></el-icon>
           {{ t('Open in File Explorer') }}
         </div>
-        <!-- 收起分组：折叠当前节点子分组树（分组过多时可收起查看其他分组；对所有非顶层分组应用，顶层含子分组亦可） -->
-        <div v-if="contextGroup && (contextGroupDepth > 0 || groupHasChildren(contextGroup))" class="menu-item" @click="handleContextMenuAction('collapseGroup')">
+        <!-- 收起分组：右键深层分组收起其父级分组整棵子树（分组过多时可释放空间查看其他分组） -->
+        <div v-if="contextGroup && contextGroupCollapsible" class="menu-item" @click="handleContextMenuAction('collapseGroup')">
           <el-icon><Fold /></el-icon>
           {{ t('common.collapse') }}
         </div>
@@ -193,11 +193,32 @@ const contextMenuY = ref(0)
 const contextGroup = ref<ModGroupData | null>(null)
 /** 右键菜单关联分组的树深度（0=顶层；折叠按钮对所有非顶层分组应用） */
 const contextGroupDepth = ref(0)
+/** 右键分组是否可折叠（入口判据）：自身有子树，或父级为真实分组且有子树 */
+const contextGroupCollapsible = ref(false)
 /** 外部「收起分组」信号：右键菜单收起时置当前分组路径，树节点命中后折叠（用后 nextTick 清回 null） */
 const collapsePath = ref<string | null>(null)
 /** 分组是否有子分组（右键「收起」入口判据，与树节点 hasChildren 同口径） */
 function groupHasChildren(g: ModGroupData): boolean {
   return !!g.hasChild && !!g.children && g.children.length > 0
+}
+
+/**
+ * 在分组树中查找目标分组的父级节点。
+ * 折叠语义：右键深层分组时收起其「父级分组」整棵子树（释放空间查看其他分组）；
+ * 顶层分组（无父）返回 null。虚拟 Groups 容器不计为真实父级（普通组不折叠收容器）。
+ * @param tree 分组树（顶层列表）
+ * @param target 目标分组路径
+ * @returns 父级分组节点；顶层/虚拟根容器下无真实父级时返回 null
+ */
+function findParentPath(tree: ModGroupData[], target: string): ModGroupData | null {
+  for (const g of tree) {
+    if (g.children?.some((c) => c.groupPath === target)) return g
+    if (g.children?.length) {
+      const found = findParentPath(g.children, target)
+      if (found) return found
+    }
+  }
+  return null
 }
 /**
  * 右键菜单显示期间及刚关闭后忽略节点点击的时间戳
@@ -222,6 +243,11 @@ function handleSelectGroup(group: ModGroupData) {
 function handleContextMenu(payload: { event: MouseEvent; group: ModGroupData; depth: number }) {
   contextGroup.value = payload.group
   contextGroupDepth.value = payload.depth ?? 0
+  // 可折叠性：自身有子树，或父级为真实分组（非虚拟 Groups 容器）且有子树时提供「收起父级」入口
+  const parent = findParentPath(groupedTree.value, payload.group.groupPath)
+  contextGroupCollapsible.value =
+    groupHasChildren(payload.group) ||
+    (!!parent && !parent.isVirtualRoot && groupHasChildren(parent))
   const e = payload.event
   // 标记300ms内忽略tree节点点击，防止右键后立即mousedown误选
   ignoreNodeClickUntil = performance.now() + 300
@@ -644,8 +670,13 @@ function handleContextMenuAction(action: string) {
       handleEnableAllMods()
       break
     case 'collapseGroup':
-      collapsePath.value = contextGroup.value?.groupPath ?? null
-      if (collapsePath.value) {
+      // 折叠目标 = 右键分组的「父级分组」（深层节点收起父级整棵子树，释放空间查看其他分组）；
+      // 顶层分组（无真实父级）折叠自身子树
+      const targetPath = contextGroup.value?.groupPath ?? null
+      if (targetPath) {
+        const parent = findParentPath(groupedTree.value, targetPath)
+        const collapseTarget = parent && !parent.isVirtualRoot ? parent.groupPath : targetPath
+        collapsePath.value = collapseTarget
         nextTick(() => {
           collapsePath.value = null
         })
