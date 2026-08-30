@@ -479,24 +479,26 @@ function onContextMenu(e: MouseEvent) {
 
 /* 虚拟"Groups"根节点：与普通角色分组区分（更强调容器感） */
 .group-item.virtual-root {
-  background: rgba(74, 158, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
   /* 中性虚线边框（去默认蓝色，与底部添加按钮虚线统一） */
   border: 1px dashed rgba(255, 255, 255, 0.18);
 }
 .group-item.virtual-root:hover {
-  background: rgba(74, 158, 255, 0.16);
+  background: rgba(255, 255, 255, 0.1);
 }
 .group-item.virtual-root .group-avatar.virtual-avatar {
-  background: linear-gradient(135deg, rgba(74, 158, 255, 0.35), rgba(136, 85, 255, 0.3));
-  border-color: rgba(74, 158, 255, 0.6);
-  box-shadow: 0 0 10px rgba(74, 158, 255, 0.3);
+  /* 中性化：未选中不显示蓝色（原固定蓝渐变+蓝边+蓝光，用户反馈不匹配）；保留浅亮底与容器感 */
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.08));
+  border-color: #7f7f7f;
+  box-shadow: none;
 }
 .group-item.virtual-root .group-avatar.virtual-avatar .avatar-text {
-  color: #e6f0ff;
+  color: rgba(255, 255, 255, 0.85);
   font-weight: 800;
 }
 .group-name.virtual-label {
-  color: rgba(74, 158, 255, 0.85);
+  /* 中性文字（虚拟 Groups 节点不可选中，不再使用蓝色强调） */
+  color: rgba(255, 255, 255, 0.85);
   font-weight: 700;
   letter-spacing: 0.5px;
   font-size: 10px;
