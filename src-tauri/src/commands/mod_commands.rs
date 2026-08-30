@@ -27,8 +27,9 @@ use crate::core::mod_manager;
 use crate::core::mod_scanner;
 use crate::core::resolution;
 use crate::models::enums::TargetGame;
+use crate::models::mod_data::{BatchGroupDelta, GroupDelta};
 use crate::sel_dbg;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -734,25 +735,32 @@ pub async fn add_group(
 }
 
 /// 删除分组（移至回收站）
+///
+/// 命令级增量（R1）：分组目录已删除无需磁盘重扫，直接 `subtree_remove`
+/// 裁剪缓存，返回 `new_group = None` 的 [`GroupDelta`]（前端按 oldGroupPath
+/// 剔除该组及其模组条目），不再触发全量失效与全量刷新。
 #[tauri::command]
-pub async fn remove_group(group_path: String) -> Result<(), String> {
+pub async fn remove_group(group_path: String) -> Result<GroupDelta, String> {
+    let (mods_root, group_dir) = resolve_managed_context(Path::new(&group_path))
+        .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
     let path = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
+    let game = settings_store::get_settings().target_game;
 
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
+        // 抑制 watcher 批次在删除/裁剪中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
+        let _guard = crate::core::file_watcher::WatcherGuard::new();
         if !path.exists() {
             return Err("Group path does not exist".to_string());
         }
-        trash_delete(&path).map_err(|e| e.to_string())
+        trash_delete(&path).map_err(|e| e.to_string())?;
+        let delta = build_removed_group_delta(game, &mods_root, &group_dir);
+        log_delta("remove_group", &delta);
+        Ok(delta)
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
-
-    Ok(())
+    Ok(delta)
 }
 
 /// 移除模组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED + 还原 INI）
@@ -760,38 +768,59 @@ pub async fn remove_group(group_path: String) -> Result<(), String> {
 /// 完整流程：
 /// 1. 将模组文件夹移动到 `Mods/DISABLED_MANAGED_REMOVED/<modname>`（冲突追加 _1、_2…）
 /// 2. 对移动后的模组执行 INI 还原（清理所有 NRMM 注入内容）
-/// 3. 清除模组缓存
+/// 3. 对受影响分组（mod 目录的父分组）局部重扫 + `subtree_replace` 合并缓存（R1 命令级增量）
 ///
-/// 返回 `RemoveModResult`，包含移动后路径、INI 还原状态等信息
+/// 返回 `RemoveModResult`，包含移动后路径、INI 还原状态、受影响分组完整新状态
+/// （`groupDelta`，前端按 oldGroupPath 原地替换该组）等信息
 #[tauri::command]
 pub async fn remove_mod(
     mod_path: String,
 ) -> Result<crate::core::mod_manager::RemoveModResult, String> {
+    let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
+        .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
     let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
+    let game = settings_store::get_settings().target_game;
 
     let result = tauri::async_runtime::spawn_blocking(
         move || -> Result<crate::core::mod_manager::RemoveModResult, String> {
-            crate::core::mod_manager::remove_mod(&path).map_err(|e| e.to_string())
+            // 抑制 watcher 批次在移动/还原中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
+            let _guard = crate::core::file_watcher::WatcherGuard::new();
+            let mut result =
+                crate::core::mod_manager::remove_mod(&path).map_err(|e| e.to_string())?;
+            // 局部重扫入口：mod 目录已被移走（旧路径不存在），传 parent（分组目录，
+            // 操作前后恒存在）——scan_partial_path 会扩展到所属分组
+            let rescan_dir = path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| old_group_dir.clone());
+            result.group_delta = build_group_delta(game, &mods_root, &old_group_dir, &rescan_dir)
+                .map_err(|e| e.to_string())?;
+            log_delta("remove_mod", &result.group_delta);
+            Ok(result)
         },
     )
     .await
     .map_err(|e| e.to_string())??;
 
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
-
     Ok(result)
 }
 
 /// 重命名模组
+///
+/// 命令级增量（R1）：重命名（或写 modname 标记文件）后对受影响分组局部重扫，
+/// 返回 [`GroupDelta`]（新模组路径可从 delta.new_group 内获取），不再触发
+/// 全量失效与全量刷新。
 #[tauri::command]
-pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, String> {
+pub async fn rename_mod(mod_path: String, new_name: String) -> Result<GroupDelta, String> {
+    let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
+        .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
     let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
     settings_store::validate_filename(&new_name).map_err(|e| e.to_string())?;
+    let game = settings_store::get_settings().target_game;
 
-    let new_path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf, String> {
+    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
+        // 抑制 watcher 批次在重命名/写标记文件中途读取中间态
+        let _guard = crate::core::file_watcher::WatcherGuard::new();
         if !path.exists() {
             return Err("Mod path does not exist".to_string());
         }
@@ -805,42 +834,46 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
             .to_string();
 
         // NRMM 逻辑：group_xx 普通分组下的模组，重命名仅修改 modname 标记文件（展示名），文件夹名保持不变
-        if mod_scanner::is_group_xx_dir(&parent_name) {
+        let new_path = if mod_scanner::is_group_xx_dir(&parent_name) {
             let modname_path = path.join("modname");
             crate::utils::atomic_write(&modname_path, new_name.as_bytes())
                 .map_err(|e| format!("Failed to write modname file: {}", e))?;
-            return Ok(path);
-        }
-
-        // 其余情况（互斥组等）：重命名文件夹
-        let dir_name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
-        let final_name = if is_disabled {
-            format!(
-                "{}{}",
-                constants::DISABLED_PREFIX,
-                mod_scanner::strip_disabled_prefix(&new_name)
-            )
+            path.clone()
         } else {
-            new_name.clone()
+            // 其余情况（互斥组等）：重命名文件夹
+            let dir_name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
+            let final_name = if is_disabled {
+                format!(
+                    "{}{}",
+                    constants::DISABLED_PREFIX,
+                    mod_scanner::strip_disabled_prefix(&new_name)
+                )
+            } else {
+                new_name.clone()
+            };
+            let new_path = parent.join(final_name);
+            fs::rename(&path, &new_path).map_err(|e| e.to_string())?;
+            new_path
         };
-        let new_path = parent.join(final_name);
-        fs::rename(&path, &new_path).map_err(|e| e.to_string())?;
-        Ok(new_path)
+
+        // 局部重扫入口（须为操作后存在的目录）：
+        // - group_xx 分支 → mod_path（modname 文件变化，mod 目录未动）
+        // - mutex 分支 → 重命名后的 mod 目录
+        // 两分支返回值恰好即各自场景的存在目录，直接以其为重扫入口
+        let delta = build_group_delta(game, &mods_root, &old_group_dir, &new_path)
+            .map_err(|e| e.to_string())?;
+        log_delta("rename_mod", &delta);
+        Ok(delta)
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
-
-    Ok(new_path)
+    Ok(delta)
 }
 
 /// 重命名分组
@@ -849,26 +882,38 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<PathBuf, S
 /// - group_xx（is_group_xx=true）：修改 groupname 文件内容（无则创建）
 /// - 非group（is_group_xx=false）：重命名目录
 ///
-/// 路径不存在时返回异常
+/// 路径不存在时返回异常。
+///
+/// 命令级增量（R1）：重命名后对受影响分组局部重扫（group_xx 分支重扫原
+/// 分组目录、非 group 分支重扫新组目录），返回 [`GroupDelta`]（分组自身
+/// 重命名时 oldGroupPath 与 newGroup.groupPath 不同，前端按旧键定位替换）。
 #[tauri::command]
 pub async fn rename_group(
     group_path: String,
     new_name: String,
     is_group_xx: bool,
-) -> Result<PathBuf, String> {
+) -> Result<GroupDelta, String> {
+    let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&group_path))
+        .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
     let path = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
     settings_store::validate_filename(&new_name).map_err(|e| e.to_string())?;
+    let game = settings_store::get_settings().target_game;
 
-    let new_path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf, String> {
+    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
+        // 抑制 watcher 批次在重命名/写标记文件中途读取中间态
+        let _guard = crate::core::file_watcher::WatcherGuard::new();
         if !path.exists() {
             return Err("Group path does not exist".to_string());
         }
 
-        if is_group_xx {
+        // 局部重扫入口（须为操作后存在的目录）：
+        // - group_xx 分支 → path（仅 groupname 文件变化，目录未动）
+        // - 非 group 分支 → 新组目录（旧目录已重命名不存在）
+        let rescan_dir = if is_group_xx {
             let groupname_path = path.join("groupname");
             crate::utils::atomic_write(&groupname_path, new_name.as_bytes())
                 .map_err(|e| format!("Failed to write groupname file: {}", e))?;
-            Ok(groupname_path)
+            path.clone()
         } else {
             let parent = path
                 .parent()
@@ -881,52 +926,73 @@ pub async fn rename_group(
                 ));
             }
             fs::rename(&path, &target).map_err(|e| e.to_string())?;
-            Ok(target)
-        }
+            target
+        };
+
+        let delta = build_group_delta(game, &mods_root, &old_group_dir, &rescan_dir)
+            .map_err(|e| e.to_string())?;
+        log_delta("rename_group", &delta);
+        Ok(delta)
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
-
-    Ok(new_path)
+    Ok(delta)
 }
 
 /// 切换模组启用/禁用状态（支持互斥组）
+///
+/// 命令级增量（R1）：文件操作后对受影响分组局部重扫 + `subtree_replace`
+/// 合并缓存，返回 [`GroupDelta`]（该组完整新状态，含互斥级联后的兄弟
+/// 模组状态）供前端原地替换，不再触发全量失效与全量刷新。
 #[tauri::command]
 pub async fn toggle_mod_disabled(
     mod_path: String,
     enable: bool,
     is_mutex: bool,
-) -> Result<(), String> {
+) -> Result<GroupDelta, String> {
+    let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
+        .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
     let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
+    let game = settings_store::get_settings().target_game;
 
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
+        // 抑制 watcher 批次在目录重命名中途读取中间态（C11：暂停期事件保留，
+        // 恢复后幂等合并；enable_mutex_mod 内部守卫与本守卫嵌套安全）
+        let _guard = crate::core::file_watcher::WatcherGuard::new();
         if is_mutex {
             if enable {
-                mod_manager::enable_mutex_mod(&path).map_err(|e| e.to_string())
+                mod_manager::enable_mutex_mod(&path).map_err(|e| e.to_string())?;
             } else {
-                mod_manager::disable_mutex_mod(&path).map_err(|e| e.to_string())
+                mod_manager::disable_mutex_mod(&path).map_err(|e| e.to_string())?;
             }
         } else {
-            mod_manager::toggle_mod(&path, enable).map_err(|e| e.to_string())
+            mod_manager::toggle_mod(&path, enable).map_err(|e| e.to_string())?;
         }
+        // 局部重扫入口：mod 目录已被重命名（DISABLED 前缀增删），旧路径不存在，
+        // 传 parent（分组目录，操作前后恒存在）——scan_partial_path 会扩展到所属分组
+        let rescan_dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| old_group_dir.clone());
+        let delta = build_group_delta(game, &mods_root, &old_group_dir, &rescan_dir)
+            .map_err(|e| e.to_string())?;
+        log_delta("toggle_mod_disabled", &delta);
+        Ok(delta)
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
-
-    Ok(())
+    Ok(delta)
 }
 
 /// 切换模组收藏状态
+///
+/// 设计说明（R1 命令级增量）：fav 是模组目录内的空标记文件（创建/删除），
+/// 不产生目录重命名或路径变化——**不做局部重扫也不返回组 delta**：
+/// - 前端按返回的 `bool` 本地翻转 `isFavorite`（单条目状态，无级联）；
+/// - 缓存由 fav 文件的 watcher 事件增量修正（事件收敛到 mod 目录 →
+///   `scan_partial_path` 整组局部重扫，`subtree_replace` 幂等合并）。
 #[tauri::command]
 pub async fn toggle_favorite(mod_path: String) -> Result<bool, String> {
     let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
@@ -943,11 +1009,6 @@ pub async fn toggle_favorite(mod_path: String) -> Result<bool, String> {
     })
     .await
     .map_err(|e| e.to_string())??;
-
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
 
     Ok(is_fav)
 }
@@ -1162,6 +1223,147 @@ fn parse_game(game: &str) -> Result<TargetGame, String> {
     }
 }
 
+// =========================================================================
+// 命令级 Delta 更新（R1）
+//
+// 目标：toggle/remove/rename/批量组命令不再 invalidate_all 全量失效缓存，
+// 而是对受影响分组局部重扫（scan_partial_path 自动扩展到 _MANAGED_ 一级
+// 子目录粒度）、subtree_replace 就地合并缓存，并返回 GroupDelta（该组
+// 完整新状态）供前端原地替换——零全量重扫、零全量 IPC。
+//
+// 缓存键取 settings.target_game（与 watcher 增量链路一致）；mods_root 从
+// 命令传入路径解析并保留原始形态（与 get_mods 前端入参形态一致），保证
+// 局部重扫产物中的 group_path 能与缓存条目按路径匹配（原位合并的前提）。
+// =========================================================================
+
+/// 从 `_MANAGED_` 内路径解析（Mods 根目录, 受影响顶层分组目录）。
+///
+/// 遍历路径组件定位 `_MANAGED_` 段：其前缀即 Mods 根目录，其后第一段即
+/// 受影响分组（与 `scan_partial_path` 的收敛粒度一致）。纯组件解析，
+/// 不要求路径存在；保留传入路径的原始形态（见上方区块说明）。
+///
+/// # 参数
+/// - `path`: `_MANAGED_` 目录内任意层级的路径
+///
+/// # 返回
+///
+/// `(mods_root, group_dir)` 二元组；路径不含 `_MANAGED_` 段或其下无分组段时返回 `None`。
+fn resolve_managed_context(path: &Path) -> Option<(PathBuf, PathBuf)> {
+    let comps: Vec<_> = path.components().collect();
+    for (i, c) in comps.iter().enumerate() {
+        if c.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(constants::MANAGED_FOLDER)
+        {
+            let group_seg = comps.get(i + 1)?;
+            let mut mods_root = PathBuf::new();
+            for cc in &comps[..i] {
+                mods_root.push(cc.as_os_str());
+            }
+            let group_dir = mods_root.join(constants::MANAGED_FOLDER).join(group_seg);
+            return Some((mods_root, group_dir));
+        }
+    }
+    None
+}
+
+/// 命令级 delta 组装：对受影响分组局部重扫 + 合并缓存，返回该组完整新状态。
+///
+/// 流程（与 watcher 增量链路同构）：
+/// 1. `scan_partial_path` 对 `rescan_dir` 局部重扫（自动扩展到所属顶层分组；
+///    产物含该组完整节点与扁平 mods，磁盘为唯一真相源）；
+/// 2. 读锁收集旧分组状态（须在 subtree_replace 覆盖旧数据之前完成）；
+/// 3. 写锁 `subtree_replace` 就地合并缓存（缓存未命中时内部跳过，
+///    下次 get_mods 全量扫描回填）。
+///
+/// # 参数
+/// - `game`: 目标游戏（缓存键）。
+/// - `mods_path`: Mods 根目录（与 `get_mods` 相同的路径形态）。
+/// - `old_group_dir`: 旧分组目录（缓存匹配与 old_group_path 兜底键）。
+/// - `rescan_dir`: 局部重扫入口目录（须存在；不必为分组目录，扫描会自动扩展到所属分组）。
+///
+/// # 返回
+///
+/// 受影响分组的 [`GroupDelta`]（new_group 为该组重扫后的完整新节点）。
+///
+/// # Errors
+///
+/// `scan_partial_path` 底层扫描失败时传播错误。
+fn build_group_delta(
+    game: TargetGame,
+    mods_path: &Path,
+    old_group_dir: &Path,
+    rescan_dir: &Path,
+) -> Result<GroupDelta> {
+    let partial = mod_scanner::scan_partial_path(mods_path, rescan_dir)
+        .with_context(|| format!("partial rescan failed for {:?}", rescan_dir))?;
+    // 新分组节点：partial 中覆盖 rescan_dir 的分组（可能含多个节点，按 full_path 前缀匹配）
+    let new_group = partial
+        .groups
+        .iter()
+        .find(|g| mod_cache::path_within(rescan_dir, &g.full_path))
+        .cloned();
+    // 旧状态收集（读锁；必须在写锁合并前完成——subtree_replace 会覆盖旧数据）
+    let (old_group_path, old_mod_paths) =
+        mod_cache::collect_old_group_state(game, mods_path, old_group_dir);
+    // 缓存合并（写锁）
+    mod_cache::MOD_CACHE
+        .write()
+        .subtree_replace(game, mods_path, partial);
+    Ok(GroupDelta {
+        old_group_path,
+        new_group,
+        old_mod_paths,
+    })
+}
+
+/// 分组移除 delta 组装：从缓存裁剪组子树（磁盘目录已移除，无需重扫）。
+///
+/// 读锁收集移除前的组状态，随后写锁 `subtree_remove` 裁剪缓存
+/// （组节点 + 其全部 mods + 计数重算）。返回 `new_group = None` 的
+/// [`GroupDelta`]（前端按 oldGroupPath 定位并剔除该组）。
+///
+/// # 参数
+/// - `game`: 目标游戏（缓存键）。
+/// - `mods_path`: Mods 根目录。
+/// - `group_dir`: 被移除分组的目录路径。
+///
+/// # 返回
+///
+/// `new_group = None` 的 [`GroupDelta`]。
+fn build_removed_group_delta(game: TargetGame, mods_path: &Path, group_dir: &Path) -> GroupDelta {
+    // 旧状态收集（读锁；必须在写锁裁剪前完成）
+    let (old_group_path, old_mod_paths) =
+        mod_cache::collect_old_group_state(game, mods_path, group_dir);
+    mod_cache::MOD_CACHE
+        .write()
+        .subtree_remove(game, mods_path, group_dir);
+    GroupDelta {
+        old_group_path,
+        new_group: None,
+        old_mod_paths,
+    }
+}
+
+/// 埋点：命令级 delta 组装结果日志（每个改造命令组装后调用一处）。
+///
+/// affected_mods 为新分组子树内真实模组数（排除 None 空槽位），
+/// removed 为旧扁平条目数（前端需从扁平 mods 列表剔除的条目数）。
+fn log_delta(command_name: &str, delta: &GroupDelta) {
+    let affected_mods = delta
+        .new_group
+        .as_ref()
+        .map(mod_cache::collect_group_mod_paths)
+        .map_or(0, |paths| paths.len());
+    log::debug!(
+        "[delta] {} 命令 | 组={} affected_mods={} removed={}",
+        command_name,
+        delta.old_group_path,
+        affected_mods,
+        delta.old_mod_paths.len()
+    );
+}
+
 fn trash_delete(path: &Path) -> Result<()> {
     match trash::delete(path) {
         Ok(_) => Ok(()),
@@ -1346,62 +1548,89 @@ pub fn create_subfolder(parent_path: String, folder_name: String) -> Result<(), 
 }
 
 /// 禁用指定分组下所有一级模组（不含 .ini 的子分组目录不处理）
+///
+/// 命令级增量（R1）：批量禁用后对受影响分组局部重扫 + `subtree_replace`
+/// 合并缓存，返回 [`BatchGroupDelta`]（保留原 changed 计数语义 + 该组完整新状态）。
 #[tauri::command]
-pub async fn disable_all_mods_in_group(group_path: String) -> Result<u32, String> {
+pub async fn disable_all_mods_in_group(group_path: String) -> Result<BatchGroupDelta, String> {
+    let (mods_root, group_dir) = resolve_managed_context(Path::new(&group_path))
+        .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
     let path = PathBuf::from(group_path);
+    let game = settings_store::get_settings().target_game;
 
-    let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
-        crate::core::mod_manager::disable_all_mods_in_group(&path).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> Result<BatchGroupDelta, String> {
+            // 抑制 watcher 批次在批量重命名中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
+            let _guard = crate::core::file_watcher::WatcherGuard::new();
+            let changed = crate::core::mod_manager::disable_all_mods_in_group(&path)
+                .map_err(|e| e.to_string())?;
+            // 组目录本身未被删除/重命名（仅组内 mod 目录重命名），直接以分组目录为重扫入口
+            let delta = build_group_delta(game, &mods_root, &group_dir, &group_dir)
+                .map_err(|e| e.to_string())?;
+            log_delta("disable_all_mods_in_group", &delta);
+            Ok(BatchGroupDelta { changed, delta })
+        })
+        .await
+        .map_err(|e| e.to_string())??;
 
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
-
-    Ok(count)
+    Ok(result)
 }
 
 /// 启用指定分组下所有一级禁用模组（不含 .ini 的子分组目录不处理）
+///
+/// 命令级增量（R1）：批量启用后对受影响分组局部重扫 + `subtree_replace`
+/// 合并缓存，返回 [`BatchGroupDelta`]（保留原 changed 计数语义 + 该组完整新状态）。
 #[tauri::command]
-pub async fn enable_all_mods_in_group(group_path: String) -> Result<u32, String> {
+pub async fn enable_all_mods_in_group(group_path: String) -> Result<BatchGroupDelta, String> {
+    let (mods_root, group_dir) = resolve_managed_context(Path::new(&group_path))
+        .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
     let path = PathBuf::from(group_path);
+    let game = settings_store::get_settings().target_game;
 
-    let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
-        crate::core::mod_manager::enable_all_mods_in_group(&path).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> Result<BatchGroupDelta, String> {
+            // 抑制 watcher 批次在批量重命名中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
+            let _guard = crate::core::file_watcher::WatcherGuard::new();
+            let changed = crate::core::mod_manager::enable_all_mods_in_group(&path)
+                .map_err(|e| e.to_string())?;
+            // 组目录本身未被删除/重命名（仅组内 mod 目录重命名），直接以分组目录为重扫入口
+            let delta = build_group_delta(game, &mods_root, &group_dir, &group_dir)
+                .map_err(|e| e.to_string())?;
+            log_delta("enable_all_mods_in_group", &delta);
+            Ok(BatchGroupDelta { changed, delta })
+        })
+        .await
+        .map_err(|e| e.to_string())??;
 
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
-
-    Ok(count)
+    Ok(result)
 }
 
 /// 移除分组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED；非group先移子分组到父级再移除）
 ///
 /// 顶层函数：负责从设置数据获取 Mods 根目录、在线程池中执行底层移动、
 /// 处理错误并记录日志。具体「哪些目录移动到哪里」由底层编排层 `remove_group_ex` 决定。
+///
+/// 命令级增量（R1）：分组目录（含其全部子树）已移出扫描范围，无需磁盘重扫，
+/// 直接 `subtree_remove` 裁剪缓存，返回 `new_group = None` 的 [`GroupDelta`]。
 #[tauri::command]
-pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<(), String> {
+pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<GroupDelta, String> {
     // 路径边界校验（R1）：确认 group_path canonicalize 后位于任一已配置 mods_root 内
     let _validated =
         settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
     let path = PathBuf::from(group_path);
+    // 命令级增量（R1）：定位受影响顶层分组（磁盘目录将被移出，直接裁剪缓存子树）
+    let (mods_root, group_dir) = resolve_managed_context(&path)
+        .ok_or_else(|| format!("Path is not inside a managed group: {}", path.display()))?;
+    let game = settings_store::get_settings().target_game;
     log::info!(
         "[remove_group_ex] start | group_path={:?} is_group_xx={}",
         path,
         is_group_xx
     );
 
-    // 从设置数据定位 Mods 根目录（与 _MANAGED_ 同级）
+    // 从设置数据定位 Mods 根目录（与 _MANAGED_ 同级；供底层移动编排使用）
     let settings = settings_store::get_settings();
-    let mods_root = settings
+    let mods_root_for_move = settings
         .game_mods_path
         .values()
         .map(PathBuf::from)
@@ -1413,26 +1642,26 @@ pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<()
             );
             "无法从设置数据定位 Mods 根目录".to_string()
         })?;
-    log::debug!("[remove_group_ex] mods_root={:?}", mods_root);
+    log::debug!("[remove_group_ex] mods_root={:?}", mods_root_for_move);
 
     let path_for_log = path.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        crate::core::mod_manager::remove_group_ex(&path, is_group_xx, &mods_root)
-            .map_err(|e| e.to_string())
+    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
+        // 抑制 watcher 批次在批量移动中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
+        let _guard = crate::core::file_watcher::WatcherGuard::new();
+        crate::core::mod_manager::remove_group_ex(&path, is_group_xx, &mods_root_for_move)
+            .map_err(|e| e.to_string())?;
+        let delta = build_removed_group_delta(game, &mods_root, &group_dir);
+        log_delta("remove_group_ex", &delta);
+        Ok(delta)
     })
     .await
     .map_err(|e| e.to_string())??;
-
-    {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
 
     log::info!(
         "[remove_group_ex] completed | group_path={:?}",
         path_for_log
     );
-    Ok(())
+    Ok(delta)
 }
 
 // =========================================================================
@@ -1452,6 +1681,7 @@ pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<()
 
 #[cfg(test)]
 mod tests {
+    use super::{build_group_delta, build_removed_group_delta};
     use crate::core::constants;
     use crate::core::mod_manager;
     use crate::models::enums::TargetGame;
@@ -1835,5 +2065,304 @@ mod tests {
             "两次更新 enabled_mods 应一致"
         );
         println!("[PASS] update_mod_data_test_idempotent");
+    }
+
+    // =====================================================================
+    // 命令级 Delta 组装（R1）：局部重扫 + subtree_replace/subtree_remove 合并
+    //
+    // 注意：以下测试直接调用模块内组装函数（不经过 Tauri 命令层），
+    // 使用全局 MOD_CACHE（各测试临时目录路径唯一，缓存键互不冲突）；
+    // 故意不在结束时 invalidate_all——并行测试下清空全局缓存会破坏
+    // 其他正在进行的 delta 测试的前置数据。全局缓存写者（含 file_watcher
+    // R2 测试）共 4 个 > 容量上限 3，须持 CACHE_WRITER_TEST_LOCK 串行，
+    // 防 set() 的 LRU 淘汰在他测窗口内淘汰其条目（详见锁文档）。
+    // =====================================================================
+
+    /// 冒烟测试：toggle 禁用后 delta.new_group 与磁盘一致、old_mod_paths 正确、缓存已合并。
+    #[test]
+    fn toggle_group_delta_assembly_smoke() {
+        use crate::core::mod_cache;
+        use crate::core::mod_scanner;
+        use tempfile::TempDir;
+
+        // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
+        // 见 mod_cache::CACHE_WRITER_TEST_LOCK 文档）
+        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().to_path_buf();
+        let managed = dir.path().join(constants::MANAGED_FOLDER);
+        fs::write(dir.path().join("d3dx.ini"), "; test\n").unwrap();
+        let group1 = managed.join("group_1");
+        fs::create_dir_all(group1.join("ModA")).unwrap();
+        fs::write(group1.join("ModA").join("mod.ini"), "[Section]\nx=1\n").unwrap();
+        fs::create_dir_all(group1.join("ModB")).unwrap();
+        fs::write(group1.join("ModB").join("mod.ini"), "[Section]\nx=1\n").unwrap();
+        // 另一组不应受影响
+        fs::create_dir_all(managed.join("group_2").join("ModC")).unwrap();
+        fs::write(
+            managed.join("group_2").join("ModC").join("mod.ini"),
+            "[Section]\nx=1\n",
+        )
+        .unwrap();
+
+        // 预填充缓存（模拟 get_mods 已加载该游戏）
+        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        mod_cache::MOD_CACHE
+            .write()
+            .set(TargetGame::GenshinImpact, &mods_path, full);
+
+        // 执行禁用（目录重命名：ModA → DISABLED 前缀形态）
+        let mod_a = group1.join("ModA");
+        mod_manager::toggle_mod(&mod_a, false).expect("toggle_mod 失败");
+
+        // delta 组装：toggle 场景对 parent（分组目录）局部重扫
+        let delta = build_group_delta(
+            TargetGame::GenshinImpact,
+            &mods_path,
+            &group1,
+            mod_a.parent().expect("mod 目录应有 parent"),
+        )
+        .expect("delta 组装失败");
+
+        // old_group_path 为缓存中该组的 group_path（前端树定位键）
+        assert_eq!(
+            delta.old_group_path,
+            group1.to_string_lossy().to_string(),
+            "old_group_path 应为缓存内该组的分组路径"
+        );
+        // old_mod_paths：磁盘操作前该组全部真实模组（排除 None 槽位）
+        assert_eq!(delta.old_mod_paths.len(), 2, "该组应有 2 个旧模组条目");
+        assert!(
+            delta.old_mod_paths.iter().any(|p| p.ends_with("ModA")),
+            "old_mod_paths 应含旧 ModA 路径"
+        );
+        assert!(
+            delta.old_mod_paths.iter().any(|p| p.ends_with("ModB")),
+            "old_mod_paths 应含 ModB 路径"
+        );
+
+        // new_group 与磁盘一致：含禁用后的 ModA 与未受影响的 ModB
+        let new_group = delta.new_group.as_ref().expect("new_group 不应为 None");
+        assert_eq!(new_group.group_name, "group_1");
+        assert_eq!(
+            mod_cache::collect_group_mod_paths(new_group).len(),
+            2,
+            "新分组应含 2 个真实模组"
+        );
+        let disabled = new_group
+            .mods
+            .iter()
+            .find(|m| m.mod_name.ends_with("ModA"))
+            .expect("新分组应含重命名后的 ModA");
+        assert!(
+            disabled.mod_disabled && disabled.disabled,
+            "禁用后的模组应带 disabled 标记"
+        );
+        assert!(
+            new_group.mods.iter().any(|m| m.mod_name == "ModB"),
+            "未受影响的 ModB 应保留"
+        );
+
+        // 缓存已合并：group_1 节点反映禁用后状态，扁平列表剔除旧路径、计数重算
+        let cached = mod_cache::MOD_CACHE
+            .read()
+            .get(TargetGame::GenshinImpact, &mods_path)
+            .expect("缓存应命中");
+        let g1 = mod_cache::find_group_node(&cached, &group1).expect("缓存应含 group_1");
+        assert!(
+            g1.mods
+                .iter()
+                .any(|m| m.mod_name.ends_with("ModA") && m.mod_disabled),
+            "缓存内 group_1 应已反映禁用状态"
+        );
+        assert!(
+            !cached
+                .mods
+                .iter()
+                .any(|m| m.mod_path.ends_with("\\ModA") || m.mod_path.ends_with("/ModA")),
+            "缓存扁平列表不应残留旧启用态 ModA 路径（应替换为 DISABLED 前缀路径）"
+        );
+        assert!(
+            cached.mods.iter().any(|m| m.mod_name == "ModB"),
+            "缓存扁平列表应保留未受影响的 ModB（删除传播后由 partial 重新合并）"
+        );
+        assert!(
+            cached
+                .mods
+                .iter()
+                .any(|m| m.mod_disabled && m.mod_path.contains("DISABLED")),
+            "缓存扁平列表应含禁用后的 ModA 新条目"
+        );
+        assert_eq!(
+            (
+                cached.total_mods_count,
+                cached.enabled_mods_count,
+                cached.disabled_mods_count
+            ),
+            (3, 2, 1),
+            "合并后计数应重算：3 总 / 2 启用（ModB+ModC）/ 1 禁用"
+        );
+        // group_2 未受影响
+        assert!(
+            cached.mods.iter().any(|m| m.mod_name == "ModC"),
+            "未受影响分组的模组应保留"
+        );
+        println!("[PASS] toggle_group_delta_assembly_smoke");
+    }
+
+    /// 冒烟测试：remove_group 场景 delta（new_group=None，缓存子树被裁剪）。
+    #[test]
+    fn remove_group_delta_clears_cache_subtree() {
+        use crate::core::mod_cache;
+        use crate::core::mod_scanner;
+        use tempfile::TempDir;
+
+        // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
+        // 见 mod_cache::CACHE_WRITER_TEST_LOCK 文档）
+        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().to_path_buf();
+        let managed = dir.path().join(constants::MANAGED_FOLDER);
+        fs::write(dir.path().join("d3dx.ini"), "; test\n").unwrap();
+        let group1 = managed.join("group_1");
+        fs::create_dir_all(group1.join("ModA")).unwrap();
+        fs::write(group1.join("ModA").join("mod.ini"), "[Section]\nx=1\n").unwrap();
+        fs::create_dir_all(group1.join("ModB")).unwrap();
+        fs::write(group1.join("ModB").join("mod.ini"), "[Section]\nx=1\n").unwrap();
+        fs::create_dir_all(managed.join("group_2").join("ModC")).unwrap();
+        fs::write(
+            managed.join("group_2").join("ModC").join("mod.ini"),
+            "[Section]\nx=1\n",
+        )
+        .unwrap();
+
+        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        mod_cache::MOD_CACHE
+            .write()
+            .set(TargetGame::GenshinImpact, &mods_path, full);
+
+        // 磁盘删除 group_1（模拟 trash_delete 的效果）
+        fs::remove_dir_all(&group1).unwrap();
+
+        let delta = build_removed_group_delta(TargetGame::GenshinImpact, &mods_path, &group1);
+
+        assert!(
+            delta.new_group.is_none(),
+            "remove_group 场景 new_group 应为 None"
+        );
+        assert_eq!(delta.old_group_path, group1.to_string_lossy().to_string());
+        assert_eq!(
+            delta.old_mod_paths.len(),
+            2,
+            "应收集被移除组的 2 个模组路径"
+        );
+
+        let cached = mod_cache::MOD_CACHE
+            .read()
+            .get(TargetGame::GenshinImpact, &mods_path)
+            .expect("缓存应命中");
+        assert!(
+            mod_cache::find_group_node(&cached, &group1).is_none(),
+            "缓存中 group_1 节点应被移除"
+        );
+        assert!(
+            cached
+                .mods
+                .iter()
+                .all(|m| m.mod_name != "ModA" && m.mod_name != "ModB"),
+            "缓存扁平列表不应残留 group_1 模组"
+        );
+        assert!(
+            cached.mods.iter().any(|m| m.mod_name == "ModC"),
+            "其他分组应保留"
+        );
+        assert_eq!(
+            (
+                cached.total_mods_count,
+                cached.enabled_mods_count,
+                cached.disabled_mods_count
+            ),
+            (1, 1, 0),
+            "裁剪后计数应重算"
+        );
+        println!("[PASS] remove_group_delta_clears_cache_subtree");
+    }
+
+    /// 冒烟测试：互斥组模组重命名场景，以重命名后的新目录局部重扫。
+    #[test]
+    fn rename_mutex_mod_delta_uses_new_path() {
+        use crate::core::mod_cache;
+        use crate::core::mod_scanner;
+        use tempfile::TempDir;
+
+        // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
+        // 见 mod_cache::CACHE_WRITER_TEST_LOCK 文档）
+        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let dir = TempDir::new().unwrap();
+        let mods_path = dir.path().to_path_buf();
+        let managed = dir.path().join(constants::MANAGED_FOLDER);
+        fs::write(dir.path().join("d3dx.ini"), "; test\n").unwrap();
+        let mutex_root = managed.join("#Mutex");
+        fs::create_dir_all(mutex_root.join("ModY")).unwrap();
+        fs::write(mutex_root.join("ModY").join("mod.ini"), "[Section]\nx=1\n").unwrap();
+
+        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        mod_cache::MOD_CACHE
+            .write()
+            .set(TargetGame::GenshinImpact, &mods_path, full);
+
+        // 重命名 mod 目录（mutex 分支：目录重命名）
+        let old_path = mutex_root.join("ModY");
+        let new_path = mutex_root.join("NewY");
+        fs::rename(&old_path, &new_path).expect("重命名失败");
+
+        let delta = build_group_delta(
+            TargetGame::GenshinImpact,
+            &mods_path,
+            &mutex_root,
+            &new_path,
+        )
+        .expect("delta 组装失败");
+
+        // new_group 为 #Mutex 整组（局部重扫自动扩展到所属分组），含新目录模组
+        let new_group = delta.new_group.as_ref().expect("new_group 不应为 None");
+        assert_eq!(new_group.group_name, "#Mutex");
+        let new_paths = mod_cache::collect_group_mod_paths(new_group);
+        assert!(
+            new_paths.iter().any(|p| p.ends_with("NewY")),
+            "新分组应含重命名后的 NewY"
+        );
+        assert!(
+            !new_paths.iter().any(|p| p.ends_with("ModY")),
+            "新分组不应残留旧 ModY"
+        );
+        // old_mod_paths 含旧路径（供前端剔除）
+        assert!(
+            delta.old_mod_paths.iter().any(|p| p.ends_with("ModY")),
+            "old_mod_paths 应含旧 ModY 路径"
+        );
+        // 缓存合并后同样无旧条目
+        let cached = mod_cache::MOD_CACHE
+            .read()
+            .get(TargetGame::GenshinImpact, &mods_path)
+            .expect("缓存应命中");
+        assert!(
+            cached.mods.iter().all(|m| m.mod_name != "ModY"),
+            "缓存扁平列表不应残留旧 ModY"
+        );
+        assert!(
+            cached.mods.iter().any(|m| m.mod_name == "NewY"),
+            "缓存扁平列表应含 NewY"
+        );
+        println!("[PASS] rename_mutex_mod_delta_uses_new_path");
     }
 }

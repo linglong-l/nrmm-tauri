@@ -6,44 +6,64 @@
 
     <!-- 模组网格内容区：支持拖拽滚动 -->
     <div ref="gridContentRef" class="grid-content">
-      <!-- 空状态：无模组时显示提示 -->
-      <div v-if="displayMods.length === 0 && !loading" class="empty-state">
+      <!-- B-2 状态链：加载错误 → 加载骨架 → 空态 → 虚拟/全量网格（错误优先） -->
+      <div v-if="displayMods.length === 0 && modsStore.loadError" class="empty-state">
         <!-- 加载失败：显示错误信息+重试（C18，避免误导性的「无模组」提示） -->
-        <div v-if="modsStore.loadError" class="load-error-state">
+        <div class="load-error-state">
           <p class="error-title">{{ t('Mods load failed') }}</p>
           <p class="error-detail">{{ modsStore.loadError }}</p>
           <el-button size="small" @click="modsStore.loadMods()">{{ t('Retry') }}</el-button>
         </div>
-        <template v-else>
-          <el-icon :size="64" class="empty-icon">
-            <FolderOpened />
-          </el-icon>
-          <p class="empty-text">{{ t('mods.noMods') }}</p>
-          <p class="empty-hint">{{ t('Drag & Drop mod folders here to add mods to this group (1 folder = 1 mod).') }}</p>
-        </template>
+      </div>
+
+      <!-- B-2 数据加载骨架：loading 且无数据时，渲染与真实卡片同尺寸（160×240）对齐的骨架网格 -->
+      <div v-else-if="displayMods.length === 0 && loading" class="skeleton-grid" aria-busy="true">
+        <div v-for="row in 3" :key="'sk-row-' + row" class="mod-grid-row skeleton-row">
+          <div v-for="col in columnCount" :key="'sk-' + row + '-' + col" class="skeleton-card">
+            <div class="sk-img skeleton-pulse"></div>
+            <div class="sk-name skeleton-pulse"></div>
+          </div>
+        </div>
+        <span class="visually-hidden">{{ t('Loading mods...') }}</span>
+      </div>
+
+      <!-- 空状态：无模组时显示提示 -->
+      <div v-else-if="displayMods.length === 0 && !loading" class="empty-state">
+        <el-icon :size="64" class="empty-icon">
+          <FolderOpened />
+        </el-icon>
+        <p class="empty-text">{{ t('mods.noMods') }}</p>
+        <p class="empty-hint">{{ t('Drag & Drop mod folders here to add mods to this group (1 folder = 1 mod).') }}</p>
       </div>
 
       <!-- 虚拟行渲染模式（模组数 > 阈值） -->
       <template v-else-if="virtualEnabled">
         <!-- 上方占位：维持滚动条高度 -->
         <div :style="{ height: spacerTop + 'px' }" aria-hidden="true"></div>
-        <!-- 可见行：每行渲染 columnCount 个卡片 -->
+        <!-- 可见行：行内仅渲染本行真实存在的卡片（A-2 行内列数剪裁，杜绝 undefined 空卡/错位行） -->
         <div
           v-for="rowIdx in visibleRowCount"
           :key="'row-' + (virtualStartRow + rowIdx - 1)"
           class="mod-grid-row virtual-row"
         >
           <ModCard
-            v-for="colIdx in columnCount"
+            v-for="colIdx in rowColCount(displayMods.length, columnCount, virtualStartRow + rowIdx - 1)"
             :key="'card-' + virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1)"
             :mod="getModAtRowCol(virtualStartRow + rowIdx - 1, colIdx - 1)"
-            :isEmpty-slot="virtualSlotEmpty(virtualStartRow + rowIdx - 1, colIdx - 1)"
+            :isEmpty-slot="false"
             :mod-index="virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1)"
             :class="virtualCardClasses(virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1))"
             :ref="el => setModRef(el, virtualCardIndex(virtualStartRow + rowIdx - 1, colIdx - 1))"
             @select="handleHighlightMod"
             @activate="handleActivateMod"
           />
+          <!-- A-2 对齐补位：行内真实卡之后的 CSS 占位（不渲染 ModCard），与全量模式空槽布局一致 -->
+          <div
+            v-for="i in (columnCount - rowColCount(displayMods.length, columnCount, virtualStartRow + rowIdx - 1))"
+            :key="'empty-' + rowIdx + '-' + i"
+            class="empty-slot-placeholder"
+            aria-hidden="true"
+          ></div>
         </div>
         <!-- 下方占位：维持滚动条高度 -->
         <div :style="{ height: spacerBottom + 'px' }" aria-hidden="true"></div>
@@ -59,8 +79,37 @@
         <div v-for="i in emptySlots" :key="'empty-' + i" class="empty-slot-placeholder" aria-hidden="true"></div>
       </div>
     </div>
+
+    <!-- B-2 刷新遮罩：loading 且有旧数据时半透明视觉提醒，pointer-events:none 不拦截交互 -->
+    <div v-if="loading && displayMods.length > 0" class="is-refreshing-mask" aria-hidden="true"></div>
   </div>
 </template>
+
+<!-- A-1/A-2 纯计算辅助函数：独立导出以便单测 -->
+<script lang="ts">
+/**
+ * 计算某行实际应渲染的卡片数（A-2：行内列数剪裁，杜绝渲染越界空卡/错位行）
+ * @param total 当前显示模组总数
+ * @param cols 每行列数
+ * @param row 行号（0-based）
+ * @returns 该行应渲染的卡片数（首行满列 / 末行取余数 / 空行为 0）
+ */
+export function rowColCount(total: number, cols: number, row: number): number {
+  if (cols <= 0) return 0
+  const start = row * cols
+  if (start >= total) return 0
+  return Math.min(cols, total - start)
+}
+
+/**
+ * 收敛滚动容器 scrollTop 至内容最大可滚位置（A-1：patch 缩短列表后防指向空区）
+ * @param el 滚动容器 DOM（仅需 scrollHeight/clientHeight/scrollTop 三属性，便于纯函数单测）
+ */
+export function clampScrollTop(el: { scrollHeight: number; clientHeight: number; scrollTop: number }): void {
+  const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight)
+  if (el.scrollTop > maxScroll) el.scrollTop = maxScroll
+}
+</script>
 
 <script setup lang="ts">
 /**
@@ -255,22 +304,6 @@ function virtualCardClasses(idx: number): Record<string, boolean> {
     'search-highlight': status === 'active',
     'search-hit': status === 'hit',
   }
-}
-
-/**
- * 虚拟行渲染模式下某行列是否为网格对齐的空槽位（越界位置）
- *
- * 虚拟模式每行固定渲染 columnCount 个卡片，当分组模组数末尾不足一行时，
- * 越界位置无模组数据（getModAtRowCol 返回 undefined），应标记为空槽位，
- * 使 ModCard 渲染为加号空槽位样式而非空白可交互卡片（修复网格对齐渲染，
- * 与全量模式的空槽位语义对齐）。
- *
- * @param rowBase 0-based 虚拟行号
- * @param colBase 0-based 列号
- * @returns true 表示空白槽位（需传 isEmpty-slot）
- */
-function virtualSlotEmpty(rowBase: number, colBase: number): boolean {
-  return getModAtRowCol(rowBase, colBase) === undefined
 }
 
 /**
@@ -476,17 +509,32 @@ watch(loading, (newVal, oldVal) => {
 })
 
 /**
- * 显示模组列表或选中分组变化后 → 确保选中卡片可见
+ * 显示模组列表或选中分组变化后 → 收敛滚动+重算可见范围 → 确保选中卡片可见
  * 触发场景：分组切换（displayMods 重建）、收藏模式切换、模组数量变化
+ *
+ * A-1 异常渲染修复：列表变化（命令 patch/分组建树/收藏切换/refresh）后先收敛
+ * scrollTop（防 patch 缩短列表后指向空区）再重算可见范围，杜绝渲染不该渲染的行/空卡。
  */
 watch(
   () => [displayMods.value.length, modsStore.selectedGroupPath, modsStore.showFavoritesOnly],
   () => {
     if (!loading.value) {
+      clampScrollToContent()
+      virtualRecalculate()
       nextTick(ensureSelectedCardVisible)
     }
   }
 )
+
+/**
+ * A-1：收敛 gridContent 的 scrollTop 至内容最大可滚位置
+ * 当命令级 patch 缩短列表（删除模组/移除组/取消收藏）后，scrollTop 可能超过新列表
+ * 最大可滚位置，若不收敛，重算后的可见范围仍指向空区。
+ */
+function clampScrollToContent() {
+  const el = gridContentRef.value
+  if (el) clampScrollTop(el)
+}
 
 /**
  * 焦点回归（窗口显示 / 切回模组页）→ 确保选中模组卡片可见
@@ -612,5 +660,72 @@ watch(modsFocusTick, () => {
   min-height: 0;
   pointer-events: none;
   visibility: hidden;
+}
+
+/* B-2 数据加载骨架：与真实 ModCard 同尺寸（160×240）对齐，纯 CSS，复用 skeleton-pulse 呼吸动画 */
+.skeleton-grid {
+  height: 100%;
+  overflow: hidden;
+}
+
+.skeleton-row {
+  /* 复用 .mod-grid-row 的 flex 包裹与间隙布局（160×240 卡片 + 12px gap） */
+}
+
+.skeleton-card {
+  flex: 0 0 auto;
+  width: 160px;
+  height: 240px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sk-img {
+  width: 100%;
+  height: 200px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 8px 8px 0 0;
+}
+
+.sk-name {
+  margin: 8px;
+  height: 20px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* 骨架呼吸动画（作用域内定义，因 ModCard 的 .skeleton-pulse 是 scoped 无法复用） */
+.skeleton-pulse {
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+
+/* 无障碍隐藏文本（供屏幕阅读器读取"正在加载模组"） */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* B-2 刷新遮罩：loading 且有旧数据时的半透明视觉提醒，pointer-events:none 不拦截交互 */
+.is-refreshing-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(18, 18, 18, 0.4);
+  pointer-events: none;
+  transition: opacity 0.2s ease;
 }
 </style>

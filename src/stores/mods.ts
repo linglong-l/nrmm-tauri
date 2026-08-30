@@ -13,7 +13,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, reactive, watch, shallowRef, triggerRef } from 'vue'
 import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, deselectGroupMod, disableAllModsInGroup, syncNrmmUpdateFlag } from '../utils/tauri'
 import { useSettingsStore } from './settings'
-import type { ModGroupData, ModData, TargetGame, UpdateResult } from '../types'
+import type { ModGroupData, ModData, TargetGame, UpdateResult, GroupDelta } from '../types'
 import { logger } from '../utils/logger'
 
 export const useModsStore = defineStore('mods', () => {
@@ -86,6 +86,12 @@ export const useModsStore = defineStore('mods', () => {
   const currentGlobalMatchIndex = ref(-1)
   /** 需要自动展开的分组路径集合（命中分组的所有祖先路径） */
   const autoExpandGroupPaths = ref<Set<string>>(new Set())
+  /**
+   * 最近一次本地 patch 时间戳（R1 命令级 Delta）
+   * ModsView folder-changed 回声抑制依据：命令 patch 后短窗口内的 watcher 回声事件
+   * 跳过全量 refresh（缓存已由命令内局部重扫合并，批次处理为幂等重复）
+   */
+  const lastLocalPatchAt = ref(0)
 
   /**
    * 文本归一化：Unicode NFKC + 大小写 + 空白统一
@@ -659,6 +665,186 @@ export const useModsStore = defineStore('mods', () => {
     }
   }
 
+  // ========== 命令级分组增量（R1：mod-state-delta 方案，替代操作后全量 refresh） ==========
+
+  /**
+   * 递归收集组节点内全部模组对象（含 children 子分组），排除 None 空槽位
+   * None 仅存在于树内组列表首位（槽位选择展示），扁平 mods 列表不含 None
+   * （与后端 scan_mods_light 的扁平列表语义一致）
+   */
+  function collectGroupModsRecursive(group: ModGroupData): ModData[] {
+    const out: ModData[] = []
+    for (const m of group.mods) {
+      if (m.modPath && m.modPath !== 'None' && m.name !== 'None') out.push(m)
+    }
+    for (const child of group.children || []) {
+      out.push(...collectGroupModsRecursive(child))
+    }
+    return out
+  }
+
+  /**
+   * 在分组树中定位指定路径的组节点及其所在数组（顶层 groups 或父级 children）
+   * @returns 节点、所在数组与数组内下标；未找到返回 null
+   */
+  function findGroupSlot(
+    groupList: ModGroupData[],
+    path: string
+  ): { node: ModGroupData; list: ModGroupData[]; index: number } | null {
+    for (let i = 0; i < groupList.length; i++) {
+      const g = groupList[i]
+      if (g.groupPath === path) return { node: g, list: groupList, index: i }
+      if (g.children && g.children.length > 0) {
+        const found = findGroupSlot(g.children, path)
+        if (found) return found
+      }
+    }
+    return null
+  }
+
+  /**
+   * 分组树中是否存在指定路径的分组（顶层 + 互斥组 children 递归）
+   *
+   * R2：ModsView 消费 managed-partial-update 前的可 patch 判定——
+   * 树中无此组（外部新建分组、树尚未加载等）时增量无法原地 patch，
+   * 调用方应跳过 patch 改走全量 refresh 兜底
+   *
+   * @param groupPath 分组路径（树定位键）
+   * @returns 存在返回 true
+   */
+  function hasGroup(groupPath: string): boolean {
+    return findGroupSlot(groups.value, groupPath) !== null
+  }
+
+  /**
+   * 应用命令级分组增量（R1 命中路径：toggle/remove/rename/批量组操作）
+   *
+   * 命令返回受影响分组的完整新状态（后端已局部重扫并排序），本地原地 patch，
+   * 零全量 refresh：
+   * 1. 树中按 oldGroupPath 定位组节点（顶层 + children 递归）
+   * 2. 收集该节点旧扁平条目路径（递归 mods，排除 None）→ 优先用 delta.oldModPaths
+   * 3. 扁平 mods：记录旧条目最小索引 → 移除全部旧条目 → newGroup 存在时在该索引 splice 插入新条目
+   * 4. 树：newGroup 存在 → 父数组原位替换节点；null → 从父数组移除节点
+   * 5. 选中态修正：selectedGroupPath 失效（指向被移除/重命名组）→ 回退第一个分组；
+   *    selectedModIndex 越界修正（同 refresh() 既有逻辑）
+   * 6. 搜索激活时重算命中（splice 导致 modMatchIndices 扁平索引漂移，重算保证一致，仅搜索激活时付出）
+   * 7. 记录 lastLocalPatchAt（ModsView folder-changed 回声抑制依据）
+   *
+   * @param delta 命令返回的分组增量（newGroup=null 表示分组已整体移除）
+   */
+  function applyGroupDelta(delta: GroupDelta): void {
+    // 1. 树中定位旧组节点（含其所在父数组，供原位替换/移除）
+    const slot = findGroupSlot(groups.value, delta.oldGroupPath)
+    if (!slot) {
+      logger.warn('ModsStore', 'applyGroupDelta: group not found in tree, only flat mods patched', {
+        oldGroupPath: delta.oldGroupPath,
+      })
+    }
+
+    // 2. 该分组旧扁平条目路径：优先用 delta.oldModPaths；为空时从树节点递归收集（排除 None）
+    const oldPaths =
+      delta.oldModPaths.length > 0
+        ? delta.oldModPaths
+        : slot
+          ? collectGroupModsRecursive(slot.node).map((m) => m.modPath)
+          : []
+
+    // 3. 扁平 mods：剔除全部旧条目并记录最小索引；newGroup 存在时在该索引原位插入新条目
+    const oldPathSet = new Set(oldPaths)
+    let insertIdx = -1
+    const kept: ModData[] = []
+    for (let i = 0; i < mods.value.length; i++) {
+      const m = mods.value[i]
+      if (m.modPath && oldPathSet.has(m.modPath)) {
+        if (insertIdx === -1) insertIdx = i
+      } else {
+        kept.push(m)
+      }
+    }
+    if (delta.newGroup) {
+      const newEntries = collectGroupModsRecursive(delta.newGroup)
+      // 旧条目未在扁平中找到（如空分组）→ 追加到尾部
+      if (insertIdx === -1) insertIdx = kept.length
+      kept.splice(insertIdx, 0, ...newEntries)
+    }
+    mods.value = kept
+
+    // 4. 树：原位替换 / 移除节点（shallowRef 数组 mutate → 显式 triggerRef）
+    if (slot) {
+      if (delta.newGroup) {
+        slot.list[slot.index] = delta.newGroup
+      } else {
+        slot.list.splice(slot.index, 1)
+      }
+      triggerRef(groups)
+    }
+
+    // 5. 选中态修正（与 refresh() 既有逻辑对齐）
+    if (selectedGroupPath.value) {
+      const found = findGroupByPathInList(groups.value, selectedGroupPath.value)
+      if (!found && groups.value.length > 0) {
+        selectedGroupPath.value = groups.value[0].groupPath
+      }
+    } else if (groups.value.length > 0) {
+      selectedGroupPath.value = groups.value[0].groupPath
+    }
+    const currentMods = currentGroupMods.value
+    if (selectedModIndex.value >= currentMods.length) {
+      selectedModIndex.value = Math.max(0, currentMods.length - 1)
+      const curPath = selectedGroupPath.value
+      if (curPath && !curPath.startsWith('__') && curPath !== '__groups__') {
+        selectedModIndicesByGroup[curPath] = selectedModIndex.value
+      }
+    }
+
+    // 6. 搜索激活时重算命中（扁平索引随 splice 漂移，重算保证一致）
+    if (searchVisible.value && searchQuery.value.trim()) {
+      updateSearchMatches()
+    }
+
+    // 7. 记录本地 patch 时间戳（watcher 回声抑制依据）
+    lastLocalPatchAt.value = Date.now()
+  }
+
+  /**
+   * 收藏本地翻转（toggleFavorite 命令返回 bool 后调用；A2 变体——0 IPC 零全量）
+   *
+   * 扁平与树内同路径条目为两个独立对象实例（后端 ScanResult 独立序列化），需分别翻转；
+   * 组内位置近似重排（收藏前置/取消后移；精确序由后续增量/全量刷新恢复）。
+   *
+   * @param modPath 模组路径（扁平与树的共同定位键）
+   * @param isFav 命令返回的切换后收藏状态
+   */
+  function toggleFavoriteLocal(modPath: string, isFav: boolean): void {
+    // 扁平列表：翻转 isFavorite（shallowRef 内对象 mutate → 显式 triggerRef）
+    const flat = mods.value.find((m) => m.modPath === modPath)
+    if (flat) {
+      flat.isFavorite = isFav
+      triggerRef(mods)
+    }
+    // 树：定位直接包含该模组的分组节点，翻转并做组内近似重排
+    const container = findGroupContainingModInList(groups.value, modPath)
+    if (container) {
+      const idx = container.mods.findIndex((m) => m.modPath === modPath)
+      if (idx >= 0) {
+        const [moved] = container.mods.splice(idx, 1)
+        moved.isFavorite = isFav
+        if (isFav) {
+          // 收藏前置：插到首位之后（None 空槽位恒为组内第 0 位，mod_index 以 None=0 为基准，不得顶替）
+          const noneFirst =
+            container.mods[0] && (container.mods[0].name === 'None' || container.mods[0].modPath === 'None')
+          container.mods.splice(noneFirst ? 1 : 0, 0, moved)
+        } else {
+          // 取消收藏后移（近似序，精确序由后续增量/全量刷新恢复）
+          container.mods.push(moved)
+        }
+        triggerRef(groups)
+      }
+    }
+    // fav 标记文件的 watcher 回声同样需要抑制
+    lastLocalPatchAt.value = Date.now()
+  }
+
   /**
    * 高亮选中模组（仅UI，不写入INI、不刷新、不弹提示）
    * 用于单击卡片时的视觉反馈
@@ -858,12 +1044,15 @@ export const useModsStore = defineStore('mods', () => {
         if (path && !path.startsWith('__') && path !== '__groups__') {
           selectedModIndicesByGroup[path] = 0
         }
+        // deselect_group_mod 未纳入 R1 命令级 delta 契约 → 保留全量 refresh
+        await refresh()
       } else {
         logger.debug('mods', 'deselectOrDisableNoneSlot → disableAllModsInGroup', { groupPath })
-        const n = await disableAllModsInGroup(groupPath)
-        logger.info('mods', `Disabled ${n} mods in mutex group ${groupPath}`)
+        const batch = await disableAllModsInGroup(groupPath)
+        // 命令级增量原地 patch（R1：批量禁用后零全量 refresh）
+        applyGroupDelta(batch.delta)
+        logger.info('mods', `Disabled ${batch.changed} mods in mutex group ${groupPath}`)
       }
-      await refresh()
     } catch (e: unknown) {
       logger.error('mods', 'deselectOrDisableNoneSlot failed', e)
       throw e
@@ -1039,6 +1228,11 @@ export const useModsStore = defineStore('mods', () => {
     selectGroup,
     loadMods,
     refresh,
+    // ========== 命令级分组增量（R1） ==========
+    lastLocalPatchAt,
+    applyGroupDelta,
+    hasGroup,
+    toggleFavoriteLocal,
     selectModByIndex,
     highlightMod,
     activateModByIndex,

@@ -18,6 +18,11 @@
 // 故在本 crate 级别关闭这两组，同时保留 `-D warnings` 严格把关默认警告级的真实质量问题。
 #![allow(clippy::pedantic, clippy::nursery)]
 
+// 全局分配器切换为 mimalloc（C-6）：小对象密集 + 多线程分配场景（缓存树/rayon 并扫）下
+// 碎片率与锁竞争低于系统默认分配器；预期后端常驻降低并改善长跑 RSS 增长。
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod commands;
 pub mod config;
 pub mod core;

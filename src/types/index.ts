@@ -482,6 +482,46 @@ export interface UpdateResult {
 }
 
 /**
+ * 命令级分组增量（R1：命令级 Delta 更新）
+ *
+ * 状态操作命令（toggle/rename/remove/批量组操作）返回受影响分组的新状态，
+ * 前端原地 patch 进 store，避免全量 refresh IPC。
+ * 对应后端 GroupDelta（serde camelCase 已由后端保证）。
+ */
+export interface GroupDelta {
+  /** 旧分组路径（树定位键；分组重命名时与 newGroup.groupPath 不同） */
+  oldGroupPath: string;
+  /** 新分组节点（含 mods/children/统计，后端已排序）；null = 分组已整体移除 */
+  newGroup: ModGroupData | null;
+  /** 该分组旧的扁平 modPath 列表（用于从扁平 mods 剔除） */
+  oldModPaths: string[];
+}
+
+/**
+ * 批量组操作命令级增量（disable_all_mods_in_group / enable_all_mods_in_group）
+ */
+export interface BatchGroupDelta {
+  /** 实际发生状态变化的模组数量 */
+  changed: number;
+  /** 受影响分组的增量 */
+  delta: GroupDelta;
+}
+
+/**
+ * watcher 增量事件 payload（R2：managed-partial-update 直接携带分组增量列表）
+ *
+ * 后端 watcher 未溢出批次局部重扫合并缓存后推送；前端零额外 IPC 往返，
+ * 对 deltas 逐组 applyGroupDelta 原地 patch。溢出/全量兜底分支不发此事件
+ * （仅 managed-folder-changed → 前端全量 refresh 兜底）。
+ */
+export interface ManagedPartialUpdatePayload {
+  /** 当前游戏（后端 TargetGame 的 Debug 字符串形态） */
+  game: string;
+  /** 受影响分组的增量列表（多 root 批次可能含多个组；空列表 = 失效批次，走兜底） */
+  deltas: GroupDelta[];
+}
+
+/**
  * 移除模组结果（后端 RemoveModResult）
  *
  * 对应后端 `crate::core::mod_manager::RemoveModResult`
@@ -498,6 +538,8 @@ export interface RemoveModResult {
   iniCount: number;
   /** 还原过程中失败的文件数 */
   failedCount: number;
+  /** 受影响分组的增量（R1：前端原地 patch，替代全量 refresh） */
+  groupDelta: GroupDelta;
 }
 
 /**

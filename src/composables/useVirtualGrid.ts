@@ -138,6 +138,9 @@ export function useVirtualGrid(
     onScroll()
   }
 
+  /** ResizeObserver，用于监听容器高度变化（A-3/C23） */
+  let resizeObserver: ResizeObserver | null = null
+
   /** requestAnimationFrame ID，用于节流 */
   let rafId: number | null = null
 
@@ -157,12 +160,24 @@ export function useVirtualGrid(
     if (scrollContainer.value) {
       scrollContainer.value.addEventListener('scroll', onScrollThrottled, { passive: true })
       onScroll()
+      // A-3/C23：容器高度变化（窗口拉伸/收缩）即时更新，可见范围不错算
+      if (typeof ResizeObserver !== 'undefined') {
+        resizeObserver = new ResizeObserver((entries) => {
+          const h = entries[0]?.contentRect.height
+          if (h) containerHeight.value = h
+        })
+        resizeObserver.observe(scrollContainer.value)
+      }
     }
   })
 
   onUnmounted(() => {
     if (scrollContainer.value) {
       scrollContainer.value.removeEventListener('scroll', onScrollThrottled)
+    }
+    if (resizeObserver) {
+      resizeObserver.disconnect()
+      resizeObserver = null
     }
     if (rafId !== null) {
       cancelAnimationFrame(rafId)

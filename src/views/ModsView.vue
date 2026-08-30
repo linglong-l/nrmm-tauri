@@ -49,6 +49,7 @@ import { importItems, isFileWatcherRunning, currentWatchedPath } from '@/utils/t
 import { logger } from '@/utils/logger'
 import { listen } from '@tauri-apps/api/event'
 import type { ImportItemResult } from '@/utils/tauri'
+import type { ManagedPartialUpdatePayload } from '@/types'
 
 const { t } = useI18n()
 const modsStore = useModsStore()
@@ -64,6 +65,11 @@ const isDragging = ref(false)
  * 组件卸载时调用以移除 Tauri 事件监听，防止内存泄漏
  */
 let unlistenManagedFolderChanged: (() => void) | null = null
+/**
+ * 托管目录增量事件（managed-partial-update）的取消监听函数
+ * 组件卸载时调用以移除 Tauri 事件监听，防止内存泄漏
+ */
+let unlistenManagedPartialUpdate: (() => void) | null = null
 /**
  * 全局热键刷新事件（hotkey-refresh）的取消监听函数
  * 组件卸载时调用以移除 Tauri 事件监听，防止内存泄漏
@@ -200,16 +206,56 @@ onMounted(async () => {
 
   try {
     unlistenManagedFolderChanged = await listen('managed-folder-changed', () => {
+      // 回声抑制（R1）：命令 patch 后短窗口内的 watcher 回声事件跳过（缓存已由命令内局部重扫合并，
+      // 批次处理为幂等重复）；外部真实变更不受影响（窗口外）
+      if (Date.now() - modsStore.lastLocalPatchAt < 2000) {
+        logger.debug('ModsView', 'folder-changed 为命令回声，跳过全量 refresh')
+        return
+      }
       // 防抖处理：合并短时间内的连续文件变更事件
       // 避免批量操作（如互斥组目录重命名）触发多次全量 refresh，导致耗时飙升
       if (refreshTimer) clearTimeout(refreshTimer)
       refreshTimer = setTimeout(() => {
+        // 回声抑制复查（R2）：后端双事件顺序为 folder-changed 先、partial-update 后，
+        // 事件到达时增量尚未 patch（lastLocalPatchAt 未置位），须在到期时复查——
+        // 增量已 patch 的批次跳过全量 refresh，全量路径仅余兜底（溢出/失效批次）
+        if (Date.now() - modsStore.lastLocalPatchAt < 2000) {
+          logger.debug('ModsView', 'folder-changed 防抖到期，增量已 patch，跳过全量 refresh')
+          refreshTimer = null
+          return
+        }
         modsStore.refresh()
         refreshTimer = null
       }, REFRESH_DEBOUNCE_MS)
     })
   } catch (e) {
     logger.info('ModsView', 'Event listeners not available (dev mode)')
+  }
+
+  try {
+    unlistenManagedPartialUpdate = await listen<ManagedPartialUpdatePayload>(
+      'managed-partial-update',
+      (event) => {
+        const { deltas } = event.payload
+        if (!Array.isArray(deltas) || deltas.length === 0) return
+        // R2：增量事件直接携带分组 delta，逐组原地 patch（复用 R1 基建；applyGroupDelta 置
+        // lastLocalPatchAt → 已到达的 folder-changed 500ms 防抖 timer 到期时被回声抑制跳过
+        // ——全量 refresh 仅剩兜底路径）
+        // 树中不存在的组（外部新建分组、树未加载）无法原地 patch → 跳过 patch 且不置位
+        // 时间戳，保留 folder-changed 已建的防抖 timer 走全量 refresh 兜底
+        const unpatchable = deltas.some((d) => d.newGroup !== null && !modsStore.hasGroup(d.oldGroupPath))
+        if (unpatchable) {
+          logger.debug('ModsView', 'managed-partial-update 含树外分组，转全量 refresh 兜底', {
+            groups: deltas.length,
+          })
+          return
+        }
+        for (const delta of deltas) modsStore.applyGroupDelta(delta)
+        logger.debug('ModsView', 'managed-partial-update 增量 patch', { groups: deltas.length })
+      }
+    )
+  } catch (e) {
+    logger.info('ModsView', 'managed-partial-update listener failed (dev mode)')
   }
 
   try {
@@ -227,6 +273,7 @@ onUnmounted(async () => {
   // 文件监控由 App.vue 的 applyDetectedGameSwitch 或根组件卸载时统一管理
   // 这样在切换 Tab 时文件监控仍保持运行，数据缓存有效，切回时无需重新加载
   unlistenManagedFolderChanged?.()
+  unlistenManagedPartialUpdate?.()
   unlistenHotkeyRefresh?.()
   // 清理防抖定时器，避免组件卸载后残留定时器触发已销毁的 store
   if (refreshTimer) {

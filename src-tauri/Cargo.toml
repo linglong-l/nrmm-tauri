@@ -28,7 +28,7 @@ tauri-plugin-os = "~2.3.2"
 tauri-plugin-global-shortcut = "~2.3.2"
 tauri-plugin-opener = "~2.5.4"
 
-serde = { version = "^1", features = ["derive"] }
+serde = { version = "^1", features = ["derive", "rc"] }
 serde_json = "^1"
 tokio = { version = "^1", features = ["full"] }
 anyhow = "1"
@@ -63,6 +63,9 @@ image = { version = "0.25", default-features = false, features = [
 sevenz-rust = "0.6"
 unrar = "0.5"
 trash = "5"
+# 全局分配器切换为 mimalloc（C-6）：小对象密集 + 多线程分配（缓存树/rayon 并扫）场景下
+# 碎片率与锁竞争低于系统默认分配器；预期后端常驻降低并改善长跑 RSS 增长。
+mimalloc = { version = "0.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

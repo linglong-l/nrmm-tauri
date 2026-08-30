@@ -14,6 +14,7 @@
       {
         "label": "main",
         "title": "NRMM",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,WinUseBrowserSpellChecker,Translate,AutofillServerCommunication,MediaRouter,OptimizationGuide,InterestFeedContentSuggestions,BackgroundFetch,PushMessaging,SpareRendererForSitePerProcess --mute-audio --disable-extensions",
         "width": 960,
         "height": 640,
         "minWidth": 750,

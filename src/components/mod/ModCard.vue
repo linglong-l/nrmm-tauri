@@ -122,12 +122,11 @@
         </div>
       </div>
     </Teleport>
-    <!-- 移除模组对话框（UI1确认 + UI2成功提示） -->
+    <!-- 移除模组对话框（UI1确认 + UI2成功提示；R1：移除后由对话框内部分组增量 patch store） -->
     <RemoveModDialog
       v-model="removeDialogVisible"
       :mod-name="removeDialogModName"
       :mod-path="removeDialogModPath"
-      @removed="handleRemoved"
     />
   </div>
 </template>
@@ -368,8 +367,9 @@ async function handleRename() {
       }
     )
     if (value) {
-      await renameMod(mod.value.modPath, value.trim())
-      await modsStore.refresh()
+      const delta = await renameMod(mod.value.modPath, value.trim())
+      // 命令级增量：重命名后的分组新状态原地 patch（零全量 refresh）
+      modsStore.applyGroupDelta(delta)
       ElMessage.success(t('Mod renamed successfully'))
     }
   } catch (e) {
@@ -389,8 +389,7 @@ const removeDialogModPath = ref('')
 /**
  * 移除模组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED + 还原 INI）
  * 打开自定义确认对话框（UI1），后续流程由 RemoveModDialog 组件接管：
- * - 用户确认 → 调用后端 remove_mod → 显示成功提示（UI2）
- * - UI2 确认 → 触发 handleRemoved 重读模组
+ * - 用户确认 → 调用后端 remove_mod → 分组增量原地 patch（R1）→ 显示成功提示（UI2）
  */
 function handleDelete() {
   if (!mod.value) return
@@ -398,18 +397,6 @@ function handleDelete() {
   removeDialogModName.value = mod.value.modName
   removeDialogModPath.value = mod.value.modPath
   removeDialogVisible.value = true
-}
-
-/**
- * 移除模组成功后回调（由 RemoveModDialog 的 UI2 确认按钮触发）
- * 执行模组重读取以反映文件夹移动后的目录结构变化
- */
-async function handleRemoved() {
-  try {
-    await modsStore.refresh()
-  } catch (e) {
-    logger.error('ModCard', 'refresh after remove failed', e)
-  }
 }
 
 /** 点击外部区域关闭右键菜单 */

@@ -84,7 +84,9 @@ static DISABLED_PREFIX_RE: Lazy<Regex> =
 ///
 /// # 字段说明
 /// - `groups`: 分组列表，包含 NormalGroup 和 MutexGroup 根节点，按 `group_index` 排序
-/// - `mods`: 所有模组的扁平列表（不含 None 空槽位），便于前端直接渲染
+/// - `mods`: 所有模组的扁平列表（不含 None 空槽位），便于前端直接渲染；
+///   元素为 `Arc<ModData>`（R3/C-3b），与各分组 `mods` 内条目共享同一底层实例，
+///   serde 序列化透明（前端 JSON 零变化）
 /// - `total_mods_count`: 总模组数（不含 None 空槽位），用于统计展示
 /// - `enabled_mods_count`: 启用的模组数，即 `!disabled && !mod_disabled` 的模组数量
 /// - `disabled_mods_count`: 禁用的模组数，即 `disabled || mod_disabled` 的模组数量
@@ -94,7 +96,7 @@ pub struct ScanResult {
     /// 分组列表（NormalGroup + MutexGroup 根节点），按 group_index 排序
     pub groups: Vec<ModGroupData>,
     /// 所有模组的扁平列表（不含 None 空槽位）
-    pub mods: Vec<ModData>,
+    pub mods: Vec<Arc<ModData>>,
     /// 总模组数（不含 None 空槽位）
     pub total_mods_count: usize,
     /// 启用的模组数（!disabled && !mod_disabled）
@@ -384,6 +386,34 @@ pub fn create_empty_slot_mod(group_index: u32) -> ModData {
     }
 }
 
+/// 读取 metadata 的修改时间（UNIX_EPOCH 起的纳秒数）。
+///
+/// C-3b 磁盘签名的 mtime 源提取器：metadata 缺失（文件/目录不存在）或
+/// 时间不可得时返回 0（fav 不存在、目录不可 stat 等场景的约定源值）。
+fn metadata_mtime_nanos(meta: Option<&fs::Metadata>) -> u64 {
+    meta.and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+/// 组合磁盘签名（C-3b 增量复用判定）。
+///
+/// 三源 mtime 纳秒按位移分散后异或混合：
+/// 1. mod 目录 mtime（目录名/标记文件增删、modname 创建等直接子项变化）；
+/// 2. fav 标记 mtime（收藏状态，不存在恒 0，创建/删除即失效）；
+/// 3. 所属组 selectedindex mtime（`is_active` 派生源，select 改写即失效；
+///    互斥组无该文件，源恒 0）。
+///
+/// 目录源为 0（目录缺失/不可 stat）时整体返回 0 = 无签名 → 增量合并时
+/// 永不复用该条目（fail-safe，宁可重建不可误复用）。
+fn compute_disk_signature(dir_nanos: u64, fav_nanos: u64, group_selectedindex_nanos: u64) -> u64 {
+    if dir_nanos == 0 {
+        return 0;
+    }
+    dir_nanos.rotate_left(32) ^ fav_nanos.rotate_left(16) ^ group_selectedindex_nanos
+}
+
 /// 统一重算模组计数，口径与全量轻量扫描一致。
 ///
 /// 排除 `None` 空槽位（`name == "None"`），以 `!disabled && !mod_disabled` 判定启用。
@@ -392,7 +422,7 @@ pub fn create_empty_slot_mod(group_index: u32) -> ModData {
 /// # 返回
 ///
 /// `(total, enabled, disabled)`，均为 `name != "None"` 的活跃模组计数。
-pub(crate) fn recount_mods(mods: &[ModData]) -> (usize, usize, usize) {
+pub(crate) fn recount_mods(mods: &[Arc<ModData>]) -> (usize, usize, usize) {
     let mut total = 0usize;
     let mut enabled = 0usize;
     let mut disabled = 0usize;
@@ -425,37 +455,45 @@ pub(crate) fn group_order_cmp(a: &ModGroupData, b: &ModGroupData) -> CmpOrdering
     }
 }
 
+/// 模组排序比较器（单一真源）：禁用在后→收藏在前→最新收藏→自然排序
+///
+/// 供 `sort_mods_light`（`Arc<ModData>` 切片）与 `scan_normal_group_light`
+/// 构建期（值语义 `Vec<ModData>`）共用，R3/C-3b 前者为 Arc 指针排序。
+fn mod_order_cmp(a: &ModData, b: &ModData) -> CmpOrdering {
+    let a_enabled = !a.disabled && !a.mod_disabled;
+    let b_enabled = !b.disabled && !b.mod_disabled;
+    match b_enabled.cmp(&a_enabled) {
+        CmpOrdering::Equal => {}
+        other => return other,
+    }
+
+    match b.is_favorite.cmp(&a.is_favorite) {
+        CmpOrdering::Equal => {}
+        other => return other,
+    }
+
+    let a_fav_path = Path::new(a.full_path.as_ref()).join(constants::FAV_MARKER);
+    let b_fav_path = Path::new(b.full_path.as_ref()).join(constants::FAV_MARKER);
+    let a_time = a_fav_path.metadata().and_then(|m| m.modified()).ok();
+    let b_time = b_fav_path.metadata().and_then(|m| m.modified()).ok();
+    match (b_time, a_time) {
+        (Some(bt), Some(at)) => match bt.cmp(&at) {
+            CmpOrdering::Equal => {}
+            other => return other,
+        },
+        (Some(_), None) => return CmpOrdering::Less,
+        (None, Some(_)) => return CmpOrdering::Greater,
+        (None, None) => {}
+    }
+
+    natural_compare(&a.name, &b.name)
+}
+
 /// 统一排序模组列表：禁用在后→收藏在前→最新收藏→自然排序
-pub fn sort_mods_light(mods: &mut [ModData]) {
-    mods.sort_by(|a, b| {
-        let a_enabled = !a.disabled && !a.mod_disabled;
-        let b_enabled = !b.disabled && !b.mod_disabled;
-        match b_enabled.cmp(&a_enabled) {
-            CmpOrdering::Equal => {}
-            other => return other,
-        }
-
-        match b.is_favorite.cmp(&a.is_favorite) {
-            CmpOrdering::Equal => {}
-            other => return other,
-        }
-
-        let a_fav_path = Path::new(a.full_path.as_ref()).join(constants::FAV_MARKER);
-        let b_fav_path = Path::new(b.full_path.as_ref()).join(constants::FAV_MARKER);
-        let a_time = a_fav_path.metadata().and_then(|m| m.modified()).ok();
-        let b_time = b_fav_path.metadata().and_then(|m| m.modified()).ok();
-        match (b_time, a_time) {
-            (Some(bt), Some(at)) => match bt.cmp(&at) {
-                CmpOrdering::Equal => {}
-                other => return other,
-            },
-            (Some(_), None) => return CmpOrdering::Less,
-            (None, Some(_)) => return CmpOrdering::Greater,
-            (None, None) => {}
-        }
-
-        natural_compare(&a.name, &b.name)
-    });
+///
+/// R3/C-3b：元素为 `Arc<ModData>`（比较经 Deref 透明，排序移动的是指针）。
+pub fn sort_mods_light(mods: &mut [Arc<ModData>]) {
+    mods.sort_by(|a, b| mod_order_cmp(a, b));
 }
 
 /// 轻量扫描：混合目录扫描，不解析 INI 内容，不递归 NormalGroup
@@ -500,7 +538,7 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     }
 
     let mut groups: Vec<ModGroupData> = Vec::with_capacity(32); // 预分配 32 个分组，覆盖绝大多数场景
-    let mut all_mods: Vec<ModData> = Vec::with_capacity(256); // 预分配 256 个模组，减少扩容次数
+    let mut all_mods: Vec<Arc<ModData>> = Vec::with_capacity(256); // 预分配 256 个模组，减少扩容次数
 
     let entries = fs::read_dir(&managed_folder)?;
     let mut root_dirs: Vec<PathBuf> = Vec::with_capacity(32); // 预分配存储根目录列表
@@ -533,7 +571,7 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
         })
         .collect();
 
-    let normal_results: Vec<(ModGroupData, Vec<ModData>)> = normal_tasks
+    let normal_results: Vec<(ModGroupData, Vec<Arc<ModData>>)> = normal_tasks
         .par_iter()
         .filter_map(|(dir_path, dir_name, group_index)| {
             scan_normal_group_light(dir_path, dir_name, *group_index).ok()
@@ -559,7 +597,7 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
         .cloned()
         .collect();
 
-    let mutex_results: Vec<(Option<ModGroupData>, Vec<ModData>)> = mutex_roots
+    let mutex_results: Vec<(Option<ModGroupData>, Vec<Arc<ModData>>)> = mutex_roots
         .par_iter()
         .filter_map(|root_path| scan_mutex_group_dfs(root_path).ok())
         .collect();
@@ -625,7 +663,7 @@ fn scan_normal_group_light(
     dir_path: &Path,
     group_name: &str,
     group_index: u32,
-) -> Result<(ModGroupData, Vec<ModData>)> {
+) -> Result<(ModGroupData, Vec<Arc<ModData>>)> {
     let mut mods: Vec<ModData> = Vec::with_capacity(32); // 预分配 32 个模组槽位，覆盖绝大多数 NormalGroup
 
     // 读取/创建标记文件
@@ -635,6 +673,10 @@ fn scan_normal_group_light(
     let selectedindex_path = dir_path.join(constants::SELECTED_INDEX_FILE);
     let selected_index_str = read_or_create_marker_file(&selectedindex_path, "0")?;
     let selected_index: i32 = selected_index_str.parse().unwrap_or(0);
+    // 磁盘签名组级源（C-3b）：selectedindex mtime，is_active 派生源——
+    // select 改写该文件后组内全部模组签名失效，增量合并不复用旧实例。
+    // 每组一次 stat，组内模组共享。
+    let selectedindex_nanos = metadata_mtime_nanos(fs::metadata(&selectedindex_path).ok().as_ref());
 
     // 查找分组图标
     let group_icon = find_icon_path(dir_path)?;
@@ -666,59 +708,18 @@ fn scan_normal_group_light(
             continue;
         }
 
-        let disabled = is_disabled_dir(&dir_name);
-        let display_name = if disabled {
-            DISABLED_PREFIX_RE.replace(&dir_name, "").to_string()
-        } else {
-            dir_name.clone()
-        };
-
-        // 读取/创建 modname 标记文件（NRMM 逻辑：优先使用 modname 文件中的名称作为展示名，不存在则创建并写入文件夹名）
-        let modname_path = path.join("modname");
-        let mod_name = {
-            let n = read_or_create_marker_file(&modname_path, &display_name)?;
-            if n.trim().is_empty() {
-                display_name.clone()
-            } else {
-                n
-            }
-        };
-
-        // 检查 fav 文件
-        let fav_path = path.join(constants::FAV_MARKER);
-        let is_favorite = fav_path.exists();
-
-        // 检查各种标记文件
-        let mod_forced = path.join(constants::MODFORCED_MARKER).exists();
-        let _mod_syntax_error_removed = path.join("modsyntaxerrorremoved").exists();
-        let _mod_unoptimized = path.join("modunoptimized").exists();
-        let is_namespaced = path.join(constants::NAMESPACED_MARKER).exists();
-
-        // 查找图标
-        let icon_path = find_icon_path(&path)?;
-
         let real_index = mods.len() as u32;
-        let is_active = real_index as i32 == selected_index;
-
-        let mod_data = ModData {
-            mod_path: path.to_string_lossy().to_string(),
-            mod_name: mod_name.clone(),
-            name: mod_name,
-            full_path: Arc::from(path.to_string_lossy().as_ref()),
-            parent_folder: Arc::from(dir_path.to_string_lossy().as_ref()),
-            preview_image_path: icon_path,
-            is_active,
-            is_favorite,
-            is_namespaced,
-            disabled,
-            mod_disabled: disabled,
+        // 构建期 is_active 为目录枚举序对 selectedindex 的初值（组级派生随后统一覆盖）；
+        // 单模组构建逻辑提炼至 build_normal_mod_light（C-3a 与 scan_single_mod 共用）
+        mods.push(build_normal_mod_light(
+            dir_path,
             group_index,
-            mod_index: real_index,
-            is_mutex: false,
-            has_nonmanaged_mods_crashline_fix: mod_forced,
-            ..Default::default()
-        };
-        mods.push(mod_data);
+            &path,
+            &dir_name,
+            selectedindex_nanos,
+            real_index as i32 == selected_index,
+            real_index,
+        )?);
     }
 
     // 分离 None 槽位和其他模组
@@ -732,8 +733,8 @@ fn scan_normal_group_light(
         }
     }
 
-    // 只对非 None 模组排序
-    sort_mods_light(&mut other_mods);
+    // 只对非 None 模组排序（构建期值语义，比较器与 sort_mods_light 共用单一真源）
+    other_mods.sort_by(mod_order_cmp);
 
     // 重新组装：None 始终在第一位
     mods.push(none_slot.unwrap_or_else(|| create_empty_slot_mod(group_index)));
@@ -804,7 +805,11 @@ fn scan_normal_group_light(
         active_idx
     };
 
-    let mod_paths: Vec<Arc<str>> = mods
+    // Arc 包装（R3/C-3b）：构建期保持值语义完成排序/索引/is_active 派生，
+    // 此处一次性包装——组节点 mods 与返回的扁平列表共享同一批 Arc 实例
+    //（下方 clone 仅克隆指针，消除原值语义下的整组深拷贝）。
+    let arc_mods: Vec<Arc<ModData>> = mods.into_iter().map(Arc::new).collect();
+    let mod_paths: Vec<Arc<str>> = arc_mods
         .iter()
         .filter(|m| m.name != "None")
         .map(|m| m.full_path.clone())
@@ -817,8 +822,8 @@ fn scan_normal_group_light(
         full_path: dir_path.to_path_buf(),
         group_path: dir_path.to_string_lossy().to_string(),
         group_index,
-        mods: mods.clone(),
-        mod_count: (mods.len() - 1) as u32, // 减去 None 槽位
+        mods: arc_mods.clone(),
+        mod_count: arc_mods.len().saturating_sub(1) as u32, // 减去 None 槽位
         mod_paths,
         has_child: false,
         children: vec![],
@@ -831,7 +836,225 @@ fn scan_normal_group_light(
         ..Default::default()
     };
 
-    Ok((group, mods))
+    Ok((group, arc_mods))
+}
+
+/// 构建 NormalGroup 单模组的轻量数据（C-3a 从 `scan_normal_group_light` 提炼）。
+///
+/// 涵盖组内模组构建的全部磁盘派生逻辑：`DISABLED` 前缀解析、`modname` 标记读取/创建、
+/// fav 收藏状态（一次 stat 同时取存在性与 mtime）、标记文件检查、图标查找、磁盘签名
+/// （mod 目录 mtime ^ fav mtime ^ 组 selectedindex mtime 三源混合）。供组级扫描
+/// （逐子目录）与单模组扫描（[`scan_single_mod`]）共用，保证两路径产出字段口径一致。
+///
+/// # 参数
+/// - `group_dir`: 所属组目录（`parent_folder` 字段源）。
+/// - `group_index`: 组索引（`group_index` 字段源）。
+/// - `mod_dir`: 模组目录。
+/// - `dir_name`: 模组目录名（含可能的 `DISABLED` 前缀）。
+/// - `selectedindex_nanos`: 组 selectedindex 文件 mtime（签名源，组内模组共享）。
+/// - `is_active`: 构建期激活位（组扫描为目录枚举序对 selectedindex 的初值，组级派生
+///   随后统一覆盖；单模组扫描为组语义近似派生值）。
+/// - `mod_index`: 组内索引（组扫描为枚举序，重排后统一重分配；单模组扫描为占位 0，
+///   由 `mod_cache::patch_single_mod` 保留旧值/置末位）。
+///
+/// # Errors
+/// 当 `modname` 标记文件无法读取/创建时传播错误。
+fn build_normal_mod_light(
+    group_dir: &Path,
+    group_index: u32,
+    mod_dir: &Path,
+    dir_name: &str,
+    selectedindex_nanos: u64,
+    is_active: bool,
+    mod_index: u32,
+) -> Result<ModData> {
+    let disabled = is_disabled_dir(dir_name);
+    let display_name = if disabled {
+        DISABLED_PREFIX_RE.replace(dir_name, "").to_string()
+    } else {
+        dir_name.to_string()
+    };
+
+    // 读取/创建 modname 标记文件（NRMM 逻辑：优先使用 modname 文件中的名称作为展示名，不存在则创建并写入文件夹名）
+    let modname_path = mod_dir.join("modname");
+    let mod_name = {
+        let n = read_or_create_marker_file(&modname_path, &display_name)?;
+        if n.trim().is_empty() {
+            display_name.clone()
+        } else {
+            n
+        }
+    };
+
+    // 检查 fav 文件（一次 stat 同时取存在性与 mtime，替代原 exists() 调用）
+    let fav_path = mod_dir.join(constants::FAV_MARKER);
+    let fav_meta = fs::metadata(&fav_path).ok();
+    let is_favorite = fav_meta.is_some();
+    let fav_nanos = metadata_mtime_nanos(fav_meta.as_ref());
+
+    // 检查各种标记文件
+    let mod_forced = mod_dir.join(constants::MODFORCED_MARKER).exists();
+    let _mod_syntax_error_removed = mod_dir.join("modsyntaxerrorremoved").exists();
+    let _mod_unoptimized = mod_dir.join("modunoptimized").exists();
+    let is_namespaced = mod_dir.join(constants::NAMESPACED_MARKER).exists();
+
+    // 查找图标
+    let icon_path = find_icon_path(mod_dir)?;
+
+    // 磁盘签名（C-3b）：mod 目录 mtime ^ fav mtime ^ 组 selectedindex mtime
+    // 三源混合。目录源必须用新鲜 stat（不能用 DirEntry::metadata 的枚举
+    // 快照——上方 read_or_create_marker_file 首扫创建 modname 会改写目录
+    // mtime，快照仍是旧值，导致首扫/复扫签名不一致）
+    let dir_nanos = metadata_mtime_nanos(fs::metadata(mod_dir).ok().as_ref());
+    let disk_signature = compute_disk_signature(dir_nanos, fav_nanos, selectedindex_nanos);
+
+    Ok(ModData {
+        mod_path: mod_dir.to_string_lossy().to_string(),
+        mod_name: mod_name.clone(),
+        name: mod_name,
+        full_path: Arc::from(mod_dir.to_string_lossy().as_ref()),
+        parent_folder: Arc::from(group_dir.to_string_lossy().as_ref()),
+        preview_image_path: icon_path,
+        is_active,
+        is_favorite,
+        is_namespaced,
+        disabled,
+        mod_disabled: disabled,
+        group_index,
+        mod_index,
+        is_mutex: false,
+        has_nonmanaged_mods_crashline_fix: mod_forced,
+        disk_signature,
+        ..Default::default()
+    })
+}
+
+/// 统计组内启用（非 `DISABLED` 前缀、非隐藏）一级子目录，并判定目标模组是否为唯一启用者
+/// （C-3a 单模组扫描的 `is_active` 组语义近似）。
+///
+/// 对齐 `scan_normal_group_light` 的组级 `is_active` 派生分支：
+/// - 恰好一个启用 → 该模组 active（本函数返回 `true` 的唯一情形，与整组重扫一致）；
+/// - 零个启用 → None 槽位 active，真实模组均 false（返回 `false`，一致）；
+/// - 多个启用（异常态，如手动改目录名）→ 整组重扫回退到 selectedindex 指向的
+///   排序位次；单模组扫描无法独立得出组内排序位，近似返回 `false`——仅当
+///   selectedindex 非 0 且组内多启用（需外部手动破坏组状态）才会与整组重扫分歧，
+///   下次组级事件（启用集/selectedindex 变化必经目录重命名，收敛根为组级）整组重扫校正。
+///
+/// 读取失败（组目录不可读）时返回 `false`（fail-safe：宁可不 active）。
+///
+/// # 参数
+/// - `group_dir`: 组目录。
+/// - `target_file_name`: 目标模组目录名（与组直接子项名比较）。
+fn group_has_single_enabled_mod(group_dir: &Path, target_file_name: &str) -> bool {
+    let entries = match fs::read_dir(group_dir) {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    let mut enabled = 0usize;
+    let mut target_enabled = false;
+    for entry in entries.flatten() {
+        let ft = match entry.file_type() {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        if !ft.is_dir() && !ft.is_symlink() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        // 跳过标记文件目录（不会是目录，与组扫描同样仅作保险）
+        if name == "groupname" || name == constants::SELECTED_INDEX_FILE || name == "modname" {
+            continue;
+        }
+        if is_disabled_dir(&name) {
+            continue;
+        }
+        enabled += 1;
+        if name == target_file_name {
+            target_enabled = true;
+        }
+    }
+    enabled == 1 && target_enabled
+}
+
+/// 单模组轻量扫描（C-3a）：对含 `.ini` 的模组目录产出单个 [`ModData`]。
+///
+/// 复用组级扫描的单模组构建逻辑（NormalGroup 走 [`build_normal_mod_light`]，MutexGroup
+/// 走 [`build_mutex_mod_light`]），marker/modname/fav/签名等磁盘派生字段与整组扫描口径
+/// 一致。组类型按父目录判定：
+/// - 父目录为 `group_xx`（NormalGroup）→ 普通模组；`is_active` 按组语义近似派生
+///   （唯一启用者 active，见 [`group_has_single_enabled_mod`]），签名含组
+///   selectedindex mtime 源（文件不存在时源为 0）。
+/// - 其他（MutexGroup 树节点）→ 互斥模组；`is_active` 恒 false（运行时管理），签名无组源。
+///
+/// `mod_index` 无法独立得出（依赖组内排序）：替换场景由 `mod_cache::patch_single_mod`
+/// 保留旧实例值，新增场景置组内末位，均由下次组级扫描校正。
+///
+/// # 参数
+/// - `mods_path`: 游戏 Mods 根目录（路径归一基准；`mod_dir` 可为 watcher 收敛产物的
+///   canonicalize/verbatim 形态，内部统一重挂到 `mods_path/_MANAGED_` 之下，与缓存内
+///   `full_path` 形态一致）。
+/// - `mod_dir`: 模组目录（须存在且含 `.ini`）。
+///
+/// # 返回
+/// `(模组数据, 所属组目录)`——组目录为 `mod_dir` 的父目录（归一形态），供缓存定位。
+///
+/// # Errors
+/// - `mod_dir` 不在 `_MANAGED_` 子树内，或目标目录不含 `.ini`（非模组目录）；
+/// - `modname` 标记文件读取/创建失败。
+pub fn scan_single_mod(mods_path: &Path, mod_dir: &Path) -> Result<(Arc<ModData>, PathBuf)> {
+    let managed_folder = get_managed_folder(mods_path);
+    let rel = normalize_subpath(mod_dir, mods_path);
+    if rel.is_empty() || rel == "_MANAGED_" {
+        anyhow::bail!("scan_single_mod: 目标不在 _MANAGED_ 子树内: {:?}", mod_dir);
+    }
+    // 分段 join 保持平台原生分隔符：`rel` 为 '/' 分隔的归一串，直接整体 `join`
+    // 会混入 '/'（如 `...\group_1/ModA`），与缓存内 full_path 的字符串匹配失效
+    let target = rel
+        .split('/')
+        .fold(managed_folder, |acc, seg| acc.join(seg));
+    if !dir_has_ini_file(&target)? {
+        anyhow::bail!(
+            "scan_single_mod: 目标目录不含 .ini（非模组目录）: {:?}",
+            target
+        );
+    }
+    let group_dir = target
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| anyhow::anyhow!("scan_single_mod: 模组目录无父级: {:?}", target))?;
+    let group_name = group_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let dir_name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let mod_data = if let Some(group_index) = is_normal_group_dir(&group_name) {
+        // NormalGroup 模组：签名含组 selectedindex mtime 源（stat 即可，不读内容不创建——
+        // 组扫描首扫会创建该文件，此处仅取 mtime，缺失时源为 0）
+        let selectedindex_path = group_dir.join(constants::SELECTED_INDEX_FILE);
+        let selectedindex_nanos =
+            metadata_mtime_nanos(fs::metadata(&selectedindex_path).ok().as_ref());
+        let is_active = group_has_single_enabled_mod(&group_dir, &dir_name);
+        build_normal_mod_light(
+            &group_dir,
+            group_index,
+            &target,
+            &dir_name,
+            selectedindex_nanos,
+            is_active,
+            0,
+        )?
+    } else {
+        // MutexGroup 模组：is_active 恒 false，签名无组源（对齐 build_mutex_mod_light）
+        build_mutex_mod_light(&target, 0, 0)?
+    };
+    Ok((Arc::new(mod_data), group_dir))
 }
 
 /// DFS 栈元素：待遍历目录及其父分组索引
@@ -874,7 +1097,7 @@ struct DfsStackItem {
 ///
 /// # Errors
 /// 当目录无法读取、标记文件无法创建时返回 `Err`。
-fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<ModData>)> {
+fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<Arc<ModData>>)> {
     let root_name = root_path
         .file_name()
         .unwrap_or_default()
@@ -905,11 +1128,10 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     if dir_has_ini_file(root_path)? {
         // 根目录是模组叶子节点，不创建分组
         let mod_data = build_mutex_mod_light(root_path, 0, 0)?;
-        return Ok((None, vec![mod_data]));
+        return Ok((None, vec![Arc::new(mod_data)]));
     }
 
-    let mut all_mods: Vec<ModData> = Vec::with_capacity(256); // 预分配 256 个模组，覆盖大多数 MutexGroup
-                                                              // groups[0] 是根分组，后续是子分组
+    // groups[0] 是根分组，后续是子分组
     let mut groups: Vec<ModGroupData> = Vec::with_capacity(32); // 预分配 32 个分组，覆盖大多数嵌套深度
 
     // 创建根分组
@@ -979,15 +1201,13 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
         // 检查是否有 .ini 文件（叶子节点）
         if dir_has_ini_file(&current_path)? {
             let mod_data = build_mutex_mod_light(&current_path, 0, global_mod_index)?;
-            all_mods.push(mod_data);
 
-            // 添加到父分组
+            // 添加到父分组（R3/C-3b：Arc 直接入组，不再经 all_mods 中转深拷贝；
+            // 扁平列表由函数末尾 collect_mods 从树统一收集，与组内共享同一 Arc）
             if let Some(pidx) = parent_idx {
-                // SAFETY: all_mods.push() was called immediately above; all_mods is guaranteed non-empty.
-                groups[pidx].mods.push(all_mods.last().unwrap().clone());
-                groups[pidx]
-                    .mod_paths
-                    .push(all_mods.last().unwrap().full_path.clone());
+                let arc = Arc::new(mod_data);
+                groups[pidx].mod_paths.push(arc.full_path.clone());
+                groups[pidx].mods.push(arc);
                 groups[pidx].mod_count += 1;
             }
             global_mod_index += 1;
@@ -1083,9 +1303,9 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
     // 对每个分组内的 mods 排序
     for group in &mut groups {
         sort_mods_light(&mut group.mods);
-        // 重新分配 mod_index
+        // 重新分配 mod_index（make_mut：构建期各 Arc 唯一持有，原地改零拷贝）
         for (idx, m) in group.mods.iter_mut().enumerate() {
-            m.mod_index = idx as u32;
+            Arc::make_mut(m).mod_index = idx as u32;
         }
     }
 
@@ -1102,26 +1322,32 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<M
             .collect();
 
         groups[parent_idx].child_groups.clear();
+        groups[parent_idx].children.clear();
         for ci in child_indices {
             rebuild_tree(groups, ci);
+            // child_groups 维持值语义（skip_serializing 内部字段）；
+            // children Arc 化——两者内容一致，children 的 mods 与原组共享 Arc
             groups[parent_idx].child_groups.push(groups[ci].clone());
+            groups[parent_idx]
+                .children
+                .push(Arc::new(groups[ci].clone()));
         }
-        // 同步 children 字段（前端使用 camelCase 后的 children）
-        groups[parent_idx].children = groups[parent_idx].child_groups.clone();
         groups[parent_idx].has_child =
             !groups[parent_idx].child_groups.is_empty() || !groups[parent_idx].mods.is_empty();
     }
 
     rebuild_tree(&mut groups, 0);
 
-    // 收集根分组的所有 mods（包括子分组的）到 all_mods
-    fn collect_mods(group: &ModGroupData, all: &mut Vec<ModData>) {
+    // 收集根分组的所有 mods（包括子分组的）到扁平列表：
+    // R3/C-3b 经 child_groups 递归收集 Arc 指针（与组内条目共享同一实例，
+    // 增量合并的签名复用依赖该共享性）
+    fn collect_mods(group: &ModGroupData, all: &mut Vec<Arc<ModData>>) {
         all.extend(group.mods.iter().cloned());
         for child in &group.child_groups {
             collect_mods(child, all);
         }
     }
-    all_mods.clear();
+    let mut all_mods: Vec<Arc<ModData>> = Vec::with_capacity(256);
     collect_mods(&groups[0], &mut all_mods);
 
     Ok((Some(groups.remove(0)), all_mods))
@@ -1162,9 +1388,11 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
         display_name
     };
 
-    // 检查 fav 文件
+    // 检查 fav 文件（一次 stat 同时取存在性与 mtime，替代原 exists() 调用）
     let fav_path = mod_path.join(constants::FAV_MARKER);
-    let is_favorite = fav_path.exists();
+    let fav_meta = fs::metadata(&fav_path).ok();
+    let is_favorite = fav_meta.is_some();
+    let fav_nanos = metadata_mtime_nanos(fav_meta.as_ref());
 
     // 检查标记文件
     let mod_forced = mod_path.join(constants::MODFORCED_MARKER).exists();
@@ -1174,6 +1402,12 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
 
     // 查找图标
     let icon_path = find_icon_path(mod_path)?;
+
+    // 磁盘签名（C-3b）：mod 目录 mtime ^ fav mtime 两源混合；
+    // 互斥组无 selectedindex 标记文件且 is_active 由运行时管理（扫描恒 false），
+    // 无组级派生源，组源恒 0
+    let dir_nanos = metadata_mtime_nanos(fs::metadata(mod_path).ok().as_ref());
+    let disk_signature = compute_disk_signature(dir_nanos, fav_nanos, 0);
 
     Ok(ModData {
         mod_path: mod_path.to_string_lossy().to_string(),
@@ -1197,6 +1431,7 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
         mod_index,
         is_mutex: true,
         has_nonmanaged_mods_crashline_fix: mod_forced,
+        disk_signature,
         ..Default::default()
     })
 }
@@ -1248,7 +1483,7 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
     }
 
     let mut groups: Vec<ModGroupData> = Vec::with_capacity(32); // 预分配 32 个分组，覆盖绝大多数场景
-    let mut all_mods: Vec<ModData> = Vec::with_capacity(256); // 预分配 256 个模组，减少扩容次数
+    let mut all_mods: Vec<Arc<ModData>> = Vec::with_capacity(256); // 预分配 256 个模组，减少扩容次数
 
     let entries = fs::read_dir(&managed_folder)?;
 
@@ -1269,13 +1504,13 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
 
     // 分组并行扫描（对齐 scan_mods_light 的 par_iter 模式）：
     // 每组任务独立（组内 BFS 自带 visited 路径池），结果收集后统一排序合并
-    let scan_results: Vec<Result<(ModGroupData, Vec<ModData>)>> = group_dirs
+    let scan_results: Vec<Result<(ModGroupData, Vec<Arc<ModData>>)>> = group_dirs
         .par_iter()
         .map(|(path, dir_name)| scan_group_directory_deep(path, dir_name, GroupType::NormalGroup))
         .collect();
 
     // 按分组 id 升序合并（BTreeMap 迭代序确定，组内保持扫描顺序），与串行版结果一致
-    let mut grouped: std::collections::BTreeMap<u32, (ModGroupData, Vec<ModData>)> =
+    let mut grouped: std::collections::BTreeMap<u32, (ModGroupData, Vec<Arc<ModData>>)> =
         std::collections::BTreeMap::new();
     for result in scan_results {
         let (group, mods) = result?;
@@ -1322,7 +1557,7 @@ fn scan_group_directory_deep(
     dir_path: &Path,
     group_name: &str,
     group_type: GroupType,
-) -> Result<(ModGroupData, Vec<ModData>)> {
+) -> Result<(ModGroupData, Vec<Arc<ModData>>)> {
     use std::collections::VecDeque;
 
     let mut mods = Vec::with_capacity(256); // 预分配 256 个模组
@@ -1412,6 +1647,10 @@ fn scan_group_directory_deep(
 
     let mod_paths: Vec<Arc<str>> = mods.iter().map(|m| m.full_path.clone()).collect();
 
+    // R3/C-3b：组节点持有「索引修正前」快照（与原值语义 mods.clone() 一致——
+    // 原实现组节点先克隆、随后仅修正扁平列表），此处包装为独立 Arc
+    let group_mods: Vec<Arc<ModData>> = mods.iter().map(|m| Arc::new(m.clone())).collect();
+
     let has_children = !mods.is_empty() || !subgroups.is_empty();
     let group = ModGroupData {
         name: group_name.to_string(),
@@ -1421,11 +1660,11 @@ fn scan_group_directory_deep(
         group_path: dir_path.to_string_lossy().to_string(),
         group_index,
         child_groups: subgroups.clone(),
-        children: subgroups,
+        children: subgroups.into_iter().map(Arc::new).collect(),
         has_child: has_children,
         mod_count: mods.len() as u32,
         mod_paths,
-        mods: mods.clone(),
+        mods: group_mods,
         ..Default::default()
     };
 
@@ -1444,7 +1683,9 @@ fn scan_group_directory_deep(
         }
     }
 
-    Ok((group, mods))
+    // 深扫产物不填磁盘签名（默认 0 = 无签名）：深扫结果不进入 MOD_CACHE，
+    // 增量合并链路仅消费轻量扫描产物，无需签名
+    Ok((group, mods.into_iter().map(Arc::new).collect::<Vec<_>>()))
 }
 
 /// 深度扫描：检查目录是否包含 INI 文件和图标
@@ -2825,6 +3066,79 @@ filename = test.dds
         assert_eq!(group.mods[4].name, "bad");
         assert_eq!(group.mods.len(), 5);
     }
+
+    /// 测试（R3/C-3b）：轻量扫描为模组填充磁盘签名。
+    ///
+    /// 签名 = mod 目录 mtime ^ fav mtime ^ 组 selectedindex mtime 三源混合：
+    /// - NormalGroup 与 MutexGroup 模组均非零；
+    /// - 无磁盘变化时两次扫描签名相等（稳定，复用判定前提）；
+    /// - fav 创建（fav 源 0→t）→ 该模组签名变化，未动兄弟不变；
+    /// - 组 selectedindex 改写 → 组内全部模组签名变化（覆盖 is_active 派生源）；
+    /// - 深度扫描不填充（0 = 无签名，永不参与增量复用）。
+    #[test]
+    fn test_light_scan_disk_signature_sources() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+        let group_path = create_group_dir(dir.path(), "group_1");
+        create_mod_with_ini(&group_path, "ModA", "[Section]\n");
+        create_mod_with_ini(&group_path, "FavMod", "[Section]\n");
+        // 互斥组模组
+        let mutex_root = dir.path().join("_MANAGED_").join("#Mutex");
+        fs::create_dir_all(mutex_root.join("ModX")).unwrap();
+        fs::write(mutex_root.join("ModX").join("m.ini"), "[Section]\n").unwrap();
+
+        let find_sig = |r: &ScanResult, name: &str| {
+            r.mods
+                .iter()
+                .find(|m| m.name == name)
+                .unwrap_or_else(|| panic!("应存在模组 {name}"))
+                .disk_signature
+        };
+
+        // 首扫会创建 modname/selectedindex 标记文件；二次扫描读已有文件（mtime 稳定）
+        let r1 = scan_mods_light(dir.path()).unwrap();
+        let r2 = scan_mods_light(dir.path()).unwrap();
+        assert_ne!(find_sig(&r2, "ModA"), 0, "NormalGroup 模组签名应非零");
+        assert_ne!(find_sig(&r2, "ModX"), 0, "MutexGroup 模组签名应非零");
+        assert_eq!(
+            find_sig(&r1, "ModA"),
+            find_sig(&r2, "ModA"),
+            "无磁盘变化时两次扫描签名应相等"
+        );
+        assert_eq!(find_sig(&r1, "ModX"), find_sig(&r2, "ModX"));
+
+        // fav 源：FavMod 创建 fav → 其签名变化，未动的 ModA 签名不变
+        fs::write(group_path.join("FavMod").join("fav"), "").unwrap();
+        let r3 = scan_mods_light(dir.path()).unwrap();
+        assert_ne!(
+            find_sig(&r2, "FavMod"),
+            find_sig(&r3, "FavMod"),
+            "fav 创建（mtime 源 0→t）应使签名失效"
+        );
+        assert_eq!(
+            find_sig(&r2, "ModA"),
+            find_sig(&r3, "ModA"),
+            "未动模组签名应保持稳定"
+        );
+
+        // 组 selectedindex 源：改写组目录 selectedindex → 组内全部模组签名变化
+        fs::write(group_path.join("selectedindex"), "1").unwrap();
+        let r4 = scan_mods_light(dir.path()).unwrap();
+        assert_ne!(
+            find_sig(&r3, "ModA"),
+            find_sig(&r4, "ModA"),
+            "selectedindex mtime 源应参与签名（覆盖 is_active 派生源）"
+        );
+        // 互斥组不受该组 selectedindex 影响（各自组源独立）
+        assert_eq!(find_sig(&r3, "ModX"), find_sig(&r4, "ModX"));
+
+        // 深度扫描不填充签名（其产物不参与增量复用）
+        let deep = scan_mods_deep(dir.path()).unwrap();
+        assert!(
+            deep.mods.iter().all(|m| m.disk_signature == 0),
+            "深扫产物签名应为 0（无签名 → 永不复用）"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3145,5 +3459,193 @@ mod tests_scan_partial_path {
         let abs_mod_path = g1.join("Mod1");
         let result2 = normalize_subpath(&abs_mod_path, dir.path());
         assert_eq!(result2, "group_1/Mod1", "模组级绝对路径应保留分组/模组结构");
+    }
+}
+
+// ============================================================================
+// scan_single_mod 单元测试（C-3a 单模组扫描）
+// ============================================================================
+
+#[cfg(test)]
+mod tests_scan_single_mod {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// 测试辅助：创建带 `_MANAGED_` 子目录的临时 Mods 根
+    fn setup() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("_MANAGED_")).unwrap();
+        dir
+    }
+
+    /// 测试辅助：创建带 ini 的模组目录（可选 fav/modname 标记）
+    fn make_mod(parent: &Path, name: &str) -> PathBuf {
+        let p = parent.join(name);
+        fs::create_dir_all(&p).unwrap();
+        fs::write(p.join("mod.ini"), "[Section]\nx=1\n").unwrap();
+        p
+    }
+
+    /// 单模组扫描产出与组级扫描同口径的磁盘派生字段：
+    /// 名称（modname 标记优先）、DISABLED 解析、fav、is_active（唯一启用者）、组定位。
+    #[test]
+    fn scan_single_mod_normal_group_fields() {
+        let dir = setup();
+        let g1 = dir.path().join("_MANAGED_").join("group_1");
+        let mod_a = make_mod(&g1, "ModA");
+        let mod_b = make_mod(&g1, "DISABLED_ModB");
+        // modname 标记优先于目录名
+        fs::write(mod_a.join("modname"), "My Display Name\n").unwrap();
+        // fav 标记
+        fs::write(mod_b.join(constants::FAV_MARKER), "").unwrap();
+
+        // ModA：唯一启用模组 → is_active = true
+        let (arc, group_dir) = scan_single_mod(dir.path(), &mod_a).unwrap();
+        assert_eq!(group_dir, g1, "组目录应为 mod_dir.parent()");
+        assert_eq!(arc.name, "My Display Name", "modname 标记内容优先");
+        assert_eq!(arc.group_index, 1);
+        assert!(!arc.is_mutex, "普通组模组 is_mutex=false");
+        assert!(arc.is_active, "唯一启用模组应为 active");
+        assert!(!arc.disabled && !arc.mod_disabled);
+        assert!(!arc.is_favorite);
+        assert!(arc.disk_signature != 0, "磁盘签名非 0（可参与复用判定）");
+        assert_eq!(
+            arc.mod_path,
+            mod_a.to_string_lossy().to_string(),
+            "full_path/mod_path 为归一（mods_path 基准）形态"
+        );
+
+        // ModB：禁用 + 收藏 + 非 active
+        let (arc_b, _) = scan_single_mod(dir.path(), &mod_b).unwrap();
+        assert!(arc_b.disabled && arc_b.mod_disabled, "DISABLED_ 前缀解析");
+        assert_eq!(arc_b.name, "ModB", "禁用模组展示名剥离前缀");
+        assert!(arc_b.is_favorite, "fav 标记存在");
+        assert!(!arc_b.is_active, "禁用模组不 active");
+    }
+
+    /// modname 标记不存在时创建并回写目录名（NRMM 对齐）
+    #[test]
+    fn scan_single_mod_creates_modname_marker() {
+        let dir = setup();
+        let g1 = dir.path().join("_MANAGED_").join("group_1");
+        let mod_a = make_mod(&g1, "FreshMod");
+        assert!(!mod_a.join("modname").exists());
+
+        let (arc, _) = scan_single_mod(dir.path(), &mod_a).unwrap();
+        assert_eq!(arc.name, "FreshMod", "无 modname 时以目录名为展示名");
+        assert!(
+            mod_a.join("modname").exists(),
+            "scan_single_mod 应创建 modname 标记（对齐组扫描语义）"
+        );
+    }
+
+    /// is_active 组语义近似：多个启用模组（默认 selectedindex=0 → None 槽位 active）
+    /// 时所有真实模组均非 active，与整组重扫派生一致
+    #[test]
+    fn scan_single_mod_is_active_with_multiple_enabled() {
+        let dir = setup();
+        let g1 = dir.path().join("_MANAGED_").join("group_1");
+        let mod_a = make_mod(&g1, "ModA");
+        let mod_b = make_mod(&g1, "ModB");
+
+        let (arc_a, _) = scan_single_mod(dir.path(), &mod_a).unwrap();
+        let (arc_b, _) = scan_single_mod(dir.path(), &mod_b).unwrap();
+        assert!(
+            !arc_a.is_active && !arc_b.is_active,
+            "多启用（默认 selectedindex=0 → None active）时真实模组均非 active"
+        );
+
+        // 对照：整组重扫同口径（多启用回退 selectedindex=0 → None active）
+        let group_scan = scan_partial_path(dir.path(), &g1).unwrap();
+        let gm = &group_scan.groups[0];
+        assert_eq!(gm.active_mod_index, 0, "整组重扫：None 槽位 active");
+        assert!(
+            gm.mods
+                .iter()
+                .filter(|m| m.name != "None")
+                .all(|m| !m.is_active),
+            "整组重扫：真实模组均非 active"
+        );
+    }
+
+    /// 互斥组模组（含深层嵌套）：is_active 恒 false、is_mutex=true
+    #[test]
+    fn scan_single_mod_mutex_mod_always_inactive() {
+        let dir = setup();
+        let mutex_root = dir.path().join("_MANAGED_").join("#Mutex");
+        let sub = mutex_root.join("Sub");
+        let mod_x = make_mod(&sub, "ModX");
+        let mod_root_level = make_mod(&mutex_root, "ModY");
+
+        let (arc_x, group_dir_x) = scan_single_mod(dir.path(), &mod_x).unwrap();
+        assert_eq!(group_dir_x, sub, "嵌套模组的所属组目录为其直接父目录");
+        assert!(arc_x.is_mutex, "互斥组模组 is_mutex=true");
+        assert!(!arc_x.is_active, "互斥组模组 is_active 恒 false");
+
+        let (arc_y, group_dir_y) = scan_single_mod(dir.path(), &mod_root_level).unwrap();
+        assert_eq!(group_dir_y, mutex_root);
+        assert!(arc_y.is_mutex && !arc_y.is_active);
+    }
+
+    /// 非 `_MANAGED_` 子树路径 / 无 .ini 目录 → Err（调用方降级组级重扫）
+    #[test]
+    fn scan_single_mod_rejects_invalid_targets() {
+        let dir = setup();
+        let g1 = dir.path().join("_MANAGED_").join("group_1");
+        let mod_a = make_mod(&g1, "ModA");
+
+        // 不含 .ini 的目录
+        let no_ini = g1.join("NoIni");
+        fs::create_dir_all(&no_ini).unwrap();
+        assert!(scan_single_mod(dir.path(), &no_ini).is_err());
+
+        // _MANAGED_ 根自身
+        assert!(scan_single_mod(dir.path(), &dir.path().join("_MANAGED_")).is_err());
+
+        // 组外的任意路径（不在 _MANAGED_ 下）
+        let outside = dir.path().join("Outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("x.ini"), "[S]\n").unwrap();
+        assert!(scan_single_mod(dir.path(), &outside).is_err());
+
+        // 合法模组目录不应报错
+        assert!(scan_single_mod(dir.path(), &mod_a).is_ok());
+    }
+
+    /// 单模组扫描的磁盘派生字段与整组扫描产出一致（除 mod_index/is_active 占位外）：
+    /// name/disabled/favorite/is_active/签名三源一致（正确性金标准的字段级子集）
+    #[test]
+    fn scan_single_mod_matches_group_scan_fields() {
+        let dir = setup();
+        let g1 = dir.path().join("_MANAGED_").join("group_1");
+        let mod_a = make_mod(&g1, "ModA");
+        make_mod(&g1, "DISABLED_ModB");
+
+        let group_scan = scan_partial_path(dir.path(), &g1).unwrap();
+        let group_mod_a = group_scan.groups[0]
+            .mods
+            .iter()
+            .find(|m| m.name == "ModA")
+            .unwrap()
+            .clone();
+
+        let (single, _) = scan_single_mod(dir.path(), &mod_a).unwrap();
+        assert_eq!(single.name, group_mod_a.name);
+        assert_eq!(single.disabled, group_mod_a.disabled);
+        assert_eq!(single.mod_disabled, group_mod_a.mod_disabled);
+        assert_eq!(single.is_favorite, group_mod_a.is_favorite);
+        assert_eq!(single.is_namespaced, group_mod_a.is_namespaced);
+        assert_eq!(single.is_mutex, group_mod_a.is_mutex);
+        assert_eq!(single.group_index, group_mod_a.group_index);
+        assert_eq!(
+            single.full_path.as_ref(),
+            group_mod_a.full_path.as_ref(),
+            "full_path 与组扫描一致（缓存 patch 位置匹配前提）"
+        );
+        // 唯一启用者 → 两路径 is_active 均为 true
+        assert_eq!(single.is_active, group_mod_a.is_active);
+        // 签名一致（三源 mtime 相同）
+        assert_eq!(single.disk_signature, group_mod_a.disk_signature);
     }
 }

@@ -357,7 +357,6 @@ function onContextMenu(e: MouseEvent) {
   align-items: center;
   justify-content: center;
   border: 2px solid transparent;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
   flex-shrink: 0;
 }
 

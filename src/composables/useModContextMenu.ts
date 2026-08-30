@@ -91,32 +91,34 @@ export function useModContextMenu(
   /**
    * 切换模组启用/禁用状态
    * 调用后端toggle_mod_disabled命令，传入isMutex参数处理互斥组逻辑
+   * 命令返回受影响分组增量（R1），原地 patch store，不再全量 refresh
    */
   async function handleToggleEnabled() {
     if (!mod.value) return
     closeContextMenu()
-    // 操作前捕获原禁用状态，用于生成操作后的提示文案（refresh 后会更新为操作后状态，不能直接拿来判断）
+    // 操作前捕获原禁用状态，用于生成操作后的提示文案（patch 后会更新为操作后状态，不能直接拿来判断）
     const wasDisabled = mod.value.modDisabled
     try {
-      await toggleModDisabled(mod.value.modPath, mod.value.modDisabled, mod.value.isMutex)
+      const delta = await toggleModDisabled(mod.value.modPath, mod.value.modDisabled, mod.value.isMutex)
+      // 命令级增量原地 patch（零全量 refresh）
+      modsStore.applyGroupDelta(delta)
       // 标记需要更新模组数据（仅NormalGroup操作）
       if (!mod.value.isMutex) {
         modsStore.markNeedUpdate(mod.value.groupIndex)
       }
-      await modsStore.refresh()
       ElMessage.success(wasDisabled ? t('Enabled') : t('Disabled'))
     } catch (e: unknown) {
       ElMessage.error(t('Failed to enable mod') + ': ' + (e instanceof Error ? e.message : String(e)))
     }
   }
 
-  /** 切换收藏状态 */
+  /** 切换收藏状态（R1：命令返回 bool 后本地翻转，0 IPC 零全量） */
   async function handleToggleFavorite() {
     if (!mod.value) return
     closeContextMenu()
     try {
-      await toggleFavorite(mod.value.modPath)
-      await modsStore.refresh()
+      const isFav = await toggleFavorite(mod.value.modPath)
+      modsStore.toggleFavoriteLocal(mod.value.modPath, isFav)
     } catch (e: unknown) {
       logger.error('ModCard', 'Failed to toggle favorite', e)
     }

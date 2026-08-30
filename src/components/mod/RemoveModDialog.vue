@@ -90,6 +90,7 @@
 import { ref, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { removeMod } from '@/utils/tauri'
+import { useModsStore } from '@/stores/mods'
 import { logger } from '@/utils/logger'
 import { useLoadingDots } from '@/composables/useLoadingDots'
 
@@ -113,6 +114,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const modsStore = useModsStore()
 
 /** 当前对话框状态 */
 const state = ref<DialogState>('confirm')
@@ -155,13 +157,15 @@ function handleOverlayClick() {
   }
 }
 
-/** UI1 确认按钮：调用后端移除模组，成功后切换到 UI2 */
+/** UI1 确认按钮：调用后端移除模组，成功后切换到 UI2（R1：分组增量原地 patch，零全量 refresh） */
 async function handleConfirm() {
   if (!props.modPath) return
   state.value = 'loading'
   startDots()
   try {
-    await removeMod(props.modPath)
+    const res = await removeMod(props.modPath)
+    // 命令级增量：受影响分组新状态直接 patch 进 store（不再触发全量 refresh）
+    modsStore.applyGroupDelta(res.groupDelta)
     state.value = 'success'
   } catch (e: unknown) {
     const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))

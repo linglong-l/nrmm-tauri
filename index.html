@@ -20,6 +20,49 @@
   </head>
 
   <body>
+    <!-- ===== B-1: HTML 原生首屏骨架 =====
+     WebView 从 about:blank 导航回主页、解析本文件瞬间即显示应用名+卡片网格占位，
+     避免 JS 注入 CSS 前窗口纯白/纯透明。Vue 应用挂载成功后由 main.ts 淡出移除。
+     注意：此节点为纯静态 HTML（无 Vue 模板语法），由 Vue 挂载后接管首帧衔接。 -->
+    <div id="boot-skeleton" role="status" aria-busy="true" aria-label="Loading">
+      <style>
+        #boot-skeleton {
+          position: fixed; inset: 0; z-index: 9999; background: #121212;
+          display: flex; flex-direction: column; align-items: center;
+          justify-content: center; gap: 28px;
+          transition: opacity 0.2s ease;
+        }
+        #boot-skeleton.fade-out { opacity: 0; pointer-events: none; }
+        #boot-skeleton .boot-title { color: rgba(255,255,255,.72); font-size: 18px; letter-spacing: 1px; }
+        #boot-skeleton .boot-grid { display: grid; grid-template-columns: repeat(6, 160px); gap: 12px; }
+        #boot-skeleton .boot-card {
+          width: 160px; height: 240px; border-radius: 10px;
+          background: rgba(255,255,255,.05); animation: boot-pulse 1.5s ease-in-out infinite;
+        }
+        #boot-skeleton .boot-card .boot-img {
+          height: 180px; border-radius: 10px 10px 0 0; background: rgba(255,255,255,.06);
+        }
+        #boot-skeleton .boot-card .boot-name {
+          margin: 12px; height: 12px; border-radius: 3px; background: rgba(255,255,255,.08);
+        }
+        #boot-skeleton .boot-sr-only {
+          position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
+        }
+        @keyframes boot-pulse { 0%,100% { opacity: .45 } 50% { opacity: 1 } }
+        @media (max-width: 1100px) { #boot-skeleton .boot-grid { grid-template-columns: repeat(4, 160px); } }
+        @media (max-width: 760px)  { #boot-skeleton .boot-grid { grid-template-columns: repeat(2, 160px); } }
+      </style>
+      <div class="boot-title">NRMM</div>
+      <div class="boot-grid" aria-hidden="true">
+        <div class="boot-card"><div class="boot-img"></div><div class="boot-name"></div></div>
+        <div class="boot-card"><div class="boot-img"></div><div class="boot-name"></div></div>
+        <div class="boot-card"><div class="boot-img"></div><div class="boot-name"></div></div>
+        <div class="boot-card"><div class="boot-img"></div><div class="boot-name"></div></div>
+        <div class="boot-card"><div class="boot-img"></div><div class="boot-name"></div></div>
+        <div class="boot-card"><div class="boot-img"></div><div class="boot-name"></div></div>
+      </div>
+      <span class="boot-sr-only">Loading...</span>
+    </div>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

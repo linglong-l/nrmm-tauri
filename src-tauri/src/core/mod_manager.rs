@@ -32,8 +32,8 @@ use crate::core::operation_registry::OperationGuard;
 use crate::models::enums::GroupType;
 use crate::models::enums::TargetGame;
 use crate::models::mod_data::{
-    DuplicateLib, ErroredLines, HashConflict, HashConflictEntry, LibInMod, ModData, ModGroupData,
-    NonExistentLib,
+    DuplicateLib, ErroredLines, GroupDelta, HashConflict, HashConflictEntry, LibInMod, ModData,
+    ModGroupData, NonExistentLib,
 };
 use crate::models::settings::AppSettings;
 use crate::sel_dbg;
@@ -677,11 +677,13 @@ pub fn update_mod_data(
         main_ini_existed
     );
 
-    // 步骤3: 收集启用模组和已知库
+    // 步骤3: 收集启用模组和已知库（R3/C-3b：扁平列表为 Vec<Arc<ModData>>，
+    // 此处解引用收集，下游 &[&ModData] 处理链签名不变）
     let enabled_mods: Vec<&ModData> = scan_result
         .mods
         .iter()
         .filter(|m| !m.disabled && !m.mod_disabled)
+        .map(|m| m.as_ref())
         .collect();
     log::debug!(
         "[mod_manager] [update_mod_data] step=collect_enabled done enabled_mods_count={}",
@@ -2875,6 +2877,11 @@ pub struct RemoveModResult {
     pub ini_count: u32,
     /// 还原过程中失败的文件数
     pub failed_count: u32,
+    /// 受影响分组的完整新状态（命令级增量，序列化为 groupDelta）
+    ///
+    /// core 层构造占位（`GroupDelta::default()`），由命令层（`mod_commands::remove_mod`）
+    /// 局部重扫受影响分组后组装真实值覆盖——core 层不感知缓存与局部扫描上下文。
+    pub group_delta: GroupDelta,
 }
 
 /// 还原模组 INI 结果（还原区功能）
@@ -3265,6 +3272,8 @@ pub fn remove_mod(mod_path: &Path) -> Result<RemoveModResult> {
         restored: failed_count == 0,
         ini_count,
         failed_count,
+        // 占位：命令层局部重扫受影响分组后覆盖为真实 delta
+        group_delta: GroupDelta::default(),
     })
 }
 
@@ -5888,7 +5897,12 @@ mod tests_non_group_isolation {
         fs::write(group_path.join("group_1.ini"), good_ini).unwrap();
 
         let scan = mod_scanner::scan_mods_deep(dir.path()).unwrap();
-        let enabled: Vec<&ModData> = scan.mods.iter().filter(|m| !m.disabled).collect();
+        let enabled: Vec<&ModData> = scan
+            .mods
+            .iter()
+            .filter(|m| !m.disabled)
+            .map(|m| m.as_ref())
+            .collect();
         let managed = dir.path().join("_MANAGED_");
         let mismatched = validate_group_ini_consistency(&managed, &enabled);
         assert!(mismatched.is_empty(), "一致的 group_ini 不应报错");

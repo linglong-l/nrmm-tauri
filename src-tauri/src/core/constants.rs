@@ -176,8 +176,8 @@ pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7za.exe";
 
 /// Linux 平台内置 7-Zip 相对路径（相对于 exe 目录）
 ///
-/// deb/rpm 资源装在 `/usr/lib/<productName>/7z/`，AppImage 装在
-/// `$APPDIR/usr/lib/<productName>/7z/`，portable 与系统安装均落在 `exe_dir/7z/`。
+/// deb/rpm 资源装在 `/usr/lib/<productName>/7z/`，portable 与系统安装均落在 `exe_dir/7z/`。
+/// （AppImage 已于 2026-08-29 取消：Tauri 强依赖 WebKit/glibc 等无法静态链接的 C/C++ 库。）
 /// 解析逻辑见 `archive_handler::get_bundled_7z_path`。
 #[cfg(target_os = "linux")]
 pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7zz";
@@ -247,8 +247,12 @@ pub const CRASH_LINE_PATTERNS: &[&str] = &[
 /// Windows 最大路径长度限制（用于路径过长检测）
 pub const MAX_PATH: usize = 260;
 
-/// 文件监控防抖时间（毫秒）：文件变化后等待此时间再触发刷新，避免频繁事件
-pub const FILE_WATCHER_DEBOUNCE_MS: u64 = 300;
+/// 文件监控事件平息静默期（毫秒）：距最后一次事件 1s 才处理批次（trailing 静默），
+/// 使风暴合并更大批次、降低事件环溢出频率
+pub const FILE_WATCHER_DEBOUNCE_MS: u64 = 1000;
+
+/// 文件监控溢出退避上限（毫秒）：连续溢出批次的静默期逐轮 +1s，封顶此值（R2）
+pub const FILE_WATCHER_MAX_BACKOFF_MS: u64 = 3000;
 
 /// 前台窗口轮询间隔（毫秒）：检测游戏是否在前台
 pub const FOREGROUND_POLL_INTERVAL_MS: u64 = 1000;

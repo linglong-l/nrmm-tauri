@@ -415,8 +415,9 @@ async function handleRenameGroup() {
     )
     if (value && contextGroup.value.groupPath) {
       const isGroupXx = contextGroup.value.groupType !== 'mutexGroup'
-      await renameGroup(contextGroup.value.groupPath, value.trim(), isGroupXx)
-      await modsStore.refresh()
+      const delta = await renameGroup(contextGroup.value.groupPath, value.trim(), isGroupXx)
+      // 命令级增量：重命名后的分组新状态原地 patch（零全量 refresh）
+      modsStore.applyGroupDelta(delta)
       ElMessage.success(t('Group renamed successfully'))
     }
   } catch (e) {
@@ -438,17 +439,17 @@ async function handleOpenGroupFolder() {
   }
 }
 
-/** 禁用分组下所有一级模组（已禁用的跳过） */
+/** 禁用分组下所有一级模组（已禁用的跳过）；R1：批量组增量原地 patch，零全量 refresh */
 async function handleDisableAllMods() {
   if (!contextGroup.value || !contextGroup.value.groupPath) return
   const gp = contextGroup.value.groupPath
   const displayName = contextGroup.value.name || contextGroup.value.groupName
   closeContextMenu()
   try {
-    const count = await disableAllModsInGroup(gp)
-    await modsStore.refresh()
-    if (count > 0) {
-      ElMessage.success(`已禁用 ${displayName} 下的 ${count} 个模组`)
+    const batch = await disableAllModsInGroup(gp)
+    modsStore.applyGroupDelta(batch.delta)
+    if (batch.changed > 0) {
+      ElMessage.success(`已禁用 ${displayName} 下的 ${batch.changed} 个模组`)
     } else {
       ElMessage.info(`${displayName} 下没有需要禁用的模组`)
     }
@@ -457,17 +458,17 @@ async function handleDisableAllMods() {
   }
 }
 
-/** 启用分组下所有一级禁用模组（已启用的跳过） */
+/** 启用分组下所有一级禁用模组（已启用的跳过）；R1：批量组增量原地 patch，零全量 refresh */
 async function handleEnableAllMods() {
   if (!contextGroup.value || !contextGroup.value.groupPath) return
   const gp = contextGroup.value.groupPath
   const displayName = contextGroup.value.name || contextGroup.value.groupName
   closeContextMenu()
   try {
-    const count = await enableAllModsInGroup(gp)
-    await modsStore.refresh()
-    if (count > 0) {
-      ElMessage.success(`已启用 ${displayName} 下的 ${count} 个模组`)
+    const batch = await enableAllModsInGroup(gp)
+    modsStore.applyGroupDelta(batch.delta)
+    if (batch.changed > 0) {
+      ElMessage.success(`已启用 ${displayName} 下的 ${batch.changed} 个模组`)
     } else {
       ElMessage.info(`${displayName} 下没有需要启用的模组`)
     }
@@ -498,8 +499,9 @@ async function handleRemoveGroup() {
     )
     if (contextGroup.value.groupPath) {
       const isGx = isGroupXx(contextGroup.value)
-      await removeGroupEx(contextGroup.value.groupPath, isGx)
-      await modsStore.refresh()
+      const delta = await removeGroupEx(contextGroup.value.groupPath, isGx)
+      // 命令级增量：分组移除后原地 patch（树剔除 + 扁平剔除 + 选中回退，零全量 refresh）
+      modsStore.applyGroupDelta(delta)
       ElMessage.success(t('Group removed successfully'))
     }
   } catch (e: unknown) {

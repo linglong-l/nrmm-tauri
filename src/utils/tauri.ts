@@ -10,7 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult } from '../types'
+import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta } from '../types'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from './logger'
@@ -245,9 +245,10 @@ export async function addGroup(modsPath: string, game: string, groupName?: strin
  * 删除分组
  * 后端命令：remove_group
  * @param groupPath 分组文件夹路径
+ * @returns 受影响分组的增量（R1：前端原地 patch）
  */
-export async function removeGroup(groupPath: string): Promise<void> {
-  return safeInvoke('remove_group', { groupPath })
+export async function removeGroup(groupPath: string): Promise<GroupDelta> {
+  return safeInvoke<GroupDelta>('remove_group', { groupPath })
 }
 
 /**
@@ -260,7 +261,7 @@ export async function removeGroup(groupPath: string): Promise<void> {
  * 3. 清除模组缓存
  *
  * @param modPath 模组文件夹路径
- * @returns 移除结果（包含移动后路径、INI 还原统计等）
+ * @returns 移除结果（包含移动后路径、INI 还原统计、受影响分组增量 groupDelta 等）
  */
 export async function removeMod(modPath: string): Promise<RemoveModResult> {
   return safeInvoke<RemoveModResult>('remove_mod', { modPath })
@@ -271,10 +272,10 @@ export async function removeMod(modPath: string): Promise<RemoveModResult> {
  * 后端命令：rename_mod
  * @param modPath 模组文件夹路径
  * @param newName 新名称
- * @returns 重命名后的模组名称
+ * @returns 受影响分组的增量（含重命名后的模组新状态，R1：前端原地 patch）
  */
-export async function renameMod(modPath: string, newName: string): Promise<string> {
-  return safeInvoke<string>('rename_mod', { modPath, newName })
+export async function renameMod(modPath: string, newName: string): Promise<GroupDelta> {
+  return safeInvoke<GroupDelta>('rename_mod', { modPath, newName })
 }
 
 /**
@@ -283,10 +284,10 @@ export async function renameMod(modPath: string, newName: string): Promise<strin
  * @param groupPath 分组文件夹路径
  * @param newName 新名称
  * @param isGroupXx 是否为 group_xx 格式的普通分组
- * @returns 重命名后的分组名称
+ * @returns 受影响分组的增量（分组重命名时 oldGroupPath 与 newGroup.groupPath 不同）
  */
-export async function renameGroup(groupPath: string, newName: string, isGroupXx: boolean): Promise<string> {
-  return safeInvoke<string>('rename_group', { groupPath, newName, isGroupXx })
+export async function renameGroup(groupPath: string, newName: string, isGroupXx: boolean): Promise<GroupDelta> {
+  return safeInvoke<GroupDelta>('rename_group', { groupPath, newName, isGroupXx })
 }
 
 /**
@@ -295,9 +296,10 @@ export async function renameGroup(groupPath: string, newName: string, isGroupXx:
  * @param modPath 模组文件夹路径
  * @param enable true=启用, false=禁用
  * @param isMutex 是否为互斥组成员
+ * @returns 受影响分组的增量（R1：前端原地 patch）
  */
-export async function toggleModDisabled(modPath: string, enable: boolean, isMutex: boolean): Promise<void> {
-  return safeInvoke('toggle_mod_disabled', { modPath, enable, isMutex })
+export async function toggleModDisabled(modPath: string, enable: boolean, isMutex: boolean): Promise<GroupDelta> {
+  return safeInvoke<GroupDelta>('toggle_mod_disabled', { modPath, enable, isMutex })
 }
 
 /**
@@ -825,10 +827,10 @@ export async function currentWatchedPath(): Promise<string | null> {
  * 子分组目录不受影响
  * 后端命令：disable_all_mods_in_group
  * @param groupPath 分组目录路径（绝对路径）
- * @returns 成功禁用的模组数量
+ * @returns 实际禁用数量 + 受影响分组的增量（R1：前端原地 patch）
  */
-export async function disableAllModsInGroup(groupPath: string): Promise<number> {
-  return safeInvoke<number>('disable_all_mods_in_group', { groupPath })
+export async function disableAllModsInGroup(groupPath: string): Promise<BatchGroupDelta> {
+  return safeInvoke<BatchGroupDelta>('disable_all_mods_in_group', { groupPath })
 }
 
 /**
@@ -836,10 +838,10 @@ export async function disableAllModsInGroup(groupPath: string): Promise<number> 
  * 子分组目录不受影响
  * 后端命令：enable_all_mods_in_group
  * @param groupPath 分组目录路径（绝对路径）
- * @returns 成功启用的模组数量
+ * @returns 实际启用数量 + 受影响分组的增量（R1：前端原地 patch）
  */
-export async function enableAllModsInGroup(groupPath: string): Promise<number> {
-  return safeInvoke<number>('enable_all_mods_in_group', { groupPath })
+export async function enableAllModsInGroup(groupPath: string): Promise<BatchGroupDelta> {
+  return safeInvoke<BatchGroupDelta>('enable_all_mods_in_group', { groupPath })
 }
 
 /**
@@ -849,9 +851,10 @@ export async function enableAllModsInGroup(groupPath: string): Promise<number> {
  * 后端命令：remove_group_ex
  * @param groupPath 分组目录路径（绝对路径）
  * @param isGroupXx 是否为 group_xx 格式的普通分组
+ * @returns 受影响分组的增量（R1：前端原地 patch）
  */
-export async function removeGroupEx(groupPath: string, isGroupXx: boolean): Promise<void> {
-  return safeInvoke('remove_group_ex', { groupPath, isGroupXx })
+export async function removeGroupEx(groupPath: string, isGroupXx: boolean): Promise<GroupDelta> {
+  return safeInvoke<GroupDelta>('remove_group_ex', { groupPath, isGroupXx })
 }
 
 /**

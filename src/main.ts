@@ -118,5 +118,18 @@ console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padS
 app.mount('#app')
 console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - app.mount 调用完成（等待Vue组件渲染）`)
 
+/**
+ * B-1：移除 HTML 原生首屏骨架
+ * Vue 挂载成功后淡出并移除 #boot-skeleton（index.html 内静态节点）。
+ * 异常重入/旧页面无该节点时直接跳过；transitionend 未触发时 200ms 兜底移除。
+ */
+const bootSkeleton = document.getElementById('boot-skeleton')
+if (bootSkeleton) {
+  bootSkeleton.classList.add('fade-out')
+  const removeBoot = () => bootSkeleton.remove()
+  bootSkeleton.addEventListener('transitionend', removeBoot, { once: true })
+  setTimeout(removeBoot, 200)
+}
+
 // 将HTML启动时间暴露到全局，供App.vue对齐计时起点
 window.__NRMM_FE_BOOT_START__ = HTML_BOOT_START
