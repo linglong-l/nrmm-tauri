@@ -2,7 +2,7 @@
 param([string]$TargetTriple = "x86_64-pc-windows-msvc")
 <#
 .SYNOPSIS
-    NRMM Windows 手动构建脚本（与 build-linux-zig.sh 对等：手动编译 + 手动上传发布）。
+    NRMM Windows 手动构建脚本（与 build-linux-gnu.sh 对等：手动编译 + 手动上传发布）。
 
 .DESCRIPTION
     执行流程：

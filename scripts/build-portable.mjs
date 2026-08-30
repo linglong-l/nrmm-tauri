@@ -4,8 +4,11 @@
  *
  * 生成免安装（portable）分发包（压缩包名按 nrmm-tauri_<版本>_x64-<系统> 规范派生）：
  *   - Windows: nrmm-tauri_<ver>_x64-Win.zip
- *   - Linux:   nrmm-tauri_<ver>_x64-Linux.tar.gz        （默认含内置 7z，推荐）
- *   - Linux:   nrmm-tauri_<ver>_x64-Linux-no7z.tar.gz   （--no-7z：单程序版，不含 7z）
+ *   - Linux:   nrmm-tauri_<ver>_x64-Linux.tar.gz        （含内置 7z，官方发布形态）
+ *
+ * 所有免安装产物默认均内置 7z CLI（位于 exe 同级 7z/ 目录），以保证完整归档格式支持。
+ * `--no-7z` 仅为使用者自行抉择的可选形态（不随官方发布流程产出）：不带内置 7z 时
+ * 解压回退仅支持 zip/7z/rar 并优先调用系统 7z，由此引发的异常由使用者自行承担。
  *
  * 零第三方依赖，使用系统命令（Windows: PowerShell/Compress-Archive；Linux: tar）。
  *
@@ -13,7 +16,7 @@
  *   node scripts/build-portable.mjs                # 自动检测平台，输出到 dist/
  *   node scripts/build-portable.mjs --target x86_64-pc-windows-msvc -o dist-win
  *   node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o dist
- *   node scripts/build-portable.mjs --no-7z        # 单程序版（不含内置 7z）
+ *   node scripts/build-portable.mjs --no-7z        # 可选：单程序版（不含内置 7z，自行承担回退限制）
  */
 
 import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, rmSync, cpSync, readFileSync } from 'node:fs';
@@ -80,7 +83,8 @@ console.log(`[portable] Output:  ${OUT_DIR}`);
 
 if (!existsSync(RELEASE_DIR)) {
   console.error(`[portable] ERROR: Release 目录不存在: ${RELEASE_DIR}`);
-  console.error(`  请先运行: npm run tauri build -- --target ${TARGET}`);
+  // 注意：不得写 `npm run tauri build -- --target X`——npm 会把 `--target` 当本身配置吞掉。
+  console.error(`  请先运行: npx tauri build --target ${TARGET}`);
   process.exit(1);
 }
 mkdirSync(OUT_DIR, { recursive: true });
@@ -139,19 +143,21 @@ if (!cli.no7z) {
   console.log('[portable] --no-7z：跳过内置 7z（单程序版）');
 }
 
-// README（含 7z 可删说明与回退提示）
+// README（内置 7z 说明：免安装版一律内置 7z CLI，不得出现「允许删除」的表述）
 const sevenZipNote = cli.no7z
   ? [
       '',
-      '内置 7z：本版本未附带内置 7z。解压回退仅支持 zip/7z/rar，且优先使用系统已安装的 7z。',
-      '若需完整归档格式支持，请改用附带 7z 的 tar.gz 版本，或在系统 PATH 安装 7-Zip。',
+      '内置 7z：本版本未附带内置 7z（使用者自行抉择，非官方发布形态）。',
+      '  解压回退仅支持 zip/7z/rar，且优先调用系统已安装的 7z；由此产生的异常由使用者自行承担。',
+      '  如需完整归档格式支持，请改用内置 7z 的官方版本，或在系统 PATH 安装 7-Zip。',
       ''
     ]
   : [
       '',
-      '内置 7z：本目录含 7z/ 子目录（Windows: 7za.exe + dll；Linux: 7zz）。',
-      '  该 7z 可删除，但不建议——删除后解压回退仅支持 zip/7z/rar，且会优先调用系统已安装的 7z；',
-      '  若系统未安装 7z，再回退到内置纯 Rust 解压（支持格式更少）。',
+      '内置 7z：本目录含 7z/ 子目录（Windows: 7za.exe + 7za.dll + 7zxa.dll；Linux: 7zz），为完整归档格式支持所必需。',
+      '  程序启动后自动探测该目录；请勿移除或改动 7z/ 下的任何文件。',
+      '  一旦缺失，解压回退将降级为仅支持 zip/7z/rar 并优先调用系统已安装的 7z；',
+      '  若系统亦未安装 7-Zip，则进一步回退到内置纯 Rust 解压（支持格式更少、性能较弱）。',
       ''
     ];
 const readmeContent = isWindows

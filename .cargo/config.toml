@@ -3,11 +3,10 @@
 #
 # 机制说明：Cargo 的 [profile.*] 是全局的、不支持按平台拆分；
 # 平台差异经本文件 target 段的 rustflags 实现。
-# 优先级：命令行 > 环境变量（如 build-linux-zig.sh 注入的 zig linker）> 本文件。
 # 本文件位于工作区根，cargo 无论从根目录还是 src-tauri/ 调起都会向上找到它。
 # =============================================================================
 
-# ---------- Linux x86_64（gnu）----------
+# ---------- Linux x86_64（gnu，Ubuntu 22.04 级，glibc <= 2.35）----------
 [target.x86_64-unknown-linux-gnu]
 rustflags = [
     # 仅链接实际使用的共享库，精简动态依赖列表（Ubuntu 等发行版默认构建惯例）
@@ -17,9 +16,6 @@ rustflags = [
     "-Clink-arg=-Wl,-z,relro",
     "-Clink-arg=-Wl,-z,now",
 ]
-# 兼容性：scripts/build-linux-zig.sh 通过 CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER
-# 环境变量注入 zig cc wrapper（环境变量优先级高于本文件的 linker 键，此处刻意不设置
-# linker）；上述 -Wl 参数经 zig cc 透传给 lld，语法兼容。
 
 # ---------- Windows x86_64（MSVC）----------
 # 现状评估（2026-08-18）：主要优化已由根 Cargo.toml [profile.release] 覆盖

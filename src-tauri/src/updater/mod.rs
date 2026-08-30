@@ -97,7 +97,6 @@ impl UpdateManager {
                 if name.contains(keyword)
                     && (name.ends_with(".msi")
                         || name.ends_with(".exe")
-                        || name.ends_with(".AppImage")
                         || name.ends_with(".dmg")
                         || name.ends_with(".deb")
                         || name.ends_with(".rpm")

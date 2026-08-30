@@ -17,30 +17,22 @@ variables:
   CARGO_PROFILE_RELEASE_STRIP: 'true'
   GITEE_OWNER: Yezi26
   GITEE_REPO: nrmm-tauri
-  # ===== AppImage 构建兜底（核心）：即使 FUSE 不可用也能解压运行 AppImage 工具 =====
-  APPIMAGE_EXTRACT_AND_RUN: '1'
   ARCH: 'x86_64'
-  # ===== 关键：Ubuntu 24.04+ / Fedora39+ glibc>=2.38 默认 DT_RELR (.relr.dyn) =====
-  # linuxdeploy 内置 strip 太老无法识别，会导致 failed to run linuxdeploy
-  # NO_STRIP=1 让 linuxdeploy 直接跳过 strip（本项目 Cargo.toml 已做 strip=true）
-  NO_STRIP: '1'
-  # 同时设置系统本地 strip 作为备份，两者共存时 NO_STRIP 优先生效
-  STRIP: '/usr/bin/strip'
 
 stages:
   - stage: build-linux
-    displayName: Linux 构建（zig 轨，锁 glibc 2.35）
+    displayName: Linux 构建（gnu 原生工具链，Ubuntu 22.04）
     strategy: fast
     trigger: auto
     steps:
       - step: build@rust
         name: build_linux
-        displayName: 构建 Linux (AppImage/deb/rpm + portable tar.gz)
+        displayName: 构建 Linux (deb/rpm + portable tar.gz)
         rustVersion: stable
         commands:
           - set -e
           - |
-            echo "===== [1/5] 安装系统依赖 (Tauri Linux prerequisites) ====="
+            echo "===== [1/4] 安装系统依赖 (Tauri Linux prerequisites) ====="
             sudo apt-get update -y
             sudo apt-get install -y --no-install-recommends \
               libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
@@ -51,39 +43,26 @@ stages:
               libgtk-3-dev \
               libayatana-appindicator3-dev \
               libsoup-3.0-dev \
-              libfuse2 \
               rpm fakeroot dpkg-dev \
               curl wget file xz-utils ca-certificates binutils
             sudo apt-get install -f -y
           - |
-            echo "===== [2/5] 安装 Node.js 20 ====="
+            echo "===== [2/4] 安装 Node.js 20 ====="
             curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
             sudo apt-get install -y nodejs
             node --version
             npm --version
           - |
-            echo "===== [3/5] 安装 zig（锁 glibc 2.35 的 linker/cc/c++）====="
-            # build-linux-zig.sh 依赖全局 zig；若镜像已装则跳过
-            if ! command -v zig >/dev/null 2>&1; then
-              ZIG_VER=0.13.0
-              curl -fsSL "https://ziglang.org/download/${ZIG_VER}/zig-linux-x86_64-${ZIG_VER}.tar.xz" -o /tmp/zig.tar.xz
-              sudo tar -xJf /tmp/zig.tar.xz -C /opt
-              sudo ln -sf /opt/zig-linux-x86_64-${ZIG_VER}/zig /usr/local/bin/zig
-              rm -f /tmp/zig.tar.xz
-            fi
-            zig version
-          - |
-            echo "===== [4/5] 安装 npm 依赖 ====="
+            echo "===== [3/4] 安装 npm 依赖 ====="
             npm ci
           - |
-            echo "===== [5/5] Tauri 构建（zig 锁 glibc<=2.35，产出规范名，归入 dist-linux/zig/）====="
-            # 改用 zig 轨脚本：无论宿主镜像 glibc 多新，产物均锁 2.35；已包含 AppImage/deb/rpm + 含7z/no7z 两版 tar.gz
-            bash scripts/build-linux-zig.sh
+            echo "===== [4/4] Tauri 构建（gnu 原生工具链，Ubuntu 22.04 宿主 glibc=2.35 即兼容下限）====="
+            bash scripts/build-linux-gnu.sh
           - |
             echo "===== 收集构建产物到 dist/（供发布步骤使用）====="
             set -e
             mkdir -p dist
-            cp -r dist-linux/zig/. dist/ 2>/dev/null || true
+            cp -r dist-linux/. dist/ 2>/dev/null || true
             echo "--- dist/ contents ---"
             ls -la dist/ 2>/dev/null || echo "  dist/ is empty"
         artifacts:
@@ -110,7 +89,7 @@ stages:
             node --version
           - |
             echo "===== 生成 updater manifest (latest.json) ====="
-            # zig 脚本已将 bundler 的 latest-linux.json 拷入 dist/；直接作为 latest.json 发布
+            # gnu 脚本已将 bundler 的 latest-linux.json 拷入 dist/；直接作为 latest.json 发布
             if [ -f "${LINUX_BUILD}/latest-linux.json" ]; then
               cp "${LINUX_BUILD}/latest-linux.json" latest.json
               echo "--- latest.json ---"

@@ -86,3 +86,21 @@ SESSION_CONTEXT.md
 deliverables/
 /nrmm_recover_tmp/
 .Inventory/
+
+# AI / Agent 辅助文件（本地会话与工具产物，一律不入库）
+# 注：已跟踪的 AGENTS.md / CLAUDE.md / overview.md 需 `git rm --cached` 才能真正忽略。
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.cursor/
+.codebuddy/
+.continue/
+.aider*
+.copilot/
+.github/copilot-instructions.md
+.windsurf/
+.kilocode/
+.roo/
+.gemini/
+.clinerules/
+overview.md

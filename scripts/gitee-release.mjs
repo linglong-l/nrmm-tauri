@@ -116,8 +116,8 @@ async function findOrCreateRelease() {
       body:
         `nrmm-tauri ${pkg.version}\n\n` +
         '自动发布（Gitee 流水线）。仅支持 x86_64，最低运行环境 glibc >= 2.35（Ubuntu 22.04 及以上）。\n\n' +
-        '推荐：AppImage 或含 7z 的 tar.gz 免安装包。deb/rpm 需 sudo，作为环境异常兜底。\n' +
-        '内置 7z 目录可删除但不建议（删除后回退仅支持 zip/7z/rar，优先系统 7z）。',
+        '推荐：含 7z 的 portable tar.gz 免安装包或 deb/rpm。deb/rpm 需 sudo，作为环境异常兜底。\n' +
+        '所有免安装包均内置 7z CLI（位于程序同级 7z/ 目录），请勿移除或改动；否则解压回退降级为仅支持 zip/7z/rar 并优先调用系统 7z，若系统亦未安装则进一步回退为内置纯 Rust 解压（格式更少、性能较弱）。',
       prerelease: false,
       target_commitish: 'master',
     },

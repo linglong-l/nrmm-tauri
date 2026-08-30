@@ -2,7 +2,7 @@
 
 ## 基于 [No Reload Mod Manager](https://github.com/Aglglg/No-Reload-Mod-Manager)
 
-> XXMI 模组管理器（NR Mod Manager）的桌面客户端 v0.4.0
+> XXMI 模组管理器（NR Mod Manager）的桌面客户端 v0.5.0
 
 一款基于 Tauri 2 + Vue 3 的轻量级模组管理工具，为游戏玩家提供模组的浏览、启用/禁用、分组管理、收藏、压缩包导入与 INI 备份等核心功能。支持 Windows 与 Linux 平台。
 
@@ -80,8 +80,8 @@
 
 ### 通用要求
 
-- **Node.js**：≥ 18
-- **Rust**：≥ 1.96（stable toolchain）
+- **Node.js**：≥ 22（仓库 `.nvmrc` = 22，`package.json` 的 `engines` 要求 `>=22.21.0`）
+- **Rust**：≥ 1.77.2（Tauri 2 的 MSRV；本项目与 CI 均使用 stable toolchain）
 - **Tauri CLI**：通过 `npm install` 自动安装（`@tauri-apps/cli`）
 
 ### Windows 特定要求
@@ -96,7 +96,7 @@
 - **librsvg2-dev**：图标渲染依赖
 - **xdg-utils**：文件管理器打开功能
 - **最低运行环境**：glibc >= 2.35（Ubuntu 22.04 及以上）；低于此版本的发行版无法运行。
-  gnu 轨需在 Ubuntu 22.04 环境构建；zig 轨可在任意较新 Linux 用 `scripts/build-linux-zig.sh` 锁定 glibc 2.35 构建。
+  Linux 构建需在 **Ubuntu 22.04** 环境（WSL2 或 `ubuntu:22.04` 容器）完成，宿主 glibc 即兼容下限。
 
 ## 开发
 
@@ -121,39 +121,42 @@ npm run build
 | 平台 | 产物 | 包名 | 安装作用域 | 说明 |
 |------|------|------|-----------|------|
 | Windows | NSIS 安装包 | `nrmm-tauri_<ver>_x64-Win.exe` | 用户级（currentUser） | 双击安装，不写系统目录 |
-| Windows | 免安装包 | `nrmm-tauri_<ver>_x64-Win.zip` | 用户级 | 解压即用，含内置 7z |
+| Windows | 免安装包 | `nrmm-tauri_<ver>_x64-Win.zip` | 用户级 | 解压即用，内置 7z |
 | Linux | deb | `nrmm-tauri_<ver>_x64-Linux.deb` | 系统（需 sudo） | 兜底，避免用户环境异常 |
 | Linux | rpm | `nrmm-tauri_<ver>_x64-Linux.rpm` | 系统（需 sudo） | 兜底，避免用户环境异常 |
-| Linux | AppImage | `nrmm-tauri_<ver>_x64-Linux.AppImage` | 用户级 | 推荐，免安装 |
-| Linux | 免安装包（含 7z） | `nrmm-tauri_<ver>_x64-Linux.tar.gz` | 用户级 | **推荐**，解压即用 |
-| Linux | 单程序版（无 7z） | `nrmm-tauri_<ver>_x64-Linux-no7z.tar.gz` | 用户级 | 回退仅支持 zip/7z/rar |
+| Linux | 免安装包 | `nrmm-tauri_<ver>_x64-Linux.tar.gz` | 用户级 | **推荐**，解压即用，内置 7z |
 
-> 优先推荐使用 **AppImage** 或 **含 7z 的 tar.gz 免安装包**（用户级、零安装、可放任意目录）。
-> deb/rpm 需系统级安装（sudo），仅作为用户环境异常（如无法运行 AppImage / 缺少 FUSE）时的兜底。
+> 推荐使用 **免安装包**（用户级、零安装、可放任意目录）。
+> deb/rpm 需系统级安装（sudo），仅作为用户环境异常时的兜底。
+>
+> 所有免安装包**均内置 7z CLI**，不存在「无 7z」变体。
 
 ### 关于内置 7-Zip
 
-所有打包产物（Windows 免安装包 / Linux tar.gz / NSIS / deb / rpm / AppImage）都将 7-Zip 落在程序同级的 `7z/` 目录下。
-**该 `7z/` 目录可以删除，但不建议**：删除后解压回退链仅支持 `zip / 7z / rar` 三种格式，且会优先调用系统已安装的 7-Zip；
-若系统也未安装 7-Zip，则再回退到内置的纯 Rust 解压（支持格式更少、性能较弱）。建议保留以获得完整归档支持。
+所有分发产物（Windows 免安装 zip / NSIS 安装包 / Linux tar.gz 免安装包 / deb / rpm）**均内置 7-Zip CLI**，
+落在程序同级的 `7z/` 目录下（Windows：`7za.exe` + `7za.dll` + `7zxa.dll`；Linux：`7zz`）。
+
+内置 7z 是「完整归档格式支持」的组成部分，程序启动时自动探测该目录。
+**请勿移除或改动 `7z/` 目录下的任何文件**：一旦缺失，解压回退链将降级为仅支持 `zip / 7z / rar` 三种格式，
+并优先调用系统已安装的 7-Zip；若系统也未安装 7-Zip，则进一步回退到内置纯 Rust 解压（支持格式更少、性能较弱）。
+由此产生的任何异常由使用者自行承担。
 
 ### 构建命令
 
 ```bash
-# Windows（NSIS 安装包 + 免安装 zip）：
-powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
+# Windows（NSIS 安装包 + 免安装 zip，均内置 7z）：
+npm run build:windows
 
-# Linux — gnu 轨（在 Ubuntu 22.04 环境，glibc >= 2.35）：
-npm run tauri build -- --target x86_64-unknown-linux-gnu
-node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o dist-linux/gnu
-node scripts/build-portable.mjs --target x86_64-unknown-linux-gnu -o dist-linux/gnu --no-7z
-
-# Linux — zig 轨（任意较新 Linux，zig 锁 glibc 2.35；产出与 gnu 轨同名，置于 dist-linux/zig/）：
-bash scripts/build-linux-zig.sh
+# Linux（在 Ubuntu 22.04 环境，宿主 glibc 即兼容下限；CI 用 ubuntu:22.04 容器）：
+npm run build:linux
 ```
 
-产物位于 `src-tauri/target/release/bundle/`（Tauri 安装包）与 `dist-linux/{gnu, zig}/`、`dist-win/`（免安装包与 manifest）。
-gnu 轨与 zig 轨文件名完全相同，发布到 Release 时分别归入 `linux-gnu/` 与 `linux-zig/` 子目录以免互相覆盖。
+> ⚠️ 不要写成 `npm run tauri build -- --target <triple>`：npm 会把 `--target` 当成本身配置吞掉，
+> 只把 triple 当位置参数传给 tauri，最终 cargo 报 `unexpected argument`。
+> 需要手动调用时统一用 `npx tauri build --target <triple>` 直传。
+
+产物位于工作区根 `target/<triple>/release/bundle/`（Tauri 安装包；旧布局回退 `src-tauri/target/<triple>/release/bundle/`），
+免安装包与 updater manifest 位于 `dist-win/`、`dist-linux/`。
 
 ## 多语言
 

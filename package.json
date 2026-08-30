@@ -15,7 +15,7 @@
     "vue:check": "npx vue-tsc --noEmit",
     "tsc:strict": "npx tsc --noEmit --strict",
     "biome:check": "npx biome check .",
-    "build:linux:zig": "bash scripts/build-linux-zig.sh",
+    "build:linux": "bash scripts/build-linux-gnu.sh",
     "build:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1"
   },
   "engines": {
