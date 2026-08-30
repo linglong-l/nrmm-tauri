@@ -54,6 +54,7 @@
           :selected-group-path="selectedGroupPath"
           :search-query="props.searchQuery"
           :is-group-hit="groupHit"
+          :collapse-path="props.collapsePath"
           @select="$emit('select', $event)"
           @context-menu="$emit('context-menu', $event)"
         />
