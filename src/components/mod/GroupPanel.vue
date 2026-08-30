@@ -12,6 +12,7 @@
         :default-expanded="isGroupExpanded(group.groupPath)"
         :search-query="modsStore.searchQuery"
         :is-group-hit="groupHitMap.get(group.groupPath)"
+        :collapse-path="collapsePath"
         @select="handleSelectGroup"
         @context-menu="handleContextMenu"
       />
@@ -52,6 +53,11 @@
           <el-icon><FolderOpened /></el-icon>
           {{ t('Open in File Explorer') }}
         </div>
+        <!-- 收起分组：折叠当前节点子分组树（分组过多时可收起查看其他分组） -->
+        <div v-if="contextGroup && groupHasChildren(contextGroup)" class="menu-item" @click="handleContextMenuAction('collapseGroup')">
+          <el-icon><Fold /></el-icon>
+          {{ t('common.collapse') }}
+        </div>
         <div class="menu-divider" v-if="contextGroup"></div>
         <div v-if="contextGroup" class="menu-item" @click="handleContextMenuAction('disableAllMods')">
           <el-icon><VideoPause /></el-icon>
@@ -80,7 +86,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, inject, nextTick } from 'vue'
 import type { Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Edit, Delete, FolderOpened, FolderAdd, VideoPause, VideoPlay } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, FolderOpened, FolderAdd, VideoPause, VideoPlay, Fold } from '@element-plus/icons-vue'
 import type { ModGroupData } from '@/types'
 import { addGroup, renameGroup, removeGroupEx, openGroupFolder, validateSubfolderName, createSubfolder, handlePathNotFoundError, disableAllModsInGroup, enableAllModsInGroup } from '@/utils/tauri'
 import { useModsStore } from '@/stores/mods'
@@ -185,6 +191,12 @@ const contextMenuX = ref(0)
 const contextMenuY = ref(0)
 /** 右键菜单关联的分组数据 */
 const contextGroup = ref<ModGroupData | null>(null)
+/** 外部「收起分组」信号：右键菜单收起时置当前分组路径，树节点命中后折叠（用后 nextTick 清回 null） */
+const collapsePath = ref<string | null>(null)
+/** 分组是否有子分组（右键「收起」入口判据，与树节点 hasChildren 同口径） */
+function groupHasChildren(g: ModGroupData): boolean {
+  return !!g.hasChild && !!g.children && g.children.length > 0
+}
 /**
  * 右键菜单显示期间及刚关闭后忽略节点点击的时间戳
  * 防止右键弹出后左键点击菜单外部关闭菜单时，mousedown落在el-tree-node上导致误选中分组
@@ -627,6 +639,15 @@ function handleContextMenuAction(action: string) {
       break
     case 'enableAllMods':
       handleEnableAllMods()
+      break
+    case 'collapseGroup':
+      collapsePath.value = contextGroup.value?.groupPath ?? null
+      if (collapsePath.value) {
+        nextTick(() => {
+          collapsePath.value = null
+        })
+      }
+      closeContextMenu()
       break
     case 'removeGroup':
       handleRemoveGroup()

@@ -96,6 +96,8 @@ const props = defineProps<{
   searchQuery?: string
   /** 当前分组是否为搜索命中项 */
   isGroupHit?: boolean
+  /** 外部「收起分组」信号：值命中自身 groupPath 时折叠子树（父组件用后即清回 null） */
+  collapsePath?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -137,6 +139,19 @@ watch(
     } else if (queryToggled && !props.searchQuery?.trim() && vRoot) {
       // 搜索退出且是虚拟根，保持默认展开
       expanded.value = true
+    }
+  }
+)
+
+/**
+ * 监听外部「收起分组」信号（右键菜单收起项）：路径命中自身时折叠子树。
+ * 父组件置值后在 nextTick 清回 null，同一分组可重复收起。
+ */
+watch(
+  () => props.collapsePath,
+  (target) => {
+    if (target && target === props.group.groupPath && hasChildren.value) {
+      expanded.value = false
     }
   }
 )
@@ -296,7 +311,8 @@ function onContextMenu(e: MouseEvent) {
 }
 
 .group-item:focus-visible {
-  outline: 2px solid var(--accent-primary);
+  /* 柔和聚焦边框（去默认蓝色高亮，与暗色主题匹配；键盘可达性保留） */
+  outline: 1px solid rgba(255, 255, 255, 0.3);
   outline-offset: 1px;
 }
 
@@ -464,7 +480,8 @@ function onContextMenu(e: MouseEvent) {
 /* 虚拟"Groups"根节点：与普通角色分组区分（更强调容器感） */
 .group-item.virtual-root {
   background: rgba(74, 158, 255, 0.08);
-  border: 1px dashed rgba(74, 158, 255, 0.3);
+  /* 中性虚线边框（去默认蓝色，与底部添加按钮虚线统一） */
+  border: 1px dashed rgba(255, 255, 255, 0.18);
 }
 .group-item.virtual-root:hover {
   background: rgba(74, 158, 255, 0.16);
