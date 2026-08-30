@@ -53,8 +53,8 @@
           <el-icon><FolderOpened /></el-icon>
           {{ t('Open in File Explorer') }}
         </div>
-        <!-- 收起分组：折叠当前节点子分组树（分组过多时可收起查看其他分组） -->
-        <div v-if="contextGroup && groupHasChildren(contextGroup)" class="menu-item" @click="handleContextMenuAction('collapseGroup')">
+        <!-- 收起分组：折叠当前节点子分组树（分组过多时可收起查看其他分组；对所有非顶层分组应用，顶层含子分组亦可） -->
+        <div v-if="contextGroup && (contextGroupDepth > 0 || groupHasChildren(contextGroup))" class="menu-item" @click="handleContextMenuAction('collapseGroup')">
           <el-icon><Fold /></el-icon>
           {{ t('common.collapse') }}
         </div>
@@ -191,6 +191,8 @@ const contextMenuX = ref(0)
 const contextMenuY = ref(0)
 /** 右键菜单关联的分组数据 */
 const contextGroup = ref<ModGroupData | null>(null)
+/** 右键菜单关联分组的树深度（0=顶层；折叠按钮对所有非顶层分组应用） */
+const contextGroupDepth = ref(0)
 /** 外部「收起分组」信号：右键菜单收起时置当前分组路径，树节点命中后折叠（用后 nextTick 清回 null） */
 const collapsePath = ref<string | null>(null)
 /** 分组是否有子分组（右键「收起」入口判据，与树节点 hasChildren 同口径） */
@@ -217,8 +219,9 @@ function handleSelectGroup(group: ModGroupData) {
  * 分组项右键菜单
  * @param payload 事件和分组数据
  */
-function handleContextMenu(payload: { event: MouseEvent; group: ModGroupData }) {
+function handleContextMenu(payload: { event: MouseEvent; group: ModGroupData; depth: number }) {
   contextGroup.value = payload.group
+  contextGroupDepth.value = payload.depth ?? 0
   const e = payload.event
   // 标记300ms内忽略tree节点点击，防止右键后立即mousedown误选
   ignoreNodeClickUntil = performance.now() + 300

@@ -103,8 +103,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** 选中分组事件 */
   select: [group: ModGroupData]
-  /** 右键菜单事件 */
-  'context-menu': [payload: { event: MouseEvent; group: ModGroupData }]
+  /** 右键菜单事件（携带节点深度：折叠按钮依据"非顶层分组"判定） */
+  'context-menu': [payload: { event: MouseEvent; group: ModGroupData; depth: number }]
 }>()
 
 /** 递归深度，默认0 */
@@ -275,7 +275,7 @@ function handleClick(e: MouseEvent) {
 /** 右键菜单：虚拟根屏蔽，避免误操作（因为不是真实目录） */
 function onContextMenu(e: MouseEvent) {
   if (isVirtualRoot.value) return
-  emit('context-menu', { event: e, group: props.group })
+  emit('context-menu', { event: e, group: props.group, depth: props.depth ?? 0 })
 }
 </script>
 
