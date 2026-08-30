@@ -11,7 +11,7 @@
         'search-hit-item': !!props.isGroupHit,
       }"
       @click="handleClick"
-      @contextmenu.prevent="onContextMenu"
+      @contextmenu.prevent.stop="onContextMenu"
     >
       <!-- 展开/折叠箭头（仅当有子分组时显示） -->
       <button
