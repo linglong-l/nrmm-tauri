@@ -177,6 +177,25 @@ fn deep_compare_after_update_mod_data() {
         result.total_groups
     );
 
+    // 错误明细（按 error_type 分组统计 + 逐条打印缺失库类报错），
+    // 用于在测试中直接观察是否生成与 NRMM 一致的「缺少 RabbitFx 等依赖库」警告。
+    {
+        let mut by_type: BTreeMap<u8, usize> = BTreeMap::new();
+        for e in &result.errors {
+            *by_type.entry(e.error_type).or_default() += 1;
+        }
+        println!("    error_type 分布: {:?}", by_type);
+        let lib_missing = result
+            .errors
+            .iter()
+            .filter(|e| e.error_type == 5)
+            .collect::<Vec<_>>();
+        println!("    NON EXISTENT LIB 明细 (error_type=5, 共 {} 条):", lib_missing.len());
+        for e in lib_missing {
+            println!("      [{}:{}] {} | {:?}", e.line_number, e.line, e.error_message, e.friendly_message);
+        }
+    }
+
     // Step 3: Collect files from both sides
     let actual = collect_files(temp.path());
     let baseline = collect_files(&baseline_dir());
@@ -197,6 +216,15 @@ fn deep_compare_after_update_mod_data() {
 
     let mut missing = Vec::new(); // in baseline, not in actual
     let mut extra = Vec::new(); // in actual, not in baseline
+    // 白名单 extra（Rust 有意保留、基线不存在的文件）：
+    // - d3dx.ini_managed_backup: update_mod_data 为主 INI 原子备份（NRMM 不保留；备份是安全特性，故忽略）
+    let mut extra_whitelisted: Vec<(String, PathBuf)> = Vec::new();
+    const WHITELISTED_EXTRA: &[&str] = &["d3dx.ini_managed_backup"];
+    let whitelisted_extra = |rel: &str| -> bool {
+        WHITELISTED_EXTRA
+            .iter()
+            .any(|w| rel.eq_ignore_ascii_case(w))
+    };
     let mut bytes_ok = 0usize;
     let mut bytes_diff = Vec::new(); // bytes differ
 
@@ -205,7 +233,13 @@ fn deep_compare_after_update_mod_data() {
         let b = baseline.get(*rel);
         match (a, b) {
             (None, Some(bp)) => missing.push((rel.to_string(), bp.clone())),
-            (Some(ap), None) => extra.push((rel.to_string(), ap.clone())),
+            (Some(ap), None) => {
+                if whitelisted_extra(rel) {
+                    extra_whitelisted.push((rel.to_string(), ap.clone()));
+                } else {
+                    extra.push((rel.to_string(), ap.clone()));
+                }
+            }
             (Some(ap), Some(bp)) => {
                 if read_bytes(ap) == read_bytes(bp) {
                     bytes_ok += 1;
@@ -219,6 +253,8 @@ fn deep_compare_after_update_mod_data() {
 
     // Step 5: INI line-level diff for byte-different files
     let mut ini_diffs = Vec::new();
+    // 语义级逐行 diff 明细（最多保留前 10 个文件）：normalize 后的行向量（输出侧, 基线侧）
+    let mut detail_diffs: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
     for (rel, ap, bp) in &bytes_diff {
         let fname = std::path::Path::new(rel)
             .file_name()
@@ -231,6 +267,13 @@ fn deep_compare_after_update_mod_data() {
         let nb = normalize_ini_content(&normalize_path(&read_utf8(bp)));
         if na != nb {
             ini_diffs.push((rel.clone(), na.lines().count(), nb.lines().count()));
+            if detail_diffs.len() < 10 {
+                detail_diffs.push((
+                    rel.clone(),
+                    na.lines().map(str::to_string).collect(),
+                    nb.lines().map(str::to_string).collect(),
+                ));
+            }
         }
     }
 
@@ -293,6 +336,15 @@ fn deep_compare_after_update_mod_data() {
         }
     }
 
+    println!("\n--- Whitelisted extras (expected) ---");
+    if extra_whitelisted.is_empty() {
+        println!("  OK: none");
+    } else {
+        for (p, _) in &extra_whitelisted {
+            println!("  WHITELISTED: {}", p);
+        }
+    }
+
     println!("\n--- Bytes comparison ---");
     println!("  MATCH: {}", bytes_ok);
     println!("  DIFF:  {}", bytes_diff.len());
@@ -315,6 +367,79 @@ fn deep_compare_after_update_mod_data() {
                 rel, a_len, b_len
             );
         }
+    }
+
+    println!(
+        "\n--- INI 逐行 diff（normalize 后，{} 个文件，每文件前 30 处；`< 输出`=Rust，`< 基线`=NRMM）---",
+        detail_diffs.len()
+    );
+    for (idx, (rel, na, nb)) in detail_diffs.iter().enumerate() {
+        println!("    --- INI_DIFF #{}: {} ---", idx + 1, rel);
+        let mut shown = 0usize;
+        let max_len = na.len().max(nb.len());
+        for i in 0..max_len {
+            if shown >= 30 {
+                println!("      ...（其余差异省略）");
+                break;
+            }
+            let a = na.get(i).map(String::as_str).unwrap_or("<EOF>");
+            let b = nb.get(i).map(String::as_str).unwrap_or("<EOF>");
+            if a != b {
+                println!("      L{:<4} < 输出 | {}", i + 1, a);
+                println!("      L{:<4} < 基线 | {}", i + 1, b);
+                shown += 1;
+            }
+        }
+    }
+
+    println!("\n--- `;-;` 注释行集合对比（_MANAGED_ 下 .ini） ---");
+    let semicolon_lines = |root: &Path| -> BTreeMap<String, Vec<String>> {
+        let mut map = BTreeMap::new();
+        for (rel, p) in collect_files(root) {
+            if rel.to_lowercase().ends_with(".ini") {
+                let hits: Vec<String> = read_utf8(&p)
+                    .lines()
+                    .filter(|l| l.trim_start().starts_with(";-;"))
+                    .map(|l| l.trim_start().to_string())
+                    .collect();
+                if !hits.is_empty() {
+                    map.insert(rel, hits);
+                }
+            }
+        }
+        map
+    };
+    let semi_actual = semicolon_lines(&temp.path().join("Mods").join("_MANAGED_"));
+    let semi_base = semicolon_lines(&baseline_dir().join("Mods").join("_MANAGED_"));
+    for rel in semi_base.keys().chain(semi_actual.keys()) {
+        let a = semi_actual.get(rel);
+        let b = semi_base.get(rel);
+        match (a, b) {
+            (None, Some(v)) => println!("    [;-;][基线有-输出无] {} ({} 行)", rel, v.len()),
+            (Some(v), None) => println!("    [;-;][输出有-基线无] {} ({} 行)", rel, v.len()),
+            (Some(va), Some(vb)) if va != vb => {
+                for miss in vb.iter().filter(|x| !va.contains(x)) {
+                    println!("    [;-;][基线有-输出无] {} | {}", rel, miss);
+                }
+                for extra in va.iter().filter(|x| !vb.contains(x)) {
+                    println!("    [;-;][输出有-基线无] {} | {}", rel, extra);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 保留输出树（排查用）：DEEP_COMPARE_KEEP_TEMP=1 时复制到 tests/.tmp_deep_compare_out。
+    // 置于最终判定之前，保证 FAIL（panic）路径也能保留现场。
+    if std::env::var("DEEP_COMPARE_KEEP_TEMP").as_deref() == Ok("1") {
+        let keep_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join(".tmp_deep_compare_out");
+        if keep_dir.exists() {
+            std::fs::remove_dir_all(&keep_dir).unwrap();
+        }
+        copy_dir(temp.path(), &keep_dir);
+        println!("    [keep] Rust 输出已保留至: {:?}", keep_dir);
     }
 
     // Step 7: Final verdict
