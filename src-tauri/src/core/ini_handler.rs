@@ -595,6 +595,23 @@ impl IniFile {
                 continue;
             }
 
+            // `else if <cond>` 是 3Dmigoto/NRMM 的合法条件流（等价 elif）。显式解析为 Elif
+            // 以保留条件原文：否则会落入 KeyValue（key=`else if $X`、value=`= N`），
+            // 无法区分畸形 `else if $X = = N` 与合法 `else if $X == N`。
+            if trimmed.starts_with("else if ") {
+                let condition = trimmed
+                    .strip_prefix("else if ")
+                    .unwrap_or(trimmed)
+                    .trim()
+                    .to_string();
+                let l = IniLine::Elif { condition, indent };
+                match current_section {
+                    Some(idx) => sections[idx].lines.push(l),
+                    None => preamble.push(IniLine::PreambleLine(l.to_string())),
+                }
+                continue;
+            }
+
             let after_else = trimmed.strip_prefix("else");
             if let Some(rest) = after_else {
                 if rest.trim_start().is_empty() || rest.trim_start().starts_with(';') {
@@ -858,10 +875,18 @@ impl IniFile {
             || lower == "allow_duplicate_hash"
             || lower == "match_index_count"
             || lower == "filter"
+            || lower == "filter_index"
             || lower == "type"
             || lower == "override_vertex_count"
             || lower == "override_byte_stride"
             || lower == "uav_byte_stride"
+            // CustomShader / ShaderOverride 段属性（NRMM 基线：位于 if 守卫之前）
+            || lower == "blend"
+            || lower.starts_with("blend_factor")
+            || lower == "vs"
+            || lower == "ps"
+            || lower == "cull"
+            || lower == "topology"
     }
 
     fn first_command_line_index(lines: &[IniLine]) -> Option<usize> {
@@ -1075,8 +1100,13 @@ impl IniFile {
                 || constants::is_injectable_section(&section.name);
 
             if should_wrap {
+                // 现有条件判定：仅当前格式（`$managed_slot_id == $\modmanageragl\...`）守卫视为
+                // 已注入；legacy `$\N\...\managed_slot_id` 旧格式守卫视为内容，需外包新守卫
+                // （对齐 NRMM：TextureOverride 等前缀段对旧守卫执行「外包」而非跳过）。
                 let has_existing_condition = section.lines.iter().any(|line| {
-                    matches!(line, IniLine::IfStart { condition, .. } if condition.contains("managed_slot_id"))
+                    matches!(line, IniLine::IfStart { condition, .. }
+                        if condition.contains("managed_slot_id")
+                            && !Self::is_legacy_slot_guard(condition))
                 });
 
                 if has_existing_condition {
@@ -1084,20 +1114,31 @@ impl IniFile {
                 }
 
                 // 对齐 Dart _checkAndModifySections / _parseIniSections：
-                // 段级属性行（hash / match_* / allow_duplicate_hash 等）保持在顶层、位于 if 守卫之前；
-                // if $managed_slot_id 守卫插入在属性行之后、段体（首个命令行）之前，仅包裹段体；
-                // 末尾 endif 置于最后一个内容行之后、段尾注释/空行之前。
-                let has_body = Self::first_command_line_index(&section.lines).is_some();
+                // 段级属性行（hash / match_* / blend 系 / override_* 等）保持在顶层、位于 if 守卫之前；
+                // if $managed_slot_id 守卫插入在「首个段体行之前最后一个属性行」之后
+                // （属性行之间的注释随属性块留在顶层；最后一个属性之后的注释进入守卫内部）、
+                // 仅包裹段体；末尾 endif 置于最后一个内容行之后、段尾注释/空行之前。
+                let body_start = Self::first_command_line_index(&section.lines);
+                let insert_at = if let Some(body) = body_start {
+                    let mut last_attr: Option<usize> = None;
+                    for (i, l) in section.lines.iter().enumerate().take(body) {
+                        if let IniLine::KeyValue { key, .. } = l {
+                            if Self::is_section_attribute_key(key) {
+                                last_attr = Some(i);
+                            }
+                        }
+                    }
+                    // 有属性：守卫插在最后一个属性之后；无属性：守卫插在段首（index 0），
+                    // 前置注释随段体进入守卫内部（NRMM 基线：help.ini / 段首 `;hash` 场景）
+                    last_attr.map_or(0, |idx| idx + 1)
+                } else {
+                    0
+                };
+                let has_body = body_start.is_some();
 
-                // 对齐 Dart _checkAndModifySections：白名单段统一在「段首（index 0，顶层）」
-                // 插入管理器 if 守卫，包裹整段（含 hash / match_priority 等段属性），
-                // 使被禁用模组的整段不生效。仅当存在段体（命令行）时才包裹，避免空 if 块。
-                // 注：match_priority / allow_duplicate_hash 由 ensure_section_attribute_keys
-                // 在 reorder_by_ini_key_priority 之前补齐，插入点为段末（段尾注释/空行之前），
-                // 经重排后自然落在优先级位置（hash 之后），与 Dart 一致。
                 if has_body {
                     section.lines.insert(
-                        0,
+                        insert_at,
                         IniLine::IfStart {
                             condition: condition_var.clone(),
                             indent: 0,
@@ -1382,7 +1423,12 @@ impl IniFile {
         for (i, line) in section.lines.iter().enumerate() {
             match line {
                 IniLine::IfStart { condition, .. } => {
-                    if !condition.contains("managed_slot_id") {
+                    // 仅「真 manager 守卫」（`$managed_slot_id` 条件且非 legacy）不入栈；
+                    // legacy 旧槽位守卫（`$\N\...\managed_slot_id`）按内容 if 入栈，
+                    // 否则其匹配的 endif 会被误判为 manager endif（Master1.ini 场景，外层 endif 缺失）。
+                    let is_manager_guard = condition.contains("managed_slot_id")
+                        && !Self::is_legacy_slot_guard(condition);
+                    if !is_manager_guard {
                         if_stack.push(i);
                     }
                 }
@@ -1410,12 +1456,16 @@ impl IniFile {
             }
         }
 
-        // 找到最后一个内容行位置（非空行、非注释行）。管理器 endif 必须置于该内容行之后、
-        // 段尾注释/空行之前，以对齐 Dart（Dart 不会把 endif 推到段尾注释之后）。
+        // 找到最后一个内容行位置（非空行、非注释行、非 if/endif 流程行）。管理器 endif 必须
+        // 置于该内容行之后、段尾注释/空行之前，以对齐 Dart（Dart 不会把 endif 推到
+        // 段尾注释之后，也不会因为守卫自身的 endif 而跳过重排）。
         let last_valid = (0..section.lines.len()).rev().find(|&i| {
             !matches!(
                 &section.lines[i],
-                IniLine::Comment(_) | IniLine::Empty { .. }
+                IniLine::Comment(_)
+                    | IniLine::Empty { .. }
+                    | IniLine::EndIf { .. }
+                    | IniLine::IfStart { .. }
             )
         });
 
@@ -1453,9 +1503,12 @@ impl IniFile {
     /// - `section`: 待处理的 Key 段
     /// - `condition_var`: 本管理器注入的槽位条件表达式（如 `$managed_slot_id == $...\group_1\2`）
     fn inject_key_condition(section: &mut IniSection, condition_var: &str) {
-        // 若已用旧版 if 包裹（含 managed_slot_id 的 IfStart），保持幂等，跳过注入
+        // 若已用当前格式 if 包裹（含 managed_slot_id 的 IfStart），保持幂等，跳过注入；
+        // legacy `$\N\...\managed_slot_id` 旧格式守卫不视为已注入（对齐 NRMM 语义）。
         if section.lines.iter().any(|l| {
-            matches!(l, IniLine::IfStart { condition, .. } if condition.contains("managed_slot_id"))
+            matches!(l, IniLine::IfStart { condition, .. }
+                if condition.contains("managed_slot_id")
+                    && !Self::is_legacy_slot_guard(condition))
         }) {
             return;
         }
@@ -1650,6 +1703,96 @@ impl IniFile {
             }
             section.lines = result;
         }
+    }
+
+    /// 注释「错误条件行」：与 NRMM 一致，把解析器无法视为合法流程控制的条件行
+    /// （基线证据：`else if $X = = N` 的 ` = = ` 畸形等式分隔；legacy `$\N\...\managed_slot_id`
+    /// 旧格式槽位守卫）就地注释为 `;-;<原行>`，保持行号稳定。
+    ///
+    /// # 返回
+    /// 被注释的行号列表。命中即表示该 INI 存在 NRMM 语义下的语法错误
+    /// （调用方据此写 `modsyntaxerrorremoved` 标记）。
+    pub fn comment_errored_conditional_lines(&mut self) -> Vec<u32> {
+        let mut commented: Vec<u32> = Vec::new();
+        let mut global_line = 1u32;
+        for _ in &self.preamble {
+            global_line += 1;
+        }
+        for section in &mut self.sections {
+            global_line += 1;
+            // legacy 槽位守卫的替换仅发生在 NRMM 的「精确白名单段」（Present 等）：
+            // [Present] 段旧守卫被替换并 `;-;` 注释，而 TextureOverride 等前缀段中
+            // 同款旧守卫作为内容保留（由注入逻辑外包新守卫），不对其注释。
+            let exact_injectable = crate::core::constants::INJECTABLE_SECTION_EXACT
+                .iter()
+                .any(|e| section.name.eq_ignore_ascii_case(e));
+            for line in &mut section.lines {
+                let is_errored = match line {
+                    IniLine::KeyValue { key, value, .. } => {
+                        let k = key.to_lowercase();
+                        // legacy `condition =` 守卫：引用 `$\N\...\managed_slot_id` / `\active` 的旧槽位条件
+                        k == "condition" && Self::is_legacy_slot_guard(value)
+                    }
+                    IniLine::Elif { condition, .. } => {
+                        // 基线主模式：畸形 `else if $X = = N`（解析为 Elif），等号之间带空格属非法表达式。
+                        // （原生 `elif $X = = N` 者罕见，本项目数据无此类；注释统一以 `else if ` 还原。）
+                        condition.contains(" = = ")
+                    }
+                    IniLine::IfStart { condition, indent } => {
+                        // legacy `if $\N\...\managed_slot_id == ...` 旧槽位守卫（仅精确白名单段）
+                        exact_injectable && Self::is_legacy_slot_guard(condition)
+                            && *indent == 0
+                    }
+                    _ => false,
+                };
+                if is_errored {
+                    // 注释保留原行形态：Elif（`else if`）行还原为 `;-;else if <condition>`，
+                    // 其余行取 Display 原文并保留前导缩进。
+                    let comment_text = match line {
+                        IniLine::Elif { condition, indent } => format!(
+                            "{};-;else if {}",
+                            " ".repeat(*indent),
+                            condition
+                        ),
+                        _ => {
+                            let orig = format!("{}", line);
+                            let lead = orig.len() - orig.trim_start().len();
+                            format!("{};-;{}", &orig[..lead], orig.trim_start())
+                        }
+                    };
+                    *line = IniLine::Comment(comment_text);
+                    commented.push(global_line);
+                }
+                global_line += 1;
+            }
+        }
+        commented
+    }
+
+    /// 判断是否为 legacy（NRMM V1.3.x 时代）槽位守卫：
+    /// 表达式任意位置引用数字命名空间 `$\N\...\managed_slot_id` 或 `$\N\...\active`。
+    #[inline]
+    fn is_legacy_slot_guard(expr: &str) -> bool {
+        let e = expr.trim_start();
+        // `$\N\` 数字命名空间（如 `$\1\master_1\managed_slot_id == ...`；条件可能带括号前缀）
+        let bytes = e.as_bytes();
+        let mut has_legacy_ns = false;
+        let mut i = 0usize;
+        while i + 3 <= bytes.len() {
+            if bytes[i] == b'$' && bytes.get(i + 1) == Some(&b'\\') {
+                let mut j = i + 2;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j > i + 2 && bytes.get(j) == Some(&b'\\') {
+                    has_legacy_ns = true;
+                    break;
+                }
+            }
+            i += 1;
+        }
+        has_legacy_ns
+            && (e.contains("\\managed_slot_id") || e.contains("\\active"))
     }
 
     pub fn comment_crash_lines(&mut self) -> Vec<u32> {
@@ -2237,6 +2380,64 @@ key = value
     }
 
     #[test]
+    fn comment_errored_conditional_lines_comments_malformed_else_if() {
+        // 基线证据：`else if $X = = N`（` = = ` 畸形等式分隔，keyValue 形态）应被 `;-;` 注释
+        let ini_content = "[TextureOverrideA]\n\
+             hash = x\n\
+             if $Hair == 0\n\
+             \x20   drawindexed = 1, 2, 0\n\
+             \x20   else if $Hair = = 1\n\
+             \x20   drawindexed = 3, 4, 0\n\
+             endif\n";
+        let f = write_temp_ini(ini_content.trim_start());
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        let commented = ini.comment_errored_conditional_lines();
+        assert_eq!(commented.len(), 1, "畸形 else if 条件行应被注释");
+        let rendered: Vec<String> = ini.sections[0]
+            .lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert!(
+            rendered
+                .iter()
+                .any(|l| l.trim_start().starts_with(";-;else if $Hair = = 1")),
+            "注释行应保留原行并以 ;-; 前缀：{:?}",
+            rendered
+        );
+        assert!(
+            rendered.iter().any(|l| l.trim_start() == "drawindexed = 1, 2, 0"),
+            "合法行不应被注释"
+        );
+    }
+
+    #[test]
+    fn comment_errored_conditional_lines_keeps_valid_else_if() {
+        // 合法 `else if $X == N`（`==` 正常）不应被注释
+        let ini_content = "[TextureOverrideA]\n\
+             if $Hair == 0\n\
+             \x20   else if $Hair == 1\n\
+             endif\n";
+        let f = write_temp_ini(ini_content.trim_start());
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        let commented = ini.comment_errored_conditional_lines();
+        assert!(commented.is_empty(), "合法 else if 不应被注释");
+    }
+
+    #[test]
+    fn comment_errored_conditional_lines_legacy_slot_guard_in_present() {
+        // 基线证据：槽位可注入段 [Present] 的 legacy `$\1\...\managed_slot_id` 守卫被 `;-;` 注释
+        let ini_content = "[Present]\n\
+             if $\\1\\master_1\\managed_slot_id == $\\modmanageragl\\group_3\\active_slot\n\
+             \x20   post $active = 0\n\
+             endif\n";
+        let f = write_temp_ini(ini_content.trim_start());
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        let commented = ini.comment_errored_conditional_lines();
+        assert_eq!(commented.len(), 1, "legacy 槽位守卫应被注释");
+    }
+
+    #[test]
     fn test_write_atomic_roundtrip() {
         let ini_content = "; Preamble comment\n\n[Constants]\n$test = 42\n\n[TextureOverrideFoo]\nhash = 0xDEADBEEF\nps-t0 = ResourceFoo\n";
         let f_in = write_temp_ini(ini_content);
@@ -2286,19 +2487,27 @@ key = value
         ini.reorder_by_ini_key_priority();
         ini.inject_slot_conditions(1, 2);
 
-        // TextureOverride 段：对齐 NRMM Dart，if 守卫在段首（index 0）包裹整段（含 hash/match_priority）
+        // TextureOverride 段：对齐 NRMM Dart 基线——属性行（hash / match_priority）保持在
+        // 顶层、位于 if 守卫之前；守卫插入在属性之后、段体（首个命令行）之前（仅包裹段体）。
         let to_lines = &ini.sections[1].lines;
         assert!(
-            matches!(to_lines[0], IniLine::IfStart { ref condition, .. } if condition.contains("active_slot"))
+            matches!(to_lines[0], IniLine::KeyValue { ref key, .. } if key == "hash"),
+            "属性行 hash 应位于段顶、不被守卫包裹"
+        );
+        let guard_idx = to_lines
+            .iter()
+            .position(|l| matches!(l, IniLine::IfStart { ref condition, .. } if condition.contains("active_slot")))
+            .expect("if 守卫应存在");
+        assert!(
+            guard_idx >= 2,
+            "if 守卫应插入在 hash / match_priority 等属性行之后"
         );
         assert!(to_lines.iter().any(|l| matches!(l, IniLine::EndIf { .. })));
-        // TextureOverride 段无 match_* 键时补 match_priority = 0（位于段内）
+        // TextureOverride 段无 match_* 键时补 match_priority = 0（位于段内、守卫之前）
         assert!(to_lines.iter().any(|l| matches!(l, IniLine::KeyValue { ref key, ref value, .. } if key == "match_priority" && value == "0")));
         assert!(!to_lines.iter().any(
             |l| matches!(l, IniLine::KeyValue { ref key, .. } if key == "allow_duplicate_hash")
         ));
-        // hash 紧随 if 守卫之后（index 1）；整段被 if 包裹（属性键不游离于 if 之外）
-        assert!(matches!(to_lines[1], IniLine::KeyValue { ref key, .. } if key == "hash"));
 
         // Constants 段：注入了 $managed_slot_id = 2，且 NRMM 不包裹
         let constants_lines = &ini.sections[0].lines;
@@ -2309,6 +2518,135 @@ key = value
         assert!(!constants_lines
             .iter()
             .any(|l| matches!(l, IniLine::EndIf { .. })));
+    }
+
+    #[test]
+    fn test_inject_slot_conditions_present_trailing_comment_after_endif() {
+        // Master1.ini 基线场景：[Present] 段含 legacy 旧守卫（注释化）+ 紧贴段尾的注释行，
+        // 注入后 endif 应置于最后内容行之后、段尾注释之前（注释不被守卫包裹）。
+        let ini_content = "[Present]\n\
+             if $\\1\\master_1\\managed_slot_id == $\\modmanageragl\\group_3\\active_slot\n\
+             post $active = 0\n\
+             endif\n\
+             ; Overrides ---------------------------\n\
+             \n\
+             [TextureOverride1Position]\n\
+             match_priority = 0\n\
+             if $\\1\\master_1\\managed_slot_id == $\\modmanageragl\\group_3\\active_slot\n\
+             $\\1\\master_1\\active = 1\n\
+             endif\n\
+             \n\
+             \n\
+             ; .ini 文件由 WWMI 合并脚本生成\n\
+             ; 如果你遇到任何问题\n\
+             ;.防倒卖：A.A\n";
+        let f = write_temp_ini(ini_content.trim_start());
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.comment_errored_conditional_lines();
+        ini.remove_old_managed_content();
+        ini.ensure_section_attribute_keys();
+        ini.reorder_by_ini_key_priority();
+        ini.inject_slot_conditions(3, 9);
+        ini.remove_empty_if_blocks();
+        ini.apply_indentation();
+        for s in &ini.sections {
+            println!(
+                "S[{}]: {:?}",
+                s.name,
+                s.lines.iter().map(|l| l.to_string()).collect::<Vec<_>>()
+            );
+        }
+        let present = ini
+            .sections
+            .iter()
+            .find(|s| s.name == "Present")
+            .expect("存在 [Present] 段");
+        let rendered: Vec<String> = present.lines.iter().map(|l| l.to_string()).collect();
+        let (post_idx, endif_idx, comment_idx) = (
+            rendered.iter().position(|l| l.trim_start() == "post $active = 0"),
+            rendered.iter().position(|l| l.trim_start() == "endif"),
+            rendered
+                .iter()
+                .position(|l| l.trim_start().starts_with("; Overrides")),
+        );
+        println!("present lines: {:?}", rendered);
+        assert!(post_idx < endif_idx, "post 应在 endif 之前: {:?}", rendered);
+        assert!(
+            comment_idx > endif_idx,
+            "段尾注释应位于 endif 之后（不被守卫包裹）: {:?}",
+            rendered
+        );
+    }
+
+    /// Master1.ini [TextureOverride1Position] 基线场景：TextureOverride 前缀段含 legacy 旧守卫
+    /// （内容保留）+ 注入外层守卫。外层守卫必须获得配对 endif，且置于最后内容行之后、
+    /// footer 注释之前（footer 不被守卫包裹、不缩进）。
+    #[test]
+    fn test_inject_slot_conditions_legacy_guard_gets_outer_endif() {
+        let ini_content = "[TextureOverride1Position]\n\
+             match_priority = 0\n\
+             if $\\1\\master_1\\managed_slot_id == $\\modmanageragl\\group_3\\active_slot\n\
+             $\\1\\master_1\\active = 1\n\
+             endif\n\
+             \n\
+             \n\
+             ; .ini 文件由 WWMI 合并脚本生成\n\
+             ; 如果你遇到任何问题\n\
+             ;.防倒卖：A.A\n";
+        let f = write_temp_ini(ini_content.trim_start());
+        let mut ini = IniFile::parse(f.path()).unwrap();
+        ini.comment_errored_conditional_lines();
+        ini.remove_old_managed_content();
+        ini.ensure_section_attribute_keys();
+        ini.reorder_by_ini_key_priority();
+        ini.inject_slot_conditions(3, 9);
+        ini.remove_empty_if_blocks();
+        ini.apply_indentation();
+
+        let to = ini
+            .sections
+            .iter()
+            .find(|s| s.name == "TextureOverride1Position")
+            .expect("存在 [TextureOverride1Position] 段");
+        let rendered: Vec<String> = to.lines.iter().map(|l| l.to_string()).collect();
+        println!("textureoverride lines: {:?}", rendered);
+
+        // 断言 1：if（注入守卫 + legacy 守卫）与 endif 数量相等 —— 外层守卫有配对 endif
+        let if_count = rendered
+            .iter()
+            .filter(|l| l.trim_start().starts_with("if "))
+            .count();
+        let endif_count = rendered
+            .iter()
+            .filter(|l| l.trim_start() == "endif")
+            .count();
+        assert_eq!(
+            if_count, endif_count,
+            "if/endif 数量不平衡（缺外层 endif）: {:?}",
+            rendered
+        );
+
+        // 断言 2：footer 注释位于最后一个 endif 之后（未被守卫包裹）
+        let footer_idx = rendered
+            .iter()
+            .position(|l| l.trim_start().starts_with("; .ini 文件由 WWMI"))
+            .expect("存在 footer 注释");
+        let last_endif_idx = rendered
+            .iter()
+            .rposition(|l| l.trim_start() == "endif")
+            .expect("存在 endif");
+        assert!(
+            footer_idx > last_endif_idx,
+            "footer 注释应在最后一个 endif 之后: {:?}",
+            rendered
+        );
+
+        // 断言 3：footer 注释无前导缩进（apply_indentation 后 current_indent 已归零）
+        assert!(
+            !rendered[footer_idx].starts_with(' '),
+            "footer 注释不应被缩进: {:?}",
+            rendered
+        );
     }
 
     #[test]
