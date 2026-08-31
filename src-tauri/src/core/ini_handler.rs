@@ -1740,8 +1740,7 @@ impl IniFile {
                     }
                     IniLine::IfStart { condition, indent } => {
                         // legacy `if $\N\...\managed_slot_id == ...` 旧槽位守卫（仅精确白名单段）
-                        exact_injectable && Self::is_legacy_slot_guard(condition)
-                            && *indent == 0
+                        exact_injectable && Self::is_legacy_slot_guard(condition) && *indent == 0
                     }
                     _ => false,
                 };
@@ -1749,11 +1748,9 @@ impl IniFile {
                     // 注释保留原行形态：Elif（`else if`）行还原为 `;-;else if <condition>`，
                     // 其余行取 Display 原文并保留前导缩进。
                     let comment_text = match line {
-                        IniLine::Elif { condition, indent } => format!(
-                            "{};-;else if {}",
-                            " ".repeat(*indent),
-                            condition
-                        ),
+                        IniLine::Elif { condition, indent } => {
+                            format!("{};-;else if {}", " ".repeat(*indent), condition)
+                        }
                         _ => {
                             let orig = format!("{}", line);
                             let lead = orig.len() - orig.trim_start().len();
@@ -1791,8 +1788,7 @@ impl IniFile {
             }
             i += 1;
         }
-        has_legacy_ns
-            && (e.contains("\\managed_slot_id") || e.contains("\\active"))
+        has_legacy_ns && (e.contains("\\managed_slot_id") || e.contains("\\active"))
     }
 
     pub fn comment_crash_lines(&mut self) -> Vec<u32> {
@@ -2406,7 +2402,9 @@ key = value
             rendered
         );
         assert!(
-            rendered.iter().any(|l| l.trim_start() == "drawindexed = 1, 2, 0"),
+            rendered
+                .iter()
+                .any(|l| l.trim_start() == "drawindexed = 1, 2, 0"),
             "合法行不应被注释"
         );
     }
@@ -2563,7 +2561,9 @@ key = value
             .expect("存在 [Present] 段");
         let rendered: Vec<String> = present.lines.iter().map(|l| l.to_string()).collect();
         let (post_idx, endif_idx, comment_idx) = (
-            rendered.iter().position(|l| l.trim_start() == "post $active = 0"),
+            rendered
+                .iter()
+                .position(|l| l.trim_start() == "post $active = 0"),
             rendered.iter().position(|l| l.trim_start() == "endif"),
             rendered
                 .iter()

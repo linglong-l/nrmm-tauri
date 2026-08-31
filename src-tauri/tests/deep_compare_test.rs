@@ -190,9 +190,15 @@ fn deep_compare_after_update_mod_data() {
             .iter()
             .filter(|e| e.error_type == 5)
             .collect::<Vec<_>>();
-        println!("    NON EXISTENT LIB 明细 (error_type=5, 共 {} 条):", lib_missing.len());
+        println!(
+            "    NON EXISTENT LIB 明细 (error_type=5, 共 {} 条):",
+            lib_missing.len()
+        );
         for e in lib_missing {
-            println!("      [{}:{}] {} | {:?}", e.line_number, e.line, e.error_message, e.friendly_message);
+            println!(
+                "      [{}:{}] {} | {:?}",
+                e.line_number, e.line, e.error_message, e.friendly_message
+            );
         }
     }
 
@@ -216,8 +222,8 @@ fn deep_compare_after_update_mod_data() {
 
     let mut missing = Vec::new(); // in baseline, not in actual
     let mut extra = Vec::new(); // in actual, not in baseline
-    // 白名单 extra（Rust 有意保留、基线不存在的文件）：
-    // - d3dx.ini_managed_backup: update_mod_data 为主 INI 原子备份（NRMM 不保留；备份是安全特性，故忽略）
+                                // 白名单 extra（Rust 有意保留、基线不存在的文件）：
+                                // - d3dx.ini_managed_backup: update_mod_data 为主 INI 原子备份（NRMM 不保留；备份是安全特性，故忽略）
     let mut extra_whitelisted: Vec<(String, PathBuf)> = Vec::new();
     const WHITELISTED_EXTRA: &[&str] = &["d3dx.ini_managed_backup"];
     let whitelisted_extra = |rel: &str| -> bool {
