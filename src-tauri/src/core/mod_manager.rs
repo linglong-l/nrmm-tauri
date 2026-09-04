@@ -83,17 +83,6 @@ pub struct UpdateResult {
     /// ORFix/TexFx 检测结果（在 INI 修改之前使用原始内容检测）
     #[serde(default)]
     pub orfix_detection: OrfixDetection,
-    /// 因文件名非 UTF-8 被跳过的条目总数（update_mod_data 深扫期间）
-    #[serde(default, skip_serializing_if = "is_zero_count")]
-    pub invalid_utf8_count: usize,
-    /// 被跳过的非法条目明细（空时省略）
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub invalid_utf8_entries: Vec<crate::core::fs_walk::SkippedEntry>,
-}
-
-/// serde 辅助：跳过 0 值字段
-fn is_zero_count(v: &usize) -> bool {
-    *v == 0
 }
 
 /// INI 恢复结果统计
@@ -999,8 +988,6 @@ pub fn update_mod_data(
         need_reload_manual,
         is_standard_xxmi,
         orfix_detection,
-        invalid_utf8_count: scan_result.invalid_utf8_count,
-        invalid_utf8_entries: scan_result.invalid_utf8_entries,
         ..Default::default()
     };
     log::debug!(
@@ -2858,80 +2845,38 @@ pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
     Ok(RestoredCount { restored, failed })
 }
 
-/// 还原目录树内全部 INI（显式栈 DFS + 路径池，防爆栈/防 symlink 循环）
-///
-/// 原实现为原生递归 + `entry.file_type()`（不跟随 symlink/junction，防逃逸）。
-/// 改造后保持「不跟随 symlink」语义（真实目录才递归下降），改用显式栈 + visited 路径池
-/// 避免深目录爆栈与重复遍历；非法 UTF-8 名称条目跳过并记录日志。
-///
-/// # 参数
-/// - `dir`: 遍历根目录（`_MANAGED_` 目录）
-/// - `restored`: 成功还原计数（累加）
-/// - `failed`: 失败计数（累加）
-///
-/// # Errors
-/// `read_dir` 失败时传播 IO 错误（与递归版一致）
+/// 还原目录树内全部 INI（原生递归 + 不跟随 symlink/junction，防逃逸）
 fn restore_inis_recursive(dir: &Path, restored: &mut u32, failed: &mut u32) -> Result<()> {
-    let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
-    // 路径池（visited）：仅真实目录入栈，symlink 不解析（保持原「不跟随」语义，防 junction 逃逸）
-    let mut pool = crate::core::fs_walk::PathPool::new();
-    pool.try_visit(dir);
-    // 非法 UTF-8 名称计数（restore 场景仅日志汇总，不上报前端）
-    let stats = crate::core::fs_walk::TraversalStats::default();
-
-    while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let ft = entry.file_type()?;
-            // UTF-8 合法化：非法名称条目跳过（结构性路径）
-            if crate::core::fs_walk::valid_entry_name(
-                &entry,
-                &dir.to_string_lossy(),
-                crate::core::fs_walk::kind::FILE,
-                &stats,
-            )
-            .is_none()
-            {
-                continue;
-            }
-            // 用 entry.file_type()（不跟随 symlink/junction）判断是否为真实目录，
-            // 避免 junction 逃逸到 Mods 根外（R3）
-            if ft.is_dir() {
-                // 真实目录：路径池判重后入栈（symlink/junction 为 false，天然不跟随）
-                if pool.try_visit(&path) {
-                    stack.push(path);
-                }
-            } else if ft.is_symlink() {
-                log::warn!(
-                    "restore_inis_recursive: skip symlink/junction (not followed): {:?}",
-                    path
-                );
-            } else if let Some(ext) = path.extension() {
-                if ext.eq_ignore_ascii_case("ini") && !constants::is_desktop_ini(&path) {
-                    let backup_path = path.with_extension(constants::BACKUP_EXTENSION);
-                    if backup_path.exists() {
-                        match fs::copy(&backup_path, &path) {
-                            Ok(_) => {
-                                *restored += 1;
-                                fs::remove_file(&backup_path).ok();
-                            }
-                            Err(e) => {
-                                log::error!("Failed to restore mod INI {}: {}", path.display(), e);
-                                *failed += 1;
-                            }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        // 用 entry.file_type()（不跟随 symlink/junction）判断是否为真实目录，
+        // 避免 junction 逃逸到 Mods 根外（R3）
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            restore_inis_recursive(&path, restored, failed)?;
+        } else if ft.is_symlink() {
+            log::warn!(
+                "restore_inis_recursive: skip symlink/junction (not followed): {:?}",
+                path
+            );
+        } else if let Some(ext) = path.extension() {
+            if ext.eq_ignore_ascii_case("ini") && !constants::is_desktop_ini(&path) {
+                let backup_path = path.with_extension(constants::BACKUP_EXTENSION);
+                if backup_path.exists() {
+                    match fs::copy(&backup_path, &path) {
+                        Ok(_) => {
+                            *restored += 1;
+                            fs::remove_file(&backup_path).ok();
+                        }
+                        Err(e) => {
+                            log::error!("Failed to restore mod INI {}: {}", path.display(), e);
+                            *failed += 1;
                         }
                     }
                 }
             }
         }
-    }
-    let (skipped, _entries) = stats.into_parts();
-    if skipped > 0 {
-        log::warn!(
-            "[restore_inis_recursive] 跳过 {} 个非法 UTF-8 名称条目",
-            skipped
-        );
     }
     Ok(())
 }
