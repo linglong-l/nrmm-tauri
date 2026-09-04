@@ -534,6 +534,8 @@
     "autoGenerateIcon": "Auto generate folder icon when changing group icon",
     "overallScale": "Overall Scale",
     "backgroundTransparency": "Background Transparency",
+    "windowTransparency": "Window Transparency",
+    "windowTransparencyDesc": "Enable transparent window. Turn off for a solid black background (recommended on Linux/Wayland to avoid compositor glitches)",
     "windowToggleHotkey": "Window Toggle Hotkeys",
     "keyboardToggle": "Keyboard Toggle",
     "gamepadToggle": "Gamepad(XInput) Toggle",

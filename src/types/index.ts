@@ -297,6 +297,8 @@ export interface AppSettings {
   interfaceScale: number;
   /** 背景透明度 (0-1) */
   bgTransparency: number;
+  /** 窗口是否透明化（Windows/其它平台默认 true，Linux 默认 false） */
+  windowTransparent: boolean;
   /** 是否启用动态背景 */
   dynamicBackground: boolean;
   /** 模组分组布局模式 */
@@ -444,6 +446,21 @@ export interface InvokeResult<T> {
 }
 
 /**
+ * 被跳过的非法 UTF-8 路径条目（后端 fs_walk 上报）
+ *
+ * 文件名含非 UTF-8 字节（Windows 孤代理项 / Linux 原始字节）时，后端着跳越，
+ * 该条目仅用于前端提示用户「发现无法识别的文件/目录名称」。
+ */
+export interface InvalidUtf8Entry {
+  /** 所在父目录的显示路径（恒为合法 UTF-8，可直接展示） */
+  parentDisplay: string;
+  /** 非法文件名的保真字节：`u16le:<base64>`（Windows）或 `raw:<base64>`（Linux），前端解码后展示 */
+  nameBytes: string;
+  /** 条目类型：0=目录 1=文件 2=图片候选 3=符号链接 */
+  kind: number;
+}
+
+/**
  * 模组扫描结果
  * 轻量扫描返回的分组和模组列表
  */
@@ -452,6 +469,10 @@ export interface ScanResult {
   groups: ModGroupData[];
   /** 所有模组列表（扁平结构） */
   mods: ModData[];
+  /** 因文件名非 UTF-8 被跳过的条目总数（无则省略） */
+  invalidUtf8Count?: number;
+  /** 被跳过的非法条目明细（无则省略） */
+  invalidUtf8Entries?: InvalidUtf8Entry[];
 }
 
 /**
@@ -479,6 +500,10 @@ export interface UpdateResult {
   isStandardXxmi?: boolean;
   /** ORFix/TexFx 检测结果（仅 updateModData 结果中有效） */
   orfixDetection?: OrfixDetection;
+  /** 因文件名非 UTF-8 被跳过的条目总数（update_mod_data 深扫；无则省略） */
+  invalidUtf8Count?: number;
+  /** 被跳过的非法条目明细（无则省略） */
+  invalidUtf8Entries?: InvalidUtf8Entry[];
 }
 
 /**

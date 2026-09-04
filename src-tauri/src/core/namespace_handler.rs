@@ -176,26 +176,75 @@ pub fn collect_existing_namespaces(mod_dir: &Path) -> Result<HashSet<String>> {
     if !mod_dir.exists() {
         return Ok(namespaces);
     }
-    collect_namespaces_recursive(mod_dir, mod_dir, &mut namespaces)?;
+    let stats = crate::core::fs_walk::TraversalStats::default();
+    collect_namespaces_iterative(mod_dir, mod_dir, &mut namespaces, &stats)?;
+    let (count, _entries) = stats.into_parts();
+    if count > 0 {
+        log::warn!(
+            "[namespace_handler] 收集命名空间时跳过 {} 个非法 UTF-8 名称条目",
+            count
+        );
+    }
     Ok(namespaces)
 }
 
-fn collect_namespaces_recursive(
+/// 显式栈 DFS 遍历目录树收集命名空间（替代原生递归，防深目录爆栈）。
+///
+/// 使用 [`fs_walk::PathPool`] 防 symlink 循环、UTF-8 校验跳过非法条目；
+/// 语义对齐原递归版：跳过 `.` 前缀与 `_MANAGED_` 目录，收集全部 `.ini` 文件的 namespace。
+///
+/// # 参数
+/// - `_base`: 基准目录（原递归版透传，保持签名语义）
+/// - `dir`: 遍历根目录
+/// - `namespaces`: 命名空间收集目标
+/// - `stats`: 非法 UTF-8 条目统计
+fn collect_namespaces_iterative(
     _base: &Path,
     dir: &Path,
     namespaces: &mut HashSet<String>,
+    stats: &crate::core::fs_walk::TraversalStats,
 ) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name.starts_with('.') || name == "_MANAGED_" {
-                continue;
-            }
-            collect_namespaces_recursive(_base, &path, namespaces)?;
-        } else if let Some(ext) = path.extension() {
-            if ext.eq_ignore_ascii_case("ini") {
+    let mut stack: Vec<PathBuf> = vec![dir.to_path_buf()];
+    // 根目录登记路径池（防遍历过程中回到根形成环）
+    let mut pool = crate::core::fs_walk::PathPool::new();
+    pool.try_visit(dir);
+
+    while let Some(current) = stack.pop() {
+        let current_display = current.to_string_lossy().to_string();
+        let entries = fs::read_dir(&current)?;
+        for entry in entries {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            let path = entry.path();
+            // UTF-8 合法化：非法名称条目跳过（结构性路径）
+            let name = match crate::core::fs_walk::valid_entry_name(
+                &entry,
+                &current_display,
+                crate::core::fs_walk::kind::DIR,
+                stats,
+            ) {
+                Some(n) => n,
+                None => continue,
+            };
+            if is_dir_entry(&entry, &ft) {
+                if name.starts_with('.') || name == "_MANAGED_" {
+                    continue;
+                }
+                // symlink 目录跟随（路径池判重防环）
+                if pool.try_visit(&path) {
+                    stack.push(path);
+                }
+            } else if is_ini_file(&entry, &ft) {
+                // 校验文件名：非法名称跳过该 INI（结构性路径，上报统计）
+                match crate::core::fs_walk::valid_entry_name(
+                    &entry,
+                    &current_display,
+                    crate::core::fs_walk::kind::FILE,
+                    stats,
+                ) {
+                    Some(_) => {}
+                    None => continue,
+                }
                 match crate::core::mod_ini_cache::get_or_parse_ini(&path) {
                     Ok(ini) => {
                         if let Some(ns) = extract_namespace(&ini) {
@@ -215,6 +264,32 @@ fn collect_namespaces_recursive(
         }
     }
     Ok(())
+}
+
+/// 判断目录项是否为「真实目录或指向目录的 symlink」（symlink 目录跟随遍历，路径池判重防环）
+fn is_dir_entry(entry: &fs::DirEntry, ft: &fs::FileType) -> bool {
+    if ft.is_dir() {
+        return true;
+    }
+    ft.is_symlink()
+        && entry
+            .path()
+            .metadata()
+            .map(|md| md.is_dir())
+            .unwrap_or(false)
+}
+
+/// 判断目录项是否为 ini 文件（真实文件或指向文件的 symlink）
+fn is_ini_file(entry: &fs::DirEntry, ft: &fs::FileType) -> bool {
+    if ft.is_file() {
+        return true;
+    }
+    ft.is_symlink()
+        && entry
+            .path()
+            .metadata()
+            .map(|md| md.is_file())
+            .unwrap_or(false)
 }
 
 pub fn unique_namespace(ns: &str, existing: &HashSet<String>) -> String {

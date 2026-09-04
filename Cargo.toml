@@ -3,6 +3,28 @@ members = [
     "src-tauri"
 ]
 resolver = "2"
+# vendor/ 只是被 patch 引用的第三方源码副本（见下方 [patch.crates-io]），
+# 不参与工作区自身构建，显式排除避免被当成普通成员参与 feature/profile 统一解析。
+exclude = [
+    "vendor"
+]
+
+# ---------------------------------------------------------------------------
+# 测试分支专用：unrar-ng-sys 本地副本（vendor/unrar_ng_sys，基线 = crates.io 0.7.7）
+#
+# 目的：用活跃复刻 unrar-ng 替换原 unrar，并在 build.rs 中硬化 -fPIC 处理，
+#       解决 Linux 用 zigbuild 交叉编译链接 cdylib 时的
+#       relocation ... recompile with -fPIC / the selected target requires position independent code 失败。
+# 与上游的唯一差异（build.rs）：
+#   1) 强制 `.pic(true)` + `.flag("-fPIC")`（对 MSVC/wasi/emscripten 跳过），
+#      不再依赖 `flag_if_supported` 的编译器探测。
+#   2) 清洗构建环境可能注入的 `-fno-pic`/`-fno-PIC`（CFLAGS/CXXFLAGS）：
+#      zig cc 在显式收到 -fno-pic 时会于【编译期】硬报错，而 gcc 只静默产出
+#      非 PIC 对象、最后链接才报 recompile with -fPIC —— 这正是「仅 zigbuild 炸」的根因。
+# 验证完毕若不需要，删除本 [patch.crates-io] 段与 vendor/ 目录即可完全回退。
+# ---------------------------------------------------------------------------
+[patch.crates-io]
+unrar-ng-sys = { path = "vendor/unrar_ng_sys" }
 
 # release 性能配置（2026-08-18 修订）：
 # - opt-level = 3：速度最大优化。原 "z"（最小体积）是 Tauri 模板默认，会禁用向量化/内联，

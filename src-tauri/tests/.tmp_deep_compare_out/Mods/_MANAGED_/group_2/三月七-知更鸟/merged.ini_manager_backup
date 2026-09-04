@@ -1,0 +1,778 @@
+; ";-;" are errored conditional lines.
+; ";+;" are disabled keys.
+; Errored conditional blocks (if/else/elif/endif) are handled correctly (newer syntax may require further testing), including namespaced variables.
+; If certain syntax is only available in newer XXMI versions, make sure to use the latest XXMI.
+
+; Merged Mod: .\syqMod\syq.ini, .\syqMod n0\syq.ini
+; Constants ---------------------------
+
+[Constants]
+global $managed_slot_id = 3
+global persist $swapvar = 0
+global $active
+global $creditinfo = 0
+
+[KeySwap]
+condition = ($active == 1) && $managed_slot_id == $\modmanageragl\group_2\active_slot
+key = 6
+type = cycle
+$swapvar = 0,1
+$creditinfo = 0
+
+[Present]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    post $active = 0
+endif
+; Shader ------------------------------
+; Overrides ---------------------------
+
+[TextureOverridesyqBlend]
+hash = 555fd4a4
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyqPosition
+    ;hash = 5592f1db
+    $active = 1
+endif
+
+[TextureOverridesyqTexcoord]
+hash = b950fe40
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ;hash = ecf4648c
+    run = CommandListsyqTexcoord
+endif
+
+[TextureOverridesyqVertexLimitRaise]
+hash = e9f678b6
+override_byte_stride = 40
+override_vertex_count = 16188
+uav_byte_stride = 4
+match_priority = 0
+
+[TextureOverridesyq2Blend]
+hash = 9b6d1345
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq2Position
+    ;hash = 09903e8e
+    $active = 1
+endif
+
+[TextureOverridesyq2Texcoord]
+hash = 948c4e59
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ;hash = 1ed7e59d
+    run = CommandListsyq2Texcoord
+endif
+
+[TextureOverridesyq2VertexLimitRaise]
+hash = b1bcbbd4
+override_byte_stride = 40
+override_vertex_count = 5955
+uav_byte_stride = 4
+match_priority = 0
+
+[TextureOverridesyq3Blend]
+hash = 86be292f
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq3Position
+    ;hash = b23869e0
+    $active = 1
+endif
+
+[TextureOverridesyq3Texcoord]
+hash = b3665f0b
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq3Texcoord
+endif
+
+[TextureOverridesyq3VertexLimitRaise]
+hash = 4635947e
+override_byte_stride = 40
+override_vertex_count = 7471
+uav_byte_stride = 4
+match_priority = 0
+
+[TextureOverridesyqIB]
+hash = 5212ce68
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyqIB
+endif
+
+[TextureOverridesyqA]
+hash = 5212ce68
+match_priority = 0
+match_first_index = 53751
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyqA
+endif
+
+[TextureOverridesyqB]
+hash = 5212ce68
+match_priority = 0
+match_first_index = 41466
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyqB
+endif
+
+[TextureOverridesyq2IB]
+hash = 84ba7549
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq2IB
+endif
+
+[TextureOverridesyq2A]
+hash = 84ba7549
+match_priority = 0
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq2A
+endif
+
+[TextureOverridesyq2ADiffuse]
+hash = e299099f
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ;hash = 6bd71ad9
+    run = CommandListsyq2ADiffuse
+endif
+
+[TextureOverridesyq2ALightMap]
+hash = 89cd27c7
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ;hash = 371ca498
+    run = CommandListsyq2ALightMap
+endif
+
+[TextureOverridesyq3IB]
+hash = 2e23a897
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq3IB
+endif
+
+[TextureOverridesyq3A]
+hash = 2e23a897
+match_priority = 0
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq3A
+endif
+
+[TextureOverridesyq3ADiffuse]
+hash = dbbb9b12
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ;hash = 2d25d041
+    run = CommandListsyq3ADiffuse
+endif
+
+[TextureOverridesyq3ALightMap]
+hash = bb5905b2
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq3ALightMap
+endif
+
+[TextureOverridesyq3AShadow]
+hash = c6ca85f2
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq3AShadow
+endif
+
+[TextureOverridesyq3At3]
+hash = a5b5a9da
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq3At3
+endif
+
+[TextureOverridesyq3B]
+hash = 2e23a897
+match_priority = 0
+match_first_index = 13200
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    run = CommandListsyq3B
+endif
+; CommandList -------------------------
+
+[CommandListsyqPosition]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        handling = skip
+        vb2 = ResourcesyqBlend.0
+        if DRAW_TYPE == 1
+            vb0 = ResourcesyqPosition.0
+            draw = 16188, 0
+        endif
+        if DRAW_TYPE == 8
+            Resource\SRMI\PositionBuffer = ref ResourcesyqPosition.0CS
+            Resource\SRMI\BlendBuffer = ref ResourcesyqBlend.0CS
+            $\SRMI\vertex_count = 16188
+        endif
+    else if $swapvar == 1
+        handling = skip
+        vb2 = ResourcesyqBlend.1
+        if DRAW_TYPE == 1
+            vb0 = ResourcesyqPosition.1
+            draw = 14232, 0
+        endif
+        if DRAW_TYPE == 8
+            Resource\SRMI\PositionBuffer = ref ResourcesyqPosition.1CS
+            Resource\SRMI\BlendBuffer = ref ResourcesyqBlend.1CS
+            $\SRMI\vertex_count = 14232
+        endif
+    endif
+endif
+
+[CommandListsyqTexcoord]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        vb1 = ResourcesyqTexcoord.0
+    else if $swapvar == 1
+        vb1 = ResourcesyqTexcoord.1
+    endif
+endif
+
+[CommandListsyq2Position]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        handling = skip
+        vb2 = Resourcesyq2Blend.0
+        if DRAW_TYPE == 1
+            vb0 = Resourcesyq2Position.0
+            draw = 5955, 0
+        endif
+        if DRAW_TYPE == 8
+            Resource\SRMI\PositionBuffer = ref Resourcesyq2Position.0CS
+            Resource\SRMI\BlendBuffer = ref Resourcesyq2Blend.0CS
+            $\SRMI\vertex_count = 5955
+        endif
+    else if $swapvar == 1
+        handling = skip
+        vb2 = Resourcesyq2Blend.1
+        if DRAW_TYPE == 1
+            vb0 = Resourcesyq2Position.1
+            draw = 4207, 0
+        endif
+        if DRAW_TYPE == 8
+            Resource\SRMI\PositionBuffer = ref Resourcesyq2Position.1CS
+            Resource\SRMI\BlendBuffer = ref Resourcesyq2Blend.1CS
+            $\SRMI\vertex_count = 4207
+        endif
+    endif
+endif
+
+[CommandListsyq2Texcoord]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        vb1 = Resourcesyq2Texcoord.0
+    else if $swapvar == 1
+        vb1 = Resourcesyq2Texcoord.1
+    endif
+endif
+
+[CommandListsyq3Position]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        handling = skip
+        vb2 = Resourcesyq3Blend.0
+        if DRAW_TYPE == 1
+            vb0 = Resourcesyq3Position.0
+            draw = 7471, 0
+        endif
+        if DRAW_TYPE == 8
+            Resource\SRMI\PositionBuffer = ref Resourcesyq3Position.0CS
+            Resource\SRMI\BlendBuffer = ref Resourcesyq3Blend.0CS
+            $\SRMI\vertex_count = 7471
+        endif
+    else if $swapvar == 1
+        handling = skip
+        vb2 = Resourcesyq3Blend.1
+        if DRAW_TYPE == 1
+            vb0 = Resourcesyq3Position.1
+            draw = 3222, 0
+        endif
+        if DRAW_TYPE == 8
+            Resource\SRMI\PositionBuffer = ref Resourcesyq3Position.1CS
+            Resource\SRMI\BlendBuffer = ref Resourcesyq3Blend.1CS
+            $\SRMI\vertex_count = 3222
+        endif
+    endif
+endif
+
+[CommandListsyq3Texcoord]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        vb1 = Resourcesyq3Texcoord.0
+    else if $swapvar == 1
+        vb1 = Resourcesyq3Texcoord.1
+    endif
+endif
+
+[CommandListsyqIB]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        handling = skip
+        drawindexed = auto
+    else if $swapvar == 1
+        handling = skip
+        drawindexed = auto
+    endif
+endif
+
+[CommandListsyqA]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        ib = ResourcesyqAIB.0
+        ps-t2 = ResourcesyqADiffuse.0
+        ps-t3 = ResourcesyqALightMap.0
+    else if $swapvar == 1
+        ib = ResourcesyqAIB.1
+        ps-t2 = ResourcesyqADiffuse.1
+        ps-t3 = ResourcesyqALightMap.1
+    endif
+endif
+
+[CommandListsyqB]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        ib = ResourcesyqBIB.0
+        ps-t2 = ResourcesyqBDiffuse.0
+        ps-t3 = ResourcesyqBLightMap.0
+    else if $swapvar == 1
+        ib = null
+        ps-t2 = ResourcesyqBDiffuse.1
+        ps-t3 = ResourcesyqBLightMap.1
+    endif
+endif
+
+[CommandListsyq2IB]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        handling = skip
+        drawindexed = auto
+    else if $swapvar == 1
+        handling = skip
+        drawindexed = auto
+    endif
+endif
+
+[CommandListsyq2A]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        ib = Resourcesyq2AIB.0
+    else if $swapvar == 1
+        ib = Resourcesyq2AIB.1
+        ps-t2 = Resourcesyq2ADiffuse.1
+        ps-t3 = Resourcesyq2ALightMap.1
+    endif
+endif
+
+[CommandListsyq2ADiffuse]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        this = Resourcesyq2ADiffuse.0
+    endif
+endif
+
+[CommandListsyq2ALightMap]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        this = Resourcesyq2ALightMap.0
+    endif
+endif
+
+[CommandListsyq3IB]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        handling = skip
+        drawindexed = auto
+    else if $swapvar == 1
+        handling = skip
+        drawindexed = auto
+    endif
+endif
+
+[CommandListsyq3A]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        ib = Resourcesyq3AIB.0
+    else if $swapvar == 1
+        ib = Resourcesyq3AIB.1
+        ps-t2 = Resourcesyq3ADiffuse.1
+        ps-t3 = Resourcesyq3ALightMap.1
+        ps-t2 = Resourcesyq3AShadow.1
+        ps-t3 = Resourcesyq3At3.1
+    endif
+endif
+
+[CommandListsyq3ADiffuse]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        this = Resourcesyq3ADiffuse.0
+    endif
+endif
+
+[CommandListsyq3ALightMap]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        this = Resourcesyq3ALightMap.0
+    else if $swapvar == 0
+        this = Resourcesyq3BLightMap.0
+    endif
+endif
+
+[CommandListsyq3AShadow]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        this = Resourcesyq3AShadow.0
+    else if $swapvar == 0
+        this = Resourcesyq3BDiffuse.0
+    endif
+endif
+
+[CommandListsyq3At3]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        this = Resourcesyq3At3.0
+    else if $swapvar == 0
+        this = Resourcesyq3BShadow.0
+    endif
+endif
+
+[CommandListsyq3B]
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    if $swapvar == 0
+        ib = Resourcesyq3BIB.0
+    else if $swapvar == 1
+        ib = Resourcesyq3BIB.1
+        ps-t2 = Resourcesyq3BDiffuse.1
+        ps-t3 = Resourcesyq3BLightMap.1
+        ps-t2 = Resourcesyq3BShadow.1
+    endif
+endif
+; Resources ---------------------------
+
+[ResourcesyqPosition.0]
+type = Buffer
+stride = 40
+filename = .\syqMod\syqPosition.buf
+
+[ResourcesyqBlend.0]
+type = Buffer
+stride = 32
+filename = .\syqMod\syqBlend.buf
+
+[ResourcesyqTexcoord.0]
+type = Buffer
+stride = 20
+filename = .\syqMod\syqTexcoord.buf
+
+[Resourcesyq2Position.0]
+type = Buffer
+stride = 40
+filename = .\syqMod\syq2Position.buf
+
+[Resourcesyq2Blend.0]
+type = Buffer
+stride = 32
+filename = .\syqMod\syq2Blend.buf
+
+[Resourcesyq2Texcoord.0]
+type = Buffer
+stride = 8
+filename = .\syqMod\syq2Texcoord.buf
+
+[Resourcesyq3Position.0]
+type = Buffer
+stride = 40
+filename = .\syqMod\syq3Position.buf
+
+[Resourcesyq3Blend.0]
+type = Buffer
+stride = 32
+filename = .\syqMod\syq3Blend.buf
+
+[Resourcesyq3Texcoord.0]
+type = Buffer
+stride = 8
+filename = .\syqMod\syq3Texcoord.buf
+
+[ResourcesyqAIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syqA.ib
+
+[ResourcesyqBIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syqB.ib
+
+[Resourcesyq2AIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syq2A.ib
+
+[Resourcesyq3AIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syq3A.ib
+
+[Resourcesyq3BIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syq3B.ib
+
+[ResourcesyqADiffuse.0]
+filename = .\syqMod\syqADiffuse.dds
+
+[ResourcesyqALightMap.0]
+filename = .\syqMod\syqALightMap.dds
+
+[ResourcesyqBDiffuse.0]
+filename = .\syqMod\syqBDiffuse.dds
+
+[ResourcesyqBLightMap.0]
+filename = .\syqMod\syqBLightMap.dds
+
+[Resourcesyq2ADiffuse.0]
+filename = .\syqMod\syq2ADiffuse.dds
+
+[Resourcesyq2ALightMap.0]
+filename = .\syqMod\syq2ALightMap.dds
+
+[Resourcesyq3ADiffuse.0]
+filename = .\syqMod\syq3ADiffuse.dds
+
+[Resourcesyq3ALightMap.0]
+filename = .\syqMod\syq3ALightMap.dds
+
+[Resourcesyq3AShadow.0]
+filename = .\syqMod\syq3AShadow.dds
+
+[Resourcesyq3At3.0]
+filename = .\syqMod\syq3At3.dds
+
+[Resourcesyq3BDiffuse.0]
+filename = .\syqMod\syq3BDiffuse.dds
+
+[Resourcesyq3BLightMap.0]
+filename = .\syqMod\syq3BLightMap.dds
+
+[Resourcesyq3BShadow.0]
+filename = .\syqMod\syq3BShadow.dds
+
+[ResourcesyqPosition.1]
+type = Buffer
+stride = 40
+filename = .\syqMod n0\syqPosition.buf
+
+[ResourcesyqBlend.1]
+type = Buffer
+stride = 32
+filename = .\syqMod n0\syqBlend.buf
+
+[ResourcesyqTexcoord.1]
+type = Buffer
+stride = 20
+filename = .\syqMod n0\syqTexcoord.buf
+
+[Resourcesyq2Position.1]
+type = Buffer
+stride = 40
+filename = .\syqMod n0\syq2Position.buf
+
+[Resourcesyq2Blend.1]
+type = Buffer
+stride = 32
+filename = .\syqMod n0\syq2Blend.buf
+
+[Resourcesyq2Texcoord.1]
+type = Buffer
+stride = 8
+filename = .\syqMod n0\syq2Texcoord.buf
+
+[Resourcesyq3Position.1]
+type = Buffer
+stride = 40
+filename = .\syqMod n0\syq3Position.buf
+
+[Resourcesyq3Blend.1]
+type = Buffer
+stride = 32
+filename = .\syqMod n0\syq3Blend.buf
+
+[Resourcesyq3Texcoord.1]
+type = Buffer
+stride = 8
+filename = .\syqMod n0\syq3Texcoord.buf
+
+[ResourcesyqAIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syqA.ib
+
+[ResourcesyqBIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syqB.ib
+
+[Resourcesyq2AIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syq2A.ib
+
+[Resourcesyq3AIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syq3A.ib
+
+[Resourcesyq3BIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syq3B.ib
+
+[ResourcesyqADiffuse.1]
+filename = .\syqMod n0\syqADiffuse.dds
+
+[ResourcesyqALightMap.1]
+filename = .\syqMod n0\syqALightMap.dds
+
+[ResourcesyqBDiffuse.1]
+filename = .\syqMod n0\syqBDiffuse.dds
+
+[ResourcesyqBLightMap.1]
+filename = .\syqMod n0\syqBLightMap.dds
+
+[Resourcesyq2ADiffuse.1]
+filename = .\syqMod n0\syq2ADiffuse.dds
+
+[Resourcesyq2ALightMap.1]
+filename = .\syqMod n0\syq2ALightMap.dds
+
+[Resourcesyq3ADiffuse.1]
+filename = .\syqMod n0\syq3ADiffuse.dds
+
+[Resourcesyq3ALightMap.1]
+filename = .\syqMod n0\syq3ALightMap.dds
+
+[Resourcesyq3AShadow.1]
+filename = .\syqMod n0\syq3AShadow.dds
+
+[Resourcesyq3At3.1]
+filename = .\syqMod n0\syq3At3.dds
+
+[Resourcesyq3BDiffuse.1]
+filename = .\syqMod n0\syq3BDiffuse.dds
+
+[Resourcesyq3BLightMap.1]
+filename = .\syqMod n0\syq3BLightMap.dds
+
+[Resourcesyq3BShadow.1]
+filename = .\syqMod n0\syq3BShadow.dds
+; .ini generated by GIMI (Genshin-Impact-Model-Importer) mod merger script
+; If you have any issues or find any bugs, please open a ticket at https://github.com/SilentNightSound/GI-Model-Importer/issues or contact SilentNightSound#7430 on discord
+
+[TextureOverride20fixA]
+hash = 5212ce68
+match_priority = 0
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ib = null
+endif
+
+[TextureOverride20fixB]
+hash = 5212ce68
+match_priority = 0
+match_first_index = 30828
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ib = null
+endif
+
+[Constants]
+global $_blend_
+
+[ResourcesyqPosition.0CS]
+type = StructuredBuffer
+stride = 40
+filename = .\syqMod\syqPosition.buf
+
+[ResourcesyqBlend.0CS]
+type = StructuredBuffer
+stride = 32
+filename = .\syqMod\syqBlend.buf
+
+[ResourcesyqPosition.1CS]
+type = StructuredBuffer
+stride = 40
+filename = .\syqMod n0\syqPosition.buf
+
+[ResourcesyqBlend.1CS]
+type = StructuredBuffer
+stride = 32
+filename = .\syqMod n0\syqBlend.buf
+
+[Resourcee9f678b6DrawCS]
+type = RWStructuredBuffer
+array = 16188
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[Resourcesyq2Position.0CS]
+type = StructuredBuffer
+stride = 40
+filename = .\syqMod\syq2Position.buf
+
+[Resourcesyq2Blend.0CS]
+type = StructuredBuffer
+stride = 32
+filename = .\syqMod\syq2Blend.buf
+
+[Resourcesyq2Position.1CS]
+type = StructuredBuffer
+stride = 40
+filename = .\syqMod n0\syq2Position.buf
+
+[Resourcesyq2Blend.1CS]
+type = StructuredBuffer
+stride = 32
+filename = .\syqMod n0\syq2Blend.buf
+
+[Resourceb1bcbbd4DrawCS]
+type = RWStructuredBuffer
+array = 5955
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[Resourcesyq3Position.0CS]
+type = StructuredBuffer
+stride = 40
+filename = .\syqMod\syq3Position.buf
+
+[Resourcesyq3Blend.0CS]
+type = StructuredBuffer
+stride = 32
+filename = .\syqMod\syq3Blend.buf
+
+[Resourcesyq3Position.1CS]
+type = StructuredBuffer
+stride = 40
+filename = .\syqMod n0\syq3Position.buf
+
+[Resourcesyq3Blend.1CS]
+type = StructuredBuffer
+stride = 32
+filename = .\syqMod n0\syq3Blend.buf
+
+[Resource4635947eDrawCS]
+type = RWStructuredBuffer
+array = 7471
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+

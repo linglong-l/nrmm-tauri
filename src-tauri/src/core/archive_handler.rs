@@ -1043,7 +1043,7 @@ fn is_excluded_for_unwrap(name: &str) -> bool {
     false
 }
 
-/// 递归遍历目录下所有文件，对每个文件调用回调
+/// 遍历目录下所有文件（BFS + 路径池防 symlink 循环），对每个文件调用回调
 ///
 /// 用于统计文件数量和检查是否包含 INI 文件。
 /// 注意：仅遍历文件（`is_file`），不包含目录本身。
@@ -1055,16 +1055,61 @@ fn is_excluded_for_unwrap(name: &str) -> bool {
 /// # Errors
 /// - `read_dir` 失败或权限不足时返回 IO 错误
 fn visit_files(dir: &Path, callback: &mut dyn FnMut(&Path)) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            visit_files(&path, callback)?;
-        } else {
-            callback(&path);
+    use std::collections::VecDeque;
+    let mut queue: VecDeque<PathBuf> = VecDeque::new();
+    // 路径池（visited + symlink 登记）：防 symlink 目录循环/重复遍历
+    let mut pool = crate::core::fs_walk::PathPool::new();
+    queue.push_back(dir.to_path_buf());
+    pool.try_visit(dir);
+    // 非法 UTF-8 名称计数（仅日志汇总，不上报前端）
+    let stats = crate::core::fs_walk::TraversalStats::default();
+
+    while let Some(current) = queue.pop_front() {
+        let entries = fs::read_dir(&current)?;
+        let current_display = current.to_string_lossy().to_string();
+        for entry in entries {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            let path = entry.path();
+            // UTF-8 合法化：非法名称条目跳过（结构性路径）
+            if crate::core::fs_walk::valid_entry_name(
+                &entry,
+                &current_display,
+                crate::core::fs_walk::kind::FILE,
+                &stats,
+            )
+            .is_none()
+            {
+                continue;
+            }
+            if is_dir_like(&entry, &ft) {
+                // 目录（含 symlink 指向目录）：路径池判重后入队
+                if pool.try_visit(&path) {
+                    queue.push_back(path);
+                }
+            } else if ft.is_file() {
+                callback(&path);
+            }
         }
     }
+    let (skipped, _entries) = stats.into_parts();
+    if skipped > 0 {
+        log::warn!("[visit_files] 跳过 {} 个非法 UTF-8 名称条目", skipped);
+    }
     Ok(())
+}
+
+/// 判断目录项是否为「真实目录或指向目录的 symlink」（symlink 目录跟随，路径池防环）
+fn is_dir_like(entry: &std::fs::DirEntry, ft: &std::fs::FileType) -> bool {
+    if ft.is_dir() {
+        return true;
+    }
+    ft.is_symlink()
+        && entry
+            .path()
+            .metadata()
+            .map(|md| md.is_dir())
+            .unwrap_or(false)
 }
 
 /// 生成唯一路径：如果路径已存在，追加 `_1`, `_2` 等数字后缀

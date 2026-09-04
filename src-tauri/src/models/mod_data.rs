@@ -1,6 +1,12 @@
 //! 模组相关数据模型
 //!
 //! 定义模组、分组、INI 数据等核心数据结构
+//!
+//! ## 路径序列化约定
+//! 写入本模块结构的 `PathBuf` 均在遍历阶段（`mod_scanner` / `fs_walk`）通过
+//! `to_str().is_none()` 校验并跳过非法 UTF-8 条目，字段必然为合法路径。
+//! 因此 IPC 序列化直接依赖 serde 对 `PathBuf` 的默认实现（合法路径即输出
+//! 标准 UTF-8 String），无需自定义 lossy 或跳过逻辑。
 
 use super::enums::*;
 use serde::{Deserialize, Serialize};
@@ -544,6 +550,14 @@ pub struct BatchGroupDelta {
 mod tests {
     use super::*;
 
+    /// 快速便捷构造：仅带路径字段的最小 ModData，用于序列化行为验证
+    fn mod_data_with_preview(preview: Option<PathBuf>) -> ModData {
+        ModData {
+            preview_image_path: preview,
+            ..ModData::default()
+        }
+    }
+
     /// 契约锁定：GroupDelta 序列化字段名为 camelCase（前端并行开发依赖此契约）
     #[test]
     fn group_delta_serializes_camel_case() {
@@ -655,5 +669,32 @@ mod tests {
         .expect("缺省 diskSignature 应可反序列化");
         assert_eq!(m.disk_signature, 0, "缺省 diskSignature 应回退 0");
         assert_eq!(m.mod_name, "ModA");
+    }
+
+    /// 合法路径序列化为标准 UTF-8 String，而不是 PathBuf 的内部形态
+    #[test]
+    fn preview_path_valid_utf8_serializes_to_string() {
+        let d = mod_data_with_preview(Some(PathBuf::from("C:\\Mods\\group_1\\ModA\\icon.png")));
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains(r#""previewImagePath":"C:\\Mods\\group_1\\ModA\\icon.png""#));
+    }
+
+    /// None 保持为 null（JSON 语义不变）
+    #[test]
+    fn preview_path_none_serializes_to_null() {
+        let d = mod_data_with_preview(None);
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains(r#""previewImagePath":null"#));
+    }
+
+    /// ModGroupData.full_path 合法路径照常序列化为标准 UTF-8 String
+    #[test]
+    fn group_full_path_valid_serializes() {
+        let g = ModGroupData {
+            full_path: PathBuf::from("C:\\Mods\\_MANAGED_\\group_1"),
+            ..ModGroupData::default()
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains(r#""fullPath":"C:\\Mods\\_MANAGED_\\group_1""#));
     }
 }

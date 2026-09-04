@@ -21,6 +21,7 @@ pub mod exit_log;
 pub mod file_lock;
 pub mod file_logger;
 pub mod file_watcher;
+pub mod fs_walk;
 pub mod incremental_updater;
 pub mod ini_backup;
 pub mod ini_backup_scheduler;

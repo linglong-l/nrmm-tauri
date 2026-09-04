@@ -13,8 +13,9 @@ import { defineStore } from 'pinia'
 import { ref, computed, reactive, watch, shallowRef, triggerRef } from 'vue'
 import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, deselectGroupMod, disableAllModsInGroup, syncNrmmUpdateFlag } from '../utils/tauri'
 import { useSettingsStore } from './settings'
-import type { ModGroupData, ModData, TargetGame, UpdateResult, GroupDelta } from '../types'
+import type { ModGroupData, ModData, TargetGame, UpdateResult, GroupDelta, InvalidUtf8Entry } from '../types'
 import { logger } from '../utils/logger'
+import { formatInvalidUtf8Message } from '../utils/decodePathName'
 
 export const useModsStore = defineStore('mods', () => {
   /**
@@ -43,6 +44,14 @@ export const useModsStore = defineStore('mods', () => {
   const loading = ref(false)
   /** 最近一次加载失败的错误信息（C18：非竞态过期时置位；success/clearData 时清空） */
   const loadError = ref<string | null>(null)
+  /**
+   * 非法 UTF-8 路径跳过通知（App.vue watch 后 ElMessage 提示）。
+   *
+   * loadMods/refresh/updateModData 扫描返回 invalidUtf8Count>0 时置位，
+   * 提示用户「有文件名因编码无法识别被跳过」；为 null 表示无跳过（不提示）。
+   * clearData/下一次无跳过加载时自动清空（防重复弹窗）。
+   */
+  const invalidUtf8Notice = ref<string | null>(null)
   /** 当前选中的分组路径（用于树状导航，唯一标识） */
   const selectedGroupPath = ref<string>('')
   /** 当前选中的模组索引（在分组内） */
@@ -542,6 +551,8 @@ export const useModsStore = defineStore('mods', () => {
       mods.value = result.mods || []
       // C18：加载成功后清空失败反馈
       loadError.value = null
+      // 非法 UTF-8 路径提示：扫描有跳过时置位（App.vue watch 弹窗），无跳过时清空
+      invalidUtf8Notice.value = applyInvalidUtf8Notice(result.invalidUtf8Count ?? 0, result.invalidUtf8Entries)
 
       // 清空之前的分组选中记录，用后端返回的 activeModIndex 初始化
       for (const key of Object.keys(selectedModIndicesByGroup)) {
@@ -572,6 +583,22 @@ export const useModsStore = defineStore('mods', () => {
         loading.value = false
       }
     }
+  }
+
+  /**
+   * 将后端扫描结果中的非法 UTF-8 跳统计转为通知文本（无跳返回 null 不再提示）
+   *
+   * @param count 跳过总数
+   * @param entries 明细（含父路径与保真字节名）
+   * @returns 通知文本；count<=0 或无明细时返回 null
+   */
+  function applyInvalidUtf8Notice(
+    count: number,
+    entries: InvalidUtf8Entry[] | undefined,
+  ): string | null {
+    const list = entries ?? []
+    if (count <= 0 || list.length === 0) return null
+    return formatInvalidUtf8Message(count, list)
   }
 
   /**
@@ -612,6 +639,8 @@ export const useModsStore = defineStore('mods', () => {
       if (epoch !== loadEpoch) return
       groups.value = result.groups || []
       mods.value = result.mods || []
+      // 非法 UTF-8 路径提示：刷新同样上报（文件变化后可能新出现非法条目）
+      invalidUtf8Notice.value = applyInvalidUtf8Notice(result.invalidUtf8Count ?? 0, result.invalidUtf8Entries)
 
       // 更新选中索引记录：保留会话内的用户选择，用新的 activeModIndex 补充未记录的分组
       for (const g of groups.value) {
@@ -1096,6 +1125,8 @@ export const useModsStore = defineStore('mods', () => {
     keybindTargetMod.value = null
     // C18：清空加载失败反馈（clearData 后旧错误不残留）
     loadError.value = null
+    // 清空非法 UTF-8 通知（切游戏/清数据后旧提示不残留）
+    invalidUtf8Notice.value = null
   }
 
   /**
@@ -1168,6 +1199,8 @@ export const useModsStore = defineStore('mods', () => {
       if (startEpoch !== loadEpoch) return lastResult
       needReloadManual.value = lastResult.needReloadManual
       updateResult.value = lastResult
+      // 非法 UTF-8 路径提示：深扫跳过项直接上报（update_mod_data 是全量深扫，最全）
+      invalidUtf8Notice.value = applyInvalidUtf8Notice(lastResult.invalidUtf8Count ?? 0, lastResult.invalidUtf8Entries)
 
       await loadMods()
       clearNeedUpdate()
@@ -1210,6 +1243,7 @@ export const useModsStore = defineStore('mods', () => {
     mods,
     loading,
     loadError,
+    invalidUtf8Notice,
     selectedGroupPath,
     selectedModIndex,
     searchQuery,

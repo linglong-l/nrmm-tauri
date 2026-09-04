@@ -13,7 +13,11 @@
 //! NRMM 为 Windows Flutter 应用，仅 Windows 执行真实读写；非 Windows 平台为无操作。
 
 use crate::models::enums::TargetGame;
+// 以下导入仅被 Windows 门控的读写函数使用（非 Windows 平台本模块为无操作），
+// 一律加 cfg 门控，避免 Linux/macOS 构建产生 unused_imports 警告。
+#[cfg(target_os = "windows")]
 use serde_json::{Map, Value};
+#[cfg(target_os = "windows")]
 use std::path::PathBuf;
 
 /// NRMM shared_preferences 所在相对路径（基于用户主目录）
@@ -163,6 +167,8 @@ mod tests {
         assert_eq!(update_mod_key_suffix(TargetGame::HonkaiImpact3rd), None);
     }
 
+    // 以下两个用例直接调用 Windows 门控的 set_flag_in_file，非 Windows 平台不存在该函数
+    #[cfg(target_os = "windows")]
     #[test]
     fn set_flag_in_file_writes_and_clears() {
         let dir = std::env::temp_dir().join("nrmm_prefs_test");
@@ -202,6 +208,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn set_flag_in_file_missing_file_is_noop() {
         let dir = std::env::temp_dir().join("nrmm_prefs_missing_test");

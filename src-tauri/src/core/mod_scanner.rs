@@ -19,6 +19,7 @@
 
 use crate::core::constants;
 use crate::core::file_watcher::WatcherGuard;
+use crate::core::fs_walk::{self, SkippedEntry, TraversalStats};
 use crate::core::ini_handler::IniFile;
 use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::namespace_handler;
@@ -90,7 +91,10 @@ static DISABLED_PREFIX_RE: Lazy<Regex> =
 /// - `total_mods_count`: 总模组数（不含 None 空槽位），用于统计展示
 /// - `enabled_mods_count`: 启用的模组数，即 `!disabled && !mod_disabled` 的模组数量
 /// - `disabled_mods_count`: 禁用的模组数，即 `disabled || mod_disabled` 的模组数量
-#[derive(Debug, Clone, serde::Serialize)]
+/// - `invalid_utf8_count`: 因文件名非 UTF-8 而被跳过的条目总数（目录/文件/图片候选）
+/// - `invalid_utf8_entries`: 被跳过的非法条目明细（受 [`TraversalStats::CAP_ENTRIES`]
+///   上限约束，空列表时因 `skip_serializing_if` 不输出，前端 JSON 零变化）
+#[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
     /// 分组列表（NormalGroup + MutexGroup 根节点），按 group_index 排序
@@ -103,6 +107,17 @@ pub struct ScanResult {
     pub enabled_mods_count: usize,
     /// 禁用的模组数（disabled || mod_disabled）
     pub disabled_mods_count: usize,
+    /// 因文件名非 UTF-8 被跳过的条目总数
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub invalid_utf8_count: usize,
+    /// 被跳过的非法条目明细（空时省略）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid_utf8_entries: Vec<SkippedEntry>,
+}
+
+/// serde 辅助：跳过 0 值字段
+fn is_zero(v: &usize) -> bool {
+    *v == 0
 }
 
 /// 获取 `_MANAGED_` 文件夹路径
@@ -297,6 +312,15 @@ pub fn find_icon_path(dir_path: &Path) -> Result<Option<PathBuf>> {
                     .iter()
                     .any(|e| ext.to_string_lossy().eq_ignore_ascii_case(e))
                 {
+                    // 装饰性路径（图片）：非法 UTF-8 文件名直接跳过该候选，
+                    // 前端走占位图逻辑，无需上报（用户指示：图片路径前端自行处理）
+                    if entry.file_name().to_str().is_none() {
+                        log::warn!(
+                            "[find_icon_path] 跳过非法 UTF-8 名称图片候选 | dir={:?}",
+                            dir_path
+                        );
+                        continue;
+                    }
                     files.push(path);
                 }
             }
@@ -534,6 +558,7 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
             total_mods_count: 0,
             enabled_mods_count: 0,
             disabled_mods_count: 0,
+            ..Default::default()
         });
     }
 
@@ -542,6 +567,8 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
 
     let entries = fs::read_dir(&managed_folder)?;
     let mut root_dirs: Vec<PathBuf> = Vec::with_capacity(32); // 预分配存储根目录列表
+    let stats = TraversalStats::default();
+    let managed_display = managed_folder.to_string_lossy().to_string();
 
     for entry in entries {
         let entry = entry?;
@@ -549,7 +576,12 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
         if !ft.is_dir() {
             continue;
         }
-        let dir_name = entry.file_name().to_string_lossy().to_string();
+        // UTF-8 合法化（方案A）：非法名称跳过 + 树剪枝（其下内容一并不见）
+        let dir_name =
+            match fs_walk::valid_entry_name(&entry, &managed_display, fs_walk::kind::DIR, &stats) {
+                Some(n) => n,
+                None => continue,
+            };
         if dir_name.starts_with('.') {
             continue;
         }
@@ -574,7 +606,7 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
     let normal_results: Vec<(ModGroupData, Vec<Arc<ModData>>)> = normal_tasks
         .par_iter()
         .filter_map(|(dir_path, dir_name, group_index)| {
-            scan_normal_group_light(dir_path, dir_name, *group_index).ok()
+            scan_normal_group_light(dir_path, dir_name, *group_index, &stats).ok()
         })
         .collect();
 
@@ -599,7 +631,7 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
 
     let mutex_results: Vec<(Option<ModGroupData>, Vec<Arc<ModData>>)> = mutex_roots
         .par_iter()
-        .filter_map(|root_path| scan_mutex_group_dfs(root_path).ok())
+        .filter_map(|root_path| scan_mutex_group_dfs(root_path, &stats).ok())
         .collect();
 
     for (g_opt, ms) in mutex_results {
@@ -632,12 +664,23 @@ pub fn scan_mods_light(game_mods_path: &Path) -> Result<ScanResult> {
         groups.len()
     );
 
+    let (invalid_utf8_count, invalid_utf8_entries) = stats.into_parts();
+    if invalid_utf8_count > 0 {
+        log::warn!(
+            "[scan_mods_light] 跳过 {} 个非法 UTF-8 名称条目（明细 {} 条）",
+            invalid_utf8_count,
+            invalid_utf8_entries.len()
+        );
+    }
+
     Ok(ScanResult {
         groups,
         total_mods_count: total,
         enabled_mods_count: enabled,
         disabled_mods_count: disabled,
         mods: all_mods,
+        invalid_utf8_count,
+        invalid_utf8_entries,
     })
 }
 
@@ -663,6 +706,7 @@ fn scan_normal_group_light(
     dir_path: &Path,
     group_name: &str,
     group_index: u32,
+    stats: &TraversalStats,
 ) -> Result<(ModGroupData, Vec<Arc<ModData>>)> {
     let mut mods: Vec<ModData> = Vec::with_capacity(32); // 预分配 32 个模组槽位，覆盖绝大多数 NormalGroup
 
@@ -696,7 +740,15 @@ fn scan_normal_group_light(
             continue;
         }
         let path = entry.path();
-        let dir_name = entry.file_name().to_string_lossy().to_string();
+        let dir_name = match fs_walk::valid_entry_name(
+            &entry,
+            &dir_path.to_string_lossy(),
+            fs_walk::kind::DIR,
+            stats,
+        ) {
+            Some(n) => n,
+            None => continue,
+        };
         if dir_name.starts_with('.') {
             continue;
         }
@@ -1097,7 +1149,10 @@ struct DfsStackItem {
 ///
 /// # Errors
 /// 当目录无法读取、标记文件无法创建时返回 `Err`。
-fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<Arc<ModData>>)> {
+fn scan_mutex_group_dfs(
+    root_path: &Path,
+    stats: &TraversalStats,
+) -> Result<(Option<ModGroupData>, Vec<Arc<ModData>>)> {
     let root_name = root_path
         .file_name()
         .unwrap_or_default()
@@ -1175,7 +1230,16 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<A
         };
         if ft.is_dir() || ft.is_symlink() {
             let p = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
+            // UTF-8 合法化：根一级子目录非法名称跳过（子树剪枝）
+            let name = match fs_walk::valid_entry_name(
+                &entry,
+                &root_path.to_string_lossy(),
+                fs_walk::kind::DIR,
+                stats,
+            ) {
+                Some(n) => n,
+                None => continue,
+            };
             if !name.starts_with('.') {
                 let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
                 if visited.insert(canon) {
@@ -1252,7 +1316,16 @@ fn scan_mutex_group_dfs(root_path: &Path) -> Result<(Option<ModGroupData>, Vec<A
             };
             if ft.is_dir() || ft.is_symlink() {
                 let p = entry.path();
-                let name = entry.file_name().to_string_lossy().to_string();
+                // UTF-8 合法化：深层子目录非法名称跳过（子树剪枝）
+                let name = match fs_walk::valid_entry_name(
+                    &entry,
+                    &current_path.to_string_lossy(),
+                    fs_walk::kind::DIR,
+                    stats,
+                ) {
+                    Some(n) => n,
+                    None => continue,
+                };
                 if !name.starts_with('.') {
                     let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
                     if visited.insert(canon) {
@@ -1471,6 +1544,7 @@ fn build_mutex_mod_light(mod_path: &Path, group_index: u32, mod_index: u32) -> R
 /// 当 `_MANAGED_` 目录不存在且无法创建，或 `fs::read_dir()` 读取失败时返回 `Err`。
 pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
     let managed_folder = get_managed_folder(game_mods_path);
+    let stats = TraversalStats::default();
     if !managed_folder.exists() {
         fs::create_dir_all(&managed_folder)?;
         return Ok(ScanResult {
@@ -1479,6 +1553,7 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
             total_mods_count: 0,
             enabled_mods_count: 0,
             disabled_mods_count: 0,
+            ..Default::default()
         });
     }
 
@@ -1489,6 +1564,7 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
 
     // 收集严格 group_<int> 一级目录（与串行版同过滤条件），非 group 目录（# 互斥分组等）
     // 不读、不写、不遍历——update_mod_data 对其零接触（2026-08-18 用户决策，对齐 NRMM 原版）
+    let managed_display = managed_folder.to_string_lossy().to_string();
     let group_dirs: Vec<(PathBuf, String)> = entries
         .filter_map(|entry| {
             let entry = entry.ok()?;
@@ -1496,9 +1572,14 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
             if !ft.is_dir() && !ft.is_symlink() {
                 return None;
             }
-            let dir_name = entry.file_name().to_string_lossy().to_string();
-            is_normal_group_dir(&dir_name)?;
-            Some((entry.path(), dir_name))
+            // UTF-8 合法化：分组目录非法名称跳过（扫不出该组，告知用户）
+            match fs_walk::valid_entry_name(&entry, &managed_display, fs_walk::kind::DIR, &stats) {
+                Some(n) => {
+                    is_normal_group_dir(&n)?;
+                    Some((entry.path(), n))
+                }
+                None => None,
+            }
         })
         .collect();
 
@@ -1506,7 +1587,9 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
     // 每组任务独立（组内 BFS 自带 visited 路径池），结果收集后统一排序合并
     let scan_results: Vec<Result<(ModGroupData, Vec<Arc<ModData>>)>> = group_dirs
         .par_iter()
-        .map(|(path, dir_name)| scan_group_directory_deep(path, dir_name, GroupType::NormalGroup))
+        .map(|(path, dir_name)| {
+            scan_group_directory_deep(path, dir_name, GroupType::NormalGroup, &stats)
+        })
         .collect();
 
     // 按分组 id 升序合并（BTreeMap 迭代序确定，组内保持扫描顺序），与串行版结果一致
@@ -1530,12 +1613,23 @@ pub fn scan_mods_deep(game_mods_path: &Path) -> Result<ScanResult> {
         .filter(|m| m.disabled || m.mod_disabled)
         .count();
 
+    let (invalid_utf8_count, invalid_utf8_entries) = stats.into_parts();
+    if invalid_utf8_count > 0 {
+        log::warn!(
+            "[scan_mods_deep] 跳过 {} 个非法 UTF-8 名称条目（明细 {} 条）",
+            invalid_utf8_count,
+            invalid_utf8_entries.len()
+        );
+    }
+
     Ok(ScanResult {
         groups,
         total_mods_count: all_mods.len(),
         enabled_mods_count: enabled,
         disabled_mods_count: disabled,
         mods: all_mods,
+        invalid_utf8_count,
+        invalid_utf8_entries,
     })
 }
 
@@ -1557,6 +1651,7 @@ fn scan_group_directory_deep(
     dir_path: &Path,
     group_name: &str,
     group_type: GroupType,
+    stats: &TraversalStats,
 ) -> Result<(ModGroupData, Vec<Arc<ModData>>)> {
     use std::collections::VecDeque;
 
@@ -1578,7 +1673,7 @@ fn scan_group_directory_deep(
         let (has_ini, has_icon, icon_path, ini_files) = if is_group_root {
             (false, false, None, Vec::with_capacity(0))
         } else {
-            check_directory_for_mod_deep(&current_path)?
+            check_directory_for_mod_deep(&current_path, stats)?
         };
 
         if has_ini || has_icon {
@@ -1610,7 +1705,16 @@ fn scan_group_directory_deep(
                 };
                 if ft.is_dir() || ft.is_symlink() {
                     let sub_path = sub_entry.path();
-                    let sub_name = sub_entry.file_name().to_string_lossy().to_string();
+                    // UTF-8 合法化：深扫子目录非法名称跳过（子树剪枝）
+                    let sub_name = match fs_walk::valid_entry_name(
+                        &sub_entry,
+                        &current_path.to_string_lossy(),
+                        fs_walk::kind::DIR,
+                        stats,
+                    ) {
+                        Some(n) => n,
+                        None => continue,
+                    };
                     if sub_name.starts_with('.') {
                         continue;
                     }
@@ -1625,6 +1729,7 @@ fn scan_group_directory_deep(
 
             if current_path != dir_path && has_subdirs && !subgroup_paths.contains(&current_path) {
                 subgroup_paths.insert(current_path.clone());
+                // 深扫子分组名来自 visited 收集（合法），file_name 安全取用
                 let subgroup_name = current_path
                     .file_name()
                     .unwrap_or_default()
@@ -1697,7 +1802,10 @@ fn scan_group_directory_deep(
 /// - `has_icon`: 是否至少有一个图片文件
 /// - `icon_path`: 优先返回 `icon.*` 命名的图片，否则返回第一张非 `DISABLED` 前缀的图片
 /// - `ini_files`: 所有 `.ini` 文件的路径列表（已排序）
-fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBuf>, Vec<PathBuf>)> {
+fn check_directory_for_mod_deep(
+    dir: &Path,
+    stats: &TraversalStats,
+) -> Result<(bool, bool, Option<PathBuf>, Vec<PathBuf>)> {
     let mut has_ini = false;
     let mut has_icon = false;
     let mut icon_path: Option<PathBuf> = None;
@@ -1708,6 +1816,8 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
         Ok(e) => e,
         Err(_) => return Ok((false, false, None, vec![])),
     };
+
+    let dir_display = dir.to_string_lossy().to_string();
 
     for entry in entries {
         let entry = match entry {
@@ -1727,12 +1837,31 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
                     if constants::is_desktop_ini(&path) {
                         continue;
                     }
-                    has_ini = true;
-                    ini_files.push(path);
+                    // 结构性路径（INI 文件）：非法名称跳过 + 上报
+                    match fs_walk::valid_entry_name(
+                        &entry,
+                        &dir_display,
+                        fs_walk::kind::FILE,
+                        stats,
+                    ) {
+                        Some(_) => {
+                            has_ini = true;
+                            ini_files.push(path);
+                        }
+                        None => continue,
+                    }
                 } else if ICON_EXTENSIONS
                     .iter()
                     .any(|e| ext_cow.eq_ignore_ascii_case(e))
                 {
+                    // 装饰性路径（图片）：非法名称跳过该候选（前端走占位逻辑，无需上报）
+                    if entry.file_name().to_str().is_none() {
+                        log::warn!(
+                            "[check_directory_for_mod_deep] 跳过非法 UTF-8 名称图片候选 | dir={:?}",
+                            dir
+                        );
+                        continue;
+                    }
                     has_icon = true;
                     let stem = path
                         .file_stem()
@@ -1760,7 +1889,7 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
     // 收集所有 .ini 文件，对齐原版 NRMM 的递归 INI 发现行为。
     // group_int/ 一级子目录 = 模组根，模组内所有 INI 均属该模组。
     if has_ini || has_icon {
-        collect_ini_files_dfs(dir, &mut ini_files);
+        collect_ini_files_dfs(dir, &mut ini_files, stats);
         if !ini_files.is_empty() {
             has_ini = true;
         }
@@ -1774,19 +1903,40 @@ fn check_directory_for_mod_deep(dir: &Path) -> Result<(bool, bool, Option<PathBu
 ///
 /// 从 `root` 的**子目录**开始遍历（跳过 root 本身——其文件已由调用方收集），
 /// 跳过 `.` 前缀和 `DISABLED` 前缀的目录，将找到的 .ini 追加到 `ini_files`。
-fn collect_ini_files_dfs(root: &Path, ini_files: &mut Vec<PathBuf>) {
+fn collect_ini_files_dfs(root: &Path, ini_files: &mut Vec<PathBuf>, stats: &TraversalStats) {
     let mut stack: Vec<PathBuf> = Vec::new();
-    // 从 root 的直接子目录开始遍历，避免重复收集已被 check_directory_for_mod_deep
-    // 在第一层扫描中已经发现的 INI 文件。
+    // 路径池（visited + symlink 登记）：防 symlink 目录循环/重复遍历
+    let mut pool = fs_walk::PathPool::new();
+    let root_display = root.to_string_lossy().to_string();
+    // symlink 目录跟随遍历（路径池判重防环），symlink 文件按 ini 收集
+    let push_dir = |stack: &mut Vec<PathBuf>, pool: &mut fs_walk::PathPool, path: PathBuf| {
+        if pool.try_visit(&path) {
+            stack.push(path);
+        }
+    };
+    // 从 root 的直接子目录开始遍历（root 直属 ini 已由调用方收集，本函数不重复收集）
     if let Ok(entries) = fs::read_dir(root) {
         for e in entries.flatten() {
-            if e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                let name = e.file_name().to_string_lossy().into_owned();
-                // 跳过隐藏目录与被禁用目录（大小写不敏感，与 is_disabled_dir/contains_disabled_segment 一致）
-                if !name.starts_with('.') && !is_disabled_dir(&name) {
-                    stack.push(e.path());
-                }
+            let ft = match e.file_type() {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            // root 一级仅收集目录入栈（ini 文件已由 check_directory_for_mod_deep 收集）
+            if !is_dir_entry(&e, &ft) {
+                continue;
             }
+            let name = match fs_walk::valid_entry_name(&e, &root_display, fs_walk::kind::DIR, stats)
+            {
+                Some(n) => n,
+                None => continue,
+            };
+            // 跳过隐藏目录与被禁用目录（大小写不敏感，与 is_disabled_dir/contains_disabled_segment 一致）
+            if name.starts_with('.') || is_disabled_dir(&name) {
+                continue;
+            }
+            let path = e.path();
+            // 目录（含 symlink 指向目录）：入栈继续遍历
+            push_dir(&mut stack, &mut pool, path);
         }
     }
     while let Some(dir) = stack.pop() {
@@ -1794,29 +1944,71 @@ fn collect_ini_files_dfs(root: &Path, ini_files: &mut Vec<PathBuf>) {
             Ok(e) => e,
             Err(_) => continue,
         };
+        let dir_display = dir.to_string_lossy().to_string();
         for entry in entries.flatten() {
             let ft = match entry.file_type() {
                 Ok(f) => f,
                 Err(_) => continue,
             };
             let path = entry.path();
-            if ft.is_dir() {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if name.starts_with('.') || is_disabled_dir(&name) {
-                    continue;
-                }
-                stack.push(path);
-            } else if (ft.is_file() || ft.is_symlink())
-                && path
-                    .extension()
-                    .map(|e| e.to_string_lossy().eq_ignore_ascii_case("ini"))
-                    .unwrap_or(false)
+            let name =
+                match fs_walk::valid_entry_name(&entry, &dir_display, fs_walk::kind::DIR, stats) {
+                    Some(n) => n,
+                    None => continue,
+                };
+            if name.starts_with('.') || is_disabled_dir(&name) {
+                continue;
+            }
+            // 目录（含 symlink 指向目录）：路径池判重后入栈
+            if is_dir_entry(&entry, &ft) {
+                push_dir(&mut stack, &mut pool, path);
+            } else if is_file_entry(&entry, &ft)
+                && is_ini_path(&path)
                 && !constants::is_desktop_ini(&path)
             {
-                ini_files.push(path);
+                // 结构性路径（模组 INI 文件）：非法名称跳过 + 上报
+                if fs_walk::valid_entry_name(&entry, &dir_display, fs_walk::kind::FILE, stats)
+                    .is_some()
+                {
+                    ini_files.push(path);
+                }
             }
         }
     }
+}
+
+/// 判断目录项是否为「真实目录或指向目录的 symlink」（不跟随解析类型）
+fn is_dir_entry(entry: &fs::DirEntry, ft: &fs::FileType) -> bool {
+    if ft.is_dir() {
+        return true;
+    }
+    // symlink：解析 metadata 判断指向类型（目录则跟随，文件则忽略此处）
+    ft.is_symlink()
+        && entry
+            .path()
+            .metadata()
+            .map(|md| md.is_dir())
+            .unwrap_or(false)
+}
+
+/// 判断目录项是否为「真实文件或指向文件的 symlink」（symlink 文件按文件收集）
+fn is_file_entry(entry: &fs::DirEntry, ft: &fs::FileType) -> bool {
+    if ft.is_file() {
+        return true;
+    }
+    ft.is_symlink()
+        && entry
+            .path()
+            .metadata()
+            .map(|md| md.is_file())
+            .unwrap_or(false)
+}
+
+/// 判断路径是否以 .ini 为扩展名（大小写不敏感）
+fn is_ini_path(path: &Path) -> bool {
+    path.extension()
+        .map(|e| e.to_string_lossy().eq_ignore_ascii_case("ini"))
+        .unwrap_or(false)
 }
 
 /// 深度扫描：构建完整 ModData（解析所有 INI 文件）
@@ -2055,7 +2247,9 @@ pub fn scan_partial_path(mods_path: &Path, target_subpath: &Path) -> Result<Scan
         // 判断是否是 NormalGroup（group_xx）
         if let Some(group_index) = is_normal_group_dir(&dir_name) {
             // 仅扫描该 NormalGroup
-            let (g, ms) = scan_normal_group_light(&first_dir, &dir_name, group_index)?;
+            let stats = TraversalStats::default();
+            let (g, ms) = scan_normal_group_light(&first_dir, &dir_name, group_index, &stats)?;
+            let (invalid_utf8_count, invalid_utf8_entries) = stats.into_parts();
             let (mut total, mut enabled, mut disabled) = (0usize, 0usize, 0usize);
             for m in &ms {
                 if m.name == "None" {
@@ -2074,11 +2268,15 @@ pub fn scan_partial_path(mods_path: &Path, target_subpath: &Path) -> Result<Scan
                 total_mods_count: total,
                 enabled_mods_count: enabled,
                 disabled_mods_count: disabled,
+                invalid_utf8_count,
+                invalid_utf8_entries,
             });
         }
 
         // 否则视为 MutexGroup 根目录
-        let (g_opt, ms) = scan_mutex_group_dfs(&first_dir)?;
+        let stats = TraversalStats::default();
+        let (g_opt, ms) = scan_mutex_group_dfs(&first_dir, &stats)?;
+        let (invalid_utf8_count, invalid_utf8_entries) = stats.into_parts();
         let total = ms.iter().filter(|m| m.name != "None").count();
         let enabled = ms
             .iter()
@@ -2094,6 +2292,8 @@ pub fn scan_partial_path(mods_path: &Path, target_subpath: &Path) -> Result<Scan
             total_mods_count: total,
             enabled_mods_count: enabled,
             disabled_mods_count: disabled,
+            invalid_utf8_count,
+            invalid_utf8_entries,
         });
     }
 
