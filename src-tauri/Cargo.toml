@@ -63,7 +63,7 @@ image = { version = "0.25", default-features = false, features = [
 sevenz-rust = "0.6"
 # unrar-ng（活跃复刻 unrar）：抽取专用 + 批抽取性能更优。
 # 用 package 别名 `unrar` 保持既有 `use unrar::Archive;` 代码不变（最小化改动）。
-# 真正的 C++ 绑定 unrar-ng-sys 由根 Cargo.toml 的 [patch.crates-io] 指向本地硬化副本 vendor/unrar_ng_sys。
+# C++ 绑定 unrar-ng-sys 0.7.7 由 cargo 从 crates.io 直接管理（去 zig 后无需本地 vendor 硬化副本）。
 unrar = { package = "unrar-ng", version = "0.7" }
 trash = "5"
 # 全局分配器切换为 mimalloc（C-6）：小对象密集 + 多线程分配（缓存树/rayon 并扫）场景下
