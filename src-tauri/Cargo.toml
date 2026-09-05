@@ -5,6 +5,9 @@ description = "A Tauri App"
 authors = ["ye"]
 license = "MIT OR Apache-2.0"
 edition = "2021"
+# MSRV：由依赖中最高 rust_version 钉定（sevenz-rust2 0.22 要求 1.93；tauri 系 1.77.2、
+# notify-rust 1.89、image/zip 1.88 均更低）。CI 与本地使用 stable toolchain（≥ 1.93）。
+rust-version = "1.93"
 
 [lib]
 name = "xxmi_nrmm_lib"
@@ -60,7 +63,10 @@ image = { version = "0.25", default-features = false, features = [
   "gif",
   "bmp",
 ] }
-sevenz-rust = "0.6"
+# sevenz-rust2（激活 fork）：sevenz-rust 原版已停止维护（Vulert 标注 Unmaintained，
+# 且 RUSTSEC 已披露路径遍历漏洞无补丁）。用依赖重命名保持既有 `use sevenz_rust::...`
+# 代码与注释不变（最小改动，同 unrar-ng 别名方案）。
+sevenz-rust = { package = "sevenz-rust2", version = "0.22" }
 # unrar-ng（活跃复刻 unrar）：抽取专用 + 批抽取性能更优。
 # 用 package 别名 `unrar` 保持既有 `use unrar::Archive;` 代码不变（最小化改动）。
 # C++ 绑定 unrar-ng-sys 0.7.7 由 cargo 从 crates.io 直接管理（去 zig 后无需本地 vendor 硬化副本）。

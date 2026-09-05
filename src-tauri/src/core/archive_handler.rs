@@ -432,7 +432,7 @@ fn extract_with_7z_cli(
 /// 反斜杠统一按分隔符处理（Windows 兼容），仅保留 `Normal` 组件。
 fn safe_join_entry(base: &Path, name: &str) -> std::result::Result<PathBuf, sevenz_rust::Error> {
     if name.is_empty() {
-        return Err(sevenz_rust::Error::other("empty 7z entry name"));
+        return Err(sevenz_rust::Error::Other("empty 7z entry name".into()));
     }
     // 反斜杠统一为正斜杠，避免 Windows 下 `\..` 被 components 当作普通文件名段
     let normalized = name.replace('\\', "/");
@@ -445,10 +445,11 @@ fn safe_join_entry(base: &Path, name: &str) -> std::result::Result<PathBuf, seve
             std::path::Component::ParentDir
             | std::path::Component::RootDir
             | std::path::Component::Prefix(_) => {
-                return Err(sevenz_rust::Error::other(format!(
+                return Err(sevenz_rust::Error::Other(format!(
                     "unsafe 7z entry name rejected (traversal/absolute/prefix): {}",
                     name
-                )));
+                )
+                .into()));
             }
         }
     }
@@ -490,7 +491,7 @@ fn extract_7z_internal(
     );
 
     if password.is_some() {
-        // sevenz-rust 0.6 不直接支持密码解压，密码保护的 7z 应在前两级 7z CLI 中处理
+        // sevenz-rust2 未启用 aes256 feature：密码保护的 7z 应在前两级 7z CLI 中处理
         return Err(anyhow!(
             "Password-protected 7z not supported by internal extractor"
         ));
@@ -512,18 +513,18 @@ fn extract_7z_internal(
             let safe_path = safe_join_entry(&dest_base, entry.name())?;
             if entry.is_directory() {
                 if !safe_path.exists() {
-                    fs::create_dir_all(&safe_path).map_err(sevenz_rust::Error::io)?;
+                    fs::create_dir_all(&safe_path).map_err(|e| sevenz_rust::Error::Io(e, "".into()))?;
                 }
             } else {
                 if let Some(parent) = safe_path.parent() {
                     if !parent.exists() {
-                        fs::create_dir_all(parent).map_err(sevenz_rust::Error::io)?;
+                        fs::create_dir_all(parent).map_err(|e| sevenz_rust::Error::Io(e, "".into()))?;
                     }
                 }
                 let mut file = fs::File::create(&safe_path).map_err(|e| {
-                    sevenz_rust::Error::io_msg(e, format!("create file: {}", safe_path.display()))
+                    sevenz_rust::Error::Io(e, format!("create file: {}", safe_path.display()).into())
                 })?;
-                std::io::copy(reader, &mut file).map_err(sevenz_rust::Error::io)?;
+                std::io::copy(reader, &mut file).map_err(|e| sevenz_rust::Error::Io(e, "".into()))?;
             }
             Ok(true)
         },

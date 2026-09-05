@@ -45,7 +45,7 @@
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| Rust | 1.96+ | 系统级编程语言 |
+| Rust | 1.93+ | 系统级编程语言（MSRV，见「环境要求」） |
 | Tauri | ~2.11.5 | 桌面应用框架（tray-icon / rustls-tls / protocol-asset） |
 | tokio | ^1 | 异步运行时 |
 | rayon | 1.12 | 数据并行（扫描/解析多核加速） |
@@ -80,8 +80,8 @@
 
 ### 通用要求
 
-- **Node.js**：≥ 22（仓库 `.nvmrc` = 22，`package.json` 的 `engines` 要求 `>=22.21.0`）
-- **Rust**：≥ 1.77.2（Tauri 2 的 MSRV；本项目与 CI 均使用 stable toolchain）
+- **Node.js**：≥ 22.22.2（仓库 `.nvmrc` = 22 线，`package.json` 的 `engines` 要求 `>=22.22.2`；下限由前端依赖最低支持版本钉定，低于此版本 npm 会报 `EBADENGINE`）
+- **Rust**：≥ 1.93（MSRV 由后端依赖中最高 `rust_version` 钉定——`sevenz-rust2` 0.22 要求 1.93，`notify-rust` 1.89、`tauri` 系 1.77.2 均更低；本项目与 CI 均使用 stable toolchain，满足即可）
 - **Tauri CLI**：通过 `npm install` 自动安装（`@tauri-apps/cli`）
 
 ### Windows 特定要求
