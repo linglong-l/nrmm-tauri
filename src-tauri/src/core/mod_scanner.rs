@@ -147,7 +147,7 @@ pub fn scan_mods(game_mods_path: &Path) -> Result<ScanResult> {
 /// 依次检查以下条件，返回第一个失败的状态：
 /// 1. `mods_path` 路径是否存在
 /// 2. `_MANAGED_` 目录是否存在
-/// 3. 主 INI 文件（`d3dx.ini` / `RatioShot.ini`，取决于 `TargetGame`）是否存在
+/// 3. 主 INI 文件（`d3dx.ini`，全游戏统一）是否存在
 ///
 /// # 返回
 /// - `ModsPathStatus::Valid`: 路径有效

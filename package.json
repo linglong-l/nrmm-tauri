@@ -19,7 +19,7 @@
     "build:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1"
   },
   "engines": {
-    "node": ">=22.22.2"
+    "node": ">=22.23.2"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2",

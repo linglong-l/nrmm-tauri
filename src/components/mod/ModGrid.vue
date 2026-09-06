@@ -2,7 +2,7 @@
   <div class="mod-grid-container" @click="handleContainerClick">
     <!-- 搜索栏：支持模糊搜索、键盘导航 -->
     <SearchBar v-model:visible="searchVisible" :model-value="searchQuery" @update:model-value="updateSearchQuery" :total-matches="totalMatches"
-      :current-index="currentMatchIndex" @next="nextMatch" @prev="prevMatch" @close="onSearchClose" />
+      :current-index="currentMatchIndex" @next="nextMatch" @prev="prevMatch" @close="onSearchClose" :disabled="modsStore.isUpdatingModData" />
 
     <!-- 模组网格内容区：支持拖拽滚动 -->
     <div ref="gridContentRef" class="grid-content">

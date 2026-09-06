@@ -163,13 +163,13 @@ impl TargetGame {
         }
     }
 
-    /// 获取主 INI 文件名
-    /// 星穹铁道使用 RatioShot.ini，其他游戏使用 d3dx.ini
+    /// 获取主 INI 文件名。
+    ///
+    /// 全游戏统一为 `d3dx.ini`（对齐原版 NRMM：`mods_path_validator.dart` 对全部游戏
+    /// 统一校验 `parent/d3dx.ini`，无按游戏的 RatioShot 特判；该特判属早期错误移植，
+    /// 会导致 HSR 主 INI 处理被跳过——3Dmigoto/XXMI 实际读取的始终是 d3dx.ini）。
     pub fn d3dx_ini_name(&self) -> &'static str {
-        match self {
-            TargetGame::HonkaiStarRail => "RatioShot.ini",
-            _ => "d3dx.ini",
-        }
+        "d3dx.ini"
     }
 
     /// 获取所有支持的游戏列表

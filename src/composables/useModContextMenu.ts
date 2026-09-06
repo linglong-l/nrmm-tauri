@@ -48,6 +48,12 @@ export function useModContextMenu(
   /** 打开右键菜单 */
   function openContextMenu(e: MouseEvent) {
     if (isNoneSlot.value) return
+    // 更新模组数据期间禁止弹出右键菜单：后台正在批量改写 INI/标记文件，
+    // 此时触发的启停/移除/选择等操作会与 update 写 `_MANAGED_` 交叠产生中间态竞态
+    if (modsStore.isUpdatingModData) {
+      logger.debug('ModContextMenu', 'openContextMenu blocked: updating mod data')
+      return
+    }
     // 标记后续短暂时间内的左键为右键后残留点击，避免误选中
     // Teleport后误触概率已大幅降低，缩短时间窗到300ms
     ignoreNextClickUntil.value = performance.now() + 300
@@ -96,12 +102,19 @@ export function useModContextMenu(
   async function handleToggleEnabled() {
     if (!mod.value) return
     closeContextMenu()
-    // 操作前捕获原禁用状态，用于生成操作后的提示文案（patch 后会更新为操作后状态，不能直接拿来判断）
+    // 操作前捕获原禁用状态与路径，用于生成操作后的提示文案与本地 patch（await 后状态即更新）
     const wasDisabled = mod.value.modDisabled
+    const oldPath = mod.value.modPath
     try {
-      const delta = await toggleModDisabled(mod.value.modPath, mod.value.modDisabled, mod.value.isMutex)
-      // 命令级增量原地 patch（零全量 refresh）
-      modsStore.applyGroupDelta(delta)
+      const res = await toggleModDisabled(mod.value.modPath, mod.value.modDisabled, mod.value.isMutex)
+      if (res.degraded) {
+        // 异常降级：增量扫描 + 组增量原地 patch，并明确告知用户发生异常
+        modsStore.applyGroupDelta(res.groupDelta)
+        ElMessage.warning(t('Operation abnormal, mod data refreshed incrementally'))
+      } else {
+        // 零扫描：仅目录重命名，前端就地更新路径与禁用标志（无任何扫描/重载）
+        modsStore.toggleModLocal(oldPath, res.newPath, res.disabled)
+      }
       // 标记需要更新模组数据（仅NormalGroup操作）
       if (!mod.value.isMutex) {
         modsStore.markNeedUpdate(mod.value.groupIndex)

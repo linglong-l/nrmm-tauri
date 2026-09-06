@@ -351,6 +351,7 @@ async function handleDoubleClick() {
 /** 重命名模组 */
 async function handleRename() {
   if (!mod.value) return
+  if (modsStore.isUpdatingModData) return
   closeContextMenu()
   try {
     const { value } = await ElMessageBox.prompt(

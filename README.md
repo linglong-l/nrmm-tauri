@@ -6,6 +6,15 @@
 
 一款基于 Tauri 2 + Vue 3 的轻量级模组管理工具，为游戏玩家提供模组的浏览、启用/禁用、分组管理、收藏、压缩包导入与 INI 备份等核心功能。支持 Windows 与 Linux 平台。
 
+> **注意：工具链版本限制（2026-09 起生效）**
+>
+> 构建与运行本项目要求 **Node.js ≥ 22.22.2**、**Rust ≥ 1.93**（MSRV）。
+> 下限由现有依赖直接钉定：
+> - Node.js：前端依赖（`abbrev`/`nopt` 等）最低支持本机 `^22.22.2`，低于此版本 `npm install` 会报 `EBADENGINE` 警告；
+> - Rust：`sevenz-rust2` 0.22 要求 Rust 1.93（`tauri` 系 1.77.2、`notify-rust` 1.89 均更低）。
+>
+> 仓库已相应设置 `package.json engines >=22.22.2`、`Cargo.toml rust-version = "1.93"`，CI 使用 Node 22 与 stable 工具链。详见[环境要求](#环境要求)。
+
 * 游戏内按键模拟（NRMM 交互协议）目前仅在 Windows 完整支持；macOS 为占位实现尚未启用。
 
 ## 平台支持

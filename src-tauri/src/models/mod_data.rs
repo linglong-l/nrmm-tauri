@@ -536,13 +536,32 @@ impl Default for GroupDelta {
     }
 }
 
-/// 批量组操作增量（禁用/启用全组等）：保留原 changed 计数语义
+/// 批量启停零扫描路径对：模组目录重命名前后（old_path → new_path），
+/// 前端据此逐条本地 patch（不触发任何扫描）。
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathPair {
+    /// 重命名前绝对路径
+    pub old_path: String,
+    /// 重命名后绝对路径
+    pub new_path: String,
+}
+
+/// 批量组操作增量（禁用/启用全组等）：保留原 changed 计数语义。
+/// 零扫描路径：`toggled` 携带被切换的路径对，`degraded=false`；
+/// 异常降级路径：`degraded=true`，`delta` 为增量扫描后的分组新状态（前端整体 patch）。
+#[derive(Debug, Clone, serde::Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchGroupDelta {
     /// 受影响（被切换状态）的模组数（原命令返回值语义保留）
     pub changed: u32,
-    /// 受影响分组增量
+    /// 零扫描路径：被切换的 (old,new) 路径对列表；降级时为空
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub toggled: Vec<PathPair>,
+    /// 是否降级为增量扫描（目录重命名/缓存更新异常）；true 时前端应消费 delta 而非逐条 patch
+    #[serde(default)]
+    pub degraded: bool,
+    /// 受影响分组增量（正常路径亦组装，供前端一键 patch 兜底）
     pub delta: GroupDelta,
 }
 
@@ -581,6 +600,11 @@ mod tests {
     fn batch_group_delta_serializes_camel_case() {
         let d = BatchGroupDelta {
             changed: 3,
+            toggled: vec![PathPair {
+                old_path: "D:/old".to_string(),
+                new_path: "D:/DISABLEDold".to_string(),
+            }],
+            degraded: false,
             delta: GroupDelta::default(),
         };
         let v = serde_json::to_value(&d).expect("BatchGroupDelta 序列化失败");
@@ -590,6 +614,8 @@ mod tests {
             "应含 changed 字段且语义保留"
         );
         assert!(v.get("delta").is_some(), "应含 delta 字段");
+        assert!(v.get("toggled").is_some(), "应含 toggled 字段");
+        assert!(v.get("degraded").is_some(), "应含 degraded 字段");
         assert!(v.get("old_group_path").is_none());
     }
 

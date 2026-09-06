@@ -498,6 +498,8 @@ export interface UpdateResult {
   selectedModIndex?: number;
   /** 是否检测到标准 XXMI/3DMigoto 环境（仅 updateModData 结果中有效） */
   isStandardXxmi?: boolean;
+  /** 主 INI（游戏根 d3dx.ini）处理状态：'Resolved'｜'MissingMainIni'（仅 updateModData 结果中有效；旧前端无该字段时按 Resolved 处理） */
+  mainIniStatus?: 'Resolved' | 'MissingMainIni';
   /** ORFix/TexFx 检测结果（仅 updateModData 结果中有效） */
   orfixDetection?: OrfixDetection;
   /** 因文件名非 UTF-8 被跳过的条目总数（update_mod_data 深扫；无则省略） */
@@ -522,14 +524,40 @@ export interface GroupDelta {
   oldModPaths: string[];
 }
 
+/** 批量启停路径对（零扫描：模组目录重命名前后） */
+export interface PathPair {
+  /** 重命名前绝对路径 */
+  oldPath: string;
+  /** 重命名后绝对路径 */
+  newPath: string;
+}
+
 /**
  * 批量组操作命令级增量（disable_all_mods_in_group / enable_all_mods_in_group）
+ * 零扫描路径：toggled 携带路径对，degraded=false，前端逐条本地 patch；
+ * 异常降级：degraded=true，delta 为增量扫描后的分组完整新状态（整体 patch + 告知用户）
  */
 export interface BatchGroupDelta {
   /** 实际发生状态变化的模组数量 */
   changed: number;
-  /** 受影响分组的增量 */
+  /** 零扫描路径：被切换状态的路径对列表（degraded=false 时消费） */
+  toggled: PathPair[];
+  /** 是否降级为增量扫描（true 时消费 delta 并告知用户异常） */
+  degraded: boolean;
+  /** 受影响分组的增量（degraded=true 时消费） */
   delta: GroupDelta;
+}
+
+/** 单模组启用/禁用结果（toggle_mod_disabled：零扫描路径） */
+export interface ToggleModResult {
+  /** 操作后模组目录绝对路径 */
+  newPath: string;
+  /** 操作后的禁用状态 */
+  disabled: boolean;
+  /** 是否降级为增量扫描（true 时消费 groupDelta 并告知用户异常） */
+  degraded: boolean;
+  /** 异常降级时的受影响分组增量 */
+  groupDelta: GroupDelta;
 }
 
 /**
@@ -565,6 +593,8 @@ export interface RemoveModResult {
   failedCount: number;
   /** 受影响分组的增量（R1：前端原地 patch，替代全量 refresh） */
   groupDelta: GroupDelta;
+  /** 是否降级为增量扫描（缓存剔除未命中；true 时消费 groupDelta 并告知用户异常） */
+  degraded?: boolean;
 }
 
 /**
