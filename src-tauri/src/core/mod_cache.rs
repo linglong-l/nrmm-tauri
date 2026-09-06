@@ -625,6 +625,162 @@ impl ModCache {
 
         Some(group_node)
     }
+
+    /// 模组级就地 patch（零扫描）：目录重命名（启用/禁用）后直接更新缓存中该模组的
+    /// 绝对路径与禁用标志。组树与扁平列表同步修改（同一 `Arc<ModData>` 经
+    /// `Arc::make_mut` 就地更新，保持 R3/C-3b 共享实例不变量）。
+    ///
+    /// # 参数
+    /// - `game`: 目标游戏（缓存键）。
+    /// - `mods_path`: Mods 根目录。
+    /// - `old_full_path`: 修改前的模组目录绝对路径。
+    /// - `new_full_path`: 修改后的模组目录绝对路径（rename 目标）。
+    /// - `disabled`: 修改后的禁用状态（`DISABLED_` 前缀增删）。
+    ///
+    /// # 返回
+    /// 组树与扁平列表均定位并更新返回 `true`；任一侧未命中返回 `false`
+    /// （调用方应降级组级局部重扫）。
+    pub fn patch_mod_entry(
+        &mut self,
+        game: TargetGame,
+        mods_path: &Path,
+        old_full_path: &Path,
+        new_full_path: &Path,
+        disabled: bool,
+    ) -> bool {
+        let key = Self::make_key(game, mods_path);
+        let existing = match self.cache.get_mut(&key) {
+            Some(e) => e,
+            None => return false,
+        };
+        let owned = Arc::make_mut(&mut existing.result);
+
+        // 组树递归定位并就地修改（含 children 递归，深度优先唯一包含）
+        fn patch_in_node(
+            node: &mut ModGroupData,
+            old: &Path,
+            new_abs: &Path,
+            disabled: bool,
+        ) -> bool {
+            for c in node.children.iter_mut() {
+                if path_within(old, &c.full_path)
+                    && patch_in_node(Arc::make_mut(c), old, new_abs, disabled)
+                {
+                    return true;
+                }
+            }
+            for m in node.mods.iter_mut() {
+                if path_equivalent(Path::new(m.full_path.as_ref()), old) {
+                    let mm = Arc::make_mut(m);
+                    mm.full_path = Arc::from(new_abs.to_string_lossy().as_ref());
+                    mm.mod_path = new_abs.to_string_lossy().to_string();
+                    mm.mod_disabled = disabled;
+                    // 同步派生路径列表（与 mods 平行索引）
+                    node.mod_paths = node.mods.iter().map(|x| x.full_path.clone()).collect();
+                    return true;
+                }
+            }
+            false
+        }
+
+        let mut group_hit = false;
+        for g in owned.groups.iter_mut() {
+            if path_within(old_full_path, &g.full_path) {
+                group_hit = patch_in_node(g, old_full_path, new_full_path, disabled);
+                break;
+            }
+        }
+
+        let flat_hit = owned.mods.iter_mut().any(|m| {
+            if !path_equivalent(Path::new(m.full_path.as_ref()), old_full_path) {
+                return false;
+            }
+            let mm = Arc::make_mut(m);
+            mm.full_path = Arc::from(new_full_path.to_string_lossy().as_ref());
+            mm.mod_path = new_full_path.to_string_lossy().to_string();
+            mm.mod_disabled = disabled;
+            true
+        });
+
+        let ok = group_hit && flat_hit;
+        if ok {
+            let (total, enabled, disabled) = recount_mods(&owned.mods);
+            owned.total_mods_count = total;
+            owned.enabled_mods_count = enabled;
+            owned.disabled_mods_count = disabled;
+        }
+        ok
+    }
+
+    /// 模组级就地移除（零扫描）：移除模组后从缓存剔除该条目（组树 + 扁平列表同步），
+    /// 重算组级与总计数。
+    ///
+    /// # 参数
+    /// - `game`: 目标游戏（缓存键）。
+    /// - `mods_path`: Mods 根目录。
+    /// - `mod_full_path`: 被移除模组的目录绝对路径。
+    ///
+    /// # 返回
+    /// 组树与扁平列表均定位并剔除返回 `true`；未命中（缓存无此模组）返回 `false`
+    /// （调用方应降级组级局部重扫）。
+    pub fn remove_mod_entry(
+        &mut self,
+        game: TargetGame,
+        mods_path: &Path,
+        mod_full_path: &Path,
+    ) -> bool {
+        let key = Self::make_key(game, mods_path);
+        let existing = match self.cache.get_mut(&key) {
+            Some(e) => e,
+            None => return false,
+        };
+        let owned = Arc::make_mut(&mut existing.result);
+        let mut group_hit = false;
+        for g in owned.groups.iter_mut() {
+            if path_within(mod_full_path, &g.full_path) {
+                group_hit = remove_mod_in_node(g, mod_full_path);
+                break;
+            }
+        }
+        let flat_hit = {
+            let before = owned.mods.len();
+            owned
+                .mods
+                .retain(|m| !path_equivalent(Path::new(m.full_path.as_ref()), mod_full_path));
+            before != owned.mods.len()
+        };
+        let ok = group_hit && flat_hit;
+        if ok {
+            let (total, enabled, disabled) = recount_mods(&owned.mods);
+            owned.total_mods_count = total;
+            owned.enabled_mods_count = enabled;
+            owned.disabled_mods_count = disabled;
+        }
+        ok
+    }
+}
+
+/// 组节点内递归剔除指定模组（含 children），并保持派生字段一致。
+///
+/// # 返回
+/// 是否剔除命中（任一树节点中该模组被移除）。
+fn remove_mod_in_node(node: &mut ModGroupData, mod_full_path: &Path) -> bool {
+    let mut hit = false;
+    for c in node.children.iter_mut() {
+        if remove_mod_in_node(Arc::make_mut(c), mod_full_path) {
+            hit = true;
+        }
+    }
+    let before = node.mods.len();
+    node.mods
+        .retain(|m| !path_equivalent(Path::new(m.full_path.as_ref()), mod_full_path));
+    if node.mods.len() != before {
+        node.mod_paths = node.mods.iter().map(|m| m.full_path.clone()).collect();
+        // 组级计数与轻量扫描同口径：模组数 = mods.len() 减 None 槽位（None 恒位于首位）
+        node.mod_count = node.mods.len().saturating_sub(1) as u32;
+        hit = true;
+    }
+    hit
 }
 
 /// C-3b 组节点签名复用：新组节点替换旧组节点（`group_path` 等价）前，
@@ -1105,6 +1261,144 @@ mod tests {
 
         assert!(cache.get(TargetGame::Wuwa, &mods_path).is_none());
         assert!(cache.get(TargetGame::GenshinImpact, &mods_path).is_some());
+    }
+
+    /// patch_mod_entry：目录重命名（禁用）后组树 + 扁平列表路径与禁用标志同步更新，零扫描。
+    #[test]
+    fn test_patch_mod_entry_updates_path_and_disabled() {
+        let (_dir, mods_path) = setup_test_mods();
+        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let old_full = result
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .and_then(|g| g.mods.iter().find(|m| m.mod_name == "TestMod"))
+            .map(|m| Path::new(m.full_path.as_ref()).to_path_buf())
+            .expect("存在 TestMod 模组");
+
+        let new_full = old_full
+            .parent()
+            .expect("模组有父目录")
+            .join("DISABLEDTestMod");
+
+        let mut cache = ModCache::new();
+        cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
+        assert!(cache.patch_mod_entry(
+            TargetGame::GenshinImpact,
+            &mods_path,
+            &old_full,
+            &new_full,
+            true
+        ));
+
+        let cached = cache
+            .get(TargetGame::GenshinImpact, &mods_path)
+            .expect("缓存存在");
+        // 组树内：路径更新 + 禁用标志 + 名称不变
+        let entry = cached
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .and_then(|g| g.mods.iter().find(|m| m.mod_name == "TestMod"))
+            .expect("组内仍存在该模组");
+        assert!(
+            path_equivalent(Path::new(entry.full_path.as_ref()), &new_full),
+            "组内 full_path 应更新为 DISABLED 路径"
+        );
+        assert!(entry.mod_disabled, "mod_disabled 应置 true");
+        assert_eq!(entry.mod_name, "TestMod", "mod_name 应保持不变");
+        // 扁平列表同步（共享 Arc，路径一致）
+        assert!(
+            cached
+                .mods
+                .iter()
+                .any(|m| path_equivalent(Path::new(m.full_path.as_ref()), &new_full)),
+            "扁平列表应同步更新路径"
+        );
+        // 计数重算：禁用 1，启用 0
+        assert_eq!(cached.total_mods_count, 1);
+        assert_eq!(cached.enabled_mods_count, 0);
+        assert_eq!(cached.disabled_mods_count, 1);
+
+        // 再次 patch（启用还原）同样命中
+        assert!(cache.patch_mod_entry(
+            TargetGame::GenshinImpact,
+            &mods_path,
+            &new_full,
+            &old_full,
+            false
+        ));
+        let cached = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+        let entry = cached
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .and_then(|g| g.mods.iter().find(|m| m.mod_name == "TestMod"))
+            .unwrap();
+        assert!(!entry.mod_disabled, "再次 patch 后应恢复启用");
+        assert_eq!(cached.enabled_mods_count, 1);
+    }
+
+    /// patch_mod_entry：命中不存在的模组路径返回 false（调用方据此降级重扫）。
+    #[test]
+    fn test_patch_mod_entry_miss_returns_false() {
+        let (_dir, mods_path) = setup_test_mods();
+        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let mut cache = ModCache::new();
+        cache.set(TargetGame::GenshinImpact, &mods_path, result);
+
+        let miss = mods_path.join("_MANAGED_/group_1/NoSuchMod");
+        let new = mods_path.join("_MANAGED_/group_1/DISABLEDNoSuchMod");
+        assert!(!cache.patch_mod_entry(TargetGame::GenshinImpact, &mods_path, &miss, &new, true));
+
+        // 缓存未命中（无该游戏条目）也返回 false
+        assert!(!cache.patch_mod_entry(
+            TargetGame::GenshinImpact,
+            Path::new("/no/mods"),
+            &miss,
+            &new,
+            true
+        ));
+    }
+
+    /// remove_mod_entry：组树 + 扁平列表同步剔除并重算计数；二次移除返回 false。
+    #[test]
+    fn test_remove_mod_entry_removes_from_tree_and_flat() {
+        let (_dir, mods_path) = setup_test_mods();
+        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = result
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .and_then(|g| g.mods.iter().find(|m| m.mod_name == "TestMod"))
+            .map(|m| Path::new(m.full_path.as_ref()).to_path_buf())
+            .expect("存在 TestMod 模组");
+
+        let mut cache = ModCache::new();
+        cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
+        assert!(cache.remove_mod_entry(TargetGame::GenshinImpact, &mods_path, &full));
+
+        let cached = cache
+            .get(TargetGame::GenshinImpact, &mods_path)
+            .expect("缓存存在");
+        assert_eq!(cached.total_mods_count, 0, "总模组数应清零");
+        assert!(
+            !cached.mods.iter().any(|m| m.mod_name == "TestMod"),
+            "扁平列表应剔除该模组"
+        );
+        let group = cached
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .expect("分组仍存在");
+        assert!(
+            !group.mods.iter().any(|m| m.mod_name == "TestMod"),
+            "组树内应剔除该模组"
+        );
+        assert_eq!(group.mod_count, 0, "组内模组计数应清零");
+
+        // 二次移除（已无此模组）返回 false
+        assert!(!cache.remove_mod_entry(TargetGame::GenshinImpact, &mods_path, &full));
     }
 
     /// 测试全局单例 `MOD_CACHE` 可正常访问且初始状态为空。

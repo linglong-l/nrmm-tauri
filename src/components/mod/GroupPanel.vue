@@ -480,15 +480,23 @@ async function handleOpenGroupFolder() {
   }
 }
 
-/** 禁用分组下所有一级模组（已禁用的跳过）；R1：批量组增量原地 patch，零全量 refresh */
+/** 禁用分组下所有一级模组（已禁用的跳过）；零扫描：目录重命名 + 前端逐条本地 patch；异常降级增量扫描并告知 */
 async function handleDisableAllMods() {
   if (!contextGroup.value || !contextGroup.value.groupPath) return
+  if (modsStore.isUpdatingModData) return
   const gp = contextGroup.value.groupPath
   const displayName = contextGroup.value.name || contextGroup.value.groupName
   closeContextMenu()
   try {
     const batch = await disableAllModsInGroup(gp)
-    modsStore.applyGroupDelta(batch.delta)
+    if (batch.degraded) {
+      // 异常降级：增量扫描 + 组增量 patch，明确告知用户发生异常
+      modsStore.applyGroupDelta(batch.delta)
+      ElMessage.warning('禁用操作异常，模组数据已增量刷新')
+    } else {
+      // 零扫描：仅目录重命名，前端逐条本地 patch（无任何扫描/重载）
+      modsStore.batchToggleModLocal(batch.toggled.map((t) => ({ ...t, disabled: true })))
+    }
     if (batch.changed > 0) {
       ElMessage.success(`已禁用 ${displayName} 下的 ${batch.changed} 个模组`)
     } else {
@@ -499,15 +507,21 @@ async function handleDisableAllMods() {
   }
 }
 
-/** 启用分组下所有一级禁用模组（已启用的跳过）；R1：批量组增量原地 patch，零全量 refresh */
+/** 启用分组下所有一级禁用模组（已启用的跳过）；零扫描：本地逐条 patch，异常降级增量扫描并告知 */
 async function handleEnableAllMods() {
   if (!contextGroup.value || !contextGroup.value.groupPath) return
+  if (modsStore.isUpdatingModData) return
   const gp = contextGroup.value.groupPath
   const displayName = contextGroup.value.name || contextGroup.value.groupName
   closeContextMenu()
   try {
     const batch = await enableAllModsInGroup(gp)
-    modsStore.applyGroupDelta(batch.delta)
+    if (batch.degraded) {
+      modsStore.applyGroupDelta(batch.delta)
+      ElMessage.warning('启用操作异常，模组数据已增量刷新')
+    } else {
+      modsStore.batchToggleModLocal(batch.toggled.map((t) => ({ ...t, disabled: false })))
+    }
     if (batch.changed > 0) {
       ElMessage.success(`已启用 ${displayName} 下的 ${batch.changed} 个模组`)
     } else {
@@ -526,6 +540,7 @@ function isGroupXx(group: ModGroupData): boolean {
 /** 删除分组（NRMM对齐：移至 _MANAGED_REMOVED_ 目录） */
 async function handleRemoveGroup() {
   if (!contextGroup.value || !contextGroup.value.groupPath) return
+  if (modsStore.isUpdatingModData) return
   closeContextMenu()
   try {
     await ElMessageBox.confirm(

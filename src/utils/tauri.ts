@@ -10,7 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta } from '../types'
+import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta, ToggleModResult } from '../types'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from './logger'
@@ -298,8 +298,8 @@ export async function renameGroup(groupPath: string, newName: string, isGroupXx:
  * @param isMutex 是否为互斥组成员
  * @returns 受影响分组的增量（R1：前端原地 patch）
  */
-export async function toggleModDisabled(modPath: string, enable: boolean, isMutex: boolean): Promise<GroupDelta> {
-  return safeInvoke<GroupDelta>('toggle_mod_disabled', { modPath, enable, isMutex })
+export async function toggleModDisabled(modPath: string, enable: boolean, isMutex: boolean): Promise<ToggleModResult> {
+  return safeInvoke<ToggleModResult>('toggle_mod_disabled', { modPath, enable, isMutex })
 }
 
 /**

@@ -61,9 +61,6 @@ export default defineConfig(async () => ({
       "@tauri-apps/api/event",
       "@tauri-apps/plugin-dialog",
       "@tauri-apps/plugin-notification",
-      "@tauri-apps/plugin-opener",
-      "@tauri-apps/plugin-shell",
-      "@tauri-apps/plugin-os",
     ],
   },
 

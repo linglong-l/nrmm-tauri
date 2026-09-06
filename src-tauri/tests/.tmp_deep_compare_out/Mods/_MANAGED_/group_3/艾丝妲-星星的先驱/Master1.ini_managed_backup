@@ -1,0 +1,30 @@
+;.防倒卖：AA-往.生.堂.桃.姐 二.次.整.理.免.費.發.布 企.鵝.群：三.二.一.三.二.六.九.零.零.
+; 合并的模组: E:\下载\艾丝妲-星星的先驱\asta no rhine\asta.ini, E:\下载\艾丝妲-星星的先驱\asta rhine lab\asta.ini
+
+namespace = 1\master_1
+; Constants ---------------------------
+
+[Constants]
+global persist $swapvar = 0
+global $active
+global $creditinfo = 0
+
+[KeySwap]
+condition = $active == 1
+key = /
+back = .
+type = cycle
+$swapvar = 1,2
+$creditinfo = 0
+
+[Present]
+post $active = 0
+; Overrides ---------------------------
+
+[TextureOverride1Position]
+$active = 1
+
+
+; .ini 文件由 WWMI 合并脚本生成，使用由 SilentNightSound 和 Qwerty3Yuiop 提供的命名空间，由 Exomata 为 WWMI 编辑
+; 如果你遇到任何问题或发现任何错误，请联系我（Discord: xxexomataxx）
+;.防倒卖：A.A-往.生.堂.桃.姐 二.次.整.理.免.費.發.布 企.鵝.群.：321326900

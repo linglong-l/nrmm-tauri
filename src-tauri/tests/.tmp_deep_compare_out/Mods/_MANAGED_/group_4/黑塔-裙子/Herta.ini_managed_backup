@@ -1,0 +1,339 @@
+;.防倒卖：寄寄子二次收集整理;企鹅交流裙 :170666418
+; Herta
+
+; Constants -------------------------
+
+[Constants]
+global $active = 0
+global $creditinfo = 0
+
+[Present]
+post $active = 0
+run = CommandListCreditInfo
+
+; Overrides -------------------------
+
+[TextureOverrideHertaHairBlend]
+hash = af0ef73c
+handling = skip
+vb2 = ResourceHertaHairBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceHertaHairPosition
+	draw = 2915, 0
+endif
+$active = 1
+ResourceHertaHairDrawCS = copy ResourceHertaHairDrawCS
+if DRAW_TYPE == 8    
+	Resource\SRMI\PositionBuffer = ref ResourceHertaHairPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceHertaHairBlendCS
+	Resource\SRMI\DrawBuffer = ref ResourceHertaHairDrawCS
+	$\SRMI\vertcount = 2915
+elif DRAW_TYPE != 1
+	$_blend_ = 2
+endif
+
+[TextureOverrideHertaHairTexcoord]
+hash = d30fc7cc
+vb1 = ResourceHertaHairTexcoord
+
+[TextureOverrideHertaHairVertexLimitRaise]
+hash = f67e9060
+;hash = f9eda56d
+override_vertex_count = 2915
+override_byte_stride = 40
+if DRAW_TYPE != 8 && DRAW_TYPE != 1 && $_blend_ > 0
+	$_blend_ = $_blend_ - 1
+	this = ref ResourceHertaHairDrawCS
+endif
+
+[TextureOverrideHertaHeadBlend]
+hash = 2e65ff34
+handling = skip
+vb2 = ResourceHertaHeadBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceHertaHeadPosition
+	draw = 3421, 0
+endif
+$active = 1
+ResourceHertaHeadDrawCS = copy ResourceHertaHeadDrawCS
+if DRAW_TYPE == 8    
+	Resource\SRMI\PositionBuffer = ref ResourceHertaHeadPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceHertaHeadBlendCS
+	Resource\SRMI\DrawBuffer = ref ResourceHertaHeadDrawCS
+	$\SRMI\vertcount = 3421
+elif DRAW_TYPE != 1
+	$_blend_ = 2
+endif
+
+[TextureOverrideHertaHeadTexcoord]
+hash = 8794f692
+vb1 = ResourceHertaHeadTexcoord
+
+[TextureOverrideHertaHeadVertexLimitRaise]
+hash = 0e8c035a
+;hash = 011f3657
+override_vertex_count = 3421
+override_byte_stride = 40
+if DRAW_TYPE != 8 && DRAW_TYPE != 1 && $_blend_ > 0
+	$_blend_ = $_blend_ - 1
+	this = ref ResourceHertaHeadDrawCS
+endif
+
+[TextureOverrideHertaBodyBlend]
+hash = d7ccfed7
+handling = skip
+vb2 = ResourceHertaBodyBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceHertaBodyPosition
+	draw = 107454, 0
+endif
+;hash = 73749b98
+$active = 1
+ResourceHertaBodyDrawCS = copy ResourceHertaBodyDrawCS
+if DRAW_TYPE == 8    
+	Resource\SRMI\PositionBuffer = ref ResourceHertaBodyPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceHertaBodyBlendCS
+	Resource\SRMI\DrawBuffer = ref ResourceHertaBodyDrawCS
+	$\SRMI\vertcount = 107454
+elif DRAW_TYPE != 1
+	$_blend_ = 2
+endif
+
+[TextureOverrideHertaBodyTexcoord]
+hash = 91c0cb8e
+vb1 = ResourceHertaBodyTexcoord
+
+[TextureOverrideHertaBodyVertexLimitRaise]
+hash = cf1012f5
+;hash = c08327f8
+override_vertex_count = 107454
+override_byte_stride = 40
+if DRAW_TYPE != 8 && DRAW_TYPE != 1 && $_blend_ > 0
+	$_blend_ = $_blend_ - 1
+	this = ref ResourceHertaBodyDrawCS
+endif
+
+[TextureOverrideHertaHairIB]
+hash = 5ed4d217
+handling = skip
+drawindexed = auto
+
+[TextureOverrideHertaHairA]
+hash = 5ed4d217
+match_first_index = 0
+ib = ResourceHertaHairAIB
+
+[TextureOverrideHertaHairADiffuse]
+hash = ee995067
+this = ResourceHertaHairADiffuse
+
+[TextureOverrideHertaHairALightMap]
+hash = 515a7733
+this = ResourceHertaHairALightMap
+
+[TextureOverrideHertaHeadIB]
+hash = d27ce7f6
+handling = skip
+drawindexed = auto
+
+[TextureOverrideHertaHeadA]
+hash = d27ce7f6
+match_first_index = 0
+ib = ResourceHertaHeadAIB
+
+[TextureOverrideHertaHeadADiffuse]
+hash = e116363f
+this = ResourceHertaHeadADiffuse
+
+[TextureOverrideHertaHeadB]
+hash = d27ce7f6
+match_first_index = 12336
+ib = ResourceHertaHeadBIB
+
+[TextureOverrideHertaBodyIB]
+hash = 9553ff35
+handling = skip
+drawindexed = auto
+
+[TextureOverrideHertaBodyA]
+hash = 9553ff35
+match_first_index = 0
+ib = ResourceHertaBodyAIB
+
+[TextureOverrideHertaBodyADiffuse]
+hash = e07c10c9
+this = ResourceHertaBodyADiffuse
+
+[TextureOverrideHertaBodyALightMap]
+hash = b878ef55
+this = ResourceHertaBodyALightMap
+
+[TextureOverrideHertaBodyB]
+hash = 9553ff35
+match_first_index = 8814
+ib = ResourceHertaBodyBIB
+
+[TextureOverrideHertaBodyC]
+hash = 9553ff35
+match_first_index = 53166
+ib = ResourceHertaBodyCIB
+
+; CommandList -----------------------
+
+[CommandListCreditInfo]
+if $creditinfo == 0 && $active == 1
+	pre Resource\ShaderFixes\help.ini\Notification = ResourceCreditInfo
+	pre run = CustomShader\ShaderFixes\help.ini\FormatText
+	pre $\ShaderFixes\help.ini\notification_timeout = time + 5.0
+	$creditinfo = 1
+endif
+
+; Resources -------------------------
+
+[ResourceHertaHairPosition]
+type = Buffer
+stride = 40
+filename = HertaHairPosition.buf
+
+[ResourceHertaHairBlend]
+type = Buffer
+stride = 32
+filename = HertaHairBlend.buf
+
+[ResourceHertaHairTexcoord]
+type = Buffer
+stride = 8
+filename = HertaHairTexcoord.buf
+
+[ResourceHertaHeadPosition]
+type = Buffer
+stride = 40
+filename = HertaHeadPosition.buf
+
+[ResourceHertaHeadBlend]
+type = Buffer
+stride = 32
+filename = HertaHeadBlend.buf
+
+[ResourceHertaHeadTexcoord]
+type = Buffer
+stride = 8
+filename = HertaHeadTexcoord.buf
+
+[ResourceHertaBodyPosition]
+type = Buffer
+stride = 40
+filename = HertaBodyPosition.buf
+
+[ResourceHertaBodyBlend]
+type = Buffer
+stride = 32
+filename = HertaBodyBlend.buf
+
+[ResourceHertaBodyTexcoord]
+type = Buffer
+stride = 20
+filename = HertaBodyTexcoord.buf
+
+[ResourceHertaHairAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = HertaHairA.ib
+
+[ResourceHertaHeadAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = HertaHeadA.ib
+
+[ResourceHertaHeadBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = HertaHeadB.ib
+
+[ResourceHertaBodyAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = HertaBodyA.ib
+
+[ResourceHertaBodyBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = HertaBodyB.ib
+
+[ResourceHertaBodyCIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = HertaBodyC.ib
+
+[ResourceHertaHairADiffuse]
+filename = HertaHairADiffuse.dds
+
+[ResourceHertaHairALightMap]
+filename = HertaHairALightMap.dds
+
+[ResourceHertaHeadADiffuse]
+filename = HertaHeadADiffuse.dds
+
+[ResourceHertaBodyADiffuse]
+filename = HertaBodyADiffuse.dds
+
+[ResourceHertaBodyALightMap]
+filename = HertaBodyALightMap.dds
+
+[ResourceCreditInfo]
+type = Buffer
+data = "Created by LHQ70"
+
+; .ini generated by XXMI (XX-Model-Importer)
+; If you have any issues or find any bugs, please open a ticket at https://github.com/leotorrez/XXMI-Tools/issues
+
+[Constants]
+global $_blend_ = 0
+
+; -------------------- Auto-generated CS resources --------------------
+
+[ResourceHertaHairDrawCS]
+type = RWStructuredBuffer
+array = 2915
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceHertaHairPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = HertaHairPosition.buf
+
+[ResourceHertaHairBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = HertaHairBlend.buf
+
+[ResourceHertaHeadDrawCS]
+type = RWStructuredBuffer
+array = 3421
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceHertaHeadPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = HertaHeadPosition.buf
+
+[ResourceHertaHeadBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = HertaHeadBlend.buf
+
+[ResourceHertaBodyDrawCS]
+type = RWStructuredBuffer
+array = 107454
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceHertaBodyPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = HertaBodyPosition.buf
+
+[ResourceHertaBodyBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = HertaBodyBlend.buf
+

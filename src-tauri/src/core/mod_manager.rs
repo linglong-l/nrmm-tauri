@@ -53,6 +53,16 @@ use walkdir::WalkDir;
 // 同时供本模块内部使用（pub use 也会将名称引入当前作用域）
 pub use crate::models::mod_data::{HashConflictResult, OrfixDetection};
 
+/// 主 INI（游戏根 d3dx.ini）处理状态，上报前端用于缺失警告。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Default)]
+pub enum MainIniStatus {
+    /// 主 INI 存在于游戏根，备份/读取/注入流程正常执行
+    #[default]
+    Resolved,
+    /// 游戏根未找到 d3dx.ini：模组处理仍完成，但游戏侧不会加载管理段
+    MissingMainIni,
+}
+
 /// 模组更新结果结构体
 #[derive(Debug, Clone, serde::Serialize, Default)]
 pub struct UpdateResult {
@@ -80,6 +90,9 @@ pub struct UpdateResult {
     /// 是否检测到标准 XXMI/3DMigoto 环境（[Constants] + XXMI 注入标记 + [Inject] 段）
     #[serde(default)]
     pub is_standard_xxmi: bool,
+    /// 主 INI（游戏根 d3dx.ini）处理状态（Resolved / MissingMainIni）
+    #[serde(default)]
+    pub main_ini_status: MainIniStatus,
     /// ORFix/TexFx 检测结果（在 INI 修改之前使用原始内容检测）
     #[serde(default)]
     pub orfix_detection: OrfixDetection,
@@ -552,7 +565,7 @@ impl Drop for BackupPauseGuard {
 /// 这是模组管理的核心函数，严格复刻 NRMM 的 updateModData 流程：
 /// 1. 准备 _MANAGED_ 目录（创建必要的模板 INI 文件）
 /// 2. 深度扫描所有模组（完整解析 INI）
-/// 3. 备份主 INI（d3dx.ini/RatioShot.ini）
+/// 3. 备份主 INI（d3dx.ini，全游戏统一）
 /// 4. 收集所有启用模组的 INI 路径和已知库
 /// 5. 清理旧的 group INI 文件
 /// 6. 为每个 group 创建 ModFolder.ini（include 该组启用的模组）
@@ -987,6 +1000,12 @@ pub fn update_mod_data(
         errors: all_errors,
         need_reload_manual,
         is_standard_xxmi,
+        // 主 INI 缺失状态显式上报（此前仅写日志静默跳过，前端无从感知游戏侧不生效）
+        main_ini_status: if main_ini_existed {
+            MainIniStatus::Resolved
+        } else {
+            MainIniStatus::MissingMainIni
+        },
         orfix_detection,
         ..Default::default()
     };
@@ -2458,18 +2477,18 @@ pub fn disable_mutex_mod(mod_path: &Path) -> Result<()> {
 /// # 错误
 /// - 读取目录失败时返回错误
 /// - 重命名失败时返回错误
-pub fn disable_all_mods_in_group(group_path: &Path) -> Result<u32> {
+pub fn disable_all_mods_in_group(group_path: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
     if !group_path.exists() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     if !group_path.is_dir() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
     let entries = fs::read_dir(group_path)
         .with_context(|| format!("Failed to read group directory: {:?}", group_path))?;
 
-    let mut disabled_count: u32 = 0;
+    let mut renamed: Vec<(PathBuf, PathBuf)> = Vec::new();
 
     for entry in entries {
         let entry = entry?;
@@ -2511,14 +2530,13 @@ pub fn disable_all_mods_in_group(group_path: &Path) -> Result<u32> {
             continue;
         }
 
-        // 重命名添加前缀
+        // 重命名添加前缀，并记录 (old, new) 供调用方零扫描更新缓存
         fs::rename(&path, &new_path)
             .with_context(|| format!("Failed to disable mod: {:?}", path))?;
-
-        disabled_count += 1;
+        renamed.push((path, new_path));
     }
 
-    Ok(disabled_count)
+    Ok(renamed)
 }
 
 /// 判断模组是否属于MutexGroup（非group_xx目录下的模组）
@@ -2680,18 +2698,18 @@ pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> 
 /// # 错误
 /// - 读取目录失败时返回错误
 /// - 重命名失败时返回错误
-pub fn enable_all_mods_in_group(group_path: &Path) -> Result<u32> {
+pub fn enable_all_mods_in_group(group_path: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
     if !group_path.exists() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     if !group_path.is_dir() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
     let entries = fs::read_dir(group_path)
         .with_context(|| format!("Failed to read group directory: {:?}", group_path))?;
 
-    let mut enabled_count: u32 = 0;
+    let mut renamed: Vec<(PathBuf, PathBuf)> = Vec::new();
 
     for entry in entries {
         let entry = entry?;
@@ -2747,10 +2765,10 @@ pub fn enable_all_mods_in_group(group_path: &Path) -> Result<u32> {
         fs::rename(&path, &new_path)
             .with_context(|| format!("Failed to enable mod: {:?}", path))?;
 
-        enabled_count += 1;
+        renamed.push((path, new_path));
     }
 
-    Ok(enabled_count)
+    Ok(renamed)
 }
 
 /// 从备份恢复所有 INI 文件
@@ -2771,21 +2789,19 @@ pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
     let mut restored = 0u32;
     let mut failed = 0u32;
 
-    // d3dx.ini / RatioShot.ini 位于游戏根（Mods 父目录），不在 Mods/ 内
+    // d3dx.ini 位于游戏根（Mods 父目录），不在 Mods/ 内
     let game_root = game_mods_path.parent().unwrap_or(game_mods_path);
-    for &ini_name in &["d3dx.ini", "RatioShot.ini"] {
-        let ini_path = game_root.join(ini_name);
-        let backup_path = ini_path.with_extension(constants::BACKUP_EXTENSION);
-        if backup_path.exists() {
-            match fs::copy(&backup_path, &ini_path) {
-                Ok(_) => {
-                    restored += 1;
-                    fs::remove_file(&backup_path).ok();
-                }
-                Err(e) => {
-                    log::error!("Failed to restore main INI {}: {}", ini_path.display(), e);
-                    failed += 1;
-                }
+    let ini_path = game_root.join("d3dx.ini");
+    let backup_path = ini_path.with_extension(constants::BACKUP_EXTENSION);
+    if backup_path.exists() {
+        match fs::copy(&backup_path, &ini_path) {
+            Ok(_) => {
+                restored += 1;
+                fs::remove_file(&backup_path).ok();
+            }
+            Err(e) => {
+                log::error!("Failed to restore main INI {}: {}", ini_path.display(), e);
+                failed += 1;
             }
         }
     }
@@ -2905,6 +2921,9 @@ pub struct RemoveModResult {
     /// core 层构造占位（`GroupDelta::default()`），由命令层（`mod_commands::remove_mod`）
     /// 局部重扫受影响分组后组装真实值覆盖——core 层不感知缓存与局部扫描上下文。
     pub group_delta: GroupDelta,
+    /// 是否降级为增量扫描（命令层缓存剔除未命中时置 true；前端据此消费 group_delta 并告知用户）
+    #[serde(default)]
+    pub degraded: bool,
 }
 
 /// 还原模组 INI 结果（还原区功能）
@@ -3297,6 +3316,7 @@ pub fn remove_mod(mod_path: &Path) -> Result<RemoveModResult> {
         failed_count,
         // 占位：命令层局部重扫受影响分组后覆盖为真实 delta
         group_delta: GroupDelta::default(),
+        degraded: false,
     })
 }
 
@@ -4380,17 +4400,26 @@ endif
         assert_eq!(result.total_mods, 0);
         // d3dx.ini 不应在 Mods 目录内被创建
         assert!(!dir.path().join("d3dx.ini").exists());
+        // 主 INI 缺失必须显式上报（而非静默跳过）
+        assert_eq!(
+            result.main_ini_status,
+            crate::core::mod_manager::MainIniStatus::MissingMainIni
+        );
     }
 
     #[test]
     fn test_update_mod_data_hsr_ini() {
-        // HSR 同理：RatioShot.ini 不在 Mods/ 内创建
+        // 对齐原版 NRMM：全游戏统一 d3dx.ini（无 HSR RatioShot 特判），d3dx.ini 不在 Mods/ 内创建
         let dir = setup_test_env();
         let settings = AppSettings::default();
 
         let result = update_mod_data(TargetGame::HonkaiStarRail, dir.path(), &settings).unwrap();
         assert_eq!(result.total_mods, 0);
-        assert!(!dir.path().join("RatioShot.ini").exists());
+        assert!(!dir.path().join("d3dx.ini").exists());
+        assert_eq!(
+            result.main_ini_status,
+            crate::core::mod_manager::MainIniStatus::MissingMainIni
+        );
     }
 
     #[test]
@@ -4977,7 +5006,7 @@ mod tests_disable_all {
         fs::create_dir_all(&subgroup).unwrap();
         let _mod_d = create_mod_dir(&group, "ModD"); // 启用
 
-        let count = disable_all_mods_in_group(&group).unwrap();
+        let count = disable_all_mods_in_group(&group).unwrap().len() as u32;
         assert_eq!(count, 3); // ModA, ModC, ModD
 
         // 验证目录状态
@@ -5009,7 +5038,7 @@ mod tests_disable_all {
         create_mod_dir(&group, "DISABLEDModA");
         create_mod_dir(&group, "DISABLEDModB");
 
-        let count = disable_all_mods_in_group(&group).unwrap();
+        let count = disable_all_mods_in_group(&group).unwrap().len() as u32;
         assert_eq!(count, 0, "全部已禁用时计数为0");
     }
 
@@ -5024,7 +5053,7 @@ mod tests_disable_all {
         create_mod_dir(&group, "DISABLEDModB");
         create_mod_dir(&group, "ModC");
 
-        let count = disable_all_mods_in_group(&group).unwrap();
+        let count = disable_all_mods_in_group(&group).unwrap().len() as u32;
         assert_eq!(count, 1, "仅未禁用的 ModC 应被禁用");
 
         let entries: Vec<String> = fs::read_dir(&group)
@@ -5055,7 +5084,7 @@ mod tests_disable_all {
         let subgroup = group.join("SubGroup");
         fs::create_dir_all(&subgroup).unwrap();
 
-        let count = disable_all_mods_in_group(&group).unwrap();
+        let count = disable_all_mods_in_group(&group).unwrap().len() as u32;
         assert_eq!(count, 0);
     }
 }
@@ -5333,7 +5362,7 @@ mod tests_enable_all {
         fs::create_dir_all(&subgroup).unwrap();
         create_mod_dir(&group, "DISABLEDModD"); // 需启用
 
-        let count = enable_all_mods_in_group(&group).unwrap();
+        let count = enable_all_mods_in_group(&group).unwrap().len() as u32;
         assert_eq!(count, 3); // ModA, ModC, ModD
 
         let entries: Vec<String> = fs::read_dir(&group)
@@ -5356,7 +5385,7 @@ mod tests_enable_all {
         create_mod_dir(&group, "ModA");
         create_mod_dir(&group, "ModB");
 
-        let count = enable_all_mods_in_group(&group).unwrap();
+        let count = enable_all_mods_in_group(&group).unwrap().len() as u32;
         assert_eq!(count, 0);
     }
 
@@ -5370,7 +5399,7 @@ mod tests_enable_all {
         create_mod_dir(&group, "DISABLED-OtherMod"); // 横杠分隔
         create_mod_dir(&group, "DISABLED Third"); // 空格分隔
 
-        let count = enable_all_mods_in_group(&group).unwrap();
+        let count = enable_all_mods_in_group(&group).unwrap().len() as u32;
         assert_eq!(count, 3);
 
         let entries: Vec<String> = fs::read_dir(&group)

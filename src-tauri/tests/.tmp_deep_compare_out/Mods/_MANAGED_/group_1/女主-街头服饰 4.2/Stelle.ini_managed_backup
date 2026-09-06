@@ -1,0 +1,333 @@
+;.防倒卖：寄寄子二次收集整理;企鹅交流裙 :170666418
+; Stelle
+
+; Constants -------------------------
+
+[Constants]
+global $active = 0
+global $creditinfo = 0
+
+[Present]
+post $active = 0
+run = CommandListCreditInfo
+
+; Overrides -------------------------
+
+[TextureOverrideStelleHairBlend]
+hash = a91c061e
+handling = skip
+vb2 = ResourceStelleHairBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceStelleHairPosition
+	draw = 4241, 0
+elif DRAW_TYPE == 8
+	Resource\SRMI\PositionBuffer = ref ResourceStelleHairPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceStelleHairBlendCS
+	$\SRMI\vertex_count = 4241
+endif
+$active = 1
+
+[TextureOverrideStelleHairTexcoord]
+hash = fe9eaef0
+vb1 = ResourceStelleHairTexcoord
+
+[TextureOverrideStelleHairDraw]
+hash = 0f43f610
+override_vertex_count = 4241
+override_byte_stride = 40
+uav_byte_stride = 4
+
+[TextureOverrideStelleHeadBlend]
+hash = aa50f051
+handling = skip
+vb2 = ResourceStelleHeadBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceStelleHeadPosition
+	draw = 3118, 0
+elif DRAW_TYPE == 8
+	Resource\SRMI\PositionBuffer = ref ResourceStelleHeadPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceStelleHeadBlendCS
+	$\SRMI\vertex_count = 3118
+endif
+$active = 1
+
+[TextureOverrideStelleHeadTexcoord]
+hash = 6d41cf70
+vb1 = ResourceStelleHeadTexcoord
+
+[TextureOverrideStelleHeadDraw]
+hash = 9cfbc761
+override_vertex_count = 3118
+override_byte_stride = 40
+uav_byte_stride = 4
+
+[TextureOverrideStelleBodyBlend]
+hash = 89a23fcd
+handling = skip
+vb2 = ResourceStelleBodyBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceStelleBodyPosition
+	draw = 27390, 0
+elif DRAW_TYPE == 8
+	Resource\SRMI\PositionBuffer = ref ResourceStelleBodyPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceStelleBodyBlendCS
+	$\SRMI\vertex_count = 27390
+endif
+$active = 1
+
+[TextureOverrideStelleBodyTexcoord]
+hash = 43d9095b
+vb1 = ResourceStelleBodyTexcoord
+
+[TextureOverrideStelleBodyDraw]
+hash = f8209611
+override_vertex_count = 27390
+override_byte_stride = 40
+uav_byte_stride = 4
+
+[TextureOverrideStelleHairIB]
+hash = 1d62eafb
+handling = skip
+
+[TextureOverrideStelleHairA]
+hash = 1d62eafb
+match_first_index = 0
+ib = ResourceStelleHairAIB
+; StelleHairA-vb0=95b91a3d.txt (4241)
+drawindexed = 14157, 0, 0
+
+[TextureOverrideStelleHeadIB]
+hash = b6a70a49
+handling = skip
+
+[TextureOverrideStelleHeadA]
+hash = b6a70a49
+match_first_index = 0
+ib = ResourceStelleHeadAIB
+; StelleHeadA-vb0=19d09218.txt (3062)
+drawindexed = 12636, 0, 0
+
+[TextureOverrideStelleHeadB]
+hash = b6a70a49
+match_first_index = 12636
+ib = ResourceStelleHeadBIB
+; StelleHeadB-vb0=19d09218.txt (56)
+drawindexed = 156, 0, 0
+
+[TextureOverrideStelleBodyIB]
+hash = 5bdd3731
+handling = skip
+
+[TextureOverrideStelleBodyA]
+hash = 5bdd3731
+match_first_index = 0
+ib = ResourceStelleBodyAIB
+Resource\RabbitFX\Diffuse = ResourceStelleBodyADiffuse
+Resource\RabbitFX\Lightmap = ResourceStelleBodyALightMap
+run= Commandlist\RabbitFX\SetTextures
+; StelleBodyA-vb0=0d85a303.txt (5655)
+drawindexed = 22164, 0, 0
+
+[TextureOverrideStelleBodyB_Acc]
+hash = 5bdd3731
+match_first_index = 6717
+ib = ResourceStelleBodyBIB
+Resource\RabbitFX\Diffuse = ResourceStelleBodyB_AccDiffuse
+Resource\RabbitFX\Lightmap = ResourceStelleBodyB_AccLightMap
+run= Commandlist\RabbitFX\SetTextures
+; Accessories (4371)
+drawindexed = 18144, 0, 0
+
+[TextureOverrideStelleBodyB_Hand]
+hash = 5bdd3731
+match_first_index = 6717
+ib = ResourceStelleBodyBIB
+Resource\RabbitFX\Diffuse = ResourceStelleBodyB_HandDiffuse
+Resource\RabbitFX\Lightmap = ResourceStelleBodyB_HandLightMap
+run= Commandlist\RabbitFX\SetTextures
+; Hands (1902)
+drawindexed = 8592, 18144, 0
+
+[TextureOverrideStelleBodyB_Pants]
+hash = 5bdd3731
+match_first_index = 6717
+ib = ResourceStelleBodyBIB
+Resource\RabbitFX\Diffuse = ResourceStelleBodyB_PantsDiffuse
+Resource\RabbitFX\Lightmap = ResourceStelleBodyB_PantsLightMap
+run= Commandlist\RabbitFX\SetTextures
+; Pants (12490)
+drawindexed = 55098, 26736, 0
+
+[TextureOverrideStelleBodyB_Skin]
+hash = 5bdd3731
+match_first_index = 6717
+ib = ResourceStelleBodyBIB
+Resource\RabbitFX\Diffuse = ResourceStelleBodyB_SkinDiffuse
+Resource\RabbitFX\Lightmap = ResourceStelleBodyB_SkinLightMap
+run= Commandlist\RabbitFX\SetTextures
+; Skin (2972)
+drawindexed = 13740, 81834, 0
+
+
+; CommandList -----------------------
+
+[CommandListCreditInfo]
+if $creditinfo == 0 && $active > 0
+	pre Resource\ShaderFixes\help.ini\Notification = ResourceCreditInfo
+	pre run = CustomShader\ShaderFixes\help.ini\FormatText
+	pre $\ShaderFixes\help.ini\notification_timeout = time + 5.0
+	$creditinfo = 1
+endif
+
+; Resources -------------------------
+
+[ResourceStelleHairPosition]
+type = Buffer
+stride = 40
+filename = StelleHairPosition.buf
+
+[ResourceStelleHairBlend]
+type = Buffer
+stride = 32
+filename = StelleHairBlend.buf
+
+[ResourceStelleHairTexcoord]
+type = Buffer
+stride = 8
+filename = StelleHairTexcoord.buf
+
+[ResourceStelleHairPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = StelleHairPosition.buf
+
+[ResourceStelleHairBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = StelleHairBlend.buf
+
+[ResourceStelleHairAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleHairA.ib
+
+[ResourceStelleHeadPosition]
+type = Buffer
+stride = 40
+filename = StelleHeadPosition.buf
+
+[ResourceStelleHeadBlend]
+type = Buffer
+stride = 32
+filename = StelleHeadBlend.buf
+
+[ResourceStelleHeadTexcoord]
+type = Buffer
+stride = 8
+filename = StelleHeadTexcoord.buf
+
+[ResourceStelleHeadPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = StelleHeadPosition.buf
+
+[ResourceStelleHeadBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = StelleHeadBlend.buf
+
+[ResourceStelleHeadAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleHeadA.ib
+
+[ResourceStelleHeadBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleHeadB.ib
+
+[ResourceStelleBodyPosition]
+type = Buffer
+stride = 40
+filename = StelleBodyPosition.buf
+
+[ResourceStelleBodyBlend]
+type = Buffer
+stride = 32
+filename = StelleBodyBlend.buf
+
+[ResourceStelleBodyTexcoord]
+type = Buffer
+stride = 20
+filename = StelleBodyTexcoord.buf
+
+[ResourceStelleBodyPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = StelleBodyPosition.buf
+
+[ResourceStelleBodyBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = StelleBodyBlend.buf
+
+[ResourceStelleBodyAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleBodyA.ib
+
+[ResourceStelleBodyBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleBodyB.ib
+
+[ResourceStelleBodyCIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleBodyC.ib
+
+[ResourceStelleHairADiffuse]
+filename = StelleHairADiffuse.dds
+
+[ResourceStelleHairALightMap]
+filename = StelleHairALightMap.dds
+
+[ResourceStelleHeadADiffuse]
+filename = StelleHeadADiffuse.dds
+
+[ResourceStelleBodyADiffuse]
+filename = JacketDiffuse.dds
+
+[ResourceStelleBodyALightMap]
+filename = JacketLM.dds
+
+[ResourceStelleBodyB_AccDiffuse]
+filename = Accessories.dds
+
+[ResourceStelleBodyB_AccLightMap]
+filename = AccessoriesLM.dds
+
+[ResourceStelleBodyB_HandDiffuse]
+filename = StelleBodyADiffuse.dds
+
+[ResourceStelleBodyB_HandLightMap]
+filename = StelleBodyALightMap.dds
+
+[ResourceStelleBodyB_PantsDiffuse]
+filename = PantsDiffuse.dds
+
+[ResourceStelleBodyB_PantsLightMap]
+filename = PantsLM.dds
+
+[ResourceStelleBodyB_SkinDiffuse]
+filename = Skin.dds
+
+[ResourceStelleBodyB_SkinLightMap]
+filename = SkinLM.dds
+
+[ResourceCreditInfo]
+type = Buffer
+data = "Created by ZukuUzu"
+
+; .ini generated by XXMI (XX-Model-Importer) v1.6.3
+; If you have any issues or find any bugs, please open a ticket at https://github.com/leotorrez/XXMI-Tools/issues

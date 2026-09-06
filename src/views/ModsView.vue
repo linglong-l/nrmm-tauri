@@ -120,6 +120,11 @@ function handleDragLeave(e: DragEvent) {
  */
 async function handleDrop(e: DragEvent) {
   isDragging.value = false
+  // 更新模组数据期间禁止导入/拖放：update 正在批量改写 _MANAGED_，导入写入会产生中间态竞态
+  if (modsStore.isUpdatingModData) {
+    ElMessage.warning(t('更新模组数据中，请稍后再试'))
+    return
+  }
   const files = e.dataTransfer?.files
   if (!files || files.length === 0) return
 

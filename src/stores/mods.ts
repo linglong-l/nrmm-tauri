@@ -11,10 +11,12 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed, reactive, watch, shallowRef, triggerRef } from 'vue'
+import { ElMessage } from 'element-plus'
 import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, deselectGroupMod, disableAllModsInGroup, syncNrmmUpdateFlag } from '../utils/tauri'
 import { useSettingsStore } from './settings'
-import type { ModGroupData, ModData, TargetGame, UpdateResult, GroupDelta } from '../types'
+import type { ModGroupData, ModData, TargetGame, UpdateResult, GroupDelta, InvalidUtf8Entry } from '../types'
 import { logger } from '../utils/logger'
+import { formatInvalidUtf8Message } from '../utils/decodePathName'
 
 export const useModsStore = defineStore('mods', () => {
   /**
@@ -43,6 +45,14 @@ export const useModsStore = defineStore('mods', () => {
   const loading = ref(false)
   /** 最近一次加载失败的错误信息（C18：非竞态过期时置位；success/clearData 时清空） */
   const loadError = ref<string | null>(null)
+  /**
+   * 非法 UTF-8 路径跳过通知（App.vue watch 后 ElMessage 提示）。
+   *
+   * loadMods/refresh/updateModData 扫描返回 invalidUtf8Count>0 时置位，
+   * 提示用户「有文件名因编码无法识别被跳过」；为 null 表示无跳过（不提示）。
+   * clearData/下一次无跳过加载时自动清空（防重复弹窗）。
+   */
+  const invalidUtf8Notice = ref<string | null>(null)
   /** 当前选中的分组路径（用于树状导航，唯一标识） */
   const selectedGroupPath = ref<string>('')
   /** 当前选中的模组索引（在分组内） */
@@ -542,6 +552,8 @@ export const useModsStore = defineStore('mods', () => {
       mods.value = result.mods || []
       // C18：加载成功后清空失败反馈
       loadError.value = null
+      // 非法 UTF-8 路径提示：扫描有跳过时置位（App.vue watch 弹窗），无跳过时清空
+      invalidUtf8Notice.value = applyInvalidUtf8Notice(result.invalidUtf8Count ?? 0, result.invalidUtf8Entries)
 
       // 清空之前的分组选中记录，用后端返回的 activeModIndex 初始化
       for (const key of Object.keys(selectedModIndicesByGroup)) {
@@ -572,6 +584,22 @@ export const useModsStore = defineStore('mods', () => {
         loading.value = false
       }
     }
+  }
+
+  /**
+   * 将后端扫描结果中的非法 UTF-8 跳统计转为通知文本（无跳返回 null 不再提示）
+   *
+   * @param count 跳过总数
+   * @param entries 明细（含父路径与保真字节名）
+   * @returns 通知文本；count<=0 或无明细时返回 null
+   */
+  function applyInvalidUtf8Notice(
+    count: number,
+    entries: InvalidUtf8Entry[] | undefined,
+  ): string | null {
+    const list = entries ?? []
+    if (count <= 0 || list.length === 0) return null
+    return formatInvalidUtf8Message(count, list)
   }
 
   /**
@@ -612,6 +640,8 @@ export const useModsStore = defineStore('mods', () => {
       if (epoch !== loadEpoch) return
       groups.value = result.groups || []
       mods.value = result.mods || []
+      // 非法 UTF-8 路径提示：刷新同样上报（文件变化后可能新出现非法条目）
+      invalidUtf8Notice.value = applyInvalidUtf8Notice(result.invalidUtf8Count ?? 0, result.invalidUtf8Entries)
 
       // 更新选中索引记录：保留会话内的用户选择，用新的 activeModIndex 补充未记录的分组
       for (const g of groups.value) {
@@ -842,6 +872,103 @@ export const useModsStore = defineStore('mods', () => {
       }
     }
     // fav 标记文件的 watcher 回声同样需要抑制
+    lastLocalPatchAt.value = Date.now()
+  }
+
+  /**
+   * 启用/禁用本地 patch（零扫描路径：toggle_mod_disabled 命令仅目录重命名后返回路径对，
+   * 前端原位更新新路径与禁用标志，不触发任何扫描/重载/IPC）。
+   *
+   * 扁平与树内同路径条目为两个独立对象实例，需分别更新；组内位置与 mod_index 不变
+   * （仅目录重命名，不产生数量/顺序变化），无需重排。
+   *
+   * @param oldPath 重命名前绝对路径（扁平/树的共同定位键）
+   * @param newPath 重命名后绝对路径
+   * @param disabled 操作后的禁用状态
+   */
+  function toggleModLocal(oldPath: string, newPath: string, disabled: boolean): void {
+    const patch = (m: ModData) => {
+      if (m.modPath === oldPath) {
+        m.modPath = newPath
+        m.modDisabled = disabled
+      }
+    }
+    for (const m of mods.value) patch(m)
+    const walk = (list: ModGroupData[]) => {
+      for (const g of list) {
+        for (const m of g.mods) patch(m)
+        walk(g.children || [])
+      }
+    }
+    walk(groups.value)
+    // shallowRef：树内字段 mutate 需显式触发 UI 刷新
+    triggerRef(mods)
+    triggerRef(groups)
+    // 目录重命名的 watcher 回声同样需要抑制（避免快照泄漏为一次无操作 refresh）
+    lastLocalPatchAt.value = Date.now()
+  }
+
+  /**
+   * 批量启停本地 patch（零扫描路径：disable/enable_all_mods_in_group 返回路径对列表，
+   * 前端逐条原位更新，不触发任何扫描/重载）。
+   */
+  function batchToggleModLocal(pairs: { oldPath: string; newPath: string; disabled: boolean }[]): void {
+    const patch = (m: ModData) => {
+      const hit = pairs.find((p) => m.modPath === p.oldPath)
+      if (hit) {
+        m.modPath = hit.newPath
+        m.modDisabled = hit.disabled
+      }
+    }
+    for (const m of mods.value) patch(m)
+    const walk = (list: ModGroupData[]) => {
+      for (const g of list) {
+        for (const m of g.mods) patch(m)
+        walk(g.children || [])
+      }
+    }
+    walk(groups.value)
+    triggerRef(mods)
+    triggerRef(groups)
+    if (pairs.length > 0) lastLocalPatchAt.value = Date.now()
+  }
+
+  /**
+   * 移除模组本地 patch（零扫描路径：remove_mod 命令移动 + INI 还原后，
+   * 前端就地剔除卡片，不触发任何扫描/重载/IPC）。
+   *
+   * 扁平与树内同路径条目为两个独立对象实例，需分别剔除；若被移除模组为当前选中项，
+   * 选中索引回退（对齐 applyGroupDelta 的选中态修正语义）。
+   */
+  function removeModLocal(modPath: string): void {
+    // 扁平剔除
+    mods.value = mods.value.filter((m) => m.modPath !== modPath)
+    // 树内剔除（深层 children 递归；空组保留）
+    const walk = (list: ModGroupData[]): boolean => {
+      let removed = false
+      for (const g of list) {
+        const before = g.mods.length
+        g.mods = g.mods.filter((m) => m.modPath !== modPath)
+        if (g.mods.length !== before) removed = true
+        if (walk(g.children || [])) removed = true
+      }
+      return removed
+    }
+    walk(groups.value)
+    triggerRef(mods)
+    triggerRef(groups)
+    // 选中态修正：被移除模组为当前选中时回退
+    if (currentGroup.value) {
+      const cur = currentGroupMods.value
+      if (selectedModIndex.value >= cur.length) {
+        selectedModIndex.value = Math.max(0, cur.length - 1)
+        const p = selectedGroupPath.value
+        if (p && !p.startsWith('__') && p !== '__groups__') {
+          selectedModIndicesByGroup[p] = selectedModIndex.value
+        }
+      }
+    }
+    // 目录移动的 watcher 回声同样需要抑制
     lastLocalPatchAt.value = Date.now()
   }
 
@@ -1096,6 +1223,8 @@ export const useModsStore = defineStore('mods', () => {
     keybindTargetMod.value = null
     // C18：清空加载失败反馈（clearData 后旧错误不残留）
     loadError.value = null
+    // 清空非法 UTF-8 通知（切游戏/清数据后旧提示不残留）
+    invalidUtf8Notice.value = null
   }
 
   /**
@@ -1164,10 +1293,21 @@ export const useModsStore = defineStore('mods', () => {
     loading.value = true
     try {
       const lastResult = await tauriUpdateModData(s.currentGame, s.currentModsPath)
-      // 竞态防护（C14）：更新期间数据已被清空/切换（epoch 变化）→ 不回灌加载（刚释放的内存不再拉回）
-      if (startEpoch !== loadEpoch) return lastResult
+      // 主 INI（游戏根 d3dx.ini）缺失：模组处理完成但游戏侧不会加载管理段，显式警告（对齐修复目标，
+      // 不再静默跳过让用户误以为「更新未生效」）
+      if (lastResult.mainIniStatus === 'MissingMainIni') {
+        ElMessage.warning('未找到游戏根主 INI（d3dx.ini），游戏内模组管理不会生效，请确认游戏根目录包含 d3dx.ini')
+      }
+      // 竞态防护（C14）：更新期间数据已被清空/切换（epoch 变化）→ 不回灌加载（刚释放的内存不再拉回）。
+      // 更新本身已成功，仍需清除 needUpdate 标记（否则提醒条残留造成「更新没生效」假象）。
+      if (startEpoch !== loadEpoch) {
+        clearNeedUpdate()
+        return lastResult
+      }
       needReloadManual.value = lastResult.needReloadManual
       updateResult.value = lastResult
+      // 非法 UTF-8 路径提示：深扫跳过项直接上报（update_mod_data 是全量深扫，最全）
+      invalidUtf8Notice.value = applyInvalidUtf8Notice(lastResult.invalidUtf8Count ?? 0, lastResult.invalidUtf8Entries)
 
       await loadMods()
       clearNeedUpdate()
@@ -1210,6 +1350,7 @@ export const useModsStore = defineStore('mods', () => {
     mods,
     loading,
     loadError,
+    invalidUtf8Notice,
     selectedGroupPath,
     selectedModIndex,
     searchQuery,
@@ -1233,6 +1374,9 @@ export const useModsStore = defineStore('mods', () => {
     applyGroupDelta,
     hasGroup,
     toggleFavoriteLocal,
+    toggleModLocal,
+    batchToggleModLocal,
+    removeModLocal,
     selectModByIndex,
     highlightMod,
     activateModByIndex,

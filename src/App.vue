@@ -25,6 +25,7 @@
  */
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent, provide } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ElMessage } from 'element-plus'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
@@ -201,6 +202,12 @@ const bgAlpha = computed(() => {
   return typeof v === 'number' && !Number.isNaN(v) ? v : 0.3
 })
 
+/** 窗口是否透明化（带默认值兜底，提取为 computed 保持模板干净） */
+const windowTransparent = computed(() => {
+  const v = settingsStore.settings.windowTransparent
+  return typeof v === 'boolean' ? v : true
+})
+
 /** 界面缩放比例计算属性，带默认值和类型校验 */
 const scaleVal = computed(() => {
   const v = settingsStore.settings.interfaceScale
@@ -210,10 +217,17 @@ const scaleVal = computed(() => {
 /**
  * 应用背景透明度到DOM
  * 将透明度值限制在0-1范围内并设置CSS背景色
+ *
+ * 窗口未透明化时（windowTransparent=false，如 Linux 默认），
+ * 强制纯黑背景（rgb(0,0,0)），不随透明度滑块变化，避免 Wayland 合成器异常。
  */
 function applyBackground() {
   const el = document.getElementById('app')
   if (!el) return
+  if (!windowTransparent.value) {
+    el.style.setProperty('background-color', 'rgb(0, 0, 0)')
+    return
+  }
   const alpha = Math.max(0, Math.min(1, bgAlpha.value))
   const a = Number(alpha.toFixed(2))
   el.style.setProperty('background-color', `rgba(18, 18, 18, ${a})`)
@@ -262,6 +276,8 @@ async function sendStartupNotification() {
 
 /** 监听设置变化，实时应用背景透明度 */
 watch(bgAlpha, applyBackground, { flush: 'post' })
+/** 监听设置变化，实时应用窗口透明化（非透明时切换为纯黑背景） */
+watch(windowTransparent, applyBackground, { flush: 'post' })
 /** 监听设置变化，实时应用界面缩放 */
 watch(scaleVal, applyScale, { flush: 'post' })
 
@@ -276,6 +292,28 @@ watch(activeTab, (tab) => {
     })
   }
 })
+
+/**
+ * 非法 UTF-8 路径跳过提示（后端扫描上报 invalidUtf8Entries）
+ *
+ * store 在 loadMods/refresh/updateModData 成功后置位报文字符串，
+ * 此处消费并弹窗提示；null 表示无跳过（不弹）。弹窗为一次性 toast，
+ * 下次状态变化可再次触发（如用户修复文件名后重扫清零再置零不弹）。
+ */
+watch(
+  () => modsStore.invalidUtf8Notice,
+  (notice) => {
+    if (notice) {
+      ElMessage.warning({
+        message: notice,
+        duration: 8000,
+        showClose: true,
+        customClass: 'invalid-utf8-toast',
+        dangerouslyUseHTMLString: false,
+      })
+    }
+  },
+)
 
 onMounted(async () => {
   reportBootStage('dom-mounted')
@@ -661,5 +699,12 @@ img {
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(255, 255, 255, 0.28);
   color: var(--text-primary);
+}
+
+/* 非法 UTF-8 路径跳过提示：允许多行展示（父路径\名称逐行） */
+.invalid-utf8-toast .el-message__content {
+  white-space: pre-line;
+  word-break: break-all;
+  line-height: 1.6;
 }
 </style>

@@ -1,0 +1,318 @@
+; ";-;" are errored conditional lines.
+; ";+;" are disabled keys.
+; Errored conditional blocks (if/else/elif/endif) are handled correctly (newer syntax may require further testing), including namespaced variables.
+; If certain syntax is only available in newer XXMI versions, make sure to use the latest XXMI.
+; Asta
+
+; Constants -------------------------
+
+; Overrides -------------------------
+
+[TextureOverrideAstaHairPosition]
+hash = 4e29dad2
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    vb0 = ResourceAstaHairPosition
+    vb2 = ResourceAstaHairBlend
+    draw = 4690,0
+endif
+
+[TextureOverrideAstaHairTexcoord]
+hash = 6406c03e
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    vb1 = ResourceAstaHairTexcoord
+endif
+
+[TextureOverrideAstaHairVertexLimitRaise]
+hash = cde8d751
+match_priority = 0
+
+[TextureOverrideAstaHeadPosition]
+hash = 6f2e00c4
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    vb0 = ResourceAstaHeadPosition
+    vb2 = ResourceAstaHeadBlend
+    draw = 3167,0
+endif
+
+[TextureOverrideAstaHeadTexcoord]
+hash = 9852cb10
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    vb1 = ResourceAstaHeadTexcoord
+endif
+
+[TextureOverrideAstaHeadVertexLimitRaise]
+hash = 618d1c95
+match_priority = 0
+
+[TextureOverrideAstaBodyPosition]
+hash = b8e767e9
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    vb0 = ResourceAstaBodyPosition
+    vb2 = ResourceAstaBodyBlend
+    draw = 11901,0
+endif
+
+[TextureOverrideAstaBodyTexcoord]
+hash = 337e94ce
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    vb1 = ResourceAstaBodyTexcoord
+endif
+
+[TextureOverrideAstaBodyVertexLimitRaise]
+hash = 0b10db89
+match_priority = 0
+
+[TextureOverrideAstaHairIB]
+hash = 84668635
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    drawindexed = auto
+endif
+
+[TextureOverrideAstaHairA]
+hash = 84668635
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaHairAIB
+endif
+
+[TextureOverrideAstaHairADiffuse]
+hash = 9bd1710d
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaHairADiffuse
+endif
+
+[TextureOverrideAstaHairALightMap]
+hash = 8206809f
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaHairALightMap
+endif
+
+[TextureOverrideAstaHeadIB]
+hash = 46b9e3dc
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    drawindexed = auto
+endif
+
+[TextureOverrideAstaHeadA]
+hash = 46b9e3dc
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaHeadAIB
+endif
+
+[TextureOverrideAstaHeadADiffuse]
+hash = 0fb34dc9
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaHeadADiffuse
+endif
+
+[TextureOverrideAstaHeadB]
+hash = 46b9e3dc
+match_first_index = 12699
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaHeadBIB
+endif
+
+[TextureOverrideAstaBodyIB]
+hash = 8fb66ce1
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    drawindexed = auto
+endif
+
+[TextureOverrideAstaBodyA]
+hash = 8fb66ce1
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyAIB
+endif
+
+[TextureOverrideAstaBodyADiffuse]
+hash = fb0f55f4
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyADiffuse
+endif
+
+[TextureOverrideAstaBodyALightMap]
+hash = 088765db
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyALightMap
+endif
+
+[TextureOverrideAstaBodyB]
+hash = 8fb66ce1
+match_first_index = 4791
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyBIB
+endif
+
+[TextureOverrideAstaBodyBDiffuse]
+hash = 3cc949c8
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyBDiffuse
+endif
+
+[TextureOverrideAstaBodyBLightMap]
+hash = 701d9092
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyBLightMap
+endif
+
+[TextureOverrideAstaBodyC]
+hash = 8fb66ce1
+match_first_index = 11823
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyCIB
+endif
+
+[TextureOverrideAstaBodyD]
+hash = 8fb66ce1
+match_first_index = 12510
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyDIB
+endif
+
+[TextureOverrideAstaBodyE]
+hash = 8fb66ce1
+match_first_index = 47880
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyEIB
+endif
+
+; CommandList -----------------------
+
+; Resources -------------------------
+
+[ResourceAstaHairPosition]
+type = Buffer
+stride = 40
+filename = AstaHairPosition.buf
+
+[ResourceAstaHairBlend]
+type = Buffer
+stride = 32
+filename = AstaHairBlend.buf
+
+[ResourceAstaHairTexcoord]
+type = Buffer
+stride = 8
+filename = AstaHairTexcoord.buf
+
+[ResourceAstaHeadPosition]
+type = Buffer
+stride = 40
+filename = AstaHeadPosition.buf
+
+[ResourceAstaHeadBlend]
+type = Buffer
+stride = 32
+filename = AstaHeadBlend.buf
+
+[ResourceAstaHeadTexcoord]
+type = Buffer
+stride = 8
+filename = AstaHeadTexcoord.buf
+
+[ResourceAstaBodyPosition]
+type = Buffer
+stride = 40
+filename = AstaBodyPosition.buf
+
+[ResourceAstaBodyBlend]
+type = Buffer
+stride = 32
+filename = AstaBodyBlend.buf
+
+[ResourceAstaBodyTexcoord]
+type = Buffer
+stride = 20
+filename = AstaBodyTexcoord.buf
+
+[ResourceAstaHairAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHairA.ib
+
+[ResourceAstaHeadAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHeadA.ib
+
+[ResourceAstaHeadBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHeadB.ib
+
+[ResourceAstaBodyAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyA.ib
+
+[ResourceAstaBodyBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyB.ib
+
+[ResourceAstaBodyCIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyC.ib
+
+[ResourceAstaBodyDIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyD.ib
+
+[ResourceAstaBodyEIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyE.ib
+
+[ResourceAstaHairADiffuse]
+filename = AstaHairADiffuse.dds
+
+[ResourceAstaHairALightMap]
+filename = AstaHairALightMap.dds
+
+[ResourceAstaHeadADiffuse]
+filename = AstaHeadADiffuse.dds
+
+[ResourceAstaBodyADiffuse]
+filename = AstaBodyADiffuse.dds
+
+[ResourceAstaBodyALightMap]
+filename = AstaBodyALightMap.dds
+
+[ResourceAstaBodyBDiffuse]
+filename = AstaBodyBDiffuse.dds
+
+[ResourceAstaBodyBLightMap]
+filename = AstaBodyBLightMap.dds
+
+
+; .ini generated by GIMI (Genshin-Impact-Model-Importer)
+; If you have any issues or find any bugs, please open a ticket at https://github.com/SilentNightSound/GI-Model-Importer/issues or contact SilentNightSound#7430 on discord
+[Constants]
+global $managed_slot_id = 5
+

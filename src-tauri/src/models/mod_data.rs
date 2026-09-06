@@ -1,6 +1,12 @@
 //! 模组相关数据模型
 //!
 //! 定义模组、分组、INI 数据等核心数据结构
+//!
+//! ## 路径序列化约定
+//! 写入本模块结构的 `PathBuf` 均在遍历阶段（`mod_scanner` / `fs_walk`）通过
+//! `to_str().is_none()` 校验并跳过非法 UTF-8 条目，字段必然为合法路径。
+//! 因此 IPC 序列化直接依赖 serde 对 `PathBuf` 的默认实现（合法路径即输出
+//! 标准 UTF-8 String），无需自定义 lossy 或跳过逻辑。
 
 use super::enums::*;
 use serde::{Deserialize, Serialize};
@@ -530,19 +536,46 @@ impl Default for GroupDelta {
     }
 }
 
-/// 批量组操作增量（禁用/启用全组等）：保留原 changed 计数语义
+/// 批量启停零扫描路径对：模组目录重命名前后（old_path → new_path），
+/// 前端据此逐条本地 patch（不触发任何扫描）。
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathPair {
+    /// 重命名前绝对路径
+    pub old_path: String,
+    /// 重命名后绝对路径
+    pub new_path: String,
+}
+
+/// 批量组操作增量（禁用/启用全组等）：保留原 changed 计数语义。
+/// 零扫描路径：`toggled` 携带被切换的路径对，`degraded=false`；
+/// 异常降级路径：`degraded=true`，`delta` 为增量扫描后的分组新状态（前端整体 patch）。
+#[derive(Debug, Clone, serde::Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchGroupDelta {
     /// 受影响（被切换状态）的模组数（原命令返回值语义保留）
     pub changed: u32,
-    /// 受影响分组增量
+    /// 零扫描路径：被切换的 (old,new) 路径对列表；降级时为空
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub toggled: Vec<PathPair>,
+    /// 是否降级为增量扫描（目录重命名/缓存更新异常）；true 时前端应消费 delta 而非逐条 patch
+    #[serde(default)]
+    pub degraded: bool,
+    /// 受影响分组增量（正常路径亦组装，供前端一键 patch 兜底）
     pub delta: GroupDelta,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 快速便捷构造：仅带路径字段的最小 ModData，用于序列化行为验证
+    fn mod_data_with_preview(preview: Option<PathBuf>) -> ModData {
+        ModData {
+            preview_image_path: preview,
+            ..ModData::default()
+        }
+    }
 
     /// 契约锁定：GroupDelta 序列化字段名为 camelCase（前端并行开发依赖此契约）
     #[test]
@@ -567,6 +600,11 @@ mod tests {
     fn batch_group_delta_serializes_camel_case() {
         let d = BatchGroupDelta {
             changed: 3,
+            toggled: vec![PathPair {
+                old_path: "D:/old".to_string(),
+                new_path: "D:/DISABLEDold".to_string(),
+            }],
+            degraded: false,
             delta: GroupDelta::default(),
         };
         let v = serde_json::to_value(&d).expect("BatchGroupDelta 序列化失败");
@@ -576,6 +614,8 @@ mod tests {
             "应含 changed 字段且语义保留"
         );
         assert!(v.get("delta").is_some(), "应含 delta 字段");
+        assert!(v.get("toggled").is_some(), "应含 toggled 字段");
+        assert!(v.get("degraded").is_some(), "应含 degraded 字段");
         assert!(v.get("old_group_path").is_none());
     }
 
@@ -655,5 +695,32 @@ mod tests {
         .expect("缺省 diskSignature 应可反序列化");
         assert_eq!(m.disk_signature, 0, "缺省 diskSignature 应回退 0");
         assert_eq!(m.mod_name, "ModA");
+    }
+
+    /// 合法路径序列化为标准 UTF-8 String，而不是 PathBuf 的内部形态
+    #[test]
+    fn preview_path_valid_utf8_serializes_to_string() {
+        let d = mod_data_with_preview(Some(PathBuf::from("C:\\Mods\\group_1\\ModA\\icon.png")));
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains(r#""previewImagePath":"C:\\Mods\\group_1\\ModA\\icon.png""#));
+    }
+
+    /// None 保持为 null（JSON 语义不变）
+    #[test]
+    fn preview_path_none_serializes_to_null() {
+        let d = mod_data_with_preview(None);
+        let json = serde_json::to_string(&d).unwrap();
+        assert!(json.contains(r#""previewImagePath":null"#));
+    }
+
+    /// ModGroupData.full_path 合法路径照常序列化为标准 UTF-8 String
+    #[test]
+    fn group_full_path_valid_serializes() {
+        let g = ModGroupData {
+            full_path: PathBuf::from("C:\\Mods\\_MANAGED_\\group_1"),
+            ..ModGroupData::default()
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        assert!(json.contains(r#""fullPath":"C:\\Mods\\_MANAGED_\\group_1""#));
     }
 }

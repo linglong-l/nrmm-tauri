@@ -18,7 +18,8 @@
             <span class="simulate-label">{{ t('Click keybind to simulate keypress') }}</span>
           </div>
 
-          <!-- 按键显示列表：每个 [KeyXXX] 段一张卡，整卡可点击模拟（hover 放大 + 蓝框） -->
+          <!-- 按键显示列表：每个 [KeyXXX] 段一张卡，每个 key 值（完整组合串）一个独立按钮 -->
+          <!-- 卡片本身不触发模拟（对齐用户指令：点击目标为组合键按钮，多组合键时整卡点击有歧义） -->
           <div v-if="cardList.length > 0" class="keybind-list" role="list">
             <div
               v-for="(card, idx) in cardList"
@@ -26,8 +27,6 @@
               class="keybind-card"
               :class="{ disabled: card.section.disabled, editing: isEditing }"
               role="listitem"
-              :title="card.section.disabled || isEditing ? undefined : t('Click keybind to simulate keypress')"
-              @click="onCardClick(card)"
             >
               <div class="keybind-section">
                 <input
@@ -54,17 +53,15 @@
                   spellcheck="false"
                   @click.stop
                 />
-                <template v-else>
-                  <span
-                    v-for="(token, ti) in splitKeys(entry.value)"
-                    :key="ti"
-                    class="key-chip"
-                    :class="{ 'key-chip--directive': isDirectiveToken(token) }"
-                    :title="isDirectiveToken(token) ? undefined : t('Click keybind to simulate keypress')"
-                    @click.stop="onKeyClick(token, card.section)"
-                    >{{ token }}</span
-                  >
-                </template>
+                <button
+                  v-else
+                  type="button"
+                  class="key-chip"
+                  :title="t('Click keybind to simulate keypress')"
+                  @click.stop="onKeyClick(entry.value, card.section)"
+                >
+                  {{ entry.value }}
+                </button>
               </div>
             </div>
           </div>
@@ -228,46 +225,20 @@ watch(
 )
 
 /**
- * 点击整张按键卡片 → 模拟该段首个 key 的完整组合键
- * （保留 `alt 5` 等真正组合键语义：整卡点击按整段发送）
- * 条件：非编辑模式 + 开关开启 + 段未禁用（对齐 NRMM _KeyCard 的 onPressed 判定）
+ * 点击组合键按钮 → 以整串模拟该组合键（对齐 NRMM：每个 key 值即一个完整组合串，
+ * `simulateKeysFromKeySections` 内部拆分解析——跳过 `no_*`、SHIFT 后置、全部按下再抬起）。
+ * 条件：非编辑模式 + 开关开启 + 段未禁用。
  */
-async function onCardClick(card: { file: KeybindFile; section: KeybindSection }) {
-  const entry = card.section.keys[0]
-  if (!entry) return
-  if (isEditing.value || !simulateEnabled.value || card.section.disabled) return
-  try {
-    await simulateKeys(entry.value, settingsStore.currentGame)
-  } catch (e) {
-    logger.warn('KeybindsView', 'simulateKeys failed', entry.value, e)
-    ElMessage.error(t('Invalid keys'))
-  }
-}
-
-/**
- * 点击单个按键 → 模拟该按键对应的按键字符（每个 key 单独发送）
- * 条件：非编辑模式 + 开关开启 + 段未禁用 + token 非 `no_*` 指令
- * 对齐需求：每个 key 均为单独按键，向后端传递按键对应的按键字符。
- */
-async function onKeyClick(token: string, section: KeybindSection) {
+async function onKeyClick(value: string, section: KeybindSection) {
   if (isEditing.value || !simulateEnabled.value || section.disabled) return
-  if (isDirectiveToken(token)) return // no_modifiers 等指令不是按键，不模拟
+  // 更新模组数据期间禁止按键模拟（后台正在改写 INI；遮罩覆盖下双保险）
+  if (modsStore.isUpdatingModData) return
   try {
-    await simulateKeys(token, settingsStore.currentGame)
+    await simulateKeys(value, settingsStore.currentGame)
   } catch (e) {
-    logger.warn('KeybindsView', 'simulateKeys failed', token, e)
+    logger.warn('KeybindsView', 'simulateKeys failed', value, e)
     ElMessage.error(t('Invalid keys'))
   }
-}
-
-/** 将组合键字符串拆分为独立 token（每个 token 渲染为一个单独按键） */
-function splitKeys(value: string): string[] {
-  return value.split(/\s+/).filter((t) => t.length > 0)
-}
-
-/** 是否为 `no_*` 指令 token（修饰语义，非实际按键） */
-function isDirectiveToken(token: string): boolean {
-  return token.toLowerCase().startsWith('no_')
 }
 
 /**
@@ -503,6 +474,8 @@ onBeforeUnmount(() => {
 
 /* 单个按键：独立可点击按键（每个 key 一个），黑色面 + 白字 + 蓝色高亮
    背景 #1a1a1a 复用项目统一黑色面板，与下拉框/ message-box 风格一致 */
+/* 组合键按钮（每个 key 值一个完整组合串，可点击模拟）：
+   黑色面 + 白字 + 蓝色高亮，重置 button 默认样式 */
 .key-chip {
   width: 80%;
   display: inline-flex;
@@ -519,26 +492,26 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   cursor: pointer;
   user-select: none;
+  text-align: center;
+  box-sizing: border-box;
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
 }
 
-.key-chip:hover:not(.key-chip--directive) {
+.key-chip:hover {
   border-color: #4a9eff;
   background: #242424;
 }
 
-.key-chip:active:not(.key-chip--directive) {
+.key-chip:active {
   transform: scale(0.94);
 }
 
-/* no_modifiers 等指令 token：非按键，仅作提示，不可点击 */
-.key-chip--directive {
-  color: var(--text-secondary, rgba(255, 255, 255, 0.5));
-  background: transparent;
-  border-color: transparent;
-  cursor: default;
+/* 段禁用时组合键按钮不可点（onKeyClick 也有逻辑守卫，双保险） */
+.keybind-card.disabled .key-chip,
+.keybind-card.editing .key-chip {
+  cursor: not-allowed;
   pointer-events: none;
-  font-size: 11px;
+  opacity: 0.6;
 }
 
 /* 编辑模式输入框 */

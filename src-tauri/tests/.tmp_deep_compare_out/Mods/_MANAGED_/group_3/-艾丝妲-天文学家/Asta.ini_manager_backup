@@ -1,0 +1,421 @@
+; ";-;" are errored conditional lines.
+; ";+;" are disabled keys.
+; Errored conditional blocks (if/else/elif/endif) are handled correctly (newer syntax may require further testing), including namespaced variables.
+; If certain syntax is only available in newer XXMI versions, make sure to use the latest XXMI.
+; Asta
+
+; Constants -------------------------
+
+; Overrides -------------------------
+
+[TextureOverrideAstaHairBlend]
+hash = 4925ec87
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    vb2 = ResourceAstaHairBlend
+    if DRAW_TYPE == 1
+        vb0 = ResourceAstaHairPosition
+        draw = 4706, 0
+    endif
+    ;hash = 967c0759
+    ResourceAstaHairDrawCS = copy ResourceAstaHairDrawCS
+    if DRAW_TYPE == 8
+        Resource\SRMI\PositionBuffer = ref ResourceAstaHairPositionCS
+        Resource\SRMI\BlendBuffer = ref ResourceAstaHairBlendCS
+        Resource\SRMI\DrawBuffer = ref ResourceAstaHairDrawCS
+        $\SRMI\vertcount = 4706
+    elif DRAW_TYPE != 1
+        $_blend_ = 2
+    endif
+endif
+
+[TextureOverrideAstaHairTexcoord]
+hash = 4f796933
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    vb1 = ResourceAstaHairTexcoord
+endif
+
+[TextureOverrideAstaHairVertexLimitRaise]
+hash = 1335fa30
+;hash = 1ca6cf3d
+override_vertex_count = 4706
+override_byte_stride = 40
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    if DRAW_TYPE != 8 && DRAW_TYPE != 1 && $_blend_ > 0
+        $_blend_ = $_blend_ - 1
+        this = ref ResourceAstaHairDrawCS
+    endif
+endif
+
+[TextureOverrideAstaHeadBlend]
+hash = 60227cf7
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    vb2 = ResourceAstaHeadBlend
+    if DRAW_TYPE == 1
+        vb0 = ResourceAstaHeadPosition
+        draw = 3167, 0
+    endif
+    ;hash = 6f2e00c4
+    ResourceAstaHeadDrawCS = copy ResourceAstaHeadDrawCS
+    if DRAW_TYPE == 8
+        Resource\SRMI\PositionBuffer = ref ResourceAstaHeadPositionCS
+        Resource\SRMI\BlendBuffer = ref ResourceAstaHeadBlendCS
+        Resource\SRMI\DrawBuffer = ref ResourceAstaHeadDrawCS
+        $\SRMI\vertcount = 3167
+    elif DRAW_TYPE != 1
+        $_blend_ = 2
+    endif
+endif
+
+[TextureOverrideAstaHeadTexcoord]
+hash = 9852cb10
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    vb1 = ResourceAstaHeadTexcoord
+endif
+
+[TextureOverrideAstaHeadVertexLimitRaise]
+hash = 6e1e2998
+;hash = 618d1c95
+override_vertex_count = 3167
+override_byte_stride = 40
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    if DRAW_TYPE != 8 && DRAW_TYPE != 1 && $_blend_ > 0
+        $_blend_ = $_blend_ - 1
+        this = ref ResourceAstaHeadDrawCS
+    endif
+endif
+
+[TextureOverrideAstaBodyBlend]
+hash = 19ac7cd3
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    vb2 = ResourceAstaBodyBlend
+    if DRAW_TYPE == 1
+        vb0 = ResourceAstaBodyPosition
+        draw = 15616, 0
+    endif
+    ;hash = b8e767e9
+    ResourceAstaBodyDrawCS = copy ResourceAstaBodyDrawCS
+    if DRAW_TYPE == 8
+        Resource\SRMI\PositionBuffer = ref ResourceAstaBodyPositionCS
+        Resource\SRMI\BlendBuffer = ref ResourceAstaBodyBlendCS
+        Resource\SRMI\DrawBuffer = ref ResourceAstaBodyDrawCS
+        $\SRMI\vertcount = 15616
+    elif DRAW_TYPE != 1
+        $_blend_ = 2
+    endif
+endif
+
+[TextureOverrideAstaBodyTexcoord]
+hash = 337e94ce
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    vb1 = ResourceAstaBodyTexcoord
+endif
+
+[TextureOverrideAstaBodyVertexLimitRaise]
+hash = 0483ee84
+;hash = 0b10db89
+override_vertex_count = 15616
+override_byte_stride = 40
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    if DRAW_TYPE != 8 && DRAW_TYPE != 1 && $_blend_ > 0
+        $_blend_ = $_blend_ - 1
+        this = ref ResourceAstaBodyDrawCS
+    endif
+endif
+
+[TextureOverrideAstaHairIB]
+hash = 36a13222
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    drawindexed = auto
+endif
+
+[TextureOverrideAstaHairA]
+hash = 36a13222
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaHairAIB
+    ps-t0 = ResourceAstaHairADiffuse
+    ps-t1 = ResourceAstaHairALightMap
+endif
+
+[TextureOverrideAstaHeadIB]
+hash = 46b9e3dc
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    drawindexed = auto
+endif
+
+[TextureOverrideAstaHeadA]
+hash = 46b9e3dc
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaHeadAIB
+    ps-t0 = ResourceAstaHeadADiffuse
+endif
+
+[TextureOverrideAstaHeadB]
+hash = 46b9e3dc
+match_first_index = 12699
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaHeadBIB
+endif
+
+[TextureOverrideAstaBodyIB]
+hash = 8fb66ce1
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    drawindexed = auto
+endif
+
+[TextureOverrideAstaBodyA]
+hash = 8fb66ce1
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyAIB
+    ps-t0 = ResourceAstaBodyADiffuse
+endif
+
+[TextureOverrideAstaBodyB]
+hash = 8fb66ce1
+match_first_index = 4791
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyBIB
+endif
+
+[TextureOverrideAstaBodyC]
+hash = 8fb66ce1
+match_first_index = 11823
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyCIB
+endif
+
+[TextureOverrideAstaBodyD]
+hash = 8fb66ce1
+match_first_index = 12510
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyDIB
+    ps-t0 = ResourceAstaBodyADiffuse
+endif
+
+[TextureOverrideAstaBodyE]
+hash = 8fb66ce1
+match_first_index = 47880
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyEIB
+endif
+
+[TextureOverrideAstaBodyALightmap]
+hash = 687428e3
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyALightMap
+endif
+
+[TextureOverrideAstaBodyBLightmap]
+hash = 8893d921
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyBLightMap
+endif
+
+[TextureOverrideAstaBodyBDiffuse]
+hash = 8f61660a
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyBDiffuse
+endif
+
+[TextureOverrideAstaBodyADiffuse]
+hash = 6e26d2f9
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodABDiffuse
+endif
+
+[TextureOverrideAstaHairADiffuse]
+hash = 4c1a8aa7
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaHairADiffuse
+endif
+
+; CommandList -----------------------
+
+; Resources -------------------------
+
+[ResourceAstaHairPosition]
+type = Buffer
+stride = 40
+filename = AstaHairPosition.buf
+
+[ResourceAstaHairBlend]
+type = Buffer
+stride = 32
+filename = AstaHairBlend.buf
+
+[ResourceAstaHairTexcoord]
+type = Buffer
+stride = 8
+filename = AstaHairTexcoord.buf
+
+[ResourceAstaHeadPosition]
+type = Buffer
+stride = 40
+filename = AstaHeadPosition.buf
+
+[ResourceAstaHeadBlend]
+type = Buffer
+stride = 32
+filename = AstaHeadBlend.buf
+
+[ResourceAstaHeadTexcoord]
+type = Buffer
+stride = 8
+filename = AstaHeadTexcoord.buf
+
+[ResourceAstaBodyPosition]
+type = Buffer
+stride = 40
+filename = AstaBodyPosition.buf
+
+[ResourceAstaBodyBlend]
+type = Buffer
+stride = 32
+filename = AstaBodyBlend.buf
+
+[ResourceAstaBodyTexcoord]
+type = Buffer
+stride = 20
+filename = AstaBodyTexcoord.buf
+
+[ResourceAstaHairAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHairA.ib
+
+[ResourceAstaHeadAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHeadA.ib
+
+[ResourceAstaHeadBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHeadB.ib
+
+[ResourceAstaBodyAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyA.ib
+
+[ResourceAstaBodyBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyB.ib
+
+[ResourceAstaBodyCIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyC.ib
+
+[ResourceAstaBodyDIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyD.ib
+
+[ResourceAstaBodyEIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyE.ib
+
+[ResourceAstaHairADiffuse]
+filename = AstaHairADiffuse.dds
+
+[ResourceAstaHairALightMap]
+filename = AstaHairALightMap.dds
+
+[ResourceAstaHeadADiffuse]
+filename = AstaHeadADiffuse.dds
+
+[ResourceAstaBodyADiffuse]
+filename = AstaBodyADiffuse.dds
+
+[ResourceAstaBodyALightMap]
+filename = AstaBodyALightMap.dds
+
+[ResourceAstaBodyBDiffuse]
+filename = AstaBodyBDiffuse.dds
+
+[ResourceAstaBodyBLightMap]
+filename = AstaBodyBLightMap.dds
+
+
+; .ini generated by GIMI (Genshin-Impact-Model-Importer)
+; If you have any issues or find any bugs, please open a ticket at https://github.com/SilentNightSound/GI-Model-Importer/issues or contact SilentNightSound#7430 on discord
+
+[Constants]
+global $managed_slot_id = 1
+global $_blend_ = 0
+
+; -------------------- Auto-generated CS resources --------------------
+
+[ResourceAstaHairDrawCS]
+type = RWStructuredBuffer
+array = 4706
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceAstaHairPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = AstaHairPosition.buf
+
+[ResourceAstaHairBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = AstaHairBlend.buf
+
+[ResourceAstaHeadDrawCS]
+type = RWStructuredBuffer
+array = 3167
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceAstaHeadPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = AstaHeadPosition.buf
+
+[ResourceAstaHeadBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = AstaHeadBlend.buf
+
+[ResourceAstaBodyDrawCS]
+type = RWStructuredBuffer
+array = 15616
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceAstaBodyPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = AstaBodyPosition.buf
+
+[ResourceAstaBodyBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = AstaBodyBlend.buf
+

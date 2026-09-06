@@ -1,7 +1,7 @@
 <template>
   <div class="title-bar">
-    <!-- 拖拽区域：覆盖整个标题栏用于窗口拖动 -->
-    <div class="title-bar-drag"></div>
+    <!-- 拖拽区域：覆盖整个标题栏用于窗口拖动（仅透明化窗口需要；非透明化时由系统标题栏负责拖动） -->
+    <div class="title-bar-drag" v-if="windowTransparent"></div>
     <div class="title-bar-content">
       <div class="title-bar-left no-drag">
         <!-- macOS风格窗口控制按钮（红黄绿三色圆点） -->
@@ -40,16 +40,24 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { minimizeWindow, toggleMaximize, closeWindow } from '@/utils/tauri'
 import { usePlatform } from '@/stores/platform'
+import { useSettingsStore } from '@/stores/settings'
 import { logger } from '@/utils/logger'
 import WindowControls from './WindowControls.vue'
 
 const { t } = useI18n()
 const { platformInfo } = usePlatform()
+const settingsStore = useSettingsStore()
 /** 窗口是否最大化状态 */
 const isMaximized = ref(false)
 
 /** 是否为macOS平台 */
 const isMac = computed(() => platformInfo.value?.os === 'macos')
+
+/** 窗口是否透明化（非透明化时由系统标题栏负责拖动，不渲染自定义拖拽区域） */
+const windowTransparent = computed(() => {
+  const v = settingsStore.settings.windowTransparent
+  return typeof v === 'boolean' ? v : true
+})
 
 onMounted(async () => {
   try {

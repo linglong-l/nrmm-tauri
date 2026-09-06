@@ -1,0 +1,721 @@
+; Merged Mod: .\001\TrailblazerGirl.ini, .\002\TrailblazerGirl.ini, .\003\TrailblazerGirl.ini, .\004\TrailblazerGirl.ini
+
+; Constants ---------------------------
+
+[Constants]
+global persist $swapvar = 0
+global $active
+global $creditinfo = 0
+
+[KeySwap]
+condition = $active == 1
+key = ]
+type = cycle
+$swapvar = 0,1,2,3
+$creditinfo = 0
+
+[Present]
+post $active = 0
+
+; Shader ------------------------------
+
+; Overrides ---------------------------
+
+[TextureOverrideTrailblazerGirlHairPosition]
+hash = 8c0c078f
+run = CommandListTrailblazerGirlHairPosition
+$active = 1
+
+[TextureOverrideTrailblazerGirlHairTexcoord]
+hash = fe9eaef0
+run = CommandListTrailblazerGirlHairTexcoord
+
+[TextureOverrideTrailblazerGirlHairVertexLimitRaise]
+hash = 00d0c31d
+
+[TextureOverrideTrailblazerGirlHeadPosition]
+hash = 00658faa
+run = CommandListTrailblazerGirlHeadPosition
+$active = 1
+
+[TextureOverrideTrailblazerGirlHeadTexcoord]
+hash = 6d41cf70
+run = CommandListTrailblazerGirlHeadTexcoord
+
+[TextureOverrideTrailblazerGirlHeadVertexLimitRaise]
+hash = 9368f26c
+
+[TextureOverrideTrailblazerGirlBodyPosition]
+hash = 6949f854
+run = CommandListTrailblazerGirlBodyPosition
+$active = 1
+
+[TextureOverrideTrailblazerGirlBodyTexcoord]
+hash = 454c77a5
+run = CommandListTrailblazerGirlBodyTexcoord
+
+[TextureOverrideTrailblazerGirlBodyVertexLimitRaise]
+hash = dabe4434
+
+[TextureOverrideTrailblazerGirlHairIB]
+hash = 1d62eafb
+run = CommandListTrailblazerGirlHairIB
+
+[TextureOverrideTrailblazerGirlHairA]
+hash = 1d62eafb
+match_first_index = 0
+run = CommandListTrailblazerGirlHairA
+
+[TextureOverrideTrailblazerGirlHairADiffuse]
+hash = fdb54553
+run = CommandListTrailblazerGirlHairADiffuse
+
+[TextureOverrideTrailblazerGirlHairALightMap]
+hash = ef5586c1
+run = CommandListTrailblazerGirlHairALightMap
+
+[TextureOverrideTrailblazerGirlHeadIB]
+hash = b6a70a49
+run = CommandListTrailblazerGirlHeadIB
+
+[TextureOverrideTrailblazerGirlHeadA]
+hash = b6a70a49
+match_first_index = 0
+run = CommandListTrailblazerGirlHeadA
+
+[TextureOverrideTrailblazerGirlHeadADiffuse]
+hash = 1c0a8ff8
+run = CommandListTrailblazerGirlHeadADiffuse
+
+[TextureOverrideTrailblazerGirlHeadB]
+hash = b6a70a49
+match_first_index = 12636
+run = CommandListTrailblazerGirlHeadB
+
+[TextureOverrideTrailblazerGirlBodyIB]
+hash = 47695dd6
+run = CommandListTrailblazerGirlBodyIB
+
+[TextureOverrideTrailblazerGirlBodyA]
+hash = 47695dd6
+match_first_index = 0
+run = CommandListTrailblazerGirlBodyA
+
+[TextureOverrideTrailblazerGirlBodyADiffuse]
+hash = a19a8d2c
+run = CommandListTrailblazerGirlBodyADiffuse
+
+[TextureOverrideTrailblazerGirlBodyALightMap]
+hash = 5d15eefe
+run = CommandListTrailblazerGirlBodyALightMap
+
+[TextureOverrideTrailblazerGirlBodyB]
+hash = 47695dd6
+match_first_index = 32946
+run = CommandListTrailblazerGirlBodyB
+
+; CommandList -------------------------
+
+[CommandListTrailblazerGirlHairPosition]
+if $swapvar == 0
+	handling = skip
+	vb0 = ResourceTrailblazerGirlHairPosition.0
+	vb2 = ResourceTrailblazerGirlHairBlend.0
+	draw = 8631,0
+else if $swapvar == 1
+	handling = skip
+	vb0 = ResourceTrailblazerGirlHairPosition.1
+	vb2 = ResourceTrailblazerGirlHairBlend.1
+	draw = 8669,0
+else if $swapvar == 2
+	handling = skip
+	vb0 = ResourceTrailblazerGirlHairPosition.2
+	vb2 = ResourceTrailblazerGirlHairBlend.2
+	draw = 8631,0
+else if $swapvar == 3
+	handling = skip
+	vb0 = ResourceTrailblazerGirlHairPosition.3
+	vb2 = ResourceTrailblazerGirlHairBlend.3
+	draw = 8678,0
+endif
+
+[CommandListTrailblazerGirlHairTexcoord]
+if $swapvar == 0
+	vb1 = ResourceTrailblazerGirlHairTexcoord.0
+else if $swapvar == 1
+	vb1 = ResourceTrailblazerGirlHairTexcoord.1
+else if $swapvar == 2
+	vb1 = ResourceTrailblazerGirlHairTexcoord.2
+else if $swapvar == 3
+	vb1 = ResourceTrailblazerGirlHairTexcoord.3
+endif
+
+[CommandListTrailblazerGirlHeadPosition]
+if $swapvar == 0
+	handling = skip
+	vb0 = ResourceTrailblazerGirlHeadPosition.0
+	vb2 = ResourceTrailblazerGirlHeadBlend.0
+	draw = 3116,0
+else if $swapvar == 1
+	handling = skip
+	vb0 = ResourceTrailblazerGirlHeadPosition.1
+	vb2 = ResourceTrailblazerGirlHeadBlend.1
+	draw = 3116,0
+else if $swapvar == 2
+	handling = skip
+	vb0 = ResourceTrailblazerGirlHeadPosition.2
+	vb2 = ResourceTrailblazerGirlHeadBlend.2
+	draw = 3116,0
+else if $swapvar == 3
+	handling = skip
+	vb0 = ResourceTrailblazerGirlHeadPosition.3
+	vb2 = ResourceTrailblazerGirlHeadBlend.3
+	draw = 3116,0
+endif
+
+[CommandListTrailblazerGirlHeadTexcoord]
+if $swapvar == 0
+	vb1 = ResourceTrailblazerGirlHeadTexcoord.0
+else if $swapvar == 1
+	vb1 = ResourceTrailblazerGirlHeadTexcoord.1
+else if $swapvar == 2
+	vb1 = ResourceTrailblazerGirlHeadTexcoord.2
+else if $swapvar == 3
+	vb1 = ResourceTrailblazerGirlHeadTexcoord.3
+endif
+
+[CommandListTrailblazerGirlBodyPosition]
+if $swapvar == 0
+	handling = skip
+	vb0 = ResourceTrailblazerGirlBodyPosition.0
+	vb2 = ResourceTrailblazerGirlBodyBlend.0
+	draw = 34043,0
+else if $swapvar == 1
+	handling = skip
+	vb0 = ResourceTrailblazerGirlBodyPosition.1
+	vb2 = ResourceTrailblazerGirlBodyBlend.1
+	draw = 33949,0
+else if $swapvar == 2
+	handling = skip
+	vb0 = ResourceTrailblazerGirlBodyPosition.2
+	vb2 = ResourceTrailblazerGirlBodyBlend.2
+	draw = 33742,0
+else if $swapvar == 3
+	handling = skip
+	vb0 = ResourceTrailblazerGirlBodyPosition.3
+	vb2 = ResourceTrailblazerGirlBodyBlend.3
+	draw = 32767,0
+endif
+
+[CommandListTrailblazerGirlBodyTexcoord]
+if $swapvar == 0
+	vb1 = ResourceTrailblazerGirlBodyTexcoord.0
+else if $swapvar == 1
+	vb1 = ResourceTrailblazerGirlBodyTexcoord.1
+else if $swapvar == 2
+	vb1 = ResourceTrailblazerGirlBodyTexcoord.2
+else if $swapvar == 3
+	vb1 = ResourceTrailblazerGirlBodyTexcoord.3
+endif
+
+[CommandListTrailblazerGirlHairIB]
+if $swapvar == 0
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 1
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 2
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 3
+	handling = skip
+	drawindexed = auto
+endif
+
+[CommandListTrailblazerGirlHairA]
+if $swapvar == 0
+	ib = ResourceTrailblazerGirlHairAIB.0
+else if $swapvar == 1
+	ib = ResourceTrailblazerGirlHairAIB.1
+else if $swapvar == 2
+	ib = ResourceTrailblazerGirlHairAIB.2
+else if $swapvar == 3
+	ib = ResourceTrailblazerGirlHairAIB.3
+endif
+
+[CommandListTrailblazerGirlHairADiffuse]
+if $swapvar == 0
+	this = ResourceTrailblazerGirlHairADiffuse.0
+else if $swapvar == 1
+	this = ResourceTrailblazerGirlHairADiffuse.1
+else if $swapvar == 2
+	this = ResourceTrailblazerGirlHairADiffuse.2
+else if $swapvar == 3
+	this = ResourceTrailblazerGirlHairADiffuse.3
+endif
+
+[CommandListTrailblazerGirlHairALightMap]
+if $swapvar == 0
+	this = ResourceTrailblazerGirlHairALightMap.0
+else if $swapvar == 1
+	this = ResourceTrailblazerGirlHairALightMap.1
+else if $swapvar == 2
+	this = ResourceTrailblazerGirlHairALightMap.2
+else if $swapvar == 3
+	this = ResourceTrailblazerGirlHairALightMap.3
+endif
+
+[CommandListTrailblazerGirlHeadIB]
+if $swapvar == 0
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 1
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 2
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 3
+	handling = skip
+	drawindexed = auto
+endif
+
+[CommandListTrailblazerGirlHeadA]
+if $swapvar == 0
+	ib = ResourceTrailblazerGirlHeadAIB.0
+else if $swapvar == 1
+	ib = ResourceTrailblazerGirlHeadAIB.1
+else if $swapvar == 2
+	ib = ResourceTrailblazerGirlHeadAIB.2
+else if $swapvar == 3
+	ib = ResourceTrailblazerGirlHeadAIB.3
+endif
+
+[CommandListTrailblazerGirlHeadADiffuse]
+if $swapvar == 0
+	this = ResourceTrailblazerGirlHeadADiffuse.0
+else if $swapvar == 1
+	this = ResourceTrailblazerGirlHeadADiffuse.1
+else if $swapvar == 2
+	this = ResourceTrailblazerGirlHeadADiffuse.2
+else if $swapvar == 3
+	this = ResourceTrailblazerGirlHeadADiffuse.3
+endif
+
+[CommandListTrailblazerGirlHeadB]
+if $swapvar == 0
+	ib = ResourceTrailblazerGirlHeadBIB.0
+else if $swapvar == 1
+	ib = ResourceTrailblazerGirlHeadBIB.1
+else if $swapvar == 2
+	ib = ResourceTrailblazerGirlHeadBIB.2
+else if $swapvar == 3
+	ib = ResourceTrailblazerGirlHeadBIB.3
+endif
+
+[CommandListTrailblazerGirlBodyIB]
+if $swapvar == 0
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 1
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 2
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 3
+	handling = skip
+	drawindexed = auto
+endif
+
+[CommandListTrailblazerGirlBodyA]
+if $swapvar == 0
+	ib = ResourceTrailblazerGirlBodyAIB.0
+else if $swapvar == 1
+	ib = ResourceTrailblazerGirlBodyAIB.1
+else if $swapvar == 2
+	ib = ResourceTrailblazerGirlBodyAIB.2
+else if $swapvar == 3
+	ib = ResourceTrailblazerGirlBodyAIB.3
+endif
+
+[CommandListTrailblazerGirlBodyADiffuse]
+if $swapvar == 0
+	this = ResourceTrailblazerGirlBodyADiffuse.0
+else if $swapvar == 1
+	this = ResourceTrailblazerGirlBodyADiffuse.1
+else if $swapvar == 2
+	this = ResourceTrailblazerGirlBodyADiffuse.2
+else if $swapvar == 3
+	this = ResourceTrailblazerGirlBodyADiffuse.3
+endif
+
+[CommandListTrailblazerGirlBodyALightMap]
+if $swapvar == 0
+	this = ResourceTrailblazerGirlBodyALightMap.0
+else if $swapvar == 1
+	this = ResourceTrailblazerGirlBodyALightMap.1
+else if $swapvar == 2
+	this = ResourceTrailblazerGirlBodyALightMap.2
+else if $swapvar == 3
+	this = ResourceTrailblazerGirlBodyALightMap.3
+endif
+
+[CommandListTrailblazerGirlBodyB]
+if $swapvar == 0
+	ib = ResourceTrailblazerGirlBodyBIB.0
+else if $swapvar == 1
+	ib = ResourceTrailblazerGirlBodyBIB.1
+else if $swapvar == 2
+	ib = ResourceTrailblazerGirlBodyBIB.2
+else if $swapvar == 3
+	ib = ResourceTrailblazerGirlBodyBIB.3
+endif
+
+; Resources ---------------------------
+
+[ResourceTrailblazerGirlHairPosition.0]
+type = Buffer
+stride = 40
+filename = .\001\TrailblazerGirlHairPosition.buf
+
+[ResourceTrailblazerGirlHairBlend.0]
+type = Buffer
+stride = 32
+filename = .\001\TrailblazerGirlHairBlend.buf
+
+[ResourceTrailblazerGirlHairTexcoord.0]
+type = Buffer
+stride = 8
+filename = .\001\TrailblazerGirlHairTexcoord.buf
+
+[ResourceTrailblazerGirlHeadPosition.0]
+type = Buffer
+stride = 40
+filename = .\001\TrailblazerGirlHeadPosition.buf
+
+[ResourceTrailblazerGirlHeadBlend.0]
+type = Buffer
+stride = 32
+filename = .\001\TrailblazerGirlHeadBlend.buf
+
+[ResourceTrailblazerGirlHeadTexcoord.0]
+type = Buffer
+stride = 8
+filename = .\001\TrailblazerGirlHeadTexcoord.buf
+
+[ResourceTrailblazerGirlBodyPosition.0]
+type = Buffer
+stride = 40
+filename = .\001\TrailblazerGirlBodyPosition.buf
+
+[ResourceTrailblazerGirlBodyBlend.0]
+type = Buffer
+stride = 32
+filename = .\001\TrailblazerGirlBodyBlend.buf
+
+[ResourceTrailblazerGirlBodyTexcoord.0]
+type = Buffer
+stride = 20
+filename = .\001\TrailblazerGirlBodyTexcoord.buf
+
+[ResourceTrailblazerGirlHairAIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\001\TrailblazerGirlHairA.ib
+
+[ResourceTrailblazerGirlHeadAIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\001\TrailblazerGirlHeadA.ib
+
+[ResourceTrailblazerGirlHeadBIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\001\TrailblazerGirlHeadB.ib
+
+[ResourceTrailblazerGirlBodyAIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\001\TrailblazerGirlBodyA.ib
+
+[ResourceTrailblazerGirlBodyBIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\001\TrailblazerGirlBodyB.ib
+
+[ResourceTrailblazerGirlHairADiffuse.0]
+filename = .\001\TrailblazerGirlHairADiffuse.dds
+
+[ResourceTrailblazerGirlHairALightMap.0]
+filename = .\001\TrailblazerGirlHairALightMap.dds
+
+[ResourceTrailblazerGirlHeadADiffuse.0]
+filename = .\001\TrailblazerGirlHeadADiffuse.dds
+
+[ResourceTrailblazerGirlBodyADiffuse.0]
+filename = .\001\TrailblazerGirlBodyADiffuse.dds
+
+[ResourceTrailblazerGirlBodyALightMap.0]
+filename = .\001\TrailblazerGirlBodyALightMap.dds
+
+[ResourceTrailblazerGirlHairPosition.1]
+type = Buffer
+stride = 40
+filename = .\002\TrailblazerGirlHairPosition.buf
+
+[ResourceTrailblazerGirlHairBlend.1]
+type = Buffer
+stride = 32
+filename = .\002\TrailblazerGirlHairBlend.buf
+
+[ResourceTrailblazerGirlHairTexcoord.1]
+type = Buffer
+stride = 8
+filename = .\002\TrailblazerGirlHairTexcoord.buf
+
+[ResourceTrailblazerGirlHeadPosition.1]
+type = Buffer
+stride = 40
+filename = .\002\TrailblazerGirlHeadPosition.buf
+
+[ResourceTrailblazerGirlHeadBlend.1]
+type = Buffer
+stride = 32
+filename = .\002\TrailblazerGirlHeadBlend.buf
+
+[ResourceTrailblazerGirlHeadTexcoord.1]
+type = Buffer
+stride = 8
+filename = .\002\TrailblazerGirlHeadTexcoord.buf
+
+[ResourceTrailblazerGirlBodyPosition.1]
+type = Buffer
+stride = 40
+filename = .\002\TrailblazerGirlBodyPosition.buf
+
+[ResourceTrailblazerGirlBodyBlend.1]
+type = Buffer
+stride = 32
+filename = .\002\TrailblazerGirlBodyBlend.buf
+
+[ResourceTrailblazerGirlBodyTexcoord.1]
+type = Buffer
+stride = 20
+filename = .\002\TrailblazerGirlBodyTexcoord.buf
+
+[ResourceTrailblazerGirlHairAIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\002\TrailblazerGirlHairA.ib
+
+[ResourceTrailblazerGirlHeadAIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\002\TrailblazerGirlHeadA.ib
+
+[ResourceTrailblazerGirlHeadBIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\002\TrailblazerGirlHeadB.ib
+
+[ResourceTrailblazerGirlBodyAIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\002\TrailblazerGirlBodyA.ib
+
+[ResourceTrailblazerGirlBodyBIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\002\TrailblazerGirlBodyB.ib
+
+[ResourceTrailblazerGirlHairADiffuse.1]
+filename = .\002\TrailblazerGirlHairADiffuse.dds
+
+[ResourceTrailblazerGirlHairALightMap.1]
+filename = .\002\TrailblazerGirlHairALightMap.dds
+
+[ResourceTrailblazerGirlHeadADiffuse.1]
+filename = .\002\TrailblazerGirlHeadADiffuse.dds
+
+[ResourceTrailblazerGirlBodyADiffuse.1]
+filename = .\002\TrailblazerGirlBodyADiffuse.dds
+
+[ResourceTrailblazerGirlBodyALightMap.1]
+filename = .\002\TrailblazerGirlBodyALightMap.dds
+
+[ResourceTrailblazerGirlHairPosition.2]
+type = Buffer
+stride = 40
+filename = .\003\TrailblazerGirlHairPosition.buf
+
+[ResourceTrailblazerGirlHairBlend.2]
+type = Buffer
+stride = 32
+filename = .\003\TrailblazerGirlHairBlend.buf
+
+[ResourceTrailblazerGirlHairTexcoord.2]
+type = Buffer
+stride = 8
+filename = .\003\TrailblazerGirlHairTexcoord.buf
+
+[ResourceTrailblazerGirlHeadPosition.2]
+type = Buffer
+stride = 40
+filename = .\003\TrailblazerGirlHeadPosition.buf
+
+[ResourceTrailblazerGirlHeadBlend.2]
+type = Buffer
+stride = 32
+filename = .\003\TrailblazerGirlHeadBlend.buf
+
+[ResourceTrailblazerGirlHeadTexcoord.2]
+type = Buffer
+stride = 8
+filename = .\003\TrailblazerGirlHeadTexcoord.buf
+
+[ResourceTrailblazerGirlBodyPosition.2]
+type = Buffer
+stride = 40
+filename = .\003\TrailblazerGirlBodyPosition.buf
+
+[ResourceTrailblazerGirlBodyBlend.2]
+type = Buffer
+stride = 32
+filename = .\003\TrailblazerGirlBodyBlend.buf
+
+[ResourceTrailblazerGirlBodyTexcoord.2]
+type = Buffer
+stride = 20
+filename = .\003\TrailblazerGirlBodyTexcoord.buf
+
+[ResourceTrailblazerGirlHairAIB.2]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\003\TrailblazerGirlHairA.ib
+
+[ResourceTrailblazerGirlHeadAIB.2]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\003\TrailblazerGirlHeadA.ib
+
+[ResourceTrailblazerGirlHeadBIB.2]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\003\TrailblazerGirlHeadB.ib
+
+[ResourceTrailblazerGirlBodyAIB.2]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\003\TrailblazerGirlBodyA.ib
+
+[ResourceTrailblazerGirlBodyBIB.2]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\003\TrailblazerGirlBodyB.ib
+
+[ResourceTrailblazerGirlHairADiffuse.2]
+filename = .\003\TrailblazerGirlHairADiffuse.dds
+
+[ResourceTrailblazerGirlHairALightMap.2]
+filename = .\003\TrailblazerGirlHairALightMap.dds
+
+[ResourceTrailblazerGirlHeadADiffuse.2]
+filename = .\003\TrailblazerGirlHeadADiffuse.dds
+
+[ResourceTrailblazerGirlBodyADiffuse.2]
+filename = .\003\TrailblazerGirlBodyADiffuse.dds
+
+[ResourceTrailblazerGirlBodyALightMap.2]
+filename = .\003\TrailblazerGirlBodyALightMap.dds
+
+[ResourceTrailblazerGirlHairPosition.3]
+type = Buffer
+stride = 40
+filename = .\004\TrailblazerGirlHairPosition.buf
+
+[ResourceTrailblazerGirlHairBlend.3]
+type = Buffer
+stride = 32
+filename = .\004\TrailblazerGirlHairBlend.buf
+
+[ResourceTrailblazerGirlHairTexcoord.3]
+type = Buffer
+stride = 8
+filename = .\004\TrailblazerGirlHairTexcoord.buf
+
+[ResourceTrailblazerGirlHeadPosition.3]
+type = Buffer
+stride = 40
+filename = .\004\TrailblazerGirlHeadPosition.buf
+
+[ResourceTrailblazerGirlHeadBlend.3]
+type = Buffer
+stride = 32
+filename = .\004\TrailblazerGirlHeadBlend.buf
+
+[ResourceTrailblazerGirlHeadTexcoord.3]
+type = Buffer
+stride = 8
+filename = .\004\TrailblazerGirlHeadTexcoord.buf
+
+[ResourceTrailblazerGirlBodyPosition.3]
+type = Buffer
+stride = 40
+filename = .\004\TrailblazerGirlBodyPosition.buf
+
+[ResourceTrailblazerGirlBodyBlend.3]
+type = Buffer
+stride = 32
+filename = .\004\TrailblazerGirlBodyBlend.buf
+
+[ResourceTrailblazerGirlBodyTexcoord.3]
+type = Buffer
+stride = 20
+filename = .\004\TrailblazerGirlBodyTexcoord.buf
+
+[ResourceTrailblazerGirlHairAIB.3]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\004\TrailblazerGirlHairA.ib
+
+[ResourceTrailblazerGirlHeadAIB.3]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\004\TrailblazerGirlHeadA.ib
+
+[ResourceTrailblazerGirlHeadBIB.3]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\004\TrailblazerGirlHeadB.ib
+
+[ResourceTrailblazerGirlBodyAIB.3]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\004\TrailblazerGirlBodyA.ib
+
+[ResourceTrailblazerGirlBodyBIB.3]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\004\TrailblazerGirlBodyB.ib
+
+[ResourceTrailblazerGirlHairADiffuse.3]
+filename = .\004\TrailblazerGirlHairADiffuse.dds
+
+[ResourceTrailblazerGirlHairALightMap.3]
+filename = .\004\TrailblazerGirlHairALightMap.dds
+
+[ResourceTrailblazerGirlHeadADiffuse.3]
+filename = .\004\TrailblazerGirlHeadADiffuse.dds
+
+[ResourceTrailblazerGirlBodyADiffuse.3]
+filename = .\004\TrailblazerGirlBodyADiffuse.dds
+
+[ResourceTrailblazerGirlBodyALightMap.3]
+filename = .\004\TrailblazerGirlBodyALightMap.dds
+
+
+
+; .ini generated by GIMI (Genshin-Impact-Model-Importer) mod merger script
+; If you have any issues or find any bugs, please open a ticket at https://github.com/SilentNightSound/GI-Model-Importer/issues or contact SilentNightSound#7430 on discord

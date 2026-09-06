@@ -1,0 +1,336 @@
+; ";-;" are errored conditional lines.
+; ";+;" are disabled keys.
+; Errored conditional blocks (if/else/elif/endif) are handled correctly (newer syntax may require further testing), including namespaced variables.
+; If certain syntax is only available in newer XXMI versions, make sure to use the latest XXMI.
+; syq
+
+; Constants -------------------------
+
+; Overrides -------------------------
+
+[TextureOverridesyqPosition]
+hash = 5592f1db
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    handling = skip
+    vb0 = ResourcesyqPosition
+    vb2 = ResourcesyqBlend
+    draw = 16188,0
+endif
+
+[TextureOverridesyqTexcoord]
+hash = ecf4648c
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    vb1 = ResourcesyqTexcoord
+endif
+
+[TextureOverridesyqVertexLimitRaise]
+hash = e6654dbb
+match_priority = 0
+
+[TextureOverridesyq2Position]
+hash = 09903e8e
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    handling = skip
+    vb0 = Resourcesyq2Position
+    vb2 = Resourcesyq2Blend
+    draw = 5955,0
+endif
+
+[TextureOverridesyq2Texcoord]
+hash = 1ed7e59d
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    vb1 = Resourcesyq2Texcoord
+endif
+
+[TextureOverridesyq2VertexLimitRaise]
+hash = be2f8ed9
+match_priority = 0
+
+[TextureOverridesyq3Position]
+hash = b23869e0
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    handling = skip
+    vb0 = Resourcesyq3Position
+    vb2 = Resourcesyq3Blend
+    draw = 7471,0
+endif
+
+[TextureOverridesyq3Texcoord]
+hash = b3665f0b
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    vb1 = Resourcesyq3Texcoord
+endif
+
+[TextureOverridesyq3VertexLimitRaise]
+hash = 49a6a173
+match_priority = 0
+
+[TextureOverridesyqIB]
+hash = 5212ce68
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    handling = skip
+    drawindexed = auto
+endif
+
+[TextureOverridesyqA]
+hash = 5212ce68
+match_first_index = 53751
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ib = ResourcesyqAIB
+    
+    ps-t0 = ResourcesyqADiffuse
+    ps-t1 = ResourcesyqALightMap
+endif
+
+[TextureOverridesyqB]
+hash = 5212ce68
+match_first_index = 41466
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ib = ResourcesyqBIB
+    
+    ps-t0 = ResourcesyqBDiffuse
+    ps-t1 = ResourcesyqBLightMap
+endif
+
+[TextureOverridesyq2IB]
+hash = 84ba7549
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    handling = skip
+    drawindexed = auto
+endif
+
+[TextureOverridesyq2A]
+hash = 84ba7549
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ib = Resourcesyq2AIB
+endif
+
+[TextureOverridesyq2ADiffuse]
+hash = 6bd71ad9
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    this = Resourcesyq2ADiffuse
+endif
+
+[TextureOverridesyq2ALightMap]
+hash = 371ca498
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    this = Resourcesyq2ALightMap
+endif
+
+[TextureOverridesyq3IB]
+hash = 2e23a897
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    handling = skip
+    drawindexed = auto
+endif
+
+[TextureOverridesyq3A]
+hash = 2e23a897
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ib = Resourcesyq3AIB
+endif
+
+[TextureOverridesyq3ADiffuse]
+hash = 2d25d041
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    this = Resourcesyq3ADiffuse
+endif
+
+[TextureOverridesyq3ALightMap]
+hash = bb5905b2
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    this = Resourcesyq3ALightMap
+endif
+
+[TextureOverridesyq3AShadow]
+hash = c6ca85f2
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    this = Resourcesyq3AShadow
+endif
+
+[TextureOverridesyq3At3]
+hash = a5b5a9da
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    this = Resourcesyq3At3
+endif
+
+[TextureOverridesyq3B]
+hash = 2e23a897
+match_first_index = 13200
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ib = Resourcesyq3BIB
+endif
+
+[TextureOverridesyq3BDiffuse]
+hash = c6ca85f2
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    this = Resourcesyq3BDiffuse
+endif
+
+[TextureOverridesyq3BLightMap]
+hash = bb5905b2
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    this = Resourcesyq3BLightMap
+endif
+
+[TextureOverridesyq3BShadow]
+hash = a5b5a9da
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    this = Resourcesyq3BShadow
+endif
+
+; CommandList -----------------------
+
+; Resources -------------------------
+
+[ResourcesyqPosition]
+type = Buffer
+stride = 40
+filename = syqPosition.buf
+
+[ResourcesyqBlend]
+type = Buffer
+stride = 32
+filename = syqBlend.buf
+
+[ResourcesyqTexcoord]
+type = Buffer
+stride = 20
+filename = syqTexcoord.buf
+
+[Resourcesyq2Position]
+type = Buffer
+stride = 40
+filename = syq2Position.buf
+
+[Resourcesyq2Blend]
+type = Buffer
+stride = 32
+filename = syq2Blend.buf
+
+[Resourcesyq2Texcoord]
+type = Buffer
+stride = 8
+filename = syq2Texcoord.buf
+
+[Resourcesyq3Position]
+type = Buffer
+stride = 40
+filename = syq3Position.buf
+
+[Resourcesyq3Blend]
+type = Buffer
+stride = 32
+filename = syq3Blend.buf
+
+[Resourcesyq3Texcoord]
+type = Buffer
+stride = 8
+filename = syq3Texcoord.buf
+
+[ResourcesyqAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = syqA.ib
+
+[ResourcesyqBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = syqB.ib
+
+[Resourcesyq2AIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = syq2A.ib
+
+[Resourcesyq3AIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = syq3A.ib
+
+[Resourcesyq3BIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = syq3B.ib
+
+[ResourcesyqADiffuse]
+filename = syqADiffuse.dds
+
+[ResourcesyqALightMap]
+filename = syqALightMap.dds
+
+[ResourcesyqBDiffuse]
+filename = syqBDiffuse.dds
+
+[ResourcesyqBLightMap]
+filename = syqBLightMap.dds
+
+[Resourcesyq2ADiffuse]
+filename = syq2ADiffuse.dds
+
+[Resourcesyq2ALightMap]
+filename = syq2ALightMap.dds
+
+[Resourcesyq3ADiffuse]
+filename = syq3ADiffuse.dds
+
+[Resourcesyq3ALightMap]
+filename = syq3ALightMap.dds
+
+[Resourcesyq3AShadow]
+filename = syq3AShadow.dds
+
+[Resourcesyq3At3]
+filename = syq3At3.dds
+
+[Resourcesyq3BDiffuse]
+filename = syq3BDiffuse.dds
+
+[Resourcesyq3BLightMap]
+filename = syq3BLightMap.dds
+
+[Resourcesyq3BShadow]
+filename = syq3BShadow.dds
+
+
+; .ini generated by GIMI (Genshin-Impact-Model-Importer)
+; If you have any issues or find any bugs, please open a ticket at https://github.com/SilentNightSound/GI-Model-Importer/issues or contact SilentNightSound#7430 on discord
+
+
+[TextureOverride20fixA]
+hash = 5212ce68
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ib = null
+endif
+
+[TextureOverride20fixB]
+hash = 5212ce68
+match_first_index = 30828
+if $managed_slot_id == $\modmanageragl\group_2\active_slot
+    ib = null
+endif
+
+[Constants]
+global $managed_slot_id = 3
+

@@ -10,6 +10,15 @@ fn default_true() -> bool {
     true
 }
 
+/// 窗口是否透明化的平台默认值
+///
+/// Windows / 其它平台默认透明化窗口（transparent = true）；
+/// Linux 默认不透明（transparent = false），以避免 Wayland 合成器下的渲染异常。
+/// 该默认值仅作用于「配置文件缺失该字段」的场景（旧 settings.json 兼容 / 用户未显式选择）。
+fn default_window_transparent() -> bool {
+    !cfg!(target_os = "linux")
+}
+
 /// 键盘快捷键配置
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +107,9 @@ pub struct AppSettings {
     pub interface_scale: f64,
     /// 背景透明度
     pub bg_transparency: f64,
+    /// 窗口是否透明化（Windows/其它平台默认 true，Linux 默认 false 以避免 Wayland 合成器异常）
+    #[serde(default = "default_window_transparent")]
+    pub window_transparent: bool,
     /// 是否启用动态背景
     pub dynamic_background: bool,
     /// 模组分组布局模式
@@ -174,6 +186,7 @@ impl Default for AppSettings {
             game_profile: HashMap::new(),
             interface_scale: 1.0,
             bg_transparency: 0.7,
+            window_transparent: default_window_transparent(),
             dynamic_background: true,
             mod_grouping_mode: LayoutMode::Automatic,
             mods_sorting_type: SortingType::Default,

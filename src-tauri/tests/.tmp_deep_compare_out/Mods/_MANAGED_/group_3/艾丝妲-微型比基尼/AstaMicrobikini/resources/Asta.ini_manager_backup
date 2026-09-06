@@ -1,0 +1,1143 @@
+; ";-;" are errored conditional lines.
+; ";+;" are disabled keys.
+; Errored conditional blocks (if/else/elif/endif) are handled correctly (newer syntax may require further testing), including namespaced variables.
+; If certain syntax is only available in newer XXMI versions, make sure to use the latest XXMI.
+;✿━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✿
+;❥ 往生堂桃姐免费分享 禁止二次收费倒卖 ❥
+;❥ 资源收集自各大互联网平台 仅搬运分享 ❥
+;❥   更多精彩资源在QQ群:321326900   ❥
+;✿━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✿
+; Asta
+
+; Constants -------------------------
+
+[Constants]
+global $managed_slot_id = 7
+global $active
+
+global persist $choker = 0
+global persist $glasses = 0
+global persist $preg = 1
+
+global persist $gloves = 0
+global persist $bikinitop = 0
+global persist $color = 0
+
+global persist $socks = 0
+global persist $bikinibottom = 0
+global persist $stripe = 1
+
+global persist $heels = 0
+global persist $nails = 0
+global persist $makeup = 0
+
+global persist $nipplepasties = 1
+global persist $vaginapasties = 1
+global persist $wombtattoo = 0
+
+global persist $nipplepiercing = 1
+global persist $clitpiercing = 1
+global persist $navelpiercing = 0
+
+global $menu = 0
+global $page = 0
+global $hold
+global $holdShape
+global $drag
+
+global $navigating
+global $navSpeed
+global $hovering
+global $slot
+global $hoveredSlot
+global $clickedSlot
+global $selectedSlot = 0
+global $targetSelectedSlot = 0
+global $navDirection = -1
+
+global persist $mx = 0.58
+global persist $my = 0.25
+
+global $ww
+global $wh
+global $cpx
+global $cpy
+
+global $dt
+global $ts
+
+[KeyShowMenu1]
+condition = ($active == 1) && $managed_slot_id == $\modmanageragl\group_3\active_slot
+key = h
+type = cycle
+$menu = 0,1
+
+[KeyShowMenu2]
+condition = ($active == 1) && $managed_slot_id == $\modmanageragl\group_3\active_slot
+key = /
+type = cycle
+$menu = 0,1
+
+[KeyMenu.ResetPosition]
+condition = ($menu == 1) && $managed_slot_id == $\modmanageragl\group_3\active_slot
+key = no_ctrl shift VK_RIGHT
+run = CommandListResetMenuPos
+
+[KeyHold]
+condition = ($menu == 1 && $hovering == 0) && $managed_slot_id == $\modmanageragl\group_3\active_slot
+key = no_ctrl no_shift VK_LBUTTON
+key = no_ctrl no_shift VK_RBUTTON
+type = hold
+$hold = 1
+
+[KeyHoldShape]
+condition = ($menu == 1 && $hovering > 1) && $managed_slot_id == $\modmanageragl\group_3\active_slot
+key = no_ctrl no_shift VK_LBUTTON
+key = no_ctrl no_shift VK_RBUTTON
+type = hold
+run = CommandListHoldShape
+
+[CommandListHoldShape]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    $holdShape = $hovering
+    post $holdShape = 0
+endif
+
+[KeyClickedSlot]
+condition = ($hovering == 1 && $menu == 1) && $managed_slot_id == $\modmanageragl\group_3\active_slot
+key = no_ctrl no_shift VK_LBUTTON
+key = no_ctrl no_shift VK_RBUTTON
+run = CommandListClickedSlot
+
+[Present]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    post $active = 0
+    if $active
+        $dt = time - $ts
+        $ts = time
+        if $menu
+            run = CommandListOutfitMenu
+        endif
+    endif
+endif
+
+; Custom Menu ==========================================
+
+[CommandListDimensions]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    if window_width != 0
+        $ww = window_width
+        $wh = window_height
+    elif $ww != 0
+        $ww = rt_width
+        $wh = rt_height
+    else
+        $ww = res_width
+        $wh = res_height
+    endif
+    
+    if cursor_x != 0 && cursor_y != 0
+        $cpx = cursor_x
+        $cpy = cursor_y
+    elif cursor_window_x != 0 && cursor_window_y != 0
+        $cpx = cursor_window_x / $ww
+        $cpy = cursor_window_y / $wh
+    else
+        $cpx = cursor_screen_x / $ww
+        $cpy = cursor_screen_y / $wh
+    endif
+endif
+
+[CommandListClickedSlot]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    $clickedSlot = $hoveredSlot
+    
+    if $clickedSlot == 1
+        $choker = 1 - $choker
+    elif $clickedSlot == 2
+        $glasses = $glasses + 1
+        if $glasses > 2
+            $glasses = 0
+        endif
+    elif $clickedSlot == 3
+        $preg = 1 - $preg
+        if $preg == 0
+            $navelpiercing = 1
+        endif
+    elif $clickedSlot == 4
+        $gloves = 1 - $gloves
+    elif $clickedSlot == 5
+        $bikinitop = 1 - $bikinitop
+        if $nipplepasties == 0
+            $nipplepasties = 1
+        endif
+        if $nipplepiercing == 0
+            $nipplepiercing = 1
+        endif
+    elif $clickedSlot == 6
+        $color = $color + 1
+        if $color > 2
+            $color = 0
+        endif
+    elif $clickedSlot == 7
+        $socks = 1 - $socks
+    elif $clickedSlot == 8
+        $bikinibottom = 1 - $bikinibottom
+        if $clitpiercing == 0
+            $clitpiercing = 1
+        endif
+        if $vaginapasties == 0
+            $vaginapasties = 1
+        endif
+    elif $clickedSlot == 9
+        $stripe = 1 - $stripe
+    elif $clickedSlot == 10
+        $heels = 1 - $heels
+    elif $clickedSlot == 11
+        $nails = 1 - $nails
+        if $stripe == 1 && $gloves == 0
+            $gloves = 1
+            $nails = 0
+        endif
+    elif $clickedSlot == 12
+        $makeup = $makeup + 1
+        if $makeup > 2
+            $makeup = 0
+        endif
+    elif $clickedSlot == 13
+        $nipplepasties = 1 - $nipplepasties
+        if $nipplepiercing == 0
+            $nipplepiercing = 1
+        endif
+        if $bikinitop == 0
+            $bikinitop = 1
+        endif
+    elif $clickedSlot == 14
+        $vaginapasties = 1 - $vaginapasties
+        if $clitpiercing == 0
+            $clitpiercing = 1
+        endif
+        if $bikinibottom == 0
+            $bikinibottom = 1
+        endif
+    elif $clickedSlot == 15
+        $wombtattoo = 1 - $wombtattoo
+    elif $clickedSlot == 16
+        $nipplepiercing = 1 - $nipplepiercing
+        if $nipplepasties == 0
+            $nipplepasties = 1
+        endif
+        if $bikinitop == 0
+            $bikinitop = 1
+        endif
+    elif $clickedSlot == 17
+        $clitpiercing = 1 - $clitpiercing
+        if $vaginapasties == 0
+            $vaginapasties = 1
+        endif
+        if $bikinibottom == 0
+            $bikinibottom = 1
+        endif
+    elif $clickedSlot == 18
+        $navelpiercing = 1 - $navelpiercing
+        if $navelpiercing == 0
+            $preg = 1
+        endif
+    endif
+endif
+
+[CommandListSlotItemImage]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    x87 = 52 / $ww
+    y87 = 52 / $wh
+    z87 = z87 + 6 / $ww
+    w87 = w87 + 12 / $ww
+    if $slot == 1
+        ps-t100 = ResourceMenuItem.1
+        run = CustomShaderElement
+    elif $slot == 2
+        ps-t100 = ResourceMenuItem.2
+        run = CustomShaderElement
+    elif $slot == 3
+        ps-t100 = ResourceMenuItem.3
+        run = CustomShaderElement
+    elif $slot == 4
+        ps-t100 = ResourceMenuItem.4
+        run = CustomShaderElement
+    elif $slot == 5
+        ps-t100 = ResourceMenuItem.5
+        run = CustomShaderElement
+    elif $slot == 6
+        ps-t100 = ResourceMenuItem.6
+        run = CustomShaderElement
+    elif $slot == 7
+        ps-t100 = ResourceMenuItem.7
+        run = CustomShaderElement
+    elif $slot == 8
+        ps-t100 = ResourceMenuItem.8
+        run = CustomShaderElement
+    elif $slot == 9
+        ps-t100 = ResourceMenuItem.9
+        run = CustomShaderElement
+    elif $slot == 10
+        ps-t100 = ResourceMenuItem.10
+        run = CustomShaderElement
+    elif $slot == 11
+        ps-t100 = ResourceMenuItem.11
+        run = CustomShaderElement
+    elif $slot == 12
+        ps-t100 = ResourceMenuItem.12
+        run = CustomShaderElement
+    elif $slot == 13
+        ps-t100 = ResourceMenuItem.13
+        run = CustomShaderElement
+    elif $slot == 14
+        ps-t100 = ResourceMenuItem.14
+        run = CustomShaderElement
+    elif $slot == 15
+        ps-t100 = ResourceMenuItem.15
+        run = CustomShaderElement
+    elif $slot == 16
+        ps-t100 = ResourceMenuItem.16
+        run = CustomShaderElement
+    elif $slot == 17
+        ps-t100 = ResourceMenuItem.17
+        run = CustomShaderElement
+    elif $slot == 18
+        ps-t100 = ResourceMenuItem.18
+        run = CustomShaderElement
+    endif
+    
+    x87 = 64 / $ww
+    y87 = 64 / $wh
+    z87 = z87 - 6 / $ww
+    w87 = w87 - 12 / $ww
+endif
+
+[CommandListOutfitMenu]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    run = CommandListDimensions
+    run = CommandListBackground
+endif
+
+[CommandListBackground]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    local $cox
+    local $coy
+    ps-t100 = ResourceMenuBG
+    y87 = 560 / $wh
+    x87 = 360 / $ww
+    if $hovering == 0
+        if $drag == 0
+            if $cpx > $mx + 0.0125 && $cpx < ($mx+x87-0.0035) && $cpy > $my && $cpy < ($my+y87-0.0035)
+                if $hold
+                    $cox = $cpx - $mx
+                    $coy = $cpy - $my
+                    $drag = 1
+                endif
+            endif
+        else
+            if $hold
+                $mx = $cpx - $cox
+                $my = $cpy - $coy
+            else
+                $drag = 0
+            endif
+        endif
+    endif
+    z87 = $mx
+    w87 = $my
+    run = CustomShaderElement
+    run = CommandListDrawToggles
+endif
+
+[CommandListDrawToggles]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    local $z0 = z87 + 23 / $ww
+    local $z1 = $z0 + 85 / $ww
+    local $z2 = $z0 + 171 / $ww
+    local $z3 = $z0 + 250 / $ww
+    local $wo = 84 / $wh
+    
+    $hovering = 0
+    $slot = 0
+    x87 = 64 / $ww
+    y87 = 64 / $wh
+    
+    z87 = $z0
+    w87 = w87 + 60 / $wh
+    run = CommandListSlot
+    z87 = $z1
+    run = CommandListSlot
+    z87 = $z3
+    run = CommandListSlot
+    
+    z87 = $z0
+    w87 = w87 + $wo
+    run = CommandListSlot
+    z87 = $z1
+    run = CommandListSlot
+    z87 = $z3
+    run = CommandListSlot
+    
+    z87 = $z0
+    w87 = w87 + $wo
+    run = CommandListSlot
+    z87 = $z1
+    run = CommandListSlot
+    z87 = $z3
+    run = CommandListSlot
+    
+    z87 = $z0
+    w87 = w87 + $wo
+    run = CommandListSlot
+    z87 = $z1
+    run = CommandListSlot
+    z87 = $z3
+    run = CommandListSlot
+    
+    z87 = $z0
+    w87 = w87 + $wo
+    run = CommandListSlot
+    z87 = $z1
+    run = CommandListSlot
+    z87 = $z3
+    run = CommandListSlot
+    
+    z87 = $z0
+    w87 = w87 + $wo
+    run = CommandListSlot
+    z87 = $z1
+    run = CommandListSlot
+    z87 = $z2
+    run = CommandListSlot
+endif
+
+[CommandListSlot]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    $slot = $slot + 1
+    run = CommandListSlotItemImage
+    if $cpx > z87 && $cpx < (z87+x87-0.0035) && $cpy > w87 && $cpy < (w87+y87-0.0035)
+        ps-t100 = ResourceItemSlotHover.1
+        $hovering = 1
+        $hoveredSlot = $slot
+        $selectedSlot = 0
+    else
+        if $slot == $selectedSlot // 1
+            $hoveredSlot = $slot
+            ps-t100 = ResourceItemSlotHover.1
+        else
+            ps-t100 = ResourceItemSlot
+        endif
+    endif
+    run = CustomShaderElement
+    if $clickedSlot == $slot
+        ps-t100 = ResourceItemSlotHover.2
+        run = CustomShaderElement
+        $clickedSlot = 0
+    endif
+endif
+
+[CommandListResetMenuPos]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    $mx = 50 / $ww
+    $my = 0.5 - 360 / $wh
+endif
+
+[CustomShaderElement]
+vs = ..\toggles\draw_2d.hlsl
+ps = ..\toggles\draw_2d.hlsl
+blend = ADD SRC_ALPHA INV_SRC_ALPHA
+cull = none
+topology = triangle_strip
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    run = BuiltInCommandListUnbindAllRenderTargets
+    o0 = set_viewport bb
+    Draw = 4,0
+endif
+
+[ResourceMenuBG]
+filename = ..\toggles\Menu.dds
+
+[ResourceItemSlot]
+filename = ..\toggles\Slot.dds
+
+[ResourceItemSlotHover.1]
+filename = ..\toggles\Slot_Hover.dds
+
+[ResourceItemSlotHover.2]
+filename = ..\toggles\Slot_Hover_2.dds
+
+[ResourceMenuItem.1]
+filename =..\toggles\item_1.dds
+
+[ResourceMenuItem.2]
+filename =..\toggles\item_2.dds
+
+[ResourceMenuItem.3]
+filename =..\toggles\item_3.dds
+
+[ResourceMenuItem.4]
+filename =..\toggles\item_4.dds
+
+[ResourceMenuItem.5]
+filename = ..\toggles\item_5.dds
+
+[ResourceMenuItem.6]
+filename =..\toggles\item_6.dds
+
+[ResourceMenuItem.7]
+filename =..\toggles\item_7.dds
+
+[ResourceMenuItem.8]
+filename =..\toggles\item_8.dds
+
+[ResourceMenuItem.9]
+filename =..\toggles\item_9.dds
+
+[ResourceMenuItem.10]
+filename =..\toggles\item_10.dds
+
+[ResourceMenuItem.11]
+filename =..\toggles\item_11.dds
+
+[ResourceMenuItem.12]
+filename =..\toggles\item_12.dds
+
+[ResourceMenuItem.13]
+filename =..\toggles\item_13.dds
+
+[ResourceMenuItem.14]
+filename =..\toggles\item_14.dds
+
+[ResourceMenuItem.15]
+filename =..\toggles\item_15.dds
+
+[ResourceMenuItem.16]
+filename =..\toggles\item_16.dds
+
+[ResourceMenuItem.17]
+filename =..\toggles\item_17.dds
+
+[ResourceMenuItem.18]
+filename =..\toggles\item_18.dds
+
+; Textures -------------------------
+
+[CommandListBodyADiffuse]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    if $color == 0
+        this = ResourceBody.Pink
+    elif $color == 1
+        this = ResourceBody.Purple
+    elif $color == 2
+        this = ResourceBody.Blue
+    endif
+endif
+
+[ResourceBody.Pink]
+filename = ..\textures\body\Pink.dds
+
+[ResourceBody.Blue]
+filename = ..\textures\body\Blue.dds
+
+[ResourceBody.Purple]
+filename = ..\textures\body\Purple.dds
+
+[CommandListHeadADiffuse]
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    if $makeup == 0
+        this = ResourceMakeup.Blush
+    elif $makeup == 1
+        this = ResourceMakeup.Makeup
+    elif $makeup == 2
+        this = ResourceMakeup.Base
+    endif
+endif
+
+[ResourceMakeup.Blush]
+filename = ..\textures\head\Blush.dds
+
+[ResourceMakeup.Makeup]
+filename = ..\textures\head\Makeup.dds
+
+[ResourceMakeup.Base]
+filename = ..\textures\head\Base.dds
+
+; Overrides -------------------------
+
+[TextureOverrideAstaHairBlend]
+hash = 4925ec87
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    vb2 = ResourceAstaHairBlend
+    if DRAW_TYPE == 1
+        vb0 = ResourceAstaHairPosition
+        draw = 4706, 0
+    elif DRAW_TYPE == 8
+        Resource\SRMI\PositionBuffer = ref ResourceAstaHairPositionCS
+        Resource\SRMI\BlendBuffer = ref ResourceAstaHairBlendCS
+        $\SRMI\vertex_count = 4706
+    endif
+endif
+
+[TextureOverrideAstaHairTexcoord]
+hash = 4f796933
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    vb1 = ResourceAstaHairTexcoord
+endif
+
+[TextureOverrideAstaHairDraw]
+hash = 1335fa30
+override_vertex_count = 4706
+override_byte_stride = 40
+uav_byte_stride = 4
+match_priority = 0
+
+[TextureOverrideAstaHeadBlend]
+hash = 60227cf7
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+    vb2 = ResourceAstaHeadBlend
+    if DRAW_TYPE == 1
+        vb0 = ResourceAstaHeadPosition
+        draw = 3167, 0
+    elif DRAW_TYPE == 8
+        Resource\SRMI\PositionBuffer = ref ResourceAstaHeadPositionCS
+        Resource\SRMI\BlendBuffer = ref ResourceAstaHeadBlendCS
+        $\SRMI\vertex_count = 3167
+    endif
+endif
+
+[TextureOverrideAstaHeadTexcoord]
+hash = 9852cb10
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    vb1 = ResourceAstaHeadTexcoord
+endif
+
+[TextureOverrideAstaHeadDraw]
+hash = 6e1e2998
+override_vertex_count = 3167
+override_byte_stride = 40
+uav_byte_stride = 4
+match_priority = 0
+
+[TextureOverrideAstaBodyBlend]
+hash = 19ac7cd3
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    $active = 1
+    handling = skip
+    vb2 = ResourceAstaBodyBlend
+    if DRAW_TYPE == 1
+        vb0 = ResourceAstaBodyPosition
+        draw = 162223, 0
+    elif DRAW_TYPE == 8
+        Resource\SRMI\PositionBuffer = ref ResourceAstaBodyPositionCS
+        Resource\SRMI\BlendBuffer = ref ResourceAstaBodyBlendCS
+        $\SRMI\vertex_count = 162223
+    endif
+endif
+
+[TextureOverrideAstaBodyTexcoord]
+hash = 337e94ce
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    vb1 = ResourceAstaBodyTexcoord
+endif
+
+[TextureOverrideAstaBodyDraw]
+hash = 0483ee84
+override_vertex_count = 162223
+override_byte_stride = 40
+uav_byte_stride = 4
+match_priority = 0
+
+[TextureOverrideAstaHairIB]
+hash = 36a13222
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+endif
+
+[TextureOverrideAstaHairA]
+hash = 36a13222
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaHairAIB
+    ; HairA (4706)
+    drawindexed = 16152, 0, 0
+endif
+
+[TextureOverrideAstaHeadIB]
+hash = 46b9e3dc
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+endif
+
+[TextureOverrideAstaHeadA]
+hash = 46b9e3dc
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaHeadAIB
+    ; HeadA (3098)
+    drawindexed = 12699, 0, 0
+endif
+
+[TextureOverrideAstaHeadB]
+hash = 46b9e3dc
+match_first_index = 12699
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaHeadBIB
+    ; HeadB (69)
+    drawindexed = 153, 0, 0
+endif
+
+[TextureOverrideAstaBodyIB]
+hash = 8fb66ce1
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    handling = skip
+endif
+
+[TextureOverrideAstaBodyA]
+hash = 8fb66ce1
+match_first_index = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyAIB
+    ; Erect nipples (1218)
+    if $bikinitop == 1 && $nipplepasties == 1
+        drawindexed = 6432, 0, 0
+    endif
+    ; Flattened nipples (1218)
+    if $bikinitop == 0 || $nipplepasties == 0
+        drawindexed = 6432, 6432, 0
+    endif
+    ; Nude (12831)
+    if $preg == 1 && $wombtattoo == 1
+        drawindexed = 69957, 12864, 0
+    endif
+    ; Nude w/ womb tattoo (12783)
+    if $preg == 1 && $wombtattoo == 0
+        drawindexed = 69957, 82821, 0
+    endif
+    ; Preg (12869)
+    if $preg == 0 && $wombtattoo == 1
+        drawindexed = 68382, 152778, 0
+    endif
+    ; Preg w/ womb tattoo (12831)
+    if $preg == 0 && $wombtattoo == 0
+        drawindexed = 68382, 221160, 0
+    endif
+    ; Arms
+    ; Arms (8142)
+    if $gloves == 1
+        drawindexed = 42384, 289542, 0
+    endif
+    ; Arms w/ latex gloves (8192)
+    if $gloves == 0 && $stripe == 1
+        drawindexed = 42384, 331926, 0
+    endif
+    ; Arms w/ striped gloves (8358)
+    if $gloves == 0 && $stripe == 0
+        drawindexed = 42384, 374310, 0
+    endif
+    ; Finger nails (313)
+    if $nails == 0 && ($stripe == 0 || $gloves == 1)
+        drawindexed = 978, 416694, 0
+    endif
+    ; Legs
+    ; Bare legs (2636)
+    if $socks == 1
+        drawindexed = 14220, 417672, 0
+    endif
+    ; Legs w/ latex socks (2768)
+    if $socks == 0 && $stripe == 1
+        drawindexed = 14604, 431892, 0
+    endif
+    ; Legs w/ striped socks (2768)
+    if $socks == 0 && $stripe == 0
+        drawindexed = 14604, 446496, 0
+    endif
+    ; Feet
+    ; Barefeet (7132)
+    if $heels == 1 && $socks == 1
+        drawindexed = 36312, 461100, 0
+    endif
+    ; Barefeet w/ latex socks (7132)
+    if $heels == 1 && $socks == 0 && $stripe == 1
+        drawindexed = 36312, 497412, 0
+    endif
+    ; Barefeet w/ striped socks (7282)
+    if $heels == 1 && $socks == 0 && $stripe == 0
+        drawindexed = 36348, 533724, 0
+    endif
+    ; Heels (666)
+    if $heels == 0
+        drawindexed = 1818, 570072, 0
+    endif
+    ; Heels w/ barefeet (1550)
+    if $heels == 0 && $socks == 1
+        drawindexed = 7788, 571890, 0
+    endif
+    ; Heels w/ latex socks (1550)
+    if $heels == 0 && $socks == 0 && $stripe == 1
+        drawindexed = 7788, 579678, 0
+    endif
+    ; Heels w/ striped socks (1550)
+    if $heels == 0 && $socks == 0 && $stripe == 0
+        drawindexed = 7788, 587466, 0
+    endif
+    ; Piercings
+    ; Clit piercing (1135)
+    if $clitpiercing == 0 && $vaginapasties == 1 && $bikinibottom == 1
+        drawindexed = 6336, 595254, 0
+    endif
+    ; Navel Piercing (48)
+    if $navelpiercing == 0
+        drawindexed = 156, 601590, 0
+    endif
+    ; Nipple Piercing (2496)
+    if $nipplepiercing == 0 && $nipplepasties == 1 && $bikinitop == 1
+        drawindexed = 12264, 601746, 0
+    endif
+    ; Pasties
+    ; Pasties - nipples (1542)
+    if $nipplepasties == 0 && $bikinitop == 1 && $nipplepiercing == 1
+        drawindexed = 8256, 614010, 0
+    endif
+    ; Pasties - vagina (211)
+    if $vaginapasties == 0 && $bikinibottom == 1 && $clitpiercing == 1 && $preg == 1
+        drawindexed = 1104, 622266, 0
+    endif
+    ; Pasties - vagina w/ preg (211)
+    if $vaginapasties == 0 && $bikinibottom == 1 && $clitpiercing == 1 && $preg == 0
+        drawindexed = 1104, 623370, 0
+    endif
+    ; Bikini
+    ; Slingkini verA (6137)
+    ; drawindexed = 33216, 624474, 0
+    ; Latex
+    ; Bikini bottom (latex) (7101)
+    if $bikinibottom == 0 && $preg == 1 && $stripe == 1
+        drawindexed = 33960, 657690, 0
+    endif
+    ; Bikini bottom w/ preg (latex) (4519)
+    if $bikinibottom == 0 && $preg != 1 && $stripe == 1
+        drawindexed = 21768, 691650, 0
+    endif
+    ; Bikini top (latex) (3782)
+    if $bikinitop == 0 && $stripe == 1
+        drawindexed = 17808, 713418, 0
+    endif
+    ; Choker (231)
+    if $choker == 0 && $stripe == 1
+        drawindexed = 1152, 731226, 0
+    endif
+    ; Striped
+    ; Bikini bottom (striped) (7101)
+    if $bikinibottom == 0 && $preg == 1 && $stripe == 0
+        drawindexed = 33960, 732378, 0
+    endif
+    ; Bikini bottom w/ preg (striped) (4519)
+    if $bikinibottom == 0 && $preg != 1 && $stripe == 0
+        drawindexed = 21768, 766338, 0
+    endif
+    ; Bikini top (striped) (3782)
+    if $bikinitop == 0 && $stripe == 0
+        drawindexed = 17808, 788106, 0
+    endif
+    ; Choker (striped) (231)
+    if $choker == 0 && $stripe == 0
+        drawindexed = 1152, 805914, 0
+    endif
+endif
+
+[TextureOverrideAstaBodyB]
+hash = 8fb66ce1
+match_first_index = 4791
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyBIB
+    ; Hairpin (217)
+    drawindexed = 564, 0, 0
+endif
+
+[TextureOverrideAstaBodyC]
+hash = 8fb66ce1
+match_first_index = 11823
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    ib = ResourceAstaBodyCIB
+    ; Glasses - down (2550)
+    if $glasses == 0
+        drawindexed = 9564, 0, 0
+    endif
+    ; Glasses - up (2621)
+    if $glasses == 1
+        drawindexed = 9564, 9564, 0
+    endif
+endif
+
+[TextureOverrideAstaHairADiffuse]
+hash = 2ec320aa
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaHairADiffuse
+endif
+
+[TextureOverrideAstaHairALightMap]
+hash = 7fd9c40d
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaHairALightMap
+endif
+
+[TextureOverrideAstaHeadADiffuse]
+hash = a53efe63
+match_priority = 0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    run = CommandListHeadADiffuse
+endif
+
+[TextureOverrideAstaBodyADiffuse]
+hash = e290fff3
+match_priority=1
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    run = CommandListBodyADiffuse
+endif
+
+[TextureOverrideAstaBodyALightMap]
+hash = 687428e3
+match_priority=1
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyALightMap
+endif
+
+[TextureOverrideAstaBodyBDiffuse]
+hash = 8f61660a
+match_priority=2
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    run = CommandListBodyADiffuse
+endif
+
+[TextureOverrideAstaBodyBLightMap]
+hash = 8893d921
+match_priority=2
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyALightMap
+endif
+
+[TextureOverrideAstaBodyCDiffuse]
+hash = 8f61660a
+match_priority=1
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    run = CommandListBodyADiffuse
+endif
+
+[TextureOverrideAstaBodyCLightMap]
+hash = 8893d921
+match_priority=1
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyALightMap
+endif
+
+[TextureOverrideAstaBodyDDiffuse]
+hash = e290fff3
+match_priority=0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    run = CommandListBodyADiffuse
+endif
+
+[TextureOverrideAstaBodyDLightMap]
+hash = 687428e3
+match_priority=0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyALightMap
+endif
+
+[TextureOverrideAstaBodyEDiffuse]
+hash = 8f61660a
+match_priority=0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    run = CommandListBodyADiffuse
+endif
+
+[TextureOverrideAstaBodyELightMap]
+hash = 8893d921
+match_priority=0
+if $managed_slot_id == $\modmanageragl\group_3\active_slot
+    this = ResourceAstaBodyALightMap
+endif
+
+; CommandList -----------------------
+
+
+; Resources -------------------------
+
+[ResourceAstaHairPosition]
+type = Buffer
+stride = 40
+filename = AstaHairPosition.buf
+
+[ResourceAstaHairBlend]
+type = Buffer
+stride = 32
+filename = AstaHairBlend.buf
+
+[ResourceAstaHairTexcoord]
+type = Buffer
+stride = 8
+filename = AstaHairTexcoord.buf
+
+[ResourceAstaHairPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = AstaHairPosition.buf
+
+[ResourceAstaHairBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = AstaHairBlend.buf
+
+[ResourceAstaHairAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHairA.ib
+
+[ResourceAstaHeadPosition]
+type = Buffer
+stride = 40
+filename = AstaHeadPosition.buf
+
+[ResourceAstaHeadBlend]
+type = Buffer
+stride = 32
+filename = AstaHeadBlend.buf
+
+[ResourceAstaHeadTexcoord]
+type = Buffer
+stride = 8
+filename = AstaHeadTexcoord.buf
+
+[ResourceAstaHeadPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = AstaHeadPosition.buf
+
+[ResourceAstaHeadBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = AstaHeadBlend.buf
+
+[ResourceAstaHeadAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHeadA.ib
+
+[ResourceAstaHeadBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHeadB.ib
+
+[ResourceAstaBodyPosition]
+type = Buffer
+stride = 40
+filename = AstaBodyPosition.buf
+
+[ResourceAstaBodyBlend]
+type = Buffer
+stride = 32
+filename = AstaBodyBlend.buf
+
+[ResourceAstaBodyTexcoord]
+type = Buffer
+stride = 20
+filename = AstaBodyTexcoord.buf
+
+[ResourceAstaBodyPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = AstaBodyPosition.buf
+
+[ResourceAstaBodyBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = AstaBodyBlend.buf
+
+[ResourceAstaBodyAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyA.ib
+
+[ResourceAstaBodyBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyB.ib
+
+[ResourceAstaBodyCIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyC.ib
+
+[ResourceAstaBodyDIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyD.ib
+
+[ResourceAstaBodyEIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyE.ib
+
+[ResourceAstaHairADiffuse]
+filename = AstaHairADiffuse.dds
+
+[ResourceAstaHairALightMap]
+filename = AstaHairALightMap.dds
+
+[ResourceAstaHeadADiffuse]
+filename = AstaHeadADiffuse.dds
+
+[ResourceAstaBodyADiffuse]
+filename = AstaBodyADiffuse.dds
+
+[ResourceAstaBodyALightMap]
+filename = AstaBodyALightMap.dds
+
+[ResourceAstaBodyBDiffuse]
+filename = AstaBodyBDiffuse.dds
+
+[ResourceAstaBodyBLightMap]
+filename = AstaBodyBLightMap.dds
+
+[ResourceAstaBodyCDiffuse]
+filename = AstaBodyCDiffuse.dds
+
+[ResourceAstaBodyCLightMap]
+filename = AstaBodyCLightMap.dds
+
+[ResourceAstaBodyDDiffuse]
+filename = AstaBodyDDiffuse.dds
+
+[ResourceAstaBodyDLightMap]
+filename = AstaBodyDLightMap.dds
+
+[ResourceAstaBodyEDiffuse]
+filename = AstaBodyEDiffuse.dds
+
+[ResourceAstaBodyELightMap]
+filename = AstaBodyELightMap.dds
+
+
+; .ini generated by XXMI (XX-Model-Importer) v1.6.3
+; If you have any issues or find any bugs, please open a ticket at https://github.com/leotorrez/XXMI-Tools/issues
+
+;✿━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✿
+;❥ 往生堂桃姐免费分享 禁止二次收费倒卖 ❥
+;❥ 资源收集自各大互联网平台 仅搬运分享 ❥
+; ❥更多精彩资源在QQ群：叁贰壹叁贰陆玖零零❥
+;✿━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━✿

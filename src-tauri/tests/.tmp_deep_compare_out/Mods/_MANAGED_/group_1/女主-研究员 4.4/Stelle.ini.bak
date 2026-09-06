@@ -1,0 +1,410 @@
+; Stelle
+
+; Constants -------------------------
+
+[Constants]
+global persist $Hair = 3
+global persist $Horns = 1
+global persist $Skates = 1
+global persist $BackPockets = 1
+global persist $FrontPockets = 1
+global persist $Face = 0
+global $activeStelle
+
+[Present]
+post $activeStelle = 0
+
+[KeySwapHair]
+key = 5
+condition = $activeStelle == 1
+type = cycle
+$Hair = 0,1,2,3
+
+[KeySwapHorns]
+key = 6
+condition = $activeStelle == 1
+type = cycle
+$Horns = 0,1
+
+[KeySwapSkates]
+key = 7
+condition = $activeStelle == 1
+type = cycle
+$Skates = 0,1
+
+[KeySwapBackPockets]
+key = 8
+condition = $activeStelle == 1
+type = cycle
+$BackPockets = 0,1
+
+[KeySwapFrontPockets]
+key = 9
+condition = $activeStelle == 1
+type = cycle
+$FrontPockets = 0,1
+
+[KeySwapFace]
+key = 0
+condition = $activeStelle == 1
+type = cycle
+$Face = 0,1
+
+; Overrides -------------------------
+
+[TextureOverrideStelleHairBlend]
+hash = a91c061e
+handling = skip
+vb2 = ResourceStelleHairBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceStelleHairPosition
+	draw = 17993, 0
+endif
+;hash = 8c0c078f
+$activeStelle = 1
+
+if DRAW_TYPE == 8    
+	Resource\SRMI\PositionBuffer = ref ResourceStelleHairPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceStelleHairBlendCS
+	$\SRMI\vertex_count = 17993
+endif
+
+[TextureOverrideStelleHairTexcoord]
+hash = fe9eaef0
+vb1 = ResourceStelleHairTexcoord
+
+[TextureOverrideStelleHairVertexLimitRaise]
+hash = 0f43f610
+;hash = 00d0c31d
+; override_vertex_count = 17993
+; override_byte_stride = 80
+override_vertex_count = 17993
+override_byte_stride = 40
+uav_byte_stride = 4
+
+[TextureOverrideStelleHeadBlend]
+hash = aa50f051
+handling = skip
+vb2 = ResourceStelleHeadBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceStelleHeadPosition
+	draw = 3106, 0
+endif
+;hash = 00658faa
+
+if DRAW_TYPE == 8    
+	Resource\SRMI\PositionBuffer = ref ResourceStelleHeadPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceStelleHeadBlendCS
+	$\SRMI\vertex_count = 3106
+endif
+
+[TextureOverrideStelleHeadTexcoord]
+hash = 6d41cf70
+vb1 = ResourceStelleHeadTexcoord
+
+[TextureOverrideStelleHeadVertexLimitRaise]
+hash = 9cfbc761
+;hash = 9368f26c
+; override_vertex_count = 56
+; override_byte_stride = 80
+override_vertex_count = 3106
+override_byte_stride = 40
+uav_byte_stride = 4
+
+[TextureOverrideStelleBodyBlend]
+hash = 89a23fcd
+handling = skip
+vb2 = ResourceStelleBodyBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceStelleBodyPosition
+	draw = 25906, 0
+endif
+;hash = 6949f854
+$activeStelle = 1
+
+if DRAW_TYPE == 8    
+	Resource\SRMI\PositionBuffer = ref ResourceStelleBodyPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceStelleBodyBlendCS
+	$\SRMI\vertex_count = 25906
+endif
+
+[TextureOverrideStelleBodyTexcoord]
+hash = 43d9095b
+vb1 = ResourceStelleBodyTexcoord
+
+[TextureOverrideStelleBodyVertexLimitRaise]
+hash = f8209611
+;hash = dabe4434
+; override_vertex_count = 233
+; override_byte_stride = 92
+override_vertex_count = 25906
+override_byte_stride = 40
+uav_byte_stride = 4
+
+[TextureOverrideStelleHairIB]
+hash = 1d62eafb
+handling = skip
+
+[TextureOverrideStelleHairA]
+hash = 1d62eafb
+match_first_index = 0
+ib = ResourceStelleHairAIB
+; StelleHairA-vb0=8c0c078f.txt.004
+drawindexed = 0, 0, 0
+; StelleHairA
+; HAIR_ARGENTI
+if $Hair == 0
+	drawindexed = 19470, 0, 0
+	; HAIR_MARCH
+else if $Hair == 1
+	drawindexed = 16074, 19470, 0
+	; HAIR_PONYTAIL
+else if $Hair == 2
+	drawindexed = 15654, 35544, 0
+	; HAIR_STELLE
+else if $Hair == 3
+	drawindexed = 13863, 51198, 0
+endif
+; HORNS
+if $Horns == 1
+	drawindexed = 816, 65061, 0
+endif
+
+[TextureOverrideStelleHairADiffuse]
+hash = a04fcf6f
+this = ResourceStelleHairADiffuse
+
+[TextureOverrideStelleHairALightMap]
+hash = 02a9b085
+this = ResourceStelleHairALightMap
+
+[TextureOverrideStelleHeadIB]
+hash = b6a70a49
+handling = skip
+drawindexed = auto
+
+[TextureOverrideStelleHeadA]
+hash = b6a70a49
+match_first_index = 0
+ib = ResourceStelleHeadAIB
+
+[TextureOverrideStelleHeadADiffuse]
+hash = 4e98df53
+if $Face == 0
+	this = ResourceStelleHeadADiffuse
+else if $Face == 1
+	this = ResourceStelleHeadADiffuse2
+endif
+
+[TextureOverrideStelleHeadB]
+hash = b6a70a49
+match_first_index = 12636
+ib = ResourceStelleHeadBIB
+
+[TextureOverrideStelleBodyIB]
+hash = 5bdd3731
+handling = skip
+
+[TextureOverrideStelleBodyA]
+hash = 5bdd3731
+match_first_index = 0
+ib = ResourceStelleBodyAIB
+; StelleBodyA-vb0=6949f854.txt.012
+drawindexed = 0, 0, 0
+; StelleBodyA
+; POCKETS_BACK
+if $BackPockets == 1
+	drawindexed = 3456, 0, 0
+endif
+; POCKETS_FRONT
+if $FrontPockets == 1
+	drawindexed = 3696, 3456, 0
+endif
+; SHOES_FLAT
+if $Skates == 1
+	drawindexed = 6798, 7152, 0
+	; SHOES_SKATES
+else if $Skates == 0
+	drawindexed = 12414, 13950, 0
+endif
+; body
+drawindexed = 18876, 26364, 0
+; shirt
+drawindexed = 29160, 45240, 0
+
+[TextureOverrideStelleBodyADiffuse]
+hash = 0e5f975c
+this = ResourceStelleBodyADiffuse
+
+[TextureOverrideStelleBodyALightMap]
+hash = f469bcba
+this = ResourceStelleBodyALightMap
+
+[TextureOverrideStelleBodyB]
+hash = 5bdd3731
+match_first_index = 0
+ib = ResourceStelleBodyBIB
+; StelleBodyB-vb0=6949f854.txt.003
+drawindexed = 0, 0, 0
+; StelleBodyB
+; skirt
+drawindexed = 963, 0, 0
+
+; CommandList -----------------------
+
+
+
+; Resources -------------------------
+
+[ResourceStelleHairPosition]
+type = Buffer
+stride = 40
+filename = StelleHairPosition.buf
+
+[ResourceStelleHairBlend]
+type = Buffer
+stride = 32
+filename = StelleHairBlend.buf
+
+[ResourceStelleHairTexcoord]
+type = Buffer
+stride = 8
+filename = StelleHairTexcoord.buf
+
+[ResourceStelleHeadPosition]
+type = Buffer
+stride = 40
+filename = StelleHeadPosition.buf
+
+[ResourceStelleHeadBlend]
+type = Buffer
+stride = 32
+filename = StelleHeadBlend.buf
+
+[ResourceStelleHeadTexcoord]
+type = Buffer
+stride = 8
+filename = StelleHeadTexcoord.buf
+
+[ResourceStelleBodyPosition]
+type = Buffer
+stride = 40
+filename = StelleBodyPosition.buf
+
+[ResourceStelleBodyBlend]
+type = Buffer
+stride = 32
+filename = StelleBodyBlend.buf
+
+[ResourceStelleBodyTexcoord]
+type = Buffer
+stride = 20
+filename = StelleBodyTexcoord.buf
+
+[ResourceStelleHairAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleHairA.ib
+
+[ResourceStelleHeadAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleHeadA.ib
+
+[ResourceStelleHeadBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleHeadB.ib
+
+[ResourceStelleBodyAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleBodyA.ib
+
+[ResourceStelleBodyBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = StelleBodyB.ib
+
+[ResourceStelleHairADiffuse]
+filename = StelleHairADiffuse.dds
+
+[ResourceStelleHairALightMap]
+filename = StelleHairALightMap.dds
+
+[ResourceStelleHeadADiffuse]
+filename = StelleHeadADiffuse.dds
+
+[ResourceStelleHeadADiffuse2]
+filename = StelleHeadADiffuse2.dds
+
+[ResourceStelleBodyADiffuse]
+filename = StelleBodyADiffuse.dds
+
+[ResourceStelleBodyALightMap]
+filename = StelleBodyALightMap.dds
+
+[ResourceCreditInfo]
+type = Buffer
+data = "Created by kaichume"
+
+; .ini generated by XXMI (XX-Model-Importer)
+; If you have any issues or find any bugs, please open a ticket at https://github.com/leotorrez/XXMI-Tools/issues
+
+[Constants]
+global $_blend_ = 0
+
+; -------------------- Auto-generated CS resources --------------------
+
+[ResourceStelleHairDrawCS]
+type = RWStructuredBuffer
+array = 17993
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceStelleHairPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = StelleHairPosition.buf
+
+[ResourceStelleHairBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = StelleHairBlend.buf
+
+[ResourceStelleHeadDrawCS]
+type = RWStructuredBuffer
+array = 3106
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceStelleHeadPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = StelleHeadPosition.buf
+
+[ResourceStelleHeadBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = StelleHeadBlend.buf
+
+[ResourceStelleBodyDrawCS]
+type = RWStructuredBuffer
+array = 25906
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceStelleBodyPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = StelleBodyPosition.buf
+
+[ResourceStelleBodyBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = StelleBodyBlend.buf
+
+
+
+[TextureOverride40fixC]
+hash = 5bdd3731
+match_first_index = 45138
+ib = null
+

@@ -55,6 +55,8 @@ const props = defineProps<{
   totalMatches?: number
   /** 当前匹配项索引 */
   currentIndex?: number
+  /** 禁用输入（更新模组数据期间） */
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{

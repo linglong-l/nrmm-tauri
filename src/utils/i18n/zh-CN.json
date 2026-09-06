@@ -535,6 +535,8 @@
     "autoGenerateIcon": "更改分组图标时自动生成文件夹图标",
     "overallScale": "整体缩放",
     "backgroundTransparency": "背景透明度",
+    "windowTransparency": "窗口透明化",
+    "windowTransparencyDesc": "启用透明化窗口。关闭则使用纯黑背景（Linux/Wayland 下建议关闭，避免合成器渲染异常）",
     "windowToggleHotkey": "窗口切换快捷键",
     "keyboardToggle": "键盘切换",
     "gamepadToggle": "手柄切换(XInput)",

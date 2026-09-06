@@ -1,0 +1,14 @@
+-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+toggle keys !
+
+[   up   ] - hairstyle ( long, ponytail, 
+                short, default )
+
+[down]  - hair ribbon ( on / off )
+
+[  left  ] - stocking ( on / off )
+
+[ right ] - face edit ( on / off )
+
+-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-

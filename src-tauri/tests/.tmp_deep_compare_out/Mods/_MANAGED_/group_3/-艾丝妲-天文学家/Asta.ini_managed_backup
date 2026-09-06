@@ -1,0 +1,349 @@
+; Asta
+
+; Constants -------------------------
+
+; Overrides -------------------------
+
+[TextureOverrideAstaHairBlend]
+hash = 4925ec87
+handling = skip
+vb2 = ResourceAstaHairBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceAstaHairPosition
+	draw = 4706, 0
+endif
+;hash = 967c0759
+ResourceAstaHairDrawCS = copy ResourceAstaHairDrawCS
+if DRAW_TYPE == 8    
+	Resource\SRMI\PositionBuffer = ref ResourceAstaHairPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceAstaHairBlendCS
+	Resource\SRMI\DrawBuffer = ref ResourceAstaHairDrawCS
+	$\SRMI\vertcount = 4706
+elif DRAW_TYPE != 1
+	$_blend_ = 2
+endif
+
+[TextureOverrideAstaHairTexcoord]
+hash = 4f796933
+vb1 = ResourceAstaHairTexcoord
+
+[TextureOverrideAstaHairVertexLimitRaise]
+hash = 1335fa30
+;hash = 1ca6cf3d
+override_vertex_count = 4706
+override_byte_stride = 40
+if DRAW_TYPE != 8 && DRAW_TYPE != 1 && $_blend_ > 0
+	$_blend_ = $_blend_ - 1
+	this = ref ResourceAstaHairDrawCS
+endif
+
+[TextureOverrideAstaHeadBlend]
+hash = 60227cf7
+handling = skip
+vb2 = ResourceAstaHeadBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceAstaHeadPosition
+	draw = 3167, 0
+endif
+;hash = 6f2e00c4
+ResourceAstaHeadDrawCS = copy ResourceAstaHeadDrawCS
+if DRAW_TYPE == 8    
+	Resource\SRMI\PositionBuffer = ref ResourceAstaHeadPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceAstaHeadBlendCS
+	Resource\SRMI\DrawBuffer = ref ResourceAstaHeadDrawCS
+	$\SRMI\vertcount = 3167
+elif DRAW_TYPE != 1
+	$_blend_ = 2
+endif
+
+[TextureOverrideAstaHeadTexcoord]
+hash = 9852cb10
+vb1 = ResourceAstaHeadTexcoord
+
+[TextureOverrideAstaHeadVertexLimitRaise]
+hash = 6e1e2998
+;hash = 618d1c95
+override_vertex_count = 3167
+override_byte_stride = 40
+if DRAW_TYPE != 8 && DRAW_TYPE != 1 && $_blend_ > 0
+	$_blend_ = $_blend_ - 1
+	this = ref ResourceAstaHeadDrawCS
+endif
+
+[TextureOverrideAstaBodyBlend]
+hash = 19ac7cd3
+handling = skip
+vb2 = ResourceAstaBodyBlend
+if DRAW_TYPE == 1
+	vb0 = ResourceAstaBodyPosition
+	draw = 15616, 0
+endif
+;hash = b8e767e9
+ResourceAstaBodyDrawCS = copy ResourceAstaBodyDrawCS
+if DRAW_TYPE == 8    
+	Resource\SRMI\PositionBuffer = ref ResourceAstaBodyPositionCS
+	Resource\SRMI\BlendBuffer = ref ResourceAstaBodyBlendCS
+	Resource\SRMI\DrawBuffer = ref ResourceAstaBodyDrawCS
+	$\SRMI\vertcount = 15616
+elif DRAW_TYPE != 1
+	$_blend_ = 2
+endif
+
+[TextureOverrideAstaBodyTexcoord]
+hash = 337e94ce
+vb1 = ResourceAstaBodyTexcoord
+
+[TextureOverrideAstaBodyVertexLimitRaise]
+hash = 0483ee84
+;hash = 0b10db89
+override_vertex_count = 15616
+override_byte_stride = 40
+if DRAW_TYPE != 8 && DRAW_TYPE != 1 && $_blend_ > 0
+	$_blend_ = $_blend_ - 1
+	this = ref ResourceAstaBodyDrawCS
+endif
+
+[TextureOverrideAstaHairIB]
+hash = 36a13222
+handling = skip
+drawindexed = auto
+
+[TextureOverrideAstaHairA]
+hash = 36a13222
+match_first_index = 0
+ib = ResourceAstaHairAIB
+ps-t0 = ResourceAstaHairADiffuse
+ps-t1 = ResourceAstaHairALightMap
+
+[TextureOverrideAstaHeadIB]
+hash = 46b9e3dc
+handling = skip
+drawindexed = auto
+
+[TextureOverrideAstaHeadA]
+hash = 46b9e3dc
+match_first_index = 0
+ib = ResourceAstaHeadAIB
+ps-t0 = ResourceAstaHeadADiffuse
+
+[TextureOverrideAstaHeadB]
+hash = 46b9e3dc
+match_first_index = 12699
+ib = ResourceAstaHeadBIB
+
+[TextureOverrideAstaBodyIB]
+hash = 8fb66ce1
+handling = skip
+drawindexed = auto
+
+[TextureOverrideAstaBodyA]
+hash = 8fb66ce1
+match_first_index = 0
+ib = ResourceAstaBodyAIB
+ps-t0 = ResourceAstaBodyADiffuse
+
+[TextureOverrideAstaBodyB]
+hash = 8fb66ce1
+match_first_index = 4791
+ib = ResourceAstaBodyBIB
+
+[TextureOverrideAstaBodyC]
+hash = 8fb66ce1
+match_first_index = 11823
+ib = ResourceAstaBodyCIB
+
+[TextureOverrideAstaBodyD]
+hash = 8fb66ce1
+match_first_index = 12510
+ib = ResourceAstaBodyDIB
+ps-t0 = ResourceAstaBodyADiffuse
+
+[TextureOverrideAstaBodyE]
+hash = 8fb66ce1
+match_first_index = 47880
+ib = ResourceAstaBodyEIB
+
+[TextureOverrideAstaBodyALightmap]
+hash = 687428e3
+this = ResourceAstaBodyALightMap
+
+[TextureOverrideAstaBodyBLightmap]
+hash = 8893d921
+this = ResourceAstaBodyBLightMap
+
+[TextureOverrideAstaBodyBDiffuse]
+hash = 8f61660a 
+this = ResourceAstaBodyBDiffuse
+
+[TextureOverrideAstaBodyADiffuse]
+hash = 6e26d2f9 
+this = ResourceAstaBodABDiffuse
+
+[TextureOverrideAstaHairADiffuse]
+hash = 4c1a8aa7 
+this = ResourceAstaHairADiffuse
+
+; CommandList -----------------------
+
+; Resources -------------------------
+
+[ResourceAstaHairPosition]
+type = Buffer
+stride = 40
+filename = AstaHairPosition.buf
+
+[ResourceAstaHairBlend]
+type = Buffer
+stride = 32
+filename = AstaHairBlend.buf
+
+[ResourceAstaHairTexcoord]
+type = Buffer
+stride = 8
+filename = AstaHairTexcoord.buf
+
+[ResourceAstaHeadPosition]
+type = Buffer
+stride = 40
+filename = AstaHeadPosition.buf
+
+[ResourceAstaHeadBlend]
+type = Buffer
+stride = 32
+filename = AstaHeadBlend.buf
+
+[ResourceAstaHeadTexcoord]
+type = Buffer
+stride = 8
+filename = AstaHeadTexcoord.buf
+
+[ResourceAstaBodyPosition]
+type = Buffer
+stride = 40
+filename = AstaBodyPosition.buf
+
+[ResourceAstaBodyBlend]
+type = Buffer
+stride = 32
+filename = AstaBodyBlend.buf
+
+[ResourceAstaBodyTexcoord]
+type = Buffer
+stride = 20
+filename = AstaBodyTexcoord.buf
+
+[ResourceAstaHairAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHairA.ib
+
+[ResourceAstaHeadAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHeadA.ib
+
+[ResourceAstaHeadBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaHeadB.ib
+
+[ResourceAstaBodyAIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyA.ib
+
+[ResourceAstaBodyBIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyB.ib
+
+[ResourceAstaBodyCIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyC.ib
+
+[ResourceAstaBodyDIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyD.ib
+
+[ResourceAstaBodyEIB]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = AstaBodyE.ib
+
+[ResourceAstaHairADiffuse]
+filename = AstaHairADiffuse.dds
+
+[ResourceAstaHairALightMap]
+filename = AstaHairALightMap.dds
+
+[ResourceAstaHeadADiffuse]
+filename = AstaHeadADiffuse.dds
+
+[ResourceAstaBodyADiffuse]
+filename = AstaBodyADiffuse.dds
+
+[ResourceAstaBodyALightMap]
+filename = AstaBodyALightMap.dds
+
+[ResourceAstaBodyBDiffuse]
+filename = AstaBodyBDiffuse.dds
+
+[ResourceAstaBodyBLightMap]
+filename = AstaBodyBLightMap.dds
+
+
+; .ini generated by GIMI (Genshin-Impact-Model-Importer)
+; If you have any issues or find any bugs, please open a ticket at https://github.com/SilentNightSound/GI-Model-Importer/issues or contact SilentNightSound#7430 on discord
+
+[Constants]
+global $_blend_ = 0
+
+; -------------------- Auto-generated CS resources --------------------
+
+[ResourceAstaHairDrawCS]
+type = RWStructuredBuffer
+array = 4706
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceAstaHairPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = AstaHairPosition.buf
+
+[ResourceAstaHairBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = AstaHairBlend.buf
+
+[ResourceAstaHeadDrawCS]
+type = RWStructuredBuffer
+array = 3167
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceAstaHeadPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = AstaHeadPosition.buf
+
+[ResourceAstaHeadBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = AstaHeadBlend.buf
+
+[ResourceAstaBodyDrawCS]
+type = RWStructuredBuffer
+array = 15616
+data = R32_FLOAT 1 2 3 4 5 6 7 8 9 10
+
+[ResourceAstaBodyPositionCS]
+type = StructuredBuffer
+stride = 40
+filename = AstaBodyPosition.buf
+
+[ResourceAstaBodyBlendCS]
+type = StructuredBuffer
+stride = 32
+filename = AstaBodyBlend.buf
+

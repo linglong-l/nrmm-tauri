@@ -111,6 +111,15 @@
           />
         </div>
 
+        <!-- 窗口透明化开关 -->
+        <div class="section-block">
+          <div class="block-row">
+            <span class="row-label">{{ t('settings.windowTransparency') }}</span>
+            <el-switch v-model="settingsStore.settings.windowTransparent" active-color="#4a9eff" inactive-color="#555" @change="onSettingChange" />
+          </div>
+          <div class="setting-desc">{{ t('settings.windowTransparencyDesc') }}</div>
+        </div>
+
         <!-- 背景透明度滑块 -->
         <div class="section-block">
           <div class="block-row">
@@ -122,6 +131,7 @@
             :min="ALPHA_MIN"
             :max="ALPHA_MAX"
             :step="ALPHA_STEP"
+            :disabled="!settingsStore.settings.windowTransparent"
             show-stops
             @input="onSettingChange"
           />

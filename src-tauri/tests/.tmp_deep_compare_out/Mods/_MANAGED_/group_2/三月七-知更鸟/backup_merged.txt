@@ -1,0 +1,521 @@
+; Merged Mod: .\syqMod\syq.ini, .\syqMod n0\syq.ini
+
+; Constants ---------------------------
+
+[Constants]
+global persist $swapvar = 0
+global $active
+global $creditinfo = 0
+
+[KeySwap]
+condition = $active == 1
+key = 6
+type = cycle
+$swapvar = 0,1
+$creditinfo = 0
+
+[Present]
+post $active = 0
+
+; Shader ------------------------------
+
+; Overrides ---------------------------
+
+[TextureOverridesyqPosition]
+hash = 5592f1db
+run = CommandListsyqPosition
+$active = 1
+
+[TextureOverridesyqTexcoord]
+hash = fcef8885
+run = CommandListsyqTexcoord
+
+[TextureOverridesyqVertexLimitRaise]
+hash = e6654dbb
+
+[TextureOverridesyq2Position]
+hash = 09903e8e
+run = CommandListsyq2Position
+$active = 1
+
+[TextureOverridesyq2Texcoord]
+hash = 1ed7e59d
+run = CommandListsyq2Texcoord
+
+[TextureOverridesyq2VertexLimitRaise]
+hash = be2f8ed9
+
+[TextureOverridesyq3Position]
+hash = b23869e0
+run = CommandListsyq3Position
+$active = 1
+
+[TextureOverridesyq3Texcoord]
+hash = b3665f0b
+run = CommandListsyq3Texcoord
+
+[TextureOverridesyq3VertexLimitRaise]
+hash = 49a6a173
+
+[TextureOverridesyqIB]
+hash = 97ad7623
+run = CommandListsyqIB
+
+[TextureOverridesyqA]
+hash = 97ad7623
+match_first_index = 0
+run = CommandListsyqA
+
+[TextureOverridesyqB]
+hash = 97ad7623
+match_first_index = 32502
+run = CommandListsyqB
+
+[TextureOverridesyq2IB]
+hash = 84ba7549
+run = CommandListsyq2IB
+
+[TextureOverridesyq2A]
+hash = 84ba7549
+match_first_index = 0
+run = CommandListsyq2A
+
+[TextureOverridesyq2ADiffuse]
+hash = 6bd71ad9
+run = CommandListsyq2ADiffuse
+
+[TextureOverridesyq2ALightMap]
+hash = 371ca498
+run = CommandListsyq2ALightMap
+
+[TextureOverridesyq3IB]
+hash = 2e23a897
+run = CommandListsyq3IB
+
+[TextureOverridesyq3A]
+hash = 2e23a897
+match_first_index = 0
+run = CommandListsyq3A
+
+[TextureOverridesyq3ADiffuse]
+hash = 2d25d041
+run = CommandListsyq3ADiffuse
+
+[TextureOverridesyq3ALightMap]
+hash = bb5905b2
+run = CommandListsyq3ALightMap
+
+[TextureOverridesyq3AShadow]
+hash = c6ca85f2
+run = CommandListsyq3AShadow
+
+[TextureOverridesyq3At3]
+hash = a5b5a9da
+run = CommandListsyq3At3
+
+[TextureOverridesyq3B]
+hash = 2e23a897
+match_first_index = 13200
+run = CommandListsyq3B
+
+; CommandList -------------------------
+
+[CommandListsyqPosition]
+if $swapvar == 0
+	handling = skip
+	vb0 = ResourcesyqPosition.0
+	vb2 = ResourcesyqBlend.0
+	draw = 16188,0
+else if $swapvar == 1
+	handling = skip
+	vb0 = ResourcesyqPosition.1
+	vb2 = ResourcesyqBlend.1
+	draw = 14232,0
+endif
+
+[CommandListsyqTexcoord]
+if $swapvar == 0
+	vb1 = ResourcesyqTexcoord.0
+else if $swapvar == 1
+	vb1 = ResourcesyqTexcoord.1
+endif
+
+[CommandListsyq2Position]
+if $swapvar == 0
+	handling = skip
+	vb0 = Resourcesyq2Position.0
+	vb2 = Resourcesyq2Blend.0
+	draw = 5955,0
+else if $swapvar == 1
+	handling = skip
+	vb0 = Resourcesyq2Position.1
+	vb2 = Resourcesyq2Blend.1
+	draw = 4207,0
+endif
+
+[CommandListsyq2Texcoord]
+if $swapvar == 0
+	vb1 = Resourcesyq2Texcoord.0
+else if $swapvar == 1
+	vb1 = Resourcesyq2Texcoord.1
+endif
+
+[CommandListsyq3Position]
+if $swapvar == 0
+	handling = skip
+	vb0 = Resourcesyq3Position.0
+	vb2 = Resourcesyq3Blend.0
+	draw = 7471,0
+else if $swapvar == 1
+	handling = skip
+	vb0 = Resourcesyq3Position.1
+	vb2 = Resourcesyq3Blend.1
+	draw = 3222,0
+endif
+
+[CommandListsyq3Texcoord]
+if $swapvar == 0
+	vb1 = Resourcesyq3Texcoord.0
+else if $swapvar == 1
+	vb1 = Resourcesyq3Texcoord.1
+endif
+
+[CommandListsyqIB]
+if $swapvar == 0
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 1
+	handling = skip
+	drawindexed = auto
+endif
+
+[CommandListsyqA]
+if $swapvar == 0
+	ib = ResourcesyqAIB.0
+	ps-t0 = ResourcesyqADiffuse.0
+	ps-t1 = ResourcesyqALightMap.0
+else if $swapvar == 1
+	ib = ResourcesyqAIB.1
+	ps-t0 = ResourcesyqADiffuse.1
+	ps-t1 = ResourcesyqALightMap.1
+endif
+
+[CommandListsyqB]
+if $swapvar == 0
+	ib = ResourcesyqBIB.0
+	ps-t0 = ResourcesyqBDiffuse.0
+	ps-t1 = ResourcesyqBLightMap.0
+else if $swapvar == 1
+	ib = null
+	ps-t0 = ResourcesyqBDiffuse.1
+	ps-t1 = ResourcesyqBLightMap.1
+endif
+
+[CommandListsyq2IB]
+if $swapvar == 0
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 1
+	handling = skip
+	drawindexed = auto
+endif
+
+[CommandListsyq2A]
+if $swapvar == 0
+	ib = Resourcesyq2AIB.0
+else if $swapvar == 1
+	ib = Resourcesyq2AIB.1
+	ps-t0 = Resourcesyq2ADiffuse.1
+	ps-t1 = Resourcesyq2ALightMap.1
+endif
+
+[CommandListsyq2ADiffuse]
+if $swapvar == 0
+	this = Resourcesyq2ADiffuse.0
+endif
+
+[CommandListsyq2ALightMap]
+if $swapvar == 0
+	this = Resourcesyq2ALightMap.0
+endif
+
+[CommandListsyq3IB]
+if $swapvar == 0
+	handling = skip
+	drawindexed = auto
+else if $swapvar == 1
+	handling = skip
+	drawindexed = auto
+endif
+
+[CommandListsyq3A]
+if $swapvar == 0
+	ib = Resourcesyq3AIB.0
+else if $swapvar == 1
+	ib = Resourcesyq3AIB.1
+	ps-t0 = Resourcesyq3ADiffuse.1
+	ps-t1 = Resourcesyq3ALightMap.1
+	ps-t2 = Resourcesyq3AShadow.1
+	ps-t3 = Resourcesyq3At3.1
+endif
+
+[CommandListsyq3ADiffuse]
+if $swapvar == 0
+	this = Resourcesyq3ADiffuse.0
+endif
+
+[CommandListsyq3ALightMap]
+if $swapvar == 0
+	this = Resourcesyq3ALightMap.0
+else if $swapvar == 0
+	this = Resourcesyq3BLightMap.0
+endif
+
+[CommandListsyq3AShadow]
+if $swapvar == 0
+	this = Resourcesyq3AShadow.0
+else if $swapvar == 0
+	this = Resourcesyq3BDiffuse.0
+endif
+
+[CommandListsyq3At3]
+if $swapvar == 0
+	this = Resourcesyq3At3.0
+else if $swapvar == 0
+	this = Resourcesyq3BShadow.0
+endif
+
+[CommandListsyq3B]
+if $swapvar == 0
+	ib = Resourcesyq3BIB.0
+else if $swapvar == 1
+	ib = Resourcesyq3BIB.1
+	ps-t0 = Resourcesyq3BDiffuse.1
+	ps-t1 = Resourcesyq3BLightMap.1
+	ps-t2 = Resourcesyq3BShadow.1
+endif
+
+; Resources ---------------------------
+
+[ResourcesyqPosition.0]
+type = Buffer
+stride = 40
+filename = .\syqMod\syqPosition.buf
+
+[ResourcesyqBlend.0]
+type = Buffer
+stride = 32
+filename = .\syqMod\syqBlend.buf
+
+[ResourcesyqTexcoord.0]
+type = Buffer
+stride = 20
+filename = .\syqMod\syqTexcoord.buf
+
+[Resourcesyq2Position.0]
+type = Buffer
+stride = 40
+filename = .\syqMod\syq2Position.buf
+
+[Resourcesyq2Blend.0]
+type = Buffer
+stride = 32
+filename = .\syqMod\syq2Blend.buf
+
+[Resourcesyq2Texcoord.0]
+type = Buffer
+stride = 8
+filename = .\syqMod\syq2Texcoord.buf
+
+[Resourcesyq3Position.0]
+type = Buffer
+stride = 40
+filename = .\syqMod\syq3Position.buf
+
+[Resourcesyq3Blend.0]
+type = Buffer
+stride = 32
+filename = .\syqMod\syq3Blend.buf
+
+[Resourcesyq3Texcoord.0]
+type = Buffer
+stride = 8
+filename = .\syqMod\syq3Texcoord.buf
+
+[ResourcesyqAIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syqA.ib
+
+[ResourcesyqBIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syqB.ib
+
+[Resourcesyq2AIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syq2A.ib
+
+[Resourcesyq3AIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syq3A.ib
+
+[Resourcesyq3BIB.0]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod\syq3B.ib
+
+[ResourcesyqADiffuse.0]
+filename = .\syqMod\syqADiffuse.dds
+
+[ResourcesyqALightMap.0]
+filename = .\syqMod\syqALightMap.dds
+
+[ResourcesyqBDiffuse.0]
+filename = .\syqMod\syqBDiffuse.dds
+
+[ResourcesyqBLightMap.0]
+filename = .\syqMod\syqBLightMap.dds
+
+[Resourcesyq2ADiffuse.0]
+filename = .\syqMod\syq2ADiffuse.dds
+
+[Resourcesyq2ALightMap.0]
+filename = .\syqMod\syq2ALightMap.dds
+
+[Resourcesyq3ADiffuse.0]
+filename = .\syqMod\syq3ADiffuse.dds
+
+[Resourcesyq3ALightMap.0]
+filename = .\syqMod\syq3ALightMap.dds
+
+[Resourcesyq3AShadow.0]
+filename = .\syqMod\syq3AShadow.dds
+
+[Resourcesyq3At3.0]
+filename = .\syqMod\syq3At3.dds
+
+[Resourcesyq3BDiffuse.0]
+filename = .\syqMod\syq3BDiffuse.dds
+
+[Resourcesyq3BLightMap.0]
+filename = .\syqMod\syq3BLightMap.dds
+
+[Resourcesyq3BShadow.0]
+filename = .\syqMod\syq3BShadow.dds
+
+[ResourcesyqPosition.1]
+type = Buffer
+stride = 40
+filename = .\syqMod n0\syqPosition.buf
+
+[ResourcesyqBlend.1]
+type = Buffer
+stride = 32
+filename = .\syqMod n0\syqBlend.buf
+
+[ResourcesyqTexcoord.1]
+type = Buffer
+stride = 20
+filename = .\syqMod n0\syqTexcoord.buf
+
+[Resourcesyq2Position.1]
+type = Buffer
+stride = 40
+filename = .\syqMod n0\syq2Position.buf
+
+[Resourcesyq2Blend.1]
+type = Buffer
+stride = 32
+filename = .\syqMod n0\syq2Blend.buf
+
+[Resourcesyq2Texcoord.1]
+type = Buffer
+stride = 8
+filename = .\syqMod n0\syq2Texcoord.buf
+
+[Resourcesyq3Position.1]
+type = Buffer
+stride = 40
+filename = .\syqMod n0\syq3Position.buf
+
+[Resourcesyq3Blend.1]
+type = Buffer
+stride = 32
+filename = .\syqMod n0\syq3Blend.buf
+
+[Resourcesyq3Texcoord.1]
+type = Buffer
+stride = 8
+filename = .\syqMod n0\syq3Texcoord.buf
+
+[ResourcesyqAIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syqA.ib
+
+[ResourcesyqBIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syqB.ib
+
+[Resourcesyq2AIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syq2A.ib
+
+[Resourcesyq3AIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syq3A.ib
+
+[Resourcesyq3BIB.1]
+type = Buffer
+format = DXGI_FORMAT_R32_UINT
+filename = .\syqMod n0\syq3B.ib
+
+[ResourcesyqADiffuse.1]
+filename = .\syqMod n0\syqADiffuse.dds
+
+[ResourcesyqALightMap.1]
+filename = .\syqMod n0\syqALightMap.dds
+
+[ResourcesyqBDiffuse.1]
+filename = .\syqMod n0\syqBDiffuse.dds
+
+[ResourcesyqBLightMap.1]
+filename = .\syqMod n0\syqBLightMap.dds
+
+[Resourcesyq2ADiffuse.1]
+filename = .\syqMod n0\syq2ADiffuse.dds
+
+[Resourcesyq2ALightMap.1]
+filename = .\syqMod n0\syq2ALightMap.dds
+
+[Resourcesyq3ADiffuse.1]
+filename = .\syqMod n0\syq3ADiffuse.dds
+
+[Resourcesyq3ALightMap.1]
+filename = .\syqMod n0\syq3ALightMap.dds
+
+[Resourcesyq3AShadow.1]
+filename = .\syqMod n0\syq3AShadow.dds
+
+[Resourcesyq3At3.1]
+filename = .\syqMod n0\syq3At3.dds
+
+[Resourcesyq3BDiffuse.1]
+filename = .\syqMod n0\syq3BDiffuse.dds
+
+[Resourcesyq3BLightMap.1]
+filename = .\syqMod n0\syq3BLightMap.dds
+
+[Resourcesyq3BShadow.1]
+filename = .\syqMod n0\syq3BShadow.dds
+
+
+
+; .ini generated by GIMI (Genshin-Impact-Model-Importer) mod merger script
+; If you have any issues or find any bugs, please open a ticket at https://github.com/SilentNightSound/GI-Model-Importer/issues or contact SilentNightSound#7430 on discord

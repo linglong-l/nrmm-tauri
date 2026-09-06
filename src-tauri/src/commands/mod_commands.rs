@@ -765,13 +765,12 @@ pub async fn remove_group(group_path: String) -> Result<GroupDelta, String> {
 
 /// 移除模组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED + 还原 INI）
 ///
-/// 完整流程：
+/// 完整流程（后端移除逻辑不变）：
 /// 1. 将模组文件夹移动到 `Mods/DISABLED_MANAGED_REMOVED/<modname>`（冲突追加 _1、_2…）
 /// 2. 对移动后的模组执行 INI 还原（清理所有 NRMM 注入内容）
-/// 3. 对受影响分组（mod 目录的父分组）局部重扫 + `subtree_replace` 合并缓存（R1 命令级增量）
-///
-/// 返回 `RemoveModResult`，包含移动后路径、INI 还原状态、受影响分组完整新状态
-/// （`groupDelta`，前端按 oldGroupPath 原地替换该组）等信息
+/// 3. 零扫描：MOD_CACHE 模组条目直接剔除（组树 + 扁平列表），前后端索引同步清除
+/// 4. 缓存条目未命中（异常）→ 降级对受影响分组局部重扫 + `subtree_replace` 合并缓存，
+///    `degraded=true` 返回完整组增量（前端 patch 后告知用户发生异常）
 #[tauri::command]
 pub async fn remove_mod(
     mod_path: String,
@@ -787,15 +786,27 @@ pub async fn remove_mod(
             let _guard = crate::core::file_watcher::WatcherGuard::new();
             let mut result =
                 crate::core::mod_manager::remove_mod(&path).map_err(|e| e.to_string())?;
-            // 局部重扫入口：mod 目录已被移走（旧路径不存在），传 parent（分组目录，
-            // 操作前后恒存在）——scan_partial_path 会扩展到所属分组
-            let rescan_dir = path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| old_group_dir.clone());
-            result.group_delta = build_group_delta(game, &mods_root, &old_group_dir, &rescan_dir)
-                .map_err(|e| e.to_string())?;
-            log_delta("remove_mod", &result.group_delta);
+            // 零扫描缓存剔除：组树 + 扁平列表移除该模组条目；未命中（缓存无此条）→ 降级增量重扫
+            let mut degraded = false;
+            {
+                let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+                if !cache.remove_mod_entry(game, &mods_root, &path) {
+                    degraded = true;
+                }
+            } // 释放写锁
+            if degraded {
+                // 局部重扫入口：mod 目录已被移走（旧路径不存在），传 parent（分组目录，
+                // 操作前后恒存在）——scan_partial_path 会扩展到所属分组
+                let rescan_dir = path
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| old_group_dir.clone());
+                result.group_delta =
+                    build_group_delta(game, &mods_root, &old_group_dir, &rescan_dir)
+                        .map_err(|e| e.to_string())?;
+                log_delta("remove_mod(degraded)", &result.group_delta);
+            }
+            result.degraded = degraded;
             Ok(result)
         },
     )
@@ -940,50 +951,110 @@ pub async fn rename_group(
     Ok(delta)
 }
 
-/// 切换模组启用/禁用状态（支持互斥组）
+/// 单模组启用/禁用结果（零扫描路径；degraded=true 时前端消费 group_delta 并提示异常）
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleModResult {
+    /// 操作后模组目录绝对路径（rename 后；幂等未改名时为原路径）
+    pub new_path: String,
+    /// 操作后的禁用状态（true=已禁用）
+    pub disabled: bool,
+    /// 是否降级为增量扫描（缓存条目未命中等异常）；true 时请用 `group_delta` 整体 patch 并告知用户
+    pub degraded: bool,
+    /// 异常降级时的受影响分组增量（degraded=false 时为空占位）
+    pub group_delta: GroupDelta,
+}
+
+/// 切换单模组启用/禁用状态
 ///
-/// 命令级增量（R1）：文件操作后对受影响分组局部重扫 + `subtree_replace`
-/// 合并缓存，返回 [`GroupDelta`]（该组完整新状态，含互斥级联后的兄弟
-/// 模组状态）供前端原地替换，不再触发全量失效与全量刷新。
+/// 零扫描（对齐 NRMM `completeDisableMod`/`enableMod`）：仅目录重命名（`DISABLED_`
+/// 前缀增删）+ MOD_CACHE 条目就地 patch，不触发任何扫描/重载。
+/// 异常（缓存条目未命中 / 重命名失败）→ 降级组级增量重扫，`degraded=true` +
+/// `group_delta`（前端 patch 后告知用户发生异常）。
 #[tauri::command]
 pub async fn toggle_mod_disabled(
     mod_path: String,
     enable: bool,
     is_mutex: bool,
-) -> Result<GroupDelta, String> {
+) -> Result<ToggleModResult, String> {
     let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
         .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
     let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
     let game = settings_store::get_settings().target_game;
 
-    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
-        // 抑制 watcher 批次在目录重命名中途读取中间态（C11：暂停期事件保留，
-        // 恢复后幂等合并；enable_mutex_mod 内部守卫与本守卫嵌套安全）
-        let _guard = crate::core::file_watcher::WatcherGuard::new();
-        if is_mutex {
-            if enable {
-                mod_manager::enable_mutex_mod(&path).map_err(|e| e.to_string())?;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> Result<ToggleModResult, String> {
+            // 抑制 watcher 批次在目录重命名中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
+            let _guard = crate::core::file_watcher::WatcherGuard::new();
+            if is_mutex {
+                if enable {
+                    mod_manager::enable_mutex_mod(&path).map_err(|e| e.to_string())?;
+                } else {
+                    mod_manager::disable_mutex_mod(&path).map_err(|e| e.to_string())?;
+                }
             } else {
-                mod_manager::disable_mutex_mod(&path).map_err(|e| e.to_string())?;
+                mod_manager::toggle_mod(&path, enable).map_err(|e| e.to_string())?;
             }
-        } else {
-            mod_manager::toggle_mod(&path, enable).map_err(|e| e.to_string())?;
-        }
-        // 局部重扫入口：mod 目录已被重命名（DISABLED 前缀增删），旧路径不存在，
-        // 传 parent（分组目录，操作前后恒存在）——scan_partial_path 会扩展到所属分组
-        let rescan_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| old_group_dir.clone());
-        let delta = build_group_delta(game, &mods_root, &old_group_dir, &rescan_dir)
-            .map_err(|e| e.to_string())?;
-        log_delta("toggle_mod_disabled", &delta);
-        Ok(delta)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+            // 推导操作后路径（与 toggle_mod 同口径；幂等时返回原路径）
+            let new_path = derive_toggled_path(&path, enable);
+            // 零扫描缓存 patch；未命中（缓存无此条目/组树无定位）→ 降级增量重扫
+            let mut degraded = false;
+            {
+                let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+                if !cache.patch_mod_entry(game, &mods_root, &path, &new_path, enable) {
+                    degraded = true;
+                }
+            } // 释放写锁
+            let group_delta = if degraded {
+                build_group_delta(
+                    game,
+                    &mods_root,
+                    &old_group_dir,
+                    &path
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| old_group_dir.clone()),
+                )
+                .map_err(|e| e.to_string())?
+            } else {
+                GroupDelta::default()
+            };
+            if degraded {
+                log_delta("toggle_mod_disabled(degraded)", &group_delta);
+            }
+            Ok(ToggleModResult {
+                new_path: new_path.to_string_lossy().to_string(),
+                disabled: enable,
+                degraded,
+                group_delta,
+            })
+        })
+        .await
+        .map_err(|e| e.to_string())??;
 
-    Ok(delta)
+    Ok(result)
+}
+
+/// 推导启用/禁用后模组目录路径（与 `mod_manager::toggle_mod` 的重命名口径一致：
+/// 禁用 = 前缀 `DISABLED`；启用 = 去除 `DISABLED` 前缀；幂等命中时返回原路径）。
+fn derive_toggled_path(path: &Path, enable: bool) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let parent = path.parent().unwrap_or(path);
+    if enable {
+        let stripped = mod_scanner::strip_disabled_prefix(&name);
+        if stripped == name || stripped.is_empty() {
+            path.to_path_buf() // 已启用（幂等）
+        } else {
+            parent.join(stripped)
+        }
+    } else if mod_scanner::is_disabled_dir(&name) {
+        path.to_path_buf() // 已禁用（幂等）
+    } else {
+        parent.join(format!("{}{}", constants::DISABLED_PREFIX, name))
+    }
 }
 
 /// 切换模组收藏状态
@@ -1549,8 +1620,9 @@ pub fn create_subfolder(parent_path: String, folder_name: String) -> Result<(), 
 
 /// 禁用指定分组下所有一级模组（不含 .ini 的子分组目录不处理）
 ///
-/// 命令级增量（R1）：批量禁用后对受影响分组局部重扫 + `subtree_replace`
-/// 合并缓存，返回 [`BatchGroupDelta`]（保留原 changed 计数语义 + 该组完整新状态）。
+/// 零扫描（对齐 NRMM）：目录重命名后对缓存逐条 `patch_mod_entry` 就地更新，
+/// 不触发任何扫描/重载，返回路径对列表供前端本地 patch。
+/// 异常（rename 失败 / 缓存条目未命中）→ 降级增量扫描，`degraded=true` + 完整分组增量。
 #[tauri::command]
 pub async fn disable_all_mods_in_group(group_path: String) -> Result<BatchGroupDelta, String> {
     let (mods_root, group_dir) = resolve_managed_context(Path::new(&group_path))
@@ -1558,28 +1630,13 @@ pub async fn disable_all_mods_in_group(group_path: String) -> Result<BatchGroupD
     let path = PathBuf::from(group_path);
     let game = settings_store::get_settings().target_game;
 
-    let result =
-        tauri::async_runtime::spawn_blocking(move || -> Result<BatchGroupDelta, String> {
-            // 抑制 watcher 批次在批量重命名中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
-            let _guard = crate::core::file_watcher::WatcherGuard::new();
-            let changed = crate::core::mod_manager::disable_all_mods_in_group(&path)
-                .map_err(|e| e.to_string())?;
-            // 组目录本身未被删除/重命名（仅组内 mod 目录重命名），直接以分组目录为重扫入口
-            let delta = build_group_delta(game, &mods_root, &group_dir, &group_dir)
-                .map_err(|e| e.to_string())?;
-            log_delta("disable_all_mods_in_group", &delta);
-            Ok(BatchGroupDelta { changed, delta })
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-
-    Ok(result)
+    batch_toggle_group_impl(game, mods_root, group_dir, path, true).await
 }
 
 /// 启用指定分组下所有一级禁用模组（不含 .ini 的子分组目录不处理）
 ///
-/// 命令级增量（R1）：批量启用后对受影响分组局部重扫 + `subtree_replace`
-/// 合并缓存，返回 [`BatchGroupDelta`]（保留原 changed 计数语义 + 该组完整新状态）。
+/// 零扫描（对齐 NRMM）：目录重命名后对缓存逐条 `patch_mod_entry` 就地更新。
+/// 异常 → 降级增量扫描，`degraded=true` + 完整分组增量。
 #[tauri::command]
 pub async fn enable_all_mods_in_group(group_path: String) -> Result<BatchGroupDelta, String> {
     let (mods_root, group_dir) = resolve_managed_context(Path::new(&group_path))
@@ -1587,21 +1644,79 @@ pub async fn enable_all_mods_in_group(group_path: String) -> Result<BatchGroupDe
     let path = PathBuf::from(group_path);
     let game = settings_store::get_settings().target_game;
 
+    batch_toggle_group_impl(game, mods_root, group_dir, path, false).await
+}
+
+/// 批量启停实现（禁用/启用共用）：先目录重命名（返回路径对），再零扫描 patch 缓存；
+/// 任一条缓存 patch 失败 → 降级组级增量重扫（degraded=true）。
+async fn batch_toggle_group_impl(
+    game: TargetGame,
+    mods_root: PathBuf,
+    group_dir: PathBuf,
+    group_path: PathBuf,
+    disable: bool,
+) -> Result<BatchGroupDelta, String> {
+    let dir_display = group_path.display().to_string();
     let result =
         tauri::async_runtime::spawn_blocking(move || -> Result<BatchGroupDelta, String> {
             // 抑制 watcher 批次在批量重命名中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
             let _guard = crate::core::file_watcher::WatcherGuard::new();
-            let changed = crate::core::mod_manager::enable_all_mods_in_group(&path)
-                .map_err(|e| e.to_string())?;
-            // 组目录本身未被删除/重命名（仅组内 mod 目录重命名），直接以分组目录为重扫入口
-            let delta = build_group_delta(game, &mods_root, &group_dir, &group_dir)
-                .map_err(|e| e.to_string())?;
-            log_delta("enable_all_mods_in_group", &delta);
-            Ok(BatchGroupDelta { changed, delta })
+            let renamed = if disable {
+                crate::core::mod_manager::disable_all_mods_in_group(&group_path)
+                    .map_err(|e| e.to_string())?
+            } else {
+                crate::core::mod_manager::enable_all_mods_in_group(&group_path)
+                    .map_err(|e| e.to_string())?
+            };
+            let changed = renamed.len() as u32;
+
+            // 零扫描缓存 patch：逐条就地更新（组树 + 扁平列表）；任一条未命中 → 降级
+            let mut degraded = false;
+            {
+                let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+                for (old, new) in &renamed {
+                    if !cache.patch_mod_entry(game, &mods_root, old, new, disable) {
+                        degraded = true;
+                        break;
+                    }
+                }
+            } // 释放写锁（build_group_delta 内部需获取读/写锁）
+
+            let delta = if degraded {
+                build_group_delta(game, &mods_root, &group_dir, &group_dir)
+                    .map_err(|e| e.to_string())?
+            } else {
+                // 正常路径不消费 delta（toggled 路径对足够），返回空增量占位
+                GroupDelta::default()
+            };
+
+            let toggled = renamed
+                .into_iter()
+                .map(|(old, new)| crate::models::mod_data::PathPair {
+                    old_path: old.to_string_lossy().to_string(),
+                    new_path: new.to_string_lossy().to_string(),
+                })
+                .collect();
+            Ok(BatchGroupDelta {
+                changed,
+                toggled,
+                degraded,
+                delta,
+            })
         })
         .await
         .map_err(|e| e.to_string())??;
-
+    log::info!(
+        "[{}] changed={} degraded={} dir={}",
+        if disable {
+            "disable_all_mods_in_group"
+        } else {
+            "enable_all_mods_in_group"
+        },
+        result.changed,
+        result.degraded,
+        dir_display
+    );
     Ok(result)
 }
 

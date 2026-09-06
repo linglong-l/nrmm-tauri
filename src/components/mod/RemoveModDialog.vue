@@ -160,12 +160,24 @@ function handleOverlayClick() {
 /** UI1 确认按钮：调用后端移除模组，成功后切换到 UI2（R1：分组增量原地 patch，零全量 refresh） */
 async function handleConfirm() {
   if (!props.modPath) return
+  // 更新模组数据期间禁止移除：update 正在批量改写 _MANAGED_，移除目录会破坏其中间态
+  if (modsStore.isUpdatingModData) {
+    close()
+    return
+  }
   state.value = 'loading'
   startDots()
   try {
     const res = await removeMod(props.modPath)
-    // 命令级增量：受影响分组新状态直接 patch 进 store（不再触发全量 refresh）
-    modsStore.applyGroupDelta(res.groupDelta)
+    // 零扫描：后端已剔除缓存条目，前端就地剔除卡片（无任何扫描/重载）
+    if (res.degraded) {
+      // 异常降级：增量扫描 + 组增量原地 patch，并明确告知用户发生异常
+      modsStore.applyGroupDelta(res.groupDelta)
+      errorMessage.value = '移除操作异常，模组数据已增量刷新'
+      state.value = 'error'
+      return
+    }
+    modsStore.removeModLocal(props.modPath)
     state.value = 'success'
   } catch (e: unknown) {
     const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))
