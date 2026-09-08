@@ -326,6 +326,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             report_frontend_ready,
+            commands::log_commands::frontend_log,
             commands::settings_commands::get_settings,
             commands::settings_commands::save_settings,
             commands::settings_commands::reset_settings,

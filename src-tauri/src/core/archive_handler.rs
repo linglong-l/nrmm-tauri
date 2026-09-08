@@ -445,11 +445,13 @@ fn safe_join_entry(base: &Path, name: &str) -> std::result::Result<PathBuf, seve
             std::path::Component::ParentDir
             | std::path::Component::RootDir
             | std::path::Component::Prefix(_) => {
-                return Err(sevenz_rust::Error::Other(format!(
-                    "unsafe 7z entry name rejected (traversal/absolute/prefix): {}",
-                    name
-                )
-                .into()));
+                return Err(sevenz_rust::Error::Other(
+                    format!(
+                        "unsafe 7z entry name rejected (traversal/absolute/prefix): {}",
+                        name
+                    )
+                    .into(),
+                ));
             }
         }
     }
@@ -513,18 +515,24 @@ fn extract_7z_internal(
             let safe_path = safe_join_entry(&dest_base, entry.name())?;
             if entry.is_directory() {
                 if !safe_path.exists() {
-                    fs::create_dir_all(&safe_path).map_err(|e| sevenz_rust::Error::Io(e, "".into()))?;
+                    fs::create_dir_all(&safe_path)
+                        .map_err(|e| sevenz_rust::Error::Io(e, "".into()))?;
                 }
             } else {
                 if let Some(parent) = safe_path.parent() {
                     if !parent.exists() {
-                        fs::create_dir_all(parent).map_err(|e| sevenz_rust::Error::Io(e, "".into()))?;
+                        fs::create_dir_all(parent)
+                            .map_err(|e| sevenz_rust::Error::Io(e, "".into()))?;
                     }
                 }
                 let mut file = fs::File::create(&safe_path).map_err(|e| {
-                    sevenz_rust::Error::Io(e, format!("create file: {}", safe_path.display()).into())
+                    sevenz_rust::Error::Io(
+                        e,
+                        format!("create file: {}", safe_path.display()).into(),
+                    )
                 })?;
-                std::io::copy(reader, &mut file).map_err(|e| sevenz_rust::Error::Io(e, "".into()))?;
+                std::io::copy(reader, &mut file)
+                    .map_err(|e| sevenz_rust::Error::Io(e, "".into()))?;
             }
             Ok(true)
         },

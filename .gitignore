@@ -104,3 +104,4 @@ CLAUDE.local.md
 .gemini/
 .clinerules/
 overview.md
+src-tauri/tests/

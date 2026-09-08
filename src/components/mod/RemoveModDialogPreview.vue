@@ -155,6 +155,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RemoveModDialog from '@/components/mod/RemoveModDialog.vue'
 import { ElMessage } from 'element-plus'
+import { placeContextMenu } from '@/utils/contextMenuPosition'
 
 const { t } = useI18n()
 
@@ -253,13 +254,10 @@ function onCardLeftClick(m: MockMod) {
 
 function onCardRightClick(m: MockMod, e: MouseEvent) {
   selected.value = m
-  const W = 180, H = 210
-  const vw = window.innerWidth, vh = window.innerHeight
-  let x = e.clientX, y = e.clientY
-  if (x + W > vw - 4) x = vw - W - 4
-  if (y + H > vh - 4) y = vh - H - 4
-  ctxMenuX.value = x
-  ctxMenuY.value = y
+  // 缩放校正：根元素 CSS zoom 使 fixed 坐标空间与 clientX/Y 失配（zoom≠1 时菜单漂移）
+  const pos = placeContextMenu(e, 180, 210)
+  ctxMenuX.value = pos.x
+  ctxMenuY.value = pos.y
   ctxMenuVisible.value = true
 }
 function closeCtx() { ctxMenuVisible.value = false }

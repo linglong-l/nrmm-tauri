@@ -351,7 +351,11 @@ async function handleDoubleClick() {
 /** 重命名模组 */
 async function handleRename() {
   if (!mod.value) return
-  if (modsStore.isUpdatingModData) return
+  // 后端 rename_mod 需获取 UPDATE_LOCK，重量级 update 期间会被静默排队 —— 显式提示而非无反馈
+  if (modsStore.isUpdatingModData) {
+    ElMessage.warning(t('Updating mod data, please wait'))
+    return
+  }
   closeContextMenu()
   try {
     const { value } = await ElMessageBox.prompt(

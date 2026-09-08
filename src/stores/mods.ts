@@ -13,6 +13,9 @@ import { defineStore } from 'pinia'
 import { ref, computed, reactive, watch, shallowRef, triggerRef } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, deselectGroupMod, disableAllModsInGroup, syncNrmmUpdateFlag } from '../utils/tauri'
+import { predictToggledPath } from '../utils/modPath'
+import { deriveGroupActiveState } from '../utils/groupActiveState'
+import { sortModsLikeLightScan, reindexMods } from '../utils/modSort'
 import { useSettingsStore } from './settings'
 import type { ModGroupData, ModData, TargetGame, UpdateResult, GroupDelta, InvalidUtf8Entry } from '../types'
 import { logger } from '../utils/logger'
@@ -41,6 +44,17 @@ export const useModsStore = defineStore('mods', () => {
   const groups = shallowRef<ModGroupData[]>([])
   /** 所有模组的扁平列表（包含所有分组的模组），shallowRef 理由同上（整体替换赋值） */
   const mods = shallowRef<ModData[]>([])
+  /**
+   * 树内本地 mutate 版本戳（2026-09-06 启停 UI 渲染断链修复）。
+   *
+   * shallowRef 语义下，树内对象/数组的**就地 mutate**（启用禁用标志、isActive、
+   * 组内重排等）不会改变 `groups.value` / `currentGroup` 的引用——即使显式
+   * `triggerRef`，computed 链（currentGroup → currentGroupMods → displayMods）
+   * 因「值引用相等」不向下传播，UI 直到整树替换（切页/重扫）才刷新。
+   * 本地 mutate 后自增该戳 + 受影响容器替换新数组引用，强制 stats 链重算并拿到
+   * 新引用（ModCard v-for 依赖数组引用），实现乐观 UI 即时渲染。
+   */
+  const modTreeVersion = ref(0)
   /** 是否正在加载模组数据 */
   const loading = ref(false)
   /** 最近一次加载失败的错误信息（C18：非竞态过期时置位；success/clearData 时清空） */
@@ -81,6 +95,13 @@ export const useModsStore = defineStore('mods', () => {
   const needReloadManual = ref(false)
   /** 是否正在执行模组激活操作（双击防抖） */
   const isActivating = ref(false)
+  /**
+   * 后端 `select_mod` 防抖窗口为 500ms；命中防抖后前端以 trailing-edge 重发，
+   * 延迟须略大于该窗口，否则重发仍会落在窗口内被再次拦截。
+   */
+  const SELECTION_DEBOUNCE_RETRY_MS = 600
+  /** 待执行的防抖 trailing-edge 重试定时器（同一时刻最多一个，新意图覆盖旧意图） */
+  let pendingActivateRetry: ReturnType<typeof setTimeout> | null = null
   /** 是否正在执行重量级更新模组数据（全局状态锁，true时阻止其他操作） */
   const isUpdatingModData = ref(false)
   /** 更新模组数据结果（保存最近一次的 UpdateResult） */
@@ -431,6 +452,9 @@ export const useModsStore = defineStore('mods', () => {
 
   /** 当前分组显示的模组列表（所有分组类型均仅返回自身直接模组，不递归子分组） */
   const currentGroupMods = computed<ModData[]>(() => {
+    // 消费树版本戳：本地 mutate（启停/收藏/选择/取消选择）后重算，绕开 shallowRef
+    // 引用相等导致的断链（详见 modTreeVersion 注释）
+    void modTreeVersion.value
     const g = currentGroup.value
     if (!g) return []
     // 所有分组类型统一仅返回自身直接模组列表，子分组模组需点击子分组才显示
@@ -763,6 +787,16 @@ export const useModsStore = defineStore('mods', () => {
    * @param delta 命令返回的分组增量（newGroup=null 表示分组已整体移除）
    */
   function applyGroupDelta(delta: GroupDelta): void {
+    // 0. 替换前捕获「当前选中模组路径」：delta 携带后端权威序（natural 序），
+    //    替换后组内卡片会重排；若只按整数下标搬运 selectedModIndex，选中高亮会落到
+    //    别的卡片上（用户反馈的「返回数据后重排序 → 选错」）。此处对齐 toggleModLocal 口径：
+    //    按 modPath 记录 → 替换后按路径重定位。
+    const deltaGPath = selectedGroupPath.value
+    const deltaTrackingPath =
+      selectedModIndex.value > 0 && currentGroup.value
+        ? currentGroup.value.mods[selectedModIndex.value]?.modPath
+        : undefined
+
     // 1. 树中定位旧组节点（含其所在父数组，供原位替换/移除）
     const slot = findGroupSlot(groups.value, delta.oldGroupPath)
     if (!slot) {
@@ -818,6 +852,31 @@ export const useModsStore = defineStore('mods', () => {
     } else if (groups.value.length > 0) {
       selectedGroupPath.value = groups.value[0].groupPath
     }
+    // 5b. 按路径重定位选中位次（权威 delta 重排后的兜底修正）
+    //    先于越界钳制执行：重排后旧下标通常仍「合法」但已指向别的模组，
+    //    仅靠越界钳制无法发现，必须以路径为准。
+    if (deltaTrackingPath !== undefined && deltaGPath) {
+      const g = findGroupByPathInList(groups.value, deltaGPath)
+      if (g) {
+        const idx = g.mods.findIndex((m) => m.modPath === deltaTrackingPath)
+        if (idx >= 0 && idx !== selectedModIndex.value) {
+          selectedModIndex.value = idx
+          if (!deltaGPath.startsWith('__') && deltaGPath !== '__groups__') {
+            selectedModIndicesByGroup[deltaGPath] = idx
+          }
+          logger.debug('ModsStore', 'applyGroupDelta: relocated selected index by path', {
+            from: deltaTrackingPath,
+            to: idx,
+            groupPath: deltaGPath,
+          })
+        } else if (idx < 0) {
+          logger.warn('ModsStore', 'applyGroupDelta: selected mod vanished after delta', {
+            trackingPath: deltaTrackingPath,
+            groupPath: deltaGPath,
+          })
+        }
+      }
+    }
     const currentMods = currentGroupMods.value
     if (selectedModIndex.value >= currentMods.length) {
       selectedModIndex.value = Math.max(0, currentMods.length - 1)
@@ -846,31 +905,38 @@ export const useModsStore = defineStore('mods', () => {
    * @param isFav 命令返回的切换后收藏状态
    */
   function toggleFavoriteLocal(modPath: string, isFav: boolean): void {
-    // 扁平列表：翻转 isFavorite（shallowRef 内对象 mutate → 显式 triggerRef）
+    // 扁平列表：翻转 isFavorite（shallowRef 内对象 mutate → 换新引用强制收藏列表重渲染）
     const flat = mods.value.find((m) => m.modPath === modPath)
+    let flatChanged = false
     if (flat) {
       flat.isFavorite = isFav
-      triggerRef(mods)
+      flatChanged = true
     }
-    // 树：定位直接包含该模组的分组节点，翻转并做组内近似重排
+    if (flatChanged) mods.value = [...mods.value]
+    // 树：定位直接包含该模组的分组节点，翻转并做组内近似重排（换新数组引用驱动渲染）
     const container = findGroupContainingModInList(groups.value, modPath)
     if (container) {
       const idx = container.mods.findIndex((m) => m.modPath === modPath)
       if (idx >= 0) {
-        const [moved] = container.mods.splice(idx, 1)
+        const next = [...container.mods]
+        const [moved] = next.splice(idx, 1)
         moved.isFavorite = isFav
         if (isFav) {
           // 收藏前置：插到首位之后（None 空槽位恒为组内第 0 位，mod_index 以 None=0 为基准，不得顶替）
           const noneFirst =
-            container.mods[0] && (container.mods[0].name === 'None' || container.mods[0].modPath === 'None')
-          container.mods.splice(noneFirst ? 1 : 0, 0, moved)
+            next[0] && (next[0].name === 'None' || next[0].modPath === 'None')
+          next.splice(noneFirst ? 1 : 0, 0, moved)
         } else {
           // 取消收藏后移（近似序，精确序由后续增量/全量刷新恢复）
-          container.mods.push(moved)
+          next.push(moved)
         }
-        triggerRef(groups)
+        container.mods = next
+        reindexMods(container.mods)
       }
     }
+    modTreeVersion.value++
+    triggerRef(mods)
+    triggerRef(groups)
     // fav 标记文件的 watcher 回声同样需要抑制
     lastLocalPatchAt.value = Date.now()
   }
@@ -879,29 +945,83 @@ export const useModsStore = defineStore('mods', () => {
    * 启用/禁用本地 patch（零扫描路径：toggle_mod_disabled 命令仅目录重命名后返回路径对，
    * 前端原位更新新路径与禁用标志，不触发任何扫描/重载/IPC）。
    *
-   * 扁平与树内同路径条目为两个独立对象实例，需分别更新；组内位置与 mod_index 不变
-   * （仅目录重命名，不产生数量/顺序变化），无需重排。
+   * 扁平与树内同路径条目为两个独立对象实例，需分别更新；`disabled` 兼容字段与
+   * `modDisabled` 双字段同步（后端扫描/派生同源，分叉会造成 UI 显示/排序/激活态口径错位）。
+   * 变更容器按轻量扫描口径就地重排（启用在前→收藏在前→名称序），并将当前选中位次
+   * 按 modPath 重定位，使 UI 展示序与「下次全量轻扫」收敛一致。
    *
    * @param oldPath 重命名前绝对路径（扁平/树的共同定位键）
    * @param newPath 重命名后绝对路径
    * @param disabled 操作后的禁用状态
    */
   function toggleModLocal(oldPath: string, newPath: string, disabled: boolean): void {
+    // 重排前捕获当前选中位次指向的模组路径（用于重排后按路径重定位；None=0 无需）
+    const curGroup = currentGroup.value
+    const selectGPath = curGroup?.groupPath ?? ''
+    const selectTrackingPath =
+      selectedModIndex.value > 0 && curGroup
+        ? curGroup.mods[selectedModIndex.value]?.modPath
+        : undefined
     const patch = (m: ModData) => {
       if (m.modPath === oldPath) {
         m.modPath = newPath
+        m.disabled = disabled
         m.modDisabled = disabled
       }
     }
-    for (const m of mods.value) patch(m)
+    let flatChanged = false
+    for (const m of mods.value) {
+      if (m.modPath === oldPath) {
+        patch(m)
+        flatChanged = true
+      }
+    }
+    if (flatChanged) {
+      // 换新数组引用：shallowRef 整体替换以强制扁平链（收藏列表等）重渲染
+      const flatCopy = [...mods.value]
+      sortModsLikeLightScan(flatCopy)
+      mods.value = flatCopy
+    }
+    let treeChanged = false
     const walk = (list: ModGroupData[]) => {
       for (const g of list) {
-        for (const m of g.mods) patch(m)
+        let gChanged = false
+        for (const m of g.mods) {
+          if (m.modPath === oldPath) {
+            patch(m)
+            gChanged = true
+          }
+        }
+        if (gChanged) {
+          // 组内容器换新数组引用 + 排序/重编号：驱动 currentGroupMods 拿到新引用并发起重渲染
+          const sorted = [...g.mods]
+          sortModsLikeLightScan(sorted)
+          reindexMods(sorted)
+          g.mods = sorted
+          g.activeModIndex = g.mods.findIndex((m) => m.isActive)
+          treeChanged = true
+        }
         walk(g.children || [])
       }
     }
     walk(groups.value)
-    // shallowRef：树内字段 mutate 需显式触发 UI 刷新
+    // 重定位当前选中位次（组树受影响时）：patch 已改写目标模组路径，
+    // 按「patch 后新路径」找回重排后的位次（用旧路径匹配会因改名而失配）
+    if (treeChanged && selectTrackingPath !== undefined) {
+      const g = findGroupByPathInList(groups.value, selectGPath)
+      if (g) {
+        const targetPath = selectTrackingPath === oldPath ? newPath : selectTrackingPath
+        const idx = g.mods.findIndex((m) => m.modPath === targetPath)
+        if (idx >= 0 && idx !== selectedModIndex.value) {
+          selectedModIndex.value = idx
+          if (selectGPath && !selectGPath.startsWith('__') && selectGPath !== '__groups__') {
+            selectedModIndicesByGroup[selectGPath] = idx
+          }
+        }
+      }
+    }
+    // shallowRef：树内字段 mutate 需显式触发更新；版本戳自增强制渲染链重算（引用已换新）
+    modTreeVersion.value++
     triggerRef(mods)
     triggerRef(groups)
     // 目录重命名的 watcher 回声同样需要抑制（避免快照泄漏为一次无操作 refresh）
@@ -910,24 +1030,74 @@ export const useModsStore = defineStore('mods', () => {
 
   /**
    * 批量启停本地 patch（零扫描路径：disable/enable_all_mods_in_group 返回路径对列表，
-   * 前端逐条原位更新，不触发任何扫描/重载）。
+   * 前端逐条更新 + 容器重排 + 选中位次重定位，不触发任何扫描/重载）。
    */
   function batchToggleModLocal(pairs: { oldPath: string; newPath: string; disabled: boolean }[]): void {
+    const curGroup = currentGroup.value
+    const selectGPath = curGroup?.groupPath ?? ''
+    const selectTrackingPath =
+      selectedModIndex.value > 0 && curGroup
+        ? curGroup.mods[selectedModIndex.value]?.modPath
+        : undefined
     const patch = (m: ModData) => {
       const hit = pairs.find((p) => m.modPath === p.oldPath)
       if (hit) {
         m.modPath = hit.newPath
+        m.disabled = hit.disabled
         m.modDisabled = hit.disabled
       }
     }
-    for (const m of mods.value) patch(m)
+    let flatChanged = false
+    for (const m of mods.value) {
+      if (pairs.some((p) => m.modPath === p.oldPath)) {
+        patch(m)
+        flatChanged = true
+      }
+    }
+    if (flatChanged) {
+      const flatCopy = [...mods.value]
+      sortModsLikeLightScan(flatCopy)
+      mods.value = flatCopy
+    }
+    let treeChanged = false
     const walk = (list: ModGroupData[]) => {
       for (const g of list) {
-        for (const m of g.mods) patch(m)
+        let gChanged = false
+        for (const m of g.mods) {
+          if (pairs.some((p) => m.modPath === p.oldPath)) {
+            patch(m)
+            gChanged = true
+          }
+        }
+        if (gChanged) {
+          // 组内容器换新数组引用（同 toggleModLocal：驱动 currentGroupMods 重渲染）
+          const sorted = [...g.mods]
+          sortModsLikeLightScan(sorted)
+          reindexMods(sorted)
+          g.mods = sorted
+          g.activeModIndex = g.mods.findIndex((m) => m.isActive)
+          treeChanged = true
+        }
         walk(g.children || [])
       }
     }
     walk(groups.value)
+    if (treeChanged && selectTrackingPath !== undefined) {
+      const g = findGroupByPathInList(groups.value, selectGPath)
+      if (g) {
+        // 批量 patch 后按新路径重定位（与 toggleModLocal 同口径）
+        const hit = pairs.find((p) => p.oldPath === selectTrackingPath)
+        const targetPath = hit ? hit.newPath : selectTrackingPath
+        const idx = g.mods.findIndex((m) => m.modPath === targetPath)
+        if (idx >= 0 && idx !== selectedModIndex.value) {
+          selectedModIndex.value = idx
+          if (selectGPath && !selectGPath.startsWith('__') && selectGPath !== '__groups__') {
+            selectedModIndicesByGroup[selectGPath] = idx
+          }
+        }
+      }
+    }
+    modTreeVersion.value++
     triggerRef(mods)
     triggerRef(groups)
     if (pairs.length > 0) lastLocalPatchAt.value = Date.now()
@@ -955,6 +1125,8 @@ export const useModsStore = defineStore('mods', () => {
       return removed
     }
     walk(groups.value)
+    // 树容器已换新引用（filter 结果）；版本戳强制 currentGroupMods 重算（shallowRef 断链修复）
+    modTreeVersion.value++
     triggerRef(mods)
     triggerRef(groups)
     // 选中态修正：被移除模组为当前选中时回退
@@ -998,9 +1170,11 @@ export const useModsStore = defineStore('mods', () => {
    * - 不触发"需要更新模组数据"提示条
    *
    * @param modIdx 模组在当前显示列表中的索引
+   * @param modPath 模组绝对路径（唯一标识，定位模组的首选依据）
+   * @param isRetry 内部参数：是否为「防抖 trailing-edge 重试」的重发调用（防重试死循环）
    */
-  async function activateModByIndex(modIdx: number, modPath?: string) {
-    logger.debug('ModsStore', 'activateModByIndex', { modIdx, modPath })
+  async function activateModByIndex(modIdx: number, modPath?: string, isRetry = false) {
+    logger.debug('ModsStore', 'activateModByIndex', { modIdx, modPath, isRetry })
     if (isUpdatingModData.value) return
     if (isActivating.value) return
     const s = useSettingsStore()
@@ -1023,6 +1197,8 @@ export const useModsStore = defineStore('mods', () => {
     }
 
     isActivating.value = true
+    // 乐观回滚函数（try 内赋值，catch 可见；模块严格模式下块内函数声明不外提）
+    let rollbackOptimistic: () => void = () => {}
     try {
       const isMutex = group.groupType === 'mutexGroup'
       // 后端 mod_index 必须以「当前分组真实列表（含 None 槽位）」中的下标为准，
@@ -1054,6 +1230,95 @@ export const useModsStore = defineStore('mods', () => {
         })
       }
 
+      // === UI 先行（乐观更新）：后端调用前即呈现目标选中态，消除秒级点击延迟 ===
+      // 后端 mod_index 归一化口径：None 槽位占 0，真实模组从 1 起（误传 0 时按 1 处理）
+      const normalizedIdx = realModIdx === 0 ? 1 : realModIdx
+      const gPath = group.groupPath
+      const gPathUsable = !gPath.startsWith('__') && gPath !== '__groups__'
+      // 快照（回滚基准）：选中索引 / 分组索引映射 / 树节点 activeModIndex / 组内每模组 isActive
+      const prevSelectedIdx = selectedModIndex.value
+      const hadGroupIdxEntry = gPathUsable && Object.prototype.hasOwnProperty.call(selectedModIndicesByGroup, gPath)
+      const prevGroupIdxVal = selectedModIndicesByGroup[gPath]
+      const found = findGroupByPathInList(groups.value, gPath)
+      const prevActiveIdx = found ? found.activeModIndex : undefined
+      const prevActiveByPath = new Map<string, boolean>()
+      function collectActiveRecursive(g: ModGroupData) {
+        for (const m of g.mods) prevActiveByPath.set(m.modPath, m.isActive)
+        for (const child of g.children) collectActiveRecursive(child)
+      }
+      collectActiveRecursive(group)
+      // 扁平列表快照（独立实例，供回滚恢复；收藏/搜索结果视图的高亮直接读扁平 isActive）
+      for (const fm of mods.value) {
+        const prev = prevActiveByPath.get(fm.modPath)
+        if (prev === undefined) prevActiveByPath.set(fm.modPath, fm.isActive)
+      }
+      // 递归更新分组树中所有模组的isActive状态（互斥组和普通组都是互斥语义：
+      // 同一时间只有一个模组为active）
+      function setActiveRecursive(g: ModGroupData, targetPath: string) {
+        for (const m of g.mods) {
+          m.isActive = m.modPath === targetPath
+        }
+        for (const child of g.children) {
+          setActiveRecursive(child, targetPath)
+        }
+      }
+      // 扁平列表同步（收藏/搜索视图高亮与组视图一致）
+      function setActiveFlat(targetPath: string) {
+        for (const m of mods.value) {
+          m.isActive = m.modPath === targetPath
+        }
+      }
+      // 乐观回滚：失败/防抖拒绝时完整恢复操作前快照（含全部派生字段）
+      rollbackOptimistic = () => {
+        selectedModIndex.value = prevSelectedIdx
+        if (hadGroupIdxEntry) {
+          selectedModIndicesByGroup[gPath] = prevGroupIdxVal
+        } else if (gPathUsable) {
+          delete selectedModIndicesByGroup[gPath]
+        }
+        if (!isMutex && found && prevActiveIdx !== undefined) {
+          found.activeModIndex = prevActiveIdx
+        }
+        function restoreActiveRecursive(g: ModGroupData) {
+          for (const m of g.mods) {
+            const prev = prevActiveByPath.get(m.modPath)
+            if (prev !== undefined) m.isActive = prev
+          }
+          for (const child of g.children) restoreActiveRecursive(child)
+        }
+        restoreActiveRecursive(group)
+        // 扁平恢复（镜像树恢复）
+        for (const m of mods.value) {
+          const prev = prevActiveByPath.get(m.modPath)
+          if (prev !== undefined) m.isActive = prev
+        }
+        mods.value = [...mods.value]
+        // 换新数组引用 + 版本戳：驱动 currentGroupMods 重算并重渲染（shallowRef 断链修复）
+        group.mods = [...group.mods]
+        modTreeVersion.value++
+        // shallowRef：树内字段 mutate 需显式触发更新
+        triggerRef(mods)
+        triggerRef(groups)
+      }
+
+      // 应用乐观态：选中索引 / 分组映射 / 树节点 activeModIndex（非互斥）/ isActive
+      selectedModIndex.value = normalizedIdx
+      if (gPathUsable) {
+        selectedModIndicesByGroup[gPath] = normalizedIdx
+      }
+      if (!isMutex && found) {
+        found.activeModIndex = normalizedIdx
+      }
+      setActiveRecursive(group, modPath2)
+      setActiveFlat(modPath2)
+      // 换新数组引用 + 版本戳：乐观选中态即时渲染（shallowRef 断链修复）
+      group.mods = [...group.mods]
+      mods.value = [...mods.value]
+      modTreeVersion.value++
+      // shallowRef：树内模组 isActive 乐观更新需显式触发 UI 刷新
+      triggerRef(mods)
+      triggerRef(groups)
+
       logger.debug('ModsStore', '[activateModByIndex] calling selectMod', {
         game: s.currentGame,
         modsPath: s.currentModsPath,
@@ -1064,7 +1329,7 @@ export const useModsStore = defineStore('mods', () => {
         modPath: modPath2,
       })
 
-      // 调用后端select_mod命令处理INI写入和互斥逻辑，取得写入磁盘后的最终索引
+      // 调用后端select_mod命令处理selectedindex写入和互斥逻辑（UI 已先行，不再阻塞呈现）
       const result = await selectMod(
         s.currentGame,
         s.currentModsPath,
@@ -1082,54 +1347,63 @@ export const useModsStore = defineStore('mods', () => {
       // 注意：模组选择不触发 markNeedUpdate，因为选择不涉及模组数据修改
       // 仅在启用/禁用模组时才需要提醒用户更新模组数据
 
-      // 选择写入磁盘的最终索引：优先使用后端返回值，否则回退到当前分组真实列表下标
+      // 成功：以后端写入磁盘的最终索引校正（优先返回值，否则回退到当前分组真实列表下标）
       const retSelIdx: number =
         result && typeof result.selectedModIndex === 'number' ? result.selectedModIndex : realModIdx
-      // 更新前端选中状态
-      selectedModIndex.value = retSelIdx
-      // 同步记录到分组索引映射（对应 Flutter 的 previousSelectedModOnGroup）
-      const gPath = group.groupPath
-      if (!gPath.startsWith('__') && gPath !== '__groups__') {
-        selectedModIndicesByGroup[gPath] = retSelIdx
-      }
-      // 关键同步：在 groups.value 整棵树上定位该分组，更新其 activeModIndex
-      // 保证下一次点击该分组时，UI 依然显示为后端写入的选中索引
-      if (group.groupType !== 'mutexGroup') {
-        const groupPathMatch = group.groupPath
-        const found = findGroupByPathInList(groups.value, groupPathMatch)
-        if (found) {
+      if (retSelIdx !== normalizedIdx) {
+        selectedModIndex.value = retSelIdx
+        if (gPathUsable) {
+          selectedModIndicesByGroup[gPath] = retSelIdx
+        }
+        if (!isMutex && found) {
           found.activeModIndex = retSelIdx
-          // shallowRef：树内字段 mutate 需显式触发更新
-          triggerRef(groups)
-        } else {
-          logger.warn('ModsStore', 'activeModIndex sync failed: group not found in tree', {
-            groupPath: groupPathMatch,
-            retSelIdx,
-          })
         }
+        group.mods = [...group.mods]
+        modTreeVersion.value++
+        triggerRef(groups)
       }
-      // 乐观更新：递归更新分组树中所有模组的isActive状态
-      // 互斥组和普通组都是互斥语义：同一时间只有一个模组为active
-      function setActiveRecursive(g: ModGroupData, targetPath: string) {
-        for (const m of g.mods) {
-          m.isActive = m.modPath === targetPath
-        }
-        for (const child of g.children) {
-          setActiveRecursive(child, targetPath)
-        }
-      }
-      setActiveRecursive(group, modPath2)
-      // shallowRef：树内模组 isActive 乐观更新需显式触发 UI 刷新
-      triggerRef(groups)
     } catch (e: unknown) {
-      // 防抖命中时静默处理，不弹出错误提示
       const errMsg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))
+      // 防抖命中（P1 修复）：回滚本次乐观变更后不再静默丢弃最后一次选择意图。
+      // 原实现直接 return，用户双击后「点了没反应」且无任何提示；改为
+      // trailing-edge 重发一次——延迟略大于后端防抖窗口（500ms）后重放，
+      // 保证同组快速连选 A→B 时 B 最终一定生效。仅重试一次，避免抖动循环。
       if (errMsg === 'debounced') {
-        logger.debug('ModsStore', 'activateModByIndex debounced, skipping')
+        rollbackOptimistic()
+        if (isRetry) {
+          logger.warn('ModsStore', 'activateModByIndex debounced again on retry, giving up', {
+            modIdx,
+            modPath,
+          })
+          return
+        }
+        logger.debug('ModsStore', 'activateModByIndex debounced → schedule trailing-edge retry', {
+          modIdx,
+          modPath,
+          delayMs: SELECTION_DEBOUNCE_RETRY_MS,
+        })
+        if (pendingActivateRetry !== null) clearTimeout(pendingActivateRetry)
+        // 记录意图发生时的分组：定时器触发时若用户已切到别的分组，则丢弃这次重试，
+        // 避免用「旧分组的下标/路径」在新分组上选中错误的模组（无 modPath 的调用方
+        // 会退化为按 modIdx 定位，跨分组即错位）。
+        const retryGroupPath = group.groupPath
+        pendingActivateRetry = setTimeout(() => {
+          pendingActivateRetry = null
+          if (currentGroup.value?.groupPath !== retryGroupPath) {
+            logger.warn('ModsStore', 'activateModByIndex retry dropped: group changed', {
+              from: retryGroupPath,
+              to: currentGroup.value?.groupPath,
+            })
+            return
+          }
+          void activateModByIndex(modIdx, modPath, true)
+        }, SELECTION_DEBOUNCE_RETRY_MS)
         return
       }
+      // 其它错误：回滚快照并告知用户（fire-and-forget），保持异常冒泡供调用方感知
+      rollbackOptimistic()
       logger.error('ModsStore', 'Failed to activate mod', e)
-      // 向调用方冒泡异常，保证调用方能感知到失败
+      ElMessage.error(`选择模组失败：${errMsg}`)
       throw e
     } finally {
       isActivating.value = false
@@ -1162,25 +1436,102 @@ export const useModsStore = defineStore('mods', () => {
     const s = useSettingsStore()
     if (!s.currentModsPath) return
     isActivating.value = true
+    // 乐观回滚函数（try 内赋值，catch 可见；模块严格模式下块内函数声明不外提）
+    let rollbackOptimistic: () => void = () => {}
     try {
       if (!isMutex) {
         logger.debug('mods', 'deselectOrDisableNoneSlot → deselectGroupMod', { groupIndex, groupPath })
-        await deselectGroupMod(s.currentGame, s.currentModsPath, groupIndex)
-        selectedModIndex.value = 0
-        const path = selectedGroupPath.value
-        if (path && !path.startsWith('__') && path !== '__groups__') {
-          selectedModIndicesByGroup[path] = 0
+        // === UI 先行（乐观更新）：取消选择立即呈现，不等后端 ===
+        const gPathUsable = !groupPath.startsWith('__') && groupPath !== '__groups__'
+        const prevSelectedIdx = selectedModIndex.value
+        const hadGroupIdxEntry = gPathUsable && Object.prototype.hasOwnProperty.call(selectedModIndicesByGroup, groupPath)
+        const prevGroupIdxVal = selectedModIndicesByGroup[groupPath]
+        const found = findGroupByPathInList(groups.value, groupPath)
+        const prevActiveIdx = found ? found.activeModIndex : undefined
+        const prevActiveByPath = new Map<string, boolean>()
+        if (found) {
+          for (const m of found.mods) prevActiveByPath.set(m.modPath, m.isActive)
         }
-        // deselect_group_mod 未纳入 R1 命令级 delta 契约 → 保留全量 refresh
-        await refresh()
+        rollbackOptimistic = () => {
+          selectedModIndex.value = prevSelectedIdx
+          if (hadGroupIdxEntry) {
+            selectedModIndicesByGroup[groupPath] = prevGroupIdxVal
+          } else if (gPathUsable) {
+            delete selectedModIndicesByGroup[groupPath]
+          }
+          if (found && prevActiveIdx !== undefined) {
+            found.activeModIndex = prevActiveIdx
+          }
+          if (found) {
+            for (const m of found.mods) {
+              const prev = prevActiveByPath.get(m.modPath)
+              if (prev !== undefined) m.isActive = prev
+            }
+            // 换新数组引用 + 版本戳：驱动渲染链重算（shallowRef 断链修复）
+            found.mods = [...found.mods]
+          }
+          modTreeVersion.value++
+          triggerRef(groups)
+        }
+        // 应用乐观态：选中索引置 0；组内激活态按后端派生口径（单一真源镜像）同步
+        selectedModIndex.value = 0
+        if (gPathUsable) {
+          selectedModIndicesByGroup[groupPath] = 0
+        }
+        if (found) {
+          found.activeModIndex = deriveGroupActiveState(found.mods, 0)
+          // 换新数组引用 + 版本戳：取消选择态即时渲染（shallowRef 断链修复）
+          found.mods = [...found.mods]
+          modTreeVersion.value++
+          triggerRef(groups)
+        }
+
+        // 直写快路径（后端 O(1) 写 selectedindex=0 + 缓存定向 patch）；
+        // 成功后不再全量 refresh：UI 已本地一致，回声被 WatcherGuard 抑制，对账走 watcher 兜底
+        await deselectGroupMod(s.currentGame, s.currentModsPath, groupIndex, groupPath)
       } else {
         logger.debug('mods', 'deselectOrDisableNoneSlot → disableAllModsInGroup', { groupPath })
+        // === UI 先行（乐观更新）：预测禁用 pairs 并本地批量 patch ===
+        const found = findGroupByPathInList(groups.value, groupPath)
+        const groupMods = found ? found.mods : []
+        const optimisticPairs: { oldPath: string; newPath: string; disabled: boolean }[] = []
+        for (const m of groupMods) {
+          if (m.name === 'None' || m.modPath === 'None') continue
+          if (m.modDisabled) continue // 已禁用跳过（后端幂等口径）
+          optimisticPairs.push({ oldPath: m.modPath, newPath: predictToggledPath(m.modPath, true), disabled: true })
+        }
+        if (optimisticPairs.length > 0) {
+          batchToggleModLocal(optimisticPairs)
+        }
+        rollbackOptimistic = () => {
+          if (optimisticPairs.length > 0) {
+            batchToggleModLocal(
+              optimisticPairs.map((p) => ({ oldPath: p.newPath, newPath: p.oldPath, disabled: false })),
+            )
+          }
+        }
+
         const batch = await disableAllModsInGroup(groupPath)
-        // 命令级增量原地 patch（R1：批量禁用后零全量 refresh）
-        applyGroupDelta(batch.delta)
+        if (batch.degraded) {
+          // 异常降级：组增量原地 patch（磁盘真相覆盖乐观态）
+          applyGroupDelta(batch.delta)
+        } else {
+          // 零扫描校正：后端权威路径与预测不一致的条目二次 patch（同口径幂等下通常一致）
+          const predictedByOld = new Map(optimisticPairs.map((p) => [p.oldPath, p.newPath]))
+          for (const t of batch.toggled) {
+            const predicted = predictedByOld.get(t.oldPath)
+            if (predicted !== undefined && predicted !== t.newPath) {
+              toggleModLocal(predicted, t.newPath, true)
+            } else if (predicted === undefined) {
+              toggleModLocal(t.oldPath, t.newPath, true)
+            }
+          }
+        }
         logger.info('mods', `Disabled ${batch.changed} mods in mutex group ${groupPath}`)
       }
     } catch (e: unknown) {
+      // 失败：回滚乐观变更后冒泡（错误提示由调用方 ModCard 统一弹出，避免双重 toast）
+      rollbackOptimistic()
       logger.error('mods', 'deselectOrDisableNoneSlot failed', e)
       throw e
     } finally {

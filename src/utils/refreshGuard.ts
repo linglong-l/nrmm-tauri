@@ -23,3 +23,25 @@ export function isBrowserRefreshKey(e: KeyboardEvent): boolean {
   if (key === 'r' && (e.ctrlKey || e.metaKey)) return true
   return false
 }
+
+/**
+ * 判定是否应用内「轻量重扫」快捷键（Ctrl/Meta+R，不含 Shift）。
+ *
+ * 窗口内绑定：Ctrl+R 拦截整页 reload 后改为数据层轻量重扫（loadMods：
+ * 后端缓存有效则零扫描，失效则轻量扫描），修复此前「点按无反应」的表现。
+ */
+export function isLightRescanKey(e: KeyboardEvent): boolean {
+  const key = e.key?.toLowerCase()
+  return key === 'r' && (e.ctrlKey || e.metaKey) && !e.shiftKey
+}
+
+/**
+ * 判定是否应用内「全量重扫」快捷键（Ctrl/Meta+Shift+R，窗口内绑定）。
+ *
+ * 语义：强制后端全量轻扫并覆盖缓存与前端数据（refresh），与浏览器强刷逃生门
+ * 解耦——Ctrl+Shift+R 不再放行整页 reload，改走数据层全量重扫。
+ */
+export function isFullRescanKey(e: KeyboardEvent): boolean {
+  const key = e.key?.toLowerCase()
+  return key === 'r' && (e.ctrlKey || e.metaKey) && !!e.shiftKey
+}

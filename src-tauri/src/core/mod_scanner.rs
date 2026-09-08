@@ -195,6 +195,112 @@ pub fn is_group_xx_dir(dir_name: &str) -> bool {
     }
 }
 
+/// [`derive_group_active_state`] 的组内条目访问抽象。
+///
+/// 值语义 `ModData`（扫描构建期，Arc 包装前）与 `Arc<ModData>`（缓存定向
+/// patch 期，经 `Arc::make_mut` 写时拷贝）经此 trait 共用同一派生真源。
+pub trait GroupModSlot {
+    /// 只读访问底层 `ModData`。
+    fn mod_slot(&self) -> &ModData;
+    /// 可变访问底层 `ModData`。
+    fn mod_slot_mut(&mut self) -> &mut ModData;
+}
+
+impl GroupModSlot for ModData {
+    fn mod_slot(&self) -> &ModData {
+        self
+    }
+
+    fn mod_slot_mut(&mut self) -> &mut ModData {
+        self
+    }
+}
+
+impl GroupModSlot for Arc<ModData> {
+    fn mod_slot(&self) -> &ModData {
+        self
+    }
+
+    fn mod_slot_mut(&mut self) -> &mut ModData {
+        Arc::make_mut(self)
+    }
+}
+
+/// 基于磁盘状态派生组内 `is_active`（扫描与缓存定向 patch 的单一真源）。
+///
+/// 判定口径（与 NRMM 对齐）：
+/// - 恰好一个启用（非 None 且未禁用）→ 该模组为 active；
+/// - 零个启用 → None 槽位为 active（返回 0）；
+/// - 多个启用（异常状态，如手动操作文件）→ 回退到 selectedindex 文件值；
+///   selectedindex 指向禁用模组时 fallback 到第一个启用模组。
+///
+/// # 参数
+/// - `mods`: 组内模组列表（含 None 空槽位，None 恒在下标 0；就地写入 `is_active`），
+///   元素可为值语义 `ModData` 或 `Arc<ModData>`（写时拷贝，见 [`GroupModSlot`]）
+/// - `selected_index`: selectedindex 标记文件当前值（None 槽位 = 0）
+///
+/// # 返回
+/// 派生后的 `active_mod_index`（无激活条目为 -1；零启用且无 None 槽位时返回 0 但不激活任何条目）
+pub fn derive_group_active_state<M: GroupModSlot>(mods: &mut [M], selected_index: i32) -> i32 {
+    let enabled_non_none: Vec<usize> = mods
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.mod_slot().name != "None" && !m.mod_slot().disabled)
+        .map(|(i, _)| i)
+        .collect();
+
+    if enabled_non_none.len() == 1 {
+        let idx = enabled_non_none[0];
+        mods[idx].mod_slot_mut().is_active = true;
+        // None 槽位设置为不激活
+        if let Some(none) = mods.iter_mut().find(|m| m.mod_slot().name == "None") {
+            none.mod_slot_mut().is_active = false;
+        }
+        idx as i32
+    } else if enabled_non_none.is_empty() {
+        // 没有启用的模组 → None 激活
+        for m in mods.iter_mut() {
+            let slot = m.mod_slot_mut();
+            let is_none = slot.name == "None";
+            slot.is_active = is_none;
+        }
+        0
+    } else {
+        // 多个模组启用（异常），回退到 selectedindex 文件
+        let mut active_idx: i32 = -1;
+        for (idx, m) in mods.iter_mut().enumerate() {
+            let slot = m.mod_slot_mut();
+            if slot.name == "None" {
+                slot.is_active = selected_index == 0;
+                if selected_index == 0 {
+                    active_idx = 0;
+                }
+            } else {
+                slot.is_active = idx as i32 == selected_index;
+                if idx as i32 == selected_index {
+                    active_idx = idx as i32;
+                }
+            }
+        }
+        // 如果 selectedindex 指向的模组是禁用的，则 fallback 到第一个启用的
+        if active_idx < 0
+            || mods
+                .get(active_idx as usize)
+                .map(|m| m.mod_slot().disabled)
+                .unwrap_or(true)
+        {
+            if let Some(&first_enabled) = enabled_non_none.first() {
+                for m in mods.iter_mut() {
+                    m.mod_slot_mut().is_active = false;
+                }
+                mods[first_enabled].mod_slot_mut().is_active = true;
+                active_idx = first_enabled as i32;
+            }
+        }
+        active_idx
+    }
+}
+
 /// 检查目录是否包含任何 .ini 文件（仅检查扩展名，不读取内容）
 /// 使用 entry.file_type() 免 metadata() 系统调用
 ///
@@ -797,65 +903,8 @@ fn scan_normal_group_light(
         m.mod_index = idx as u32;
     }
 
-    // 基于磁盘状态判定 is_active：
-    // - 统计非 None 且未被禁用（!disabled）的模组数量
-    // - 恰好一个启用 → 该模组为 active
-    // - 零个启用 → None 为 active
-    // - 多个启用（异常状态，如手动操作文件）→ 回退到 selectedindex 文件
-    let enabled_non_none: Vec<usize> = mods
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| m.name != "None" && !m.disabled)
-        .map(|(i, _)| i)
-        .collect();
-
-    let active_mod_index: i32 = if enabled_non_none.len() == 1 {
-        let idx = enabled_non_none[0];
-        mods[idx].is_active = true;
-        // None 槽位设置为不激活
-        if let Some(none) = mods.iter_mut().find(|m| m.name == "None") {
-            none.is_active = false;
-        }
-        idx as i32
-    } else if enabled_non_none.is_empty() {
-        // 没有启用的模组 → None 激活
-        for m in mods.iter_mut() {
-            m.is_active = m.name == "None";
-        }
-        0
-    } else {
-        // 多个模组启用（异常），回退到 selectedindex 文件
-        let mut active_idx: i32 = -1;
-        for (idx, m) in mods.iter_mut().enumerate() {
-            if m.name == "None" {
-                m.is_active = selected_index == 0;
-                if selected_index == 0 {
-                    active_idx = 0;
-                }
-            } else {
-                m.is_active = idx as i32 == selected_index;
-                if idx as i32 == selected_index {
-                    active_idx = idx as i32;
-                }
-            }
-        }
-        // 如果 selectedindex 指向的模组是禁用的，则 fallback 到第一个启用的
-        if active_idx < 0
-            || mods
-                .get(active_idx as usize)
-                .map(|m| m.disabled)
-                .unwrap_or(true)
-        {
-            if let Some(&first_enabled) = enabled_non_none.first() {
-                for m in mods.iter_mut() {
-                    m.is_active = false;
-                }
-                mods[first_enabled].is_active = true;
-                active_idx = first_enabled as i32;
-            }
-        }
-        active_idx
-    };
+    // 基于磁盘状态判定 is_active（单一真源：derive_group_active_state）
+    let active_mod_index = derive_group_active_state(&mut mods, selected_index);
 
     // Arc 包装（R3/C-3b）：构建期保持值语义完成排序/索引/is_active 派生，
     // 此处一次性包装——组节点 mods 与返回的扁平列表共享同一批 Arc 实例

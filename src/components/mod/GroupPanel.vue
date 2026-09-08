@@ -87,8 +87,10 @@ import { ref, computed, onMounted, onUnmounted, watch, inject, nextTick } from '
 import type { Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Edit, Delete, FolderOpened, FolderAdd, VideoPause, VideoPlay, Fold } from '@element-plus/icons-vue'
-import type { ModGroupData } from '@/types'
+import type { ModData, ModGroupData } from '@/types'
 import { addGroup, renameGroup, removeGroupEx, openGroupFolder, validateSubfolderName, createSubfolder, handlePathNotFoundError, disableAllModsInGroup, enableAllModsInGroup } from '@/utils/tauri'
+import { predictToggledPath } from '@/utils/modPath'
+import { placeContextMenu } from '@/utils/contextMenuPosition'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { useDragScroll } from '@/composables/useDragScroll'
@@ -252,20 +254,11 @@ function handleContextMenu(payload: { event: MouseEvent; group: ModGroupData; de
   // 标记300ms内忽略tree节点点击，防止右键后立即mousedown误选
   ignoreNodeClickUntil = performance.now() + 300
   // 溢出检测：菜单估算尺寸 180×220 保守值
-  const MENU_ESTIMATED_W = 200
-  const MENU_ESTIMATED_H = 380
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  let x = e.clientX
-  let y = e.clientY
-  if (x + MENU_ESTIMATED_W > vw - 4) {
-    x = Math.max(4, x - MENU_ESTIMATED_W)
-  }
-  if (y + MENU_ESTIMATED_H > vh - 4) {
-    y = Math.max(4, y - MENU_ESTIMATED_H)
-  }
-  contextMenuX.value = x
-  contextMenuY.value = y
+  // 缩放校正：根元素 CSS zoom 会让 fixed 定位坐标空间与 clientX/clientY 失配，
+  // zoom≠1 时菜单按倍率漂移 —— 统一走 placeContextMenu 处理
+  const pos = placeContextMenu(e, 200, 380)
+  contextMenuX.value = pos.x
+  contextMenuY.value = pos.y
   contextMenuVisible.value = true
 }
 
@@ -278,18 +271,10 @@ function onContextMenuEmpty(e: MouseEvent) {
   ignoreNodeClickUntil = performance.now() + 300
   const MENU_ESTIMATED_W = 200
   const MENU_ESTIMATED_H = 80
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  let x = e.clientX
-  let y = e.clientY
-  if (x + MENU_ESTIMATED_W > vw - 4) {
-    x = Math.max(4, x - MENU_ESTIMATED_W)
-  }
-  if (y + MENU_ESTIMATED_H > vh - 4) {
-    y = Math.max(4, y - MENU_ESTIMATED_H)
-  }
-  contextMenuX.value = x
-  contextMenuY.value = y
+  // 缩放校正：同 handleContextMenu（根 CSS zoom 使 fixed 坐标空间与 clientX/Y 失配）
+  const pos = placeContextMenu(e, MENU_ESTIMATED_W, MENU_ESTIMATED_H)
+  contextMenuX.value = pos.x
+  contextMenuY.value = pos.y
   contextMenuVisible.value = true
 }
 
@@ -302,12 +287,30 @@ function closeContextMenu() {
 }
 
 /**
+ * 更新模组数据期间的写操作门控
+ *
+ * 后端这些分组写命令（`add_group` / `rename_group` / 创建子分组等）都要先获取
+ * `UPDATE_LOCK`，而重量级 `update_mod_data`（dev 实测数十秒）会长期持有该锁 ——
+ * 此时触发会被静默排队，界面毫无反馈（用户以为点了没用）。故统一拦截并提示。
+ *
+ * @returns `true` = 放行；`false` = 已拦截（并已给出提示）
+ */
+function guardDuringUpdate(): boolean {
+  if (modsStore.isUpdatingModData) {
+    ElMessage.warning(t('Updating mod data, please wait'))
+    return false
+  }
+  return true
+}
+
+/**
  * 添加分组 / 添加子分组（右键菜单分发器）
  * - 右键选中非 group 互斥组 → 委托给自动命名的子分组创建流程 handleAddSubGroupAutoNamed
  * - 其余（group_xx / 空白区域）→ 委托给 handleAddGroupXx 创建新的 group_int 分组
  */
 async function handleAddGroup() {
   closeContextMenu()
+  if (!guardDuringUpdate()) return
   if (contextGroup.value && isMutexGroup(contextGroup.value)) {
     await handleAddSubGroupAutoNamed()
     return
@@ -320,6 +323,7 @@ async function handleAddGroup() {
  * 流程：输入分组名 → 校验非空 → 调用后端 addGroup 创建 → 刷新列表
  */
 async function handleAddGroupXx() {
+  if (!guardDuringUpdate()) return
   if (!settingsStore.currentModsPath) {
     ElMessage.warning(t('Please select a group first'))
     return
@@ -353,6 +357,7 @@ async function handleAddGroupXx() {
  * 流程：收集已有名称 → 生成不冲突的默认名 → 输入框实时校验 → 后端二次校验 → 二次确认 → 创建目录
  */
 async function handleAddSubGroupAutoNamed() {
+  if (!guardDuringUpdate()) return
   if (!contextGroup.value || !isMutexGroup(contextGroup.value)) return
   // 从当前非group分组的一级子目录中收集已有名称，生成默认 未命名_int{自增}
   const parentPath = contextGroup.value.groupPath
@@ -438,6 +443,7 @@ async function handleAddSubGroupAutoNamed() {
 
 /** 重命名分组 */
 async function handleRenameGroup() {
+  if (!guardDuringUpdate()) return
   if (!contextGroup.value) return
   closeContextMenu()
   try {
@@ -480,22 +486,56 @@ async function handleOpenGroupFolder() {
   }
 }
 
-/** 禁用分组下所有一级模组（已禁用的跳过）；零扫描：目录重命名 + 前端逐条本地 patch；异常降级增量扫描并告知 */
+/**
+ * 批量启停的乐观更新基建：await 前用组内模组构造预测 pairs 并本地先行 patch。
+ *
+ * @param groupMods 分组直接模组列表（含 None 槽位，内部排除）
+ * @param targetDisabled 目标状态（true=禁用 / false=启用）
+ * @returns 预测 pairs（oldPath→newPath+目标禁用态）；无待变更模组时为空数组
+ */
+function buildOptimisticBatchPairs(groupMods: ModData[], targetDisabled: boolean): { oldPath: string; newPath: string; disabled: boolean }[] {
+  const pairs: { oldPath: string; newPath: string; disabled: boolean }[] = []
+  for (const m of groupMods) {
+    if (m.name === 'None' || m.modPath === 'None') continue
+    // 与后端口径一致：已处于目标状态的模组跳过（幂等）
+    if (m.modDisabled === targetDisabled) continue
+    pairs.push({ oldPath: m.modPath, newPath: predictToggledPath(m.modPath, targetDisabled), disabled: targetDisabled })
+  }
+  return pairs
+}
+
+/** 禁用分组下所有一级模组（已禁用的跳过）；UI 先行乐观更新；零扫描：目录重命名 + 逐条本地 patch；异常降级增量扫描并告知 */
 async function handleDisableAllMods() {
   if (!contextGroup.value || !contextGroup.value.groupPath) return
   if (modsStore.isUpdatingModData) return
   const gp = contextGroup.value.groupPath
   const displayName = contextGroup.value.name || contextGroup.value.groupName
+  // closeContextMenu 会置空 contextGroup，先捕获组内模组快照
+  const groupMods = [...(contextGroup.value.mods || [])]
   closeContextMenu()
+  // UI 先行：预测禁用路径并立即批量 patch（灰化即时呈现）
+  const optimisticPairs = buildOptimisticBatchPairs(groupMods, true)
+  if (optimisticPairs.length > 0) {
+    modsStore.batchToggleModLocal(optimisticPairs)
+  }
   try {
     const batch = await disableAllModsInGroup(gp)
     if (batch.degraded) {
-      // 异常降级：增量扫描 + 组增量 patch，明确告知用户发生异常
+      // 异常降级：增量扫描 + 组增量 patch（磁盘真相覆盖乐观态），明确告知用户发生异常
       modsStore.applyGroupDelta(batch.delta)
       ElMessage.warning('禁用操作异常，模组数据已增量刷新')
     } else {
-      // 零扫描：仅目录重命名，前端逐条本地 patch（无任何扫描/重载）
-      modsStore.batchToggleModLocal(batch.toggled.map((t) => ({ ...t, disabled: true })))
+      // 零扫描校正：后端权威路径与预测不一致的条目二次 patch（同口径幂等下通常一致）
+      const predictedByOld = new Map(optimisticPairs.map((p) => [p.oldPath, p.newPath]))
+      for (const t of batch.toggled) {
+        const predicted = predictedByOld.get(t.oldPath)
+        if (predicted !== undefined && predicted !== t.newPath) {
+          modsStore.toggleModLocal(predicted, t.newPath, true)
+        } else if (predicted === undefined) {
+          // 后端实际变更但未被预测（竞态新增等）：直接 patch
+          modsStore.toggleModLocal(t.oldPath, t.newPath, true)
+        }
+      }
     }
     if (batch.changed > 0) {
       ElMessage.success(`已禁用 ${displayName} 下的 ${batch.changed} 个模组`)
@@ -503,24 +543,44 @@ async function handleDisableAllMods() {
       ElMessage.info(`${displayName} 下没有需要禁用的模组`)
     }
   } catch (e: unknown) {
+    // 失败：反向回滚乐观 patch（恢复原路径与原禁用态）并告知用户
+    if (optimisticPairs.length > 0) {
+      modsStore.batchToggleModLocal(
+        optimisticPairs.map((p) => ({ oldPath: p.newPath, newPath: p.oldPath, disabled: !p.disabled })),
+      )
+    }
     ElMessage.error('禁用所有模组失败: ' + (e instanceof Error ? e.message : String(e)))
   }
 }
 
-/** 启用分组下所有一级禁用模组（已启用的跳过）；零扫描：本地逐条 patch，异常降级增量扫描并告知 */
+/** 启用分组下所有一级禁用模组（已启用的跳过）；UI 先行乐观更新；零扫描：本地逐条 patch，异常降级增量扫描并告知 */
 async function handleEnableAllMods() {
   if (!contextGroup.value || !contextGroup.value.groupPath) return
   if (modsStore.isUpdatingModData) return
   const gp = contextGroup.value.groupPath
   const displayName = contextGroup.value.name || contextGroup.value.groupName
+  const groupMods = [...(contextGroup.value.mods || [])]
   closeContextMenu()
+  // UI 先行：预测启用路径并立即批量 patch（恢复即时呈现）
+  const optimisticPairs = buildOptimisticBatchPairs(groupMods, false)
+  if (optimisticPairs.length > 0) {
+    modsStore.batchToggleModLocal(optimisticPairs)
+  }
   try {
     const batch = await enableAllModsInGroup(gp)
     if (batch.degraded) {
       modsStore.applyGroupDelta(batch.delta)
       ElMessage.warning('启用操作异常，模组数据已增量刷新')
     } else {
-      modsStore.batchToggleModLocal(batch.toggled.map((t) => ({ ...t, disabled: false })))
+      const predictedByOld = new Map(optimisticPairs.map((p) => [p.oldPath, p.newPath]))
+      for (const t of batch.toggled) {
+        const predicted = predictedByOld.get(t.oldPath)
+        if (predicted !== undefined && predicted !== t.newPath) {
+          modsStore.toggleModLocal(predicted, t.newPath, false)
+        } else if (predicted === undefined) {
+          modsStore.toggleModLocal(t.oldPath, t.newPath, false)
+        }
+      }
     }
     if (batch.changed > 0) {
       ElMessage.success(`已启用 ${displayName} 下的 ${batch.changed} 个模组`)
@@ -528,6 +588,11 @@ async function handleEnableAllMods() {
       ElMessage.info(`${displayName} 下没有需要启用的模组`)
     }
   } catch (e: unknown) {
+    if (optimisticPairs.length > 0) {
+      modsStore.batchToggleModLocal(
+        optimisticPairs.map((p) => ({ oldPath: p.newPath, newPath: p.oldPath, disabled: !p.disabled })),
+      )
+    }
     ElMessage.error('启用所有模组失败: ' + (e instanceof Error ? e.message : String(e)))
   }
 }
@@ -581,6 +646,7 @@ function isMutexGroup(group: ModGroupData): boolean {
  * 流程：输入名称→前端实时校验→后端二次校验→二次确认→创建目录→刷新
  */
 async function handleAddSubGroup() {
+  if (!guardDuringUpdate()) return
   if (!contextGroup.value) return
   closeContextMenu()
 

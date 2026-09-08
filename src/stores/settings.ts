@@ -38,6 +38,17 @@ export const useSettingsStore = defineStore('settings', () => {
   const simulateKeyOnSelection = ref(true)
   /** 防抖保存定时器 */
   let saveTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * 已同步到后端（即已注册生效）的窗口切换热键。
+   *
+   * 背景：`saveNow()` 原先在**每次**保存设置后无条件调用 `reregisterHotkeys()`，
+   * 而后端 `register_all()` 会先 unregister_all 再重新注册 22 个全局热键。
+   * 启动时的游戏自动检测（`App.vue::applyDetectedGameSwitch` → `switchGame()`）
+   * 会触发一次设置保存，于是每次启动/页面重启都会重复看到全部热键卸载+重注册，
+   * 并伴随 22 行 "Registered hotkey" 日志。
+   * 其实只有 `windowHotkey` 变化才需要重注册，故用此变量做变更检测。
+   */
+  let registeredWindowHotkey: string | null = null
 
   /**
    * 当前游戏的模组文件夹路径（computed）
@@ -71,6 +82,8 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const loadedSettings = await getSettings() as AppSettings
       settings.value = loadedSettings
+      // 启动时后端已完成一次全局热键注册，记录当前生效值以免首次保存触发无谓重注册
+      registeredWindowHotkey = loadedSettings.windowHotkey ?? ''
       if (loadedSettings.targetGame) {
         currentGame.value = loadedSettings.targetGame
       }
@@ -92,9 +105,16 @@ export const useSettingsStore = defineStore('settings', () => {
     logger.debug('SettingsStore', 'saveSettings started')
     try {
       settings.value.simulateKeyOnSelection = simulateKeyOnSelection.value
+      // 保存前捕获窗口热键：仅当它真正变化时才重注册全局热键
+      // （其余设置如模组路径/目标进程与全局热键无关，无需卸载+重注册 22 个热键）
+      const prevHotkey = registeredWindowHotkey
+      const nextHotkey = settings.value.windowHotkey ?? ''
       await saveSettings(settings.value)
-      // 保存成功后重新注册热键（如windowHotkey变更），不阻塞UI
-      reregisterHotkeys().catch(e => logger.warn('SettingsStore', 'Failed to reregister hotkeys after save', e))
+      if (nextHotkey !== prevHotkey) {
+        registeredWindowHotkey = nextHotkey
+        // 热键变更才重新注册（如windowHotkey变更），不阻塞UI
+        reregisterHotkeys(nextHotkey).catch(e => logger.warn('SettingsStore', 'Failed to reregister hotkeys after save', e))
+      }
       logger.debug('SettingsStore', 'saveSettings completed')
     } catch (e) {
       logger.error('SettingsStore', 'Failed to save settings', e)

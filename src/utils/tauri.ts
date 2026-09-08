@@ -221,13 +221,14 @@ export async function selectMod(
 
 /**
  * 取消选中分组内模组
- * 后端命令：deselect_group_mod
+ * 后端命令：deselect_group_mod（groupPath 有效时走直写快路径：免全量轻扫与整缓存失效）
  * @param game 目标游戏类型
  * @param modsPath 模组文件夹路径
  * @param groupIndex 分组索引
+ * @param groupPath 分组目录绝对路径（可选；提供且有效时后端 O(1) 直写 selectedindex=0）
  */
-export async function deselectGroupMod(game: string, modsPath: string, groupIndex: number): Promise<UpdateResult> {
-  return safeInvoke<UpdateResult>('deselect_group_mod', { game, modsPath, groupIndex })
+export async function deselectGroupMod(game: string, modsPath: string, groupIndex: number, groupPath?: string): Promise<UpdateResult> {
+  return safeInvoke<UpdateResult>('deselect_group_mod', { game, modsPath, groupIndex, groupPath })
 }
 
 /**

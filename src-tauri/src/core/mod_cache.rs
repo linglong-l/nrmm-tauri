@@ -4,7 +4,9 @@
 //! 缓存键为 (TargetGame, 规范化路径字符串)，值为轻量扫描结果 ScanResult。
 //! 使用 parking_lot::RwLock 保证线程安全的并发读写。
 
-use crate::core::mod_scanner::{group_order_cmp, recount_mods, ScanResult};
+use crate::core::mod_scanner::{
+    derive_group_active_state, group_order_cmp, recount_mods, ScanResult,
+};
 use crate::models::enums::{GroupType, TargetGame};
 use crate::models::mod_data::{ModData, ModGroupData};
 use once_cell::sync::Lazy;
@@ -674,6 +676,10 @@ impl ModCache {
                     let mm = Arc::make_mut(m);
                     mm.full_path = Arc::from(new_abs.to_string_lossy().as_ref());
                     mm.mod_path = new_abs.to_string_lossy().to_string();
+                    // 双字段同步：兼容字段 `disabled` 与 `mod_disabled` 必须一致
+                    //（扫描期两者同源；patch 只写其一会导致缓存内字段分叉，
+                    // 派生逻辑（derive_group_active_state/recount）与序列化消费点口径错位）
+                    mm.disabled = disabled;
                     mm.mod_disabled = disabled;
                     // 同步派生路径列表（与 mods 平行索引）
                     node.mod_paths = node.mods.iter().map(|x| x.full_path.clone()).collect();
@@ -698,6 +704,8 @@ impl ModCache {
             let mm = Arc::make_mut(m);
             mm.full_path = Arc::from(new_full_path.to_string_lossy().as_ref());
             mm.mod_path = new_full_path.to_string_lossy().to_string();
+            // 双字段同步（同组树分支注释：disabled/config 兼容字段不可分叉）
+            mm.disabled = disabled;
             mm.mod_disabled = disabled;
             true
         });
@@ -757,6 +765,105 @@ impl ModCache {
             owned.disabled_mods_count = disabled;
         }
         ok
+    }
+
+    /// 选择直写快路径的缓存定向 patch（零扫描）：`write_selectedindex_direct` 落盘后，
+    /// 将缓存中该分组的选中/激活态同步为「以新 selectedindex 重扫」的等价结果，
+    /// 替代 `invalidate_by_prefix` 整缓存失效（避免下次 `get_mods` 全量重扫的秒级连锁）。
+    ///
+    /// 派生口径与全量轻量扫描完全一致（[`derive_group_active_state`] 单一真源）：
+    /// 组节点 `active_mod_index` / `is_active`、组内 mods 与扁平列表（该组子树内
+    /// 条目）的 `is_active` 同步更新。选择不改变目录结构与禁用态，计数无需重算。
+    ///
+    /// # 参数
+    /// - `game`: 目标游戏（缓存键）。
+    /// - `mods_path`: Mods 根目录。
+    /// - `group_path`: 分组目录绝对路径（group_xx，容忍 verbatim / 大小写形态差异）。
+    /// - `index`: 新写入的 selectedindex 值（0 = None 槽位）。
+    ///
+    /// # 返回
+    /// 缓存命中且定位到该分组返回 `true`；缓存未命中或分组不在缓存中返回 `false`
+    /// （调用方不失效整缓存，由 watcher 增量 / 下次全量扫描对账兜底）。
+    ///
+    /// # Panics
+    ///
+    /// 此方法不会 panic。
+    ///
+    /// # Errors
+    ///
+    /// 此方法不会返回错误。
+    pub fn patch_selected_index(
+        &mut self,
+        game: TargetGame,
+        mods_path: &Path,
+        group_path: &Path,
+        index: u32,
+    ) -> bool {
+        let key = Self::make_key(game, mods_path);
+        let existing = match self.cache.get_mut(&key) {
+            Some(e) => e,
+            None => return false,
+        };
+
+        // 快路径：缓存 Arc 无外部持有（strong_count==1）→ 原地改，零拷贝。
+        // Arc 被外部持有（如 get_mods 序列化在途 clone）时，`Arc::make_mut` 会深拷贝
+        // 整棵万级模组树（实测数秒～数十秒），绝不可走默认 COW。
+        // 慢路径降级返回 false：调用方跳过缓存 patch，selectedindex 文件变更必然触发
+        // watcher 增量重扫修正缓存 + 推送组 delta 至前端（~1s 静默期，远优于阻塞数十秒）。
+        let start = Instant::now();
+        let Some(owned) = Arc::get_mut(&mut existing.result) else {
+            log::debug!(
+                "[mod_cache] patch_selected_index skip COW | group={} strong_count={} elapsed_ms={}",
+                group_path.display(),
+                Arc::strong_count(&existing.result),
+                start.elapsed().as_millis()
+            );
+            return false;
+        };
+
+        // 定位顶层分组节点（selectedindex 仅存在于 group_xx；路径等价容忍形态差异）
+        let Some(group) = owned
+            .groups
+            .iter_mut()
+            .find(|g| path_equivalent(&g.full_path, group_path))
+        else {
+            log::debug!(
+                "[mod_cache] patch_selected_index: group not in cache | group={}",
+                group_path.display()
+            );
+            return false;
+        };
+
+        // 派生 is_active / active_mod_index（与轻量扫描同口径的单一真源）
+        let active_idx = derive_group_active_state(&mut group.mods, index as i32);
+        group.active_mod_index = active_idx;
+        group.is_active = active_idx >= 0;
+
+        // 扁平列表同步：该组子树内条目按 full_path 匹配组内派生结果
+        //（None 不在扁平列表；NormalGroup 无 children，仅顶层组自身 mods）
+        let active_by_path: HashMap<String, bool> = group
+            .mods
+            .iter()
+            .map(|m| (path_cmp_key(Path::new(m.full_path.as_ref())), m.is_active))
+            .collect();
+        for m in owned.mods.iter_mut() {
+            if !path_within(Path::new(m.full_path.as_ref()), group_path) {
+                continue;
+            }
+            if let Some(active) = active_by_path.get(&path_cmp_key(Path::new(m.full_path.as_ref())))
+            {
+                Arc::make_mut(m).is_active = *active;
+            }
+        }
+
+        log::debug!(
+            "[mod_cache] patch_selected_index | group={} index={} active_mod_index={} elapsed_ms={}",
+            group_path.display(),
+            index,
+            active_idx,
+            start.elapsed().as_millis()
+        );
+        true
     }
 }
 
@@ -1306,6 +1413,10 @@ mod tests {
             "组内 full_path 应更新为 DISABLED 路径"
         );
         assert!(entry.mod_disabled, "mod_disabled 应置 true");
+        assert!(
+            entry.disabled,
+            "兼容字段 disabled 应与 mod_disabled 同步置 true（防字段分叉）"
+        );
         assert_eq!(entry.mod_name, "TestMod", "mod_name 应保持不变");
         // 扁平列表同步（共享 Arc，路径一致）
         assert!(
@@ -1314,6 +1425,15 @@ mod tests {
                 .iter()
                 .any(|m| path_equivalent(Path::new(m.full_path.as_ref()), &new_full)),
             "扁平列表应同步更新路径"
+        );
+        let flat = cached
+            .mods
+            .iter()
+            .find(|m| path_equivalent(Path::new(m.full_path.as_ref()), &new_full))
+            .expect("扁平列表含 DISABLED 路径条目");
+        assert!(
+            flat.disabled,
+            "扁平条目 disabled 字段同步声明（与组内共享同一 Arc）"
         );
         // 计数重算：禁用 1，启用 0
         assert_eq!(cached.total_mods_count, 1);
@@ -1336,6 +1456,7 @@ mod tests {
             .and_then(|g| g.mods.iter().find(|m| m.mod_name == "TestMod"))
             .unwrap();
         assert!(!entry.mod_disabled, "再次 patch 后应恢复启用");
+        assert!(!entry.disabled, "兼容字段 disabled 应同步恢复启用态");
         assert_eq!(cached.enabled_mods_count, 1);
     }
 
@@ -2369,5 +2490,182 @@ mod tests {
             Arc::ptr_eq(flat_mod_arc(&updated, "ModX"), old_sub_x),
             "互斥组扁平条目应复用同一旧 Arc"
         );
+    }
+
+    // =====================================================================
+    // 选择直写快路径：patch_selected_index 缓存定向 patch（零扫描）
+    // =====================================================================
+
+    /// patch_selected_index：两启用模组（多启用回退 selectedindex）场景下，
+    /// patch 结果与「落盘 selectedindex 后全量轻扫」完全一致（组级字段 +
+    /// 组内 is_active + 扁平列表 is_active），幂等重复写收敛。
+    #[test]
+    fn patch_selected_index_matches_light_scan_semantics() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mods_path = dir.path().to_path_buf();
+        let managed = dir.path().join("_MANAGED_");
+        fs::write(dir.path().join("d3dx.ini"), "; test\n").unwrap();
+        let group1 = managed.join("group_1");
+        fs::create_dir_all(group1.join("ModA")).unwrap();
+        fs::write(group1.join("ModA").join("mod.ini"), "[Section]\nx=1\n").unwrap();
+        fs::create_dir_all(group1.join("ModB")).unwrap();
+        fs::write(group1.join("ModB").join("mod.ini"), "[Section]\nx=1\n").unwrap();
+
+        let mut cache = ModCache::new();
+        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        cache.set(TargetGame::GenshinImpact, &mods_path, full);
+        // 前置：首扫 selectedindex=0（多启用回退）→ 无模组激活
+        {
+            let cached = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+            let g = cached
+                .groups
+                .iter()
+                .find(|g| g.group_name == "group_1")
+                .unwrap();
+            assert!(!g.mods.iter().any(|m| m.name != "None" && m.is_active));
+        }
+
+        // patch selectedindex=1（组内排序 [None, ModA, ModB] → 选中 ModA）
+        assert!(cache.patch_selected_index(TargetGame::GenshinImpact, &mods_path, &group1, 1));
+
+        // 与全量轻扫等价性校验：落盘同一 selectedindex 后重扫对比
+        fs::write(group1.join("selectedindex"), "1").unwrap();
+        let rescan = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let rescan_g = rescan
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .unwrap();
+
+        let cached = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+        let g = cached
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .unwrap();
+        assert_eq!(g.active_mod_index, rescan_g.active_mod_index);
+        assert_eq!(g.is_active, rescan_g.is_active);
+        for (cm, rm) in g.mods.iter().zip(rescan_g.mods.iter()) {
+            assert_eq!(
+                cm.is_active, rm.is_active,
+                "组内 {} is_active 应与重扫一致",
+                cm.name
+            );
+        }
+        assert_eq!(g.active_mod_index, 1, "selectedindex=1 → ModA 激活");
+        assert!(g.mods.iter().find(|m| m.name == "ModA").unwrap().is_active);
+        assert!(!g.mods.iter().find(|m| m.name == "ModB").unwrap().is_active);
+        // 扁平列表同步
+        let flat_a = flat_mod_arc(&cached, "ModA");
+        assert!(flat_a.is_active, "扁平列表 ModA is_active 应同步");
+        assert!(!flat_mod_arc(&cached, "ModB").is_active);
+        // 释放对缓存 Arc 的外部持有（否则下一次 patch 触发快路径守卫返回 false）
+        drop(cached);
+
+        // 幂等重复写：切到 2 → ModB 激活、ModA 失活，再次收敛一致
+        assert!(cache.patch_selected_index(TargetGame::GenshinImpact, &mods_path, &group1, 2));
+        let cached = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+        let g = cached
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .unwrap();
+        assert_eq!(g.active_mod_index, 2);
+        assert!(!g.mods.iter().find(|m| m.name == "ModA").unwrap().is_active);
+        assert!(g.mods.iter().find(|m| m.name == "ModB").unwrap().is_active);
+        assert!(flat_mod_arc(&cached, "ModB").is_active);
+    }
+
+    /// patch_selected_index：单启用模组场景（派生口径=该启用模组激活，
+    /// selectedindex 不改变激活位——与轻量扫描一致）。
+    #[test]
+    fn patch_selected_index_single_enabled_keeps_scan_semantics() {
+        let (_dir, mods_path) = setup_test_mods();
+        // setup_test_mods：group_1/TestMod 单启用模组
+        let group1 = mods_path.join("_MANAGED_").join("group_1");
+
+        let mut cache = ModCache::new();
+        cache.set(
+            TargetGame::GenshinImpact,
+            &mods_path,
+            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+        );
+
+        // 单启用 → 无论 selectedindex 写何值，激活位恒为该启用模组（索引 1）
+        assert!(cache.patch_selected_index(TargetGame::GenshinImpact, &mods_path, &group1, 1));
+        let cached = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+        let g = cached
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .unwrap();
+        assert_eq!(g.active_mod_index, 1);
+        assert!(
+            g.mods
+                .iter()
+                .find(|m| m.mod_name == "TestMod")
+                .unwrap()
+                .is_active
+        );
+    }
+
+    /// patch_selected_index：缓存未命中 / 分组不在缓存 → false（不 panic、不失效）。
+    #[test]
+    fn patch_selected_index_miss_returns_false() {
+        let (_dir, mods_path) = setup_test_mods();
+        let group1 = mods_path.join("_MANAGED_").join("group_1");
+
+        // 缓存未命中（空缓存）
+        let mut cache = ModCache::new();
+        assert!(!cache.patch_selected_index(TargetGame::GenshinImpact, &mods_path, &group1, 1));
+
+        // 有缓存但分组不在缓存（group_2 不存在）
+        cache.set(
+            TargetGame::GenshinImpact,
+            &mods_path,
+            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+        );
+        assert!(!cache.patch_selected_index(
+            TargetGame::GenshinImpact,
+            &mods_path,
+            &mods_path.join("_MANAGED_").join("group_2"),
+            1
+        ));
+    }
+
+    /// patch_selected_index：缓存 Arc 被外部持有（strong_count>1）时不走整树 COW，
+    /// 直接降级返回 false（由 watcher 增量兜底）；释放外部引用后恢复快路径生效。
+    ///
+    /// 回归场景（2026-09-06）：get_mods 序列化在途 clone 缓存 Arc 时，`Arc::make_mut`
+    /// 深拷贝整棵万级模组树（实测数十秒），选择命令整体 24s+。快路径守卫阻止该行为。
+    #[test]
+    fn patch_selected_index_skips_cow_when_arc_externally_held() {
+        let (_dir, mods_path) = setup_test_mods();
+        let group1 = mods_path.join("_MANAGED_").join("group_1");
+
+        let mut cache = ModCache::new();
+        cache.set(
+            TargetGame::GenshinImpact,
+            &mods_path,
+            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+        );
+
+        // 模拟外部持有：get() 克隆 Arc 并保活（strong_count>1）
+        {
+            let _held = cache
+                .get(TargetGame::GenshinImpact, &mods_path)
+                .expect("缓存存在");
+            // 外部 Arc 存活期间 patch → 拒绝深拷贝，返回 false
+            assert!(!cache.patch_selected_index(TargetGame::GenshinImpact, &mods_path, &group1, 1));
+        }
+        // 外部引用释放后恢复快路径
+        assert!(cache.patch_selected_index(TargetGame::GenshinImpact, &mods_path, &group1, 1));
+        let cached = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+        let g = cached
+            .groups
+            .iter()
+            .find(|g| g.group_name == "group_1")
+            .unwrap();
+        assert_eq!(g.active_mod_index, 1, "快路径恢复后派生生效");
     }
 }

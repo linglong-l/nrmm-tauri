@@ -43,7 +43,13 @@ pub fn init_console() {
         use std::fs::OpenOptions;
         use windows::Win32::System::Console::{AllocConsole, AttachConsole, ATTACH_PARENT_PROCESS};
 
-        let show_console = read_show_console_flag();
+        // dev 强制启用终端输出：debug 构建自建/附加控制台，日志全程可见，便于排查前后端异常；
+        // release 默认随 settings（showConsoleOnStart）开关——默认关闭终端显示，但 CONOUT$
+        // 输出流机制保留（用户开启开关或从终端启动时日志仍可见，便于现场调试）。
+        #[cfg(debug_assertions)]
+        let show_console: bool = true;
+        #[cfg(not(debug_assertions))]
+        let show_console: bool = read_show_console_flag();
 
         // 控制台归属决策：自建或附加，两类失败均属预期场景，静默忽略
         let console_ready = if show_console {
@@ -97,8 +103,11 @@ pub fn init_console() {
 /// true 表示启动时需自建控制台；文件不存在/读取失败一律返回 false
 ///
 /// # 注意
-/// 任何 IO 失败均保守返回 false，绝不 panic
-#[cfg(target_os = "windows")]
+/// 任何 IO 失败均保守返回 false，绝不 panic。
+///
+/// dev（debug_assertions）构建强制启用终端输出（见 [`init_console`]），
+/// 不读取该标志；仅 release 构建读取。
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
 fn read_show_console_flag() -> bool {
     match std::fs::read_to_string(crate::config::app_paths::settings_path()) {
         Ok(content) => parse_show_console_flag(&content),
@@ -117,7 +126,7 @@ fn read_show_console_flag() -> bool {
 /// # 返回
 /// 字段存在且为布尔 true 时返回 true；
 /// 字段为 false / 缺失 / 值非布尔 / JSON 非法 / 空串一律返回 false
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(all(target_os = "windows", not(debug_assertions)), test))]
 fn parse_show_console_flag(content: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(content)
         .ok()
@@ -148,9 +157,35 @@ pub fn write_console_err(buf: &[u8]) {
     }
 }
 
+/// ANSI 红色转义包裹（纯函数，供测试与 `write_console_red` 复用）。
+///
+/// 输出 `\x1b[31m{buf}\x1b[0m`；Windows 10 1909+ 终端（含 VS Code 集成终端 /
+/// Windows Terminal）默认支持 VT 序列。作为「日志写入异常」等醒目告警的输出。
+pub fn render_red(buf: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(buf.len() + 11);
+    out.extend_from_slice(b"\x1b[31m");
+    out.extend_from_slice(buf);
+    out.extend_from_slice(b"\x1b[0m");
+    out
+}
+
+/// 以红色写入控制台（醒目告警：日志文件写入异常等）。
+///
+/// 走与 `write_console_err` 相同的 CONOUT/stderr 降级链；失败静默。不 panic。
+pub fn write_console_red(buf: &[u8]) {
+    write_console_err(&render_red(buf));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// render_red：ANSI 红色包裹（\x1b[31m...\x1b[0m），用于日志写入异常醒目告警。
+    #[test]
+    fn test_render_red_wraps_ansi() {
+        let out = render_red(b"write failed");
+        assert_eq!(out, b"\x1b[31mwrite failed\x1b[0m");
+    }
 
     /// 表驱动测试：parse_show_console_flag 对各种输入的解析行为
     ///

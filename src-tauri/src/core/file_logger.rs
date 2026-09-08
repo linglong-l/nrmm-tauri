@@ -209,9 +209,12 @@ pub fn install_panic_hook() {
 ///
 /// # 字段
 /// - `file`: 日志文件句柄，`None` 表示文件不可用（降级为仅 stderr）
+/// - `file_err_notified`: 文件写入已失败并红字告警（避免每行都刷屏）
 pub struct DualWriter {
     /// 日志文件句柄，None 表示文件不可用（降级为仅 stderr）
     file: Option<File>,
+    /// 文件写入失败已红字告警过（置位后静默，防刷屏）
+    file_err_notified: bool,
 }
 
 impl DualWriter {
@@ -227,7 +230,10 @@ impl DualWriter {
     pub fn new() -> Self {
         ensure_stderr_drain_started();
         let file = Self::open_daily_log();
-        Self { file }
+        Self {
+            file,
+            file_err_notified: false,
+        }
     }
 
     /// 打开当日日志文件
@@ -245,9 +251,8 @@ impl DualWriter {
 
         // 创建日志目录（若不存在）
         if let Err(e) = std::fs::create_dir_all(&log_dir) {
-            eprintln!(
-                "[file_logger] Failed to create log dir {:?}: {}",
-                log_dir, e
+            crate::platform::console::write_console_red(
+                format!("[file_logger] 创建日志目录失败 {:?}: {}\n", log_dir, e).as_bytes(),
             );
             return None;
         }
@@ -268,9 +273,8 @@ impl DualWriter {
                 Some(f)
             }
             Err(e) => {
-                eprintln!(
-                    "[file_logger] Failed to open log file {:?}: {}",
-                    log_path, e
+                crate::platform::console::write_console_red(
+                    format!("[file_logger] 打开日志文件失败 {:?}: {}\n", log_path, e).as_bytes(),
                 );
                 None
             }
@@ -300,9 +304,16 @@ impl Write for DualWriter {
     /// # 返回
     /// - `Ok(len)`: 恒为 `buf.len()`（写入语义按全部成功处理）
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // 先写文件（失败忽略：文件落盘失败时至少 stderr 排水仍可送达）
+        // 先写文件（失败红字告警一次：磁盘异常需醒目可见，之后降级仅 stderr 防刷屏）
         if let Some(file) = self.file.as_mut() {
-            let _ = file.write_all(buf);
+            if let Err(e) = file.write_all(buf) {
+                if !self.file_err_notified {
+                    self.file_err_notified = true;
+                    crate::platform::console::write_console_red(
+                        format!("[file_logger] 日志文件写入失败（降级仅终端）: {}\n", e).as_bytes(),
+                    );
+                }
+            }
         }
 
         // 再异步投递 stderr（不阻塞、失败静默）
@@ -340,7 +351,10 @@ mod tests {
             .open(&log_path)
             .unwrap();
 
-        let mut writer = DualWriter { file: Some(file) };
+        let mut writer = DualWriter {
+            file: Some(file),
+            file_err_notified: false,
+        };
         let msg = b"[TEST] file priority message\n";
         let result = writer.write(msg);
         assert_eq!(result.unwrap(), msg.len());
@@ -359,7 +373,10 @@ mod tests {
     fn test_dual_writer_stderr_failure_returns_ok() {
         // 场景 1：降级标记置位（排水线程不可用的兜底路径）
         let prev = DRAIN_DEGRADED.swap(true, Ordering::Relaxed);
-        let mut writer = DualWriter { file: None };
+        let mut writer = DualWriter {
+            file: None,
+            file_err_notified: false,
+        };
         let msg = b"[TEST] degraded stderr path\n";
         assert_eq!(writer.write(msg).unwrap(), msg.len());
         DRAIN_DEGRADED.store(prev, Ordering::Relaxed);
@@ -373,7 +390,10 @@ mod tests {
     /// 测试 DualWriter 在无文件时仍可写入
     #[test]
     fn test_dual_writer_with_none_file() {
-        let mut writer = DualWriter { file: None };
+        let mut writer = DualWriter {
+            file: None,
+            file_err_notified: false,
+        };
         let result = writer.write_all(b"test message\n");
         assert!(result.is_ok());
         let result = writer.flush();

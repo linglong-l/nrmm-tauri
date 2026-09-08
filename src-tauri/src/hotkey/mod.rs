@@ -103,6 +103,15 @@ impl HotkeyManager {
             *crate::utils::lock_or_recover(&self.window_hotkey) = Some(settings.window_hotkey);
         }
 
+        // 汇总一行（替代此前 22 行逐键 debug）：注册总数 + 失败数，
+        // 明细可开 RUST_LOG=trace 查看
+        let registered = crate::utils::lock_or_recover(&self.registered_hotkeys);
+        log::debug!(
+            "Registered {} hotkeys (window hotkey: {:?}); enable RUST_LOG=trace for per-key detail",
+            registered.len(),
+            crate::utils::lock_or_recover(&self.window_hotkey)
+        );
+
         Ok(())
     }
 
@@ -126,7 +135,9 @@ impl HotkeyManager {
         match gsm.register(accel) {
             Ok(_) => {
                 crate::utils::lock_or_recover(&self.registered_hotkeys).push(accel.to_string());
-                log::debug!("Registered hotkey: {}", accel);
+                // 逐键明细降为 trace：register_all 会注册 22 个键，逐条 debug 会让
+                // 每次启动/热键变更刷出 22 行噪声；汇总行放在 register_all 末尾。
+                log::trace!("Registered hotkey: {}", accel);
             }
             Err(e) => {
                 log::warn!("Failed to register hotkey {}: {}", accel, e);

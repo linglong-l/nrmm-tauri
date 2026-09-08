@@ -15,11 +15,14 @@
  * ```
  */
 import { ref, inject, type Ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import type { ModData } from '@/types'
 import { toggleModDisabled, toggleFavorite, openModFolder, handlePathNotFoundError, deselectGroupMod } from '@/utils/tauri'
+import { predictToggledPath } from '@/utils/modPath'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { logger } from '@/utils/logger'
+import { placeContextMenu } from '@/utils/contextMenuPosition'
 
 export function useModContextMenu(
   mod: Ref<ModData | null | undefined>,
@@ -58,21 +61,9 @@ export function useModContextMenu(
     // Teleport后误触概率已大幅降低，缩短时间窗到300ms
     ignoreNextClickUntil.value = performance.now() + 300
     // 菜单估算尺寸（min-width:160px，按6项约184x240px 保守计算）
-    const MENU_ESTIMATED_W = 200
-    const MENU_ESTIMATED_H = 260
-    const vw = window.innerWidth
-    const vh = window.innerHeight
-    let x = e.clientX
-    let y = e.clientY
-    // 水平溢出：右边缘超出就左对齐到鼠标位置左侧
-    if (x + MENU_ESTIMATED_W > vw - 4) {
-      x = Math.max(4, x - MENU_ESTIMATED_W)
-    }
-    // 垂直溢出：下边缘超出就向上弹出
-    if (y + MENU_ESTIMATED_H > vh - 4) {
-      y = Math.max(4, y - MENU_ESTIMATED_H)
-    }
-    contextMenuPosition.value = { x, y }
+    // 缩放校正：根元素 CSS zoom 会让 fixed 定位坐标空间与 clientX/clientY 失配
+    // （zoom≠1 时菜单按倍率漂移），placeContextMenu 内部统一处理
+    contextMenuPosition.value = placeContextMenu(e, 200, 260)
     contextMenuVisible.value = true
   }
 
@@ -95,44 +86,66 @@ export function useModContextMenu(
   }
 
   /**
-   * 切换模组启用/禁用状态
-   * 调用后端toggle_mod_disabled命令，传入isMutex参数处理互斥组逻辑
-   * 命令返回受影响分组增量（R1），原地 patch store，不再全量 refresh
+   * 切换模组启用/禁用状态（UI 先行乐观更新）
+   *
+   * 顺序：本地立即 patch 为目标态（路径预测镜像后端 derive_toggled_path）→
+   * await 后端 toggle_mod_disabled（目录重命名 + 缓存 patch）→
+   * 成功：后端权威路径校正 + 通知；失败/降级：按返回值对齐磁盘真相并告知用户。
    */
   async function handleToggleEnabled() {
     if (!mod.value) return
     closeContextMenu()
-    // 操作前捕获原禁用状态与路径，用于生成操作后的提示文案与本地 patch（await 后状态即更新）
+    // 操作前捕获原状态（乐观更新与回滚基准；await 后 mod.value 即为 patch 后实例）
     const wasDisabled = mod.value.modDisabled
     const oldPath = mod.value.modPath
+    const isMutex = mod.value.isMutex
+    const groupIndex = mod.value.groupIndex
+    const targetDisabled = !wasDisabled
+    // UI 先行：预测目标路径并立即本地 patch（灰化/恢复即时呈现，不等待后端）
+    const predictedPath = predictToggledPath(oldPath, targetDisabled)
+    modsStore.toggleModLocal(oldPath, predictedPath, targetDisabled)
     try {
-      const res = await toggleModDisabled(mod.value.modPath, mod.value.modDisabled, mod.value.isMutex)
+      const res = await toggleModDisabled(oldPath, wasDisabled, isMutex)
       if (res.degraded) {
-        // 异常降级：增量扫描 + 组增量原地 patch，并明确告知用户发生异常
+        // 异常降级：增量扫描 + 组增量原地 patch（磁盘真相覆盖乐观态），并明确告知用户发生异常
         modsStore.applyGroupDelta(res.groupDelta)
         ElMessage.warning(t('Operation abnormal, mod data refreshed incrementally'))
-      } else {
-        // 零扫描：仅目录重命名，前端就地更新路径与禁用标志（无任何扫描/重载）
-        modsStore.toggleModLocal(oldPath, res.newPath, res.disabled)
+      } else if (res.newPath !== predictedPath) {
+        // 零扫描校正：后端权威路径与预测不一致时二次 patch（同口径幂等下通常一致）
+        modsStore.toggleModLocal(predictedPath, res.newPath, res.disabled)
       }
-      // 标记需要更新模组数据（仅NormalGroup操作）
-      if (!mod.value.isMutex) {
-        modsStore.markNeedUpdate(mod.value.groupIndex)
+      // 标记需要更新模组数据（仅NormalGroup操作；失败路径不置位）
+      if (!isMutex) {
+        modsStore.markNeedUpdate(groupIndex)
       }
+      // 通知在乐观 UI 更新之后发出（S3：不得先于状态变更）
       ElMessage.success(wasDisabled ? t('Enabled') : t('Disabled'))
     } catch (e: unknown) {
+      // 失败：回滚乐观 patch（恢复原路径与原禁用态）并告知用户
+      modsStore.toggleModLocal(predictedPath, oldPath, wasDisabled)
       ElMessage.error(t('Failed to enable mod') + ': ' + (e instanceof Error ? e.message : String(e)))
     }
   }
 
-  /** 切换收藏状态（R1：命令返回 bool 后本地翻转，0 IPC 零全量） */
+  /**
+   * 切换收藏状态（UI 先行乐观更新；R1：命令返回 bool 后本地翻转，0 IPC 零全量）
+   */
   async function handleToggleFavorite() {
     if (!mod.value) return
     closeContextMenu()
+    const modPath = mod.value.modPath
+    const wasFav = mod.value.isFavorite
+    // UI 先行：立即翻转收藏态（收藏星标即时呈现）
+    modsStore.toggleFavoriteLocal(modPath, !wasFav)
     try {
-      const isFav = await toggleFavorite(mod.value.modPath)
-      modsStore.toggleFavoriteLocal(mod.value.modPath, isFav)
+      const isFav = await toggleFavorite(modPath)
+      // 后端权威值校正（与乐观值不一致时）
+      if (isFav !== !wasFav) {
+        modsStore.toggleFavoriteLocal(modPath, isFav)
+      }
     } catch (e: unknown) {
+      // 失败：回翻收藏态
+      modsStore.toggleFavoriteLocal(modPath, wasFav)
       logger.error('ModCard', 'Failed to toggle favorite', e)
     }
   }

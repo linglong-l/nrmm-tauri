@@ -37,8 +37,46 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex as AsyncMutex;
 
-static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<String, Instant>>> =
+/// 选择操作防抖窗口（毫秒）
+const SELECTION_DEBOUNCE_MS: u64 = 500;
+
+/// 选择防抖登记表：键为「分组路径 + 模组路径」复合键，值为最近一次放行时间
+///
+/// P1 修复：原实现以 `group_path` 单键 + 500ms 窗口，同组快速连续选择**不同**模组时
+/// 第二次会被误判为「重复触发」并返回 `"debounced"`（前端静默丢弃）→ 用户表现为
+/// 「点了没反应 / 选择失效」。改复合键后仅当「同组且同模组」的重复触发才命中防抖。
+static SELECTION_DEBOUNCE: LazyLock<Mutex<HashMap<(String, String), Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 选择防抖判定（P1 修复）
+///
+/// 仅当「同分组且同模组」在 [`SELECTION_DEBOUNCE_MS`] 窗口内重复触发时命中；
+/// 每次写入前 `retain` 掉已过窗口的条目，避免登记表无限增长（原实现永不清理）。
+///
+/// # 参数
+/// - `group_path`: 分组目录绝对路径
+/// - `mod_path`: 目标模组绝对路径
+///
+/// # 返回
+/// `Ok(true)` = 命中防抖（调用方应返回 `"debounced"`）；
+/// `Ok(false)` = 放行（已记录本次时间戳）；锁中毒时返回 `Err`
+fn selection_debounce_hit(group_path: &str, mod_path: &str) -> Result<bool, String> {
+    let mut debounce_map = SELECTION_DEBOUNCE
+        .lock()
+        .map_err(|_| "debounce lock poisoned".to_string())?;
+    let now = Instant::now();
+    let window = Duration::from_millis(SELECTION_DEBOUNCE_MS);
+    // 清理过期条目：超过窗口的条目永不可能再被命中，保留只会让表无限增长
+    debounce_map.retain(|_, last| now.saturating_duration_since(*last) < window);
+    let key = (group_path.to_string(), mod_path.to_string());
+    if let Some(last_time) = debounce_map.get(&key) {
+        if now.saturating_duration_since(*last_time) < window {
+            return Ok(true);
+        }
+    }
+    debounce_map.insert(key, now);
+    Ok(false)
+}
 
 /// 「_MANAGED_ 写操作全局锁」（H1；C12 复用并扩展）。
 ///
@@ -61,6 +99,24 @@ static UPDATE_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(AsyncMutex::default
 /// 等锁期间首个扫描者已回填缓存，后续调用直接取缓存——并发 N 次只扫一次。
 /// `refresh_mods`（强制重扫语义）同样串行以防并发重复扫描，但不跳过扫描。
 static SCAN_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(AsyncMutex::default);
+
+/// 选择直写快路径的分组路径守卫：路径非空、位于 `_MANAGED_` 下且目录名为
+/// 严格 group_xx（复用扫描器判定，拒绝 group_0/前导零/互斥目录/任意路径）。
+///
+/// `write_selectedindex_direct` 内部仍有 group_xx 守卫；此处前置判定用于
+/// 无效路径回退 `switch_mod` / `deselect_group_mods` 全量路径（防御），而非直接报错。
+fn is_direct_writable_group(group_path: &Path, managed_path: &Path) -> bool {
+    if group_path.as_os_str().is_empty() {
+        return false;
+    }
+    if !mod_cache::path_within(group_path, managed_path) {
+        return false;
+    }
+    match group_path.file_name() {
+        Some(name) => mod_scanner::is_normal_group_dir(&name.to_string_lossy()).is_some(),
+        None => false,
+    }
+}
 
 /// 选择模组命令的参数结构体
 ///
@@ -426,16 +482,9 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
     );
     if is_mutex {
         // Mutex 分支防抖（与非 Mutex 分支一致，防止快速重复点击触发多次互斥切换）
-        {
-            let mut debounce_map = SELECTION_DEBOUNCE
-                .lock()
-                .map_err(|_| "debounce lock poisoned")?;
-            if let Some(last_time) = debounce_map.get(&group_path) {
-                if Instant::now() - *last_time < Duration::from_millis(500) {
-                    return Err("debounced".to_string());
-                }
-            }
-            debounce_map.insert(group_path.clone(), Instant::now());
+        // P1：复合键（分组 + 模组），同组不同模组的连续选择不再被误判为重复触发
+        if selection_debounce_hit(&group_path, &mod_path)? {
+            return Err("debounced".to_string());
         }
 
         let mod_path_buf = PathBuf::from(mod_path.clone());
@@ -475,53 +524,147 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         // === NormalGroup 分支 ===
         // 执行顺序对齐用户要求："先持久化再按键模拟"
         // 1. 防抖检查
-        {
-            let mut debounce_map = SELECTION_DEBOUNCE
-                .lock()
-                .map_err(|_| "debounce lock poisoned")?;
-            if let Some(last_time) = debounce_map.get(&group_path) {
-                if Instant::now() - *last_time < Duration::from_millis(500) {
-                    return Err("debounced".to_string());
-                }
-            }
-            debounce_map.insert(group_path.clone(), Instant::now());
+        // P1：复合键（分组 + 模组），同组不同模组的连续选择不再被误判为重复触发
+        if selection_debounce_hit(&group_path, &mod_path)? {
+            return Err("debounced".to_string());
         }
 
-        // 2. 先持久化：写 selectedindex（switch_mod 内部有 WATCHER_PAUSED 保护，防止文件监听器竞态）
+        // 2. 先持久化：优先直写快路径（O(1) 原子写 selectedindex + 缓存定向 patch，
+        //    免 switch_mod 全量轻扫），group_path 无效时回退全量路径（防御）
         let settings = settings_store::get_settings();
         let simulate_enabled = settings.simulate_key_on_selection;
         let managed_path = mods_path.join(constants::MANAGED_FOLDER);
         // TargetGame 是 Copy，提前复制用于后续按键模拟
         let game_enum_for_sim = game_enum;
 
-        let result = tauri::async_runtime::spawn_blocking(
-            move || -> Result<mod_manager::UpdateResult, String> {
-                mod_manager::switch_mod(game_enum, &mods_path, &settings, group_index, mod_index)
+        let group_path_buf = PathBuf::from(&group_path);
+        // P3：直写快路径同样必须按 mod_path 解析后端排序后的真实下标。
+        // 前端展示序因「收藏前置 / 新增置末位」等本地近似重排与后端 mod_order_cmp
+        // 分叉，直接写前端传入的 mod_index 会把 selectedindex 落到错误模组上。
+        // 缓存快照即最近一次后端扫描结果（权威后端序，无磁盘 I/O，保持 O(1) 意图）；
+        // 缓存缺失 / 路径未命中时回退到传入下标（行为不劣化）。
+        let resolved_index = mod_manager::resolve_mod_index_by_path_from_cache(
+            game_enum,
+            &mods_path,
+            &group_path_buf,
+            &mod_path,
+        );
+        let direct_index = resolved_index.unwrap_or(mod_index);
+        if let Some(r) = resolved_index {
+            if r != mod_index {
+                log::warn!(
+                    "[select_mod] direct path: mod_index corrected by mod_path | frontend={} backend={} mod_path={}",
+                    mod_index,
+                    r,
+                    mod_path
+                );
+            }
+        }
+        let result = if is_direct_writable_group(&group_path_buf, &managed_path) {
+            sel_dbg!(
+                "mod_commands",
+                "select_mod",
+                "普通组直写快路径 | group_path={} mod_index={}（免全量轻扫）",
+                group_path,
+                direct_index
+            );
+            // O(1) 原子写 selectedindex（内部含 group_xx 守卫与 WatcherGuard）
+            let write_path = group_path_buf.clone();
+            let write_start = std::time::Instant::now();
+            tauri::async_runtime::spawn_blocking(move || {
+                mod_manager::write_selectedindex_direct(&write_path, direct_index)
+            })
+            .await
+            .map_err(|e| {
+                log::error!("[select_mod] spawn_blocking join error: {}", e);
+                format!("switch task failed: {}", e)
+            })?
+            .map_err(|e| {
+                log::error!("[select_mod] write_selectedindex_direct error: {}", e);
+                e.to_string()
+            })?;
+            log::debug!(
+                "[select_mod] direct write_selectedindex done | elapsed_ms={}",
+                write_start.elapsed().as_millis()
+            );
+            // 缓存定向 patch：命中则免整缓存失效；未命中不失效（watcher / 下次全量扫描对账）
+            // 注意须用按路径解析后的 direct_index（与磁盘写入值同源），否则缓存与磁盘不一致。
+            //
+            // 改为 try_write（非阻塞）：实测启用模组的目录重命名必然触发 watcher 增量合并，
+            // 其 `subtree_replace` 写锁段在 6542 模组/109 分组下长达数秒；此处若用阻塞
+            // write() 会排在它后面空等（实测 6.7s），连带把后续按键模拟（游戏内真正生效的
+            // 动作）一起推迟，用户感知为「启用后选择延迟 ~7 秒」。
+            // 拿不到锁即跳过本次 patch —— 降级语义是现成的：磁盘 selectedindex 已由
+            // write_selectedindex_direct 写成功，缓存对账由 watcher 增量 / 下次全量扫描完成。
+            // MOD_CACHE 为 parking_lot::RwLock：try_write() 返回 Option（持锁时为 None）
+            let patched = match mod_cache::MOD_CACHE.try_write() {
+                Some(mut cache) => {
+                    cache.patch_selected_index(game_enum, &mods_path, &group_path_buf, direct_index)
+                }
+                None => {
+                    log::warn!(
+                        "[select_mod] cache patch skipped: MOD_CACHE write lock busy (watcher merge in progress); \
+                         selectedindex already persisted, cache reconciled by watcher/next full scan"
+                    );
+                    false
+                }
+            };
+            log::debug!(
+                "[commands::mod_commands] [select_mod] direct write done | patched={} selected={}",
+                patched,
+                direct_index
+            );
+            mod_manager::UpdateResult {
+                selected_mod_index: Some(direct_index as i32),
+                ..Default::default()
+            }
+        } else {
+            sel_dbg!(
+                "mod_commands",
+                "select_mod",
+                "普通组回退全量路径 | group_path={} 无效，走 switch_mod 全量轻扫",
+                group_path
+            );
+            // P3：把前端 mod_path 透传给 switch_mod，使其按路径解析后端排序后的真实
+            // mod_index（前端近似重排后的整数下标不可信），路径未命中时后端自动回退。
+            let mod_path_for_switch = mod_path.clone();
+            let result = tauri::async_runtime::spawn_blocking(
+                move || -> Result<mod_manager::UpdateResult, String> {
+                    mod_manager::switch_mod(
+                        game_enum,
+                        &mods_path,
+                        &settings,
+                        group_index,
+                        mod_index,
+                        Some(mod_path_for_switch.as_str()),
+                    )
                     .map_err(|e| e.to_string())
-            },
-        )
-        .await
-        .map_err(|e| {
-            log::error!("[select_mod] spawn_blocking join error: {}", e);
-            format!("switch task failed: {}", e)
-        })?
-        .map_err(|e| {
-            log::error!("[select_mod] switch_mod error: {}", e);
-            e
-        })?;
+                },
+            )
+            .await
+            .map_err(|e| {
+                log::error!("[select_mod] spawn_blocking join error: {}", e);
+                format!("switch task failed: {}", e)
+            })?
+            .map_err(|e| {
+                log::error!("[select_mod] switch_mod error: {}", e);
+                e
+            })?;
+
+            // 整缓存失效（旧行为，确保下次 get_mods 全量扫描）
+            {
+                let mut cache = mod_cache::MOD_CACHE.write();
+                cache.invalidate_by_prefix(&managed_path);
+            }
+            log::debug!(
+                "[commands::mod_commands] [select_mod] cache invalidated | prefix={:?}",
+                managed_path
+            );
+            result
+        };
         log::debug!(
             "[commands::mod_commands] [select_mod] switch_result={:?}",
             result
-        );
-
-        // 3. 清缓存（持久化完成后立即失效，确保下次 get_mods 全量扫描）
-        {
-            let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-            cache.invalidate_by_prefix(&managed_path);
-        }
-        log::debug!(
-            "[commands::mod_commands] [select_mod] cache invalidated | prefix={:?}",
-            managed_path
         );
 
         // 4. 再按键模拟（确保文件状态已就绪）
@@ -554,13 +697,21 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             // 否则 fallback 到 (mod_index, group_index) 作为虚拟坐标（3Dmigoto/xxmi 据此识别）。
             // 注意：NRMM 将 x=realModIndex y=realGroupIndex 直接传入 SetCursorPos，
             // 因此当未传像素坐标时，索引值本身即作为坐标输入。
+            // P3 合并修正：x 坐标必须与磁盘写入的 selectedindex **同源**——
+            // 取本命令两条路径（直写快路径 / switch_mod 全量路径）返回的权威
+            // selected_mod_index（均已按 mod_path 校正），否则会出现「持久化 X 而
+            // 按键模拟用旧 x」的分歧：分组 Y 坐标正确、模组 X 坐标无模组匹配而失效。
+            let sim_mod_index = result
+                .selected_mod_index
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(mod_index);
             let (sim_g, sim_m) = match (cursor_x, cursor_y) {
                 (Some(px), Some(py)) => {
                     let g = u32::try_from(py.max(0)).unwrap_or(group_index);
-                    let m = u32::try_from(px.max(0)).unwrap_or(mod_index);
+                    let m = u32::try_from(px.max(0)).unwrap_or(sim_mod_index);
                     (g, m)
                 }
-                _ => (group_index, mod_index),
+                _ => (group_index, sim_mod_index),
             };
             sel_dbg!(
                 "mod_commands",
@@ -620,17 +771,69 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
 }
 
 /// 取消选中分组内模组
+///
+/// `group_path` 提供且有效（位于 `_MANAGED_` 下 + group_xx）时走直写快路径：
+/// O(1) 原子写 selectedindex=0 + 缓存定向 patch，免全量轻扫与整缓存失效；
+/// 未提供或无效时回退 `deselect_group_mods` 全量扫描路径（旧行为）。
 #[tauri::command]
 pub async fn deselect_group_mod(
     game: String,
     mods_path: String,
     group_index: u32,
+    group_path: Option<String>,
 ) -> Result<mod_manager::UpdateResult, String> {
+    // P2：「_MANAGED_ 写操作全局锁」覆盖不全的补齐。取消选择同样写 selectedindex
+    // 标记文件，此前游离于锁外，可与 select_mod / update_mod_data 并发交错。
+    let _update_guard = UPDATE_LOCK.lock().await;
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
-    let settings = settings_store::get_settings();
     let managed_path = mods_path.join(constants::MANAGED_FOLDER);
 
+    let group_path_buf = group_path.map(PathBuf::from);
+    if let Some(gp) = group_path_buf.filter(|gp| is_direct_writable_group(gp, &managed_path)) {
+        sel_dbg!(
+            "mod_commands",
+            "deselect_group_mod",
+            "直写快路径 | group_path={} group_index={}（写 selectedindex=0，免全量轻扫）",
+            gp.display(),
+            group_index
+        );
+        let write_path = gp.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            mod_manager::write_selectedindex_direct(&write_path, 0)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| {
+            log::error!(
+                "[deselect_group_mod] write_selectedindex_direct error: {}",
+                e
+            );
+            e.to_string()
+        })?;
+        // 同 select_mod：非阻塞 try_write，避免排在 watcher 增量合并的写锁段后空等
+        // （selectedindex=0 已落盘，缓存对账交给 watcher / 下次全量扫描）
+        let patched = match mod_cache::MOD_CACHE.try_write() {
+            Some(mut cache) => cache.patch_selected_index(game, &mods_path, &gp, 0),
+            None => {
+                log::warn!(
+                    "[deselect_group_mod] cache patch skipped: MOD_CACHE write lock busy (watcher merge in progress)"
+                );
+                false
+            }
+        };
+        log::debug!(
+            "[commands::mod_commands] [deselect_group_mod] direct write done | patched={}",
+            patched
+        );
+        return Ok(mod_manager::UpdateResult {
+            selected_mod_index: Some(0),
+            ..Default::default()
+        });
+    }
+
+    // 回退：全量轻扫定位分组（旧行为，含整缓存失效）
+    let settings = settings_store::get_settings();
     let result = tauri::async_runtime::spawn_blocking(
         move || -> Result<mod_manager::UpdateResult, String> {
             mod_manager::deselect_group_mods(game, &mods_path, &settings, group_index)
@@ -641,7 +844,7 @@ pub async fn deselect_group_mod(
     .map_err(|e| e.to_string())??;
 
     {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        let mut cache = mod_cache::MOD_CACHE.write();
         cache.invalidate_by_prefix(&managed_path);
     }
 
@@ -741,6 +944,9 @@ pub async fn add_group(
 /// 剔除该组及其模组条目），不再触发全量失效与全量刷新。
 #[tauri::command]
 pub async fn remove_group(group_path: String) -> Result<GroupDelta, String> {
+    // P2：删除分组会移走 _MANAGED_ 下整棵子树，须与选择、更新串行
+    // （否则「删除分组后立刻选择」会出现组已消失但选择仍乐观成功的静默失败）。
+    let _update_guard = UPDATE_LOCK.lock().await;
     let (mods_root, group_dir) = resolve_managed_context(Path::new(&group_path))
         .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
     let path = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
@@ -775,6 +981,9 @@ pub async fn remove_group(group_path: String) -> Result<GroupDelta, String> {
 pub async fn remove_mod(
     mod_path: String,
 ) -> Result<crate::core::mod_manager::RemoveModResult, String> {
+    // P2：移除模组会把目录移入 DISABLED_MANAGED_REMOVED 并改写组内 INI，
+    // 与 select_mod / update_mod_data 同属 _MANAGED_ 写路径，须统一串行化。
+    let _update_guard = UPDATE_LOCK.lock().await;
     let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
         .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
     let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
@@ -823,6 +1032,8 @@ pub async fn remove_mod(
 /// 全量失效与全量刷新。
 #[tauri::command]
 pub async fn rename_mod(mod_path: String, new_name: String) -> Result<GroupDelta, String> {
+    // P2：重命名会写 modname 标记文件 / 重命名 _MANAGED_ 下目录，须与选择、更新串行。
+    let _update_guard = UPDATE_LOCK.lock().await;
     let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
         .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
     let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
@@ -904,6 +1115,8 @@ pub async fn rename_group(
     new_name: String,
     is_group_xx: bool,
 ) -> Result<GroupDelta, String> {
+    // P2：写 groupname 标记文件 / 重命名 _MANAGED_ 下分组目录，须与选择、更新串行。
+    let _update_guard = UPDATE_LOCK.lock().await;
     let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&group_path))
         .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
     let path = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
@@ -977,6 +1190,10 @@ pub async fn toggle_mod_disabled(
     enable: bool,
     is_mutex: bool,
 ) -> Result<ToggleModResult, String> {
+    // P2：启停通过 DISABLED 前缀重命名改写 _MANAGED_ 目录树。此前未持锁，
+    // 与 select_mod（写 selectedindex + 清缓存）可并发交错，是「选择 vs 启用状态」
+    // 竞态的核心缺口——统一在此入口串行化。
+    let _update_guard = UPDATE_LOCK.lock().await;
     let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
         .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
     let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
@@ -997,11 +1214,15 @@ pub async fn toggle_mod_disabled(
             }
             // 推导操作后路径（与 toggle_mod 同口径；幂等时返回原路径）
             let new_path = derive_toggled_path(&path, enable);
+            // 操作后的禁用态：enable=true（目标启用）→ 新禁用态 false；enable=false（目标禁用）→ true。
+            // 注意不可直接传 `enable`（它是"目标启用"语义；曾以反相交入缓存导致启用后缓存态为禁用、
+            // 禁用后为启用的三方一致性污染）。
+            let target_disabled = !enable;
             // 零扫描缓存 patch；未命中（缓存无此条目/组树无定位）→ 降级增量重扫
             let mut degraded = false;
             {
                 let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-                if !cache.patch_mod_entry(game, &mods_root, &path, &new_path, enable) {
+                if !cache.patch_mod_entry(game, &mods_root, &path, &new_path, target_disabled) {
                     degraded = true;
                 }
             } // 释放写锁
@@ -1024,7 +1245,7 @@ pub async fn toggle_mod_disabled(
             }
             Ok(ToggleModResult {
                 new_path: new_path.to_string_lossy().to_string(),
-                disabled: enable,
+                disabled: target_disabled,
                 degraded,
                 group_delta,
             })
@@ -1218,6 +1439,8 @@ pub async fn batch_toggle_mods(
     enable: bool,
     is_mutex: bool,
 ) -> Result<u32, String> {
+    // P2：批量启停会重命名 _MANAGED_ 下多个模组目录，须与选择、更新串行。
+    let _update_guard = UPDATE_LOCK.lock().await;
     let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
         mod_manager::batch_toggle_mods(&mod_paths, enable, is_mutex).map_err(|e| e.to_string())
     })
@@ -1656,6 +1879,9 @@ async fn batch_toggle_group_impl(
     group_path: PathBuf,
     disable: bool,
 ) -> Result<BatchGroupDelta, String> {
+    // P2：批量禁用/启用整组会重命名组内全部一级模组目录，属 _MANAGED_ 写路径。
+    // 锁加在此共用实现上（而非两个外层命令），既覆盖两条入口又避免重复加锁。
+    let _update_guard = UPDATE_LOCK.lock().await;
     let dir_display = group_path.display().to_string();
     let result =
         tauri::async_runtime::spawn_blocking(move || -> Result<BatchGroupDelta, String> {
@@ -1729,6 +1955,8 @@ async fn batch_toggle_group_impl(
 /// 直接 `subtree_remove` 裁剪缓存，返回 `new_group = None` 的 [`GroupDelta`]。
 #[tauri::command]
 pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<GroupDelta, String> {
+    // P2：与 remove_group 同理，移动 _MANAGED_ 下分组子树，须统一串行化
+    let _update_guard = UPDATE_LOCK.lock().await;
     // 路径边界校验（R1）：确认 group_path canonicalize 后位于任一已配置 mods_root 内
     let _validated =
         settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
