@@ -1,2 +1,0 @@
-[System]
-additional_foreground_window = No Reload Mod Manager Genshin_Impact

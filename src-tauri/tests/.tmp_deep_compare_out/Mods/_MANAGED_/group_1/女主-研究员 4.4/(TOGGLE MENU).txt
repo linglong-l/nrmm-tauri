@@ -1,8 +1,0 @@
-TOGGLE MENU !!
-
-5 - hairstyles (long, short, ponytail, default)
-6 - horns
-7 - skates/shoes
-8 - back pouches
-9 - front pouches
-0 - eyelashes
