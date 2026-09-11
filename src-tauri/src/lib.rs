@@ -122,6 +122,16 @@ pub fn run() {
     // 记录到全局OnceLock，供前端report_frontend_ready命令查询
     let _ = BOOT_START.set(boot_start);
 
+    // Linux：禁用 WebKitGTK 的 DMABUF 渲染器。NVIDIA 专有驱动（610.57+）+ GNOME 分数缩放
+    // （1.25/1.333 等）下，DMABUF 路径提交的缓冲不满足 mutter 的 buffer_scale 整数倍约束，
+    // 合成器直接断开连接（Gdk "Error 71 协议错误"），窗口首次显示后约 1s 必崩且无法恢复。
+    // 用户预置了该变量时不覆盖（含设为 "0"），便于手动切回各渲染路径排查。
+    // 必须在任何 GTK/WebKit 初始化之前设置，故置于 run() 最前。
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     let boot_ts = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
     log::info!("[BOOT] ===== NRMM 启动开始 at {} =====", boot_ts);
 
