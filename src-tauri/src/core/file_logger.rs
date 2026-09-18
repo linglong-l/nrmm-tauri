@@ -296,7 +296,12 @@ pub fn apply_log_timezone(config: &str) {
             (
                 TZ_MODE_FIXED,
                 secs,
-                format!("UTC{}{:02}:{:02}", if secs < 0 { '-' } else { '+' }, abs / 3600, (abs % 3600) / 60),
+                format!(
+                    "UTC{}{:02}:{:02}",
+                    if secs < 0 { '-' } else { '+' },
+                    abs / 3600,
+                    (abs % 3600) / 60
+                ),
                 None,
             )
         } else {
@@ -339,9 +344,8 @@ pub fn apply_log_timezone(config: &str) {
 /// 带固定偏移的当前时刻（System 模式下偏移为系统本地当前偏移）
 pub fn log_now() -> chrono::DateTime<chrono::FixedOffset> {
     match LOG_TZ_MODE.load(Ordering::Relaxed) {
-        TZ_MODE_UTC => chrono::Utc::now().with_timezone(
-            &chrono::FixedOffset::east_opt(0).expect("east_opt(0) 恒有效"),
-        ),
+        TZ_MODE_UTC => chrono::Utc::now()
+            .with_timezone(&chrono::FixedOffset::east_opt(0).expect("east_opt(0) 恒有效")),
         TZ_MODE_FIXED => {
             let secs = LOG_TZ_OFFSET_SECS.load(Ordering::Relaxed);
             let off = chrono::FixedOffset::east_opt(secs)

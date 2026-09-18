@@ -2497,8 +2497,8 @@ mod tests {
         let markers_before = marker_inventory(&runtime);
 
         // 2) 还原
-        let restored = mod_manager::restore_all_inis(&game_mods_path)
-            .expect("restore_all_inis 执行失败");
+        let restored =
+            mod_manager::restore_all_inis(&game_mods_path).expect("restore_all_inis 执行失败");
         println!(
             "  [restore] restored={} failed={}",
             restored.restored, restored.failed
@@ -2531,11 +2531,7 @@ mod tests {
         }
         let orphan_backups: Vec<&PathBuf> = leftover_backups
             .iter()
-            .filter(|p| {
-                !input_root
-                    .join(p.strip_prefix(&runtime).unwrap())
-                    .exists()
-            })
+            .filter(|p| !input_root.join(p.strip_prefix(&runtime).unwrap()).exists())
             .collect();
         assert!(
             orphan_backups.is_empty(),
@@ -2569,14 +2565,10 @@ mod tests {
             if file_name.ends_with(&backup_suffix) {
                 // 主文件名反推：with_extension 是「替换 .ini」→ Herta.ini_managed_backup
                 // 的主文件是 Herta + ".ini" = Herta.ini（restore 仅对 .ini 建备份）
-                let main_name =
-                    format!("{}.ini", file_name.trim_end_matches(&backup_suffix));
+                let main_name = format!("{}.ini", file_name.trim_end_matches(&backup_suffix));
                 if parent.join(&main_name).exists() {
                     if rt_path.exists() {
-                        content_diff.push(format!(
-                            "备份应被还原消费但仍存在: {}",
-                            rel.display()
-                        ));
+                        content_diff.push(format!("备份应被还原消费但仍存在: {}", rel.display()));
                     }
                 } else if !rt_path.exists() {
                     content_diff.push(format!("孤儿备份运行时缺失: {}", rel.display()));
@@ -2658,7 +2650,11 @@ mod tests {
             "还原后存在白名单之外的运行时新增文件: {:?}",
             extra_unexpected
         );
-        println!("  [extra] 白名单内新增文件 {} 个: {:?}", extra_files.len(), extra_files);
+        println!(
+            "  [extra] 白名单内新增文件 {} 个: {:?}",
+            extra_files.len(),
+            extra_files
+        );
 
         // 5) 还原安全窗口内重扫：不新建任何管理标记
         //    （模拟 watcher 防抖 1s 后的重扫，窗口 60s 内必然处于活跃态）

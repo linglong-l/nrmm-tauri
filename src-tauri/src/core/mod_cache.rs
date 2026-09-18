@@ -1141,11 +1141,7 @@ pub fn find_group_node<'a>(
 ///
 /// # 返回
 /// `true` = 有实质差异（应 emit delta）；`false` = 与缓存一致（可跳过）。
-pub fn group_has_real_change(
-    game: TargetGame,
-    mods_path: &Path,
-    new_group: &ModGroupData,
-) -> bool {
+pub fn group_has_real_change(game: TargetGame, mods_path: &Path, new_group: &ModGroupData) -> bool {
     let cache = MOD_CACHE.read();
     match cache
         .get(game, mods_path)

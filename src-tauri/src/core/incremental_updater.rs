@@ -182,9 +182,9 @@ impl IncrementalUpdater {
         let managed_norm = normalize_path(managed_root);
         let head_parent = parent_segments(&dirs[0]);
         let same_parent_mod_level = head_parent.is_some()
-            && dirs.iter().all(|d| {
-                parent_segments(d) == head_parent && is_mod_level_depth(d, &managed_norm)
-            });
+            && dirs
+                .iter()
+                .all(|d| parent_segments(d) == head_parent && is_mod_level_depth(d, &managed_norm));
         if same_parent_mod_level {
             let mut set = BTreeSet::new();
             for d in &dirs {
@@ -504,14 +504,14 @@ mod tests {
             .map(|p| p.to_string_lossy().to_ascii_lowercase())
             .collect();
         assert!(
-            lower.iter().any(|s| s.ends_with("\\x") || s.ends_with("/x")),
+            lower
+                .iter()
+                .any(|s| s.ends_with("\\x") || s.ends_with("/x")),
             "新端 x 应保留模组级: {:?}",
             lower
         );
         assert!(
-            lower
-                .iter()
-                .any(|s| s.ends_with("disabled_x")),
+            lower.iter().any(|s| s.ends_with("disabled_x")),
             "旧端 DISABLED_x 应保留模组级（删除 patch 依赖此身份）: {:?}",
             lower
         );
@@ -530,16 +530,15 @@ mod tests {
         )
         .unwrap();
         // 现存模组目录：snap 返回自身（含 .ini）
-        let living = snap_to_group_or_mod_boundary(
-            &managed.join("group_1").join("x"),
-            &managed,
+        let living = snap_to_group_or_mod_boundary(&managed.join("group_1").join("x"), &managed);
+        assert!(
+            living.ends_with("x"),
+            "现存模组应 snap 到自身: {:?}",
+            living
         );
-        assert!(living.ends_with("x"), "现存模组应 snap 到自身: {:?}", living);
         // 已消失模组目录：NotFound + 模组级深度 → 保留自身（不再向上归并）
-        let vanished = snap_to_group_or_mod_boundary(
-            &managed.join("group_1").join("DISABLED_x"),
-            &managed,
-        );
+        let vanished =
+            snap_to_group_or_mod_boundary(&managed.join("group_1").join("DISABLED_x"), &managed);
         // Path::ends_with 是组件级比较（大小写敏感），断言用实际目录名
         assert!(
             vanished.ends_with("DISABLED_x"),
@@ -548,10 +547,7 @@ mod tests {
         );
         // 已消失组目录：末段是 group_xx → 仍 snap 到组级（组删除由路由层
         // 删除语义处理，不因本修复误判为模组级）
-        let vanished_group = snap_to_group_or_mod_boundary(
-            &managed.join("group_9"),
-            &managed,
-        );
+        let vanished_group = snap_to_group_or_mod_boundary(&managed.join("group_9"), &managed);
         assert!(
             vanished_group.ends_with("group_9"),
             "组级目录（含消失）snap 到组边界: {:?}",

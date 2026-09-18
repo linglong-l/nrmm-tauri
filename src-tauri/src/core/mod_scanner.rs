@@ -33,8 +33,8 @@ use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// 支持的图标文件扩展名列表
