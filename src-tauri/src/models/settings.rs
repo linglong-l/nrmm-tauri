@@ -19,6 +19,11 @@ fn default_window_transparent() -> bool {
     !cfg!(target_os = "linux")
 }
 
+/// 日志时间戳时区的默认值（跟随系统本地时区）
+fn default_log_timezone() -> String {
+    "system".to_string()
+}
+
 /// 键盘快捷键配置
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -170,6 +175,14 @@ pub struct AppSettings {
     /// 是否在启动时打开控制台窗口查看日志（默认 false）
     #[serde(default)]
     pub show_console_on_start: bool,
+    /// 日志时间戳时区（默认 system=系统本地时区）
+    ///
+    /// 支持值（不区分大小写）：`system` / `local` / 空 = 系统本地时区；
+    /// `UTC`；固定偏移如 `UTC+8`、`+08:00`、`-05:30`。
+    /// 背景：env_logger 默认格式时间戳恒为 UTC，与日志文件名（本地日期）不一致；
+    /// 修复后默认本地时区，本字段允许在配置文件中显式指定（无 UI 项）。
+    #[serde(default = "default_log_timezone")]
+    pub log_timezone: String,
 }
 
 impl Default for AppSettings {
@@ -216,6 +229,7 @@ impl Default for AppSettings {
             show_favorites_only: false,
             check_namespace_conflict: true,
             show_console_on_start: false,
+            log_timezone: default_log_timezone(),
         }
     }
 }

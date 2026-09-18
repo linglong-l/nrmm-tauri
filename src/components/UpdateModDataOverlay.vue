@@ -63,6 +63,10 @@
                 {{ $t('updateModData.loadTime') }} {{ durationSec.toFixed(2) }}s
               </span>
             </div>
+            <!-- 写入/跳过计数：区分「实际写盘」与「内容未变化幂等跳过」 -->
+            <div v-if="writtenCount > 0 || skippedCount > 0" class="overlay-written-line">
+              {{ $t('updateModData.writtenSkipped', { written: writtenCount, skipped: skippedCount }) }}
+            </div>
             <div class="overlay-tip-text">{{ $t('updateModData.optimizationTip') }}</div>
             <div v-if="result?.isStandardXxmi" class="overlay-xxmi-hint">
               <div class="xxmi-line">{{ $t('updateModData.xxmiDetected') }}</div>
@@ -93,7 +97,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { simulateF10 } from '@/utils/tauri'
@@ -108,6 +112,10 @@ const errorMessage = ref('')
 const durationSec = ref(-1)
 
 const { dotsCount, startDots, stopDots } = useLoadingDots()
+
+// 写入/跳过计数（后端 UpdateResult.writtenMods / skippedMods，缺省 0）
+const writtenCount = computed(() => result.value?.writtenMods ?? 0)
+const skippedCount = computed(() => result.value?.skippedMods ?? 0)
 
 function show(s: OverlayState, data?: { result?: UpdateResult | null; error?: string; durationMs?: number }) {
   state.value = s
@@ -139,6 +147,12 @@ async function handleCloseAndReload() {
     const modsStore = useModsStore()
     if (settingsStore.currentGame && settingsStore.currentModsPath) {
       await modsStore.refresh()
+      // C14 兜底：关闭即刷新成功 → 数据已是最新，丢弃「窗口恢复后强制重载」标志，
+      // 避免 window-shown 再做一次冗余全量加载
+      if (modsStore.pendingReloadAfterRecreate === settingsStore.currentGame) {
+        modsStore.pendingReloadAfterRecreate = null
+        modsStore.clearNeedUpdate()
+      }
     }
   } catch (e) {
     logger.error('UpdateModDataOverlay', 'refresh after close failed', e)
@@ -164,6 +178,7 @@ function hideOverlay() { hide() }
 .success-text { color: #67c23a; font-size: 14px; font-weight: 600; margin-right: 12px; }
 .duration-text { color: #909399; font-size: 14px; }
 .overlay-success-line { margin-bottom: 12px; }
+.overlay-written-line { color: #909399; font-size: 13px; margin-bottom: 12px; }
 .overlay-tip-text { color: #fff; font-size: 14px; margin-bottom: 14px; line-height: 1.6; }
 .overlay-xxmi-hint { margin-top: 4px; padding-top: 12px; }
 .xxmi-line { color: #606266; font-size: 12px; line-height: 1.6; }

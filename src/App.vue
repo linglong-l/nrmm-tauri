@@ -441,6 +441,26 @@ onMounted(async () => {
         return
       }
 
+      // C14 竞态兜底：update_mod_data 期间发生 clearData/切游戏（epoch 变化）时，
+      // store 侧不回灌加载，改置 pendingReloadAfterRecreate 交给本监听恢复。
+      // 同游戏 → 强制 loadMods（后端缓存已被 invalidate_game 失效，必为全量新扫）
+      // 成功后 clearNeedUpdate（对齐正常路径「更新→loadMods→清标记」语义）；
+      // 已切到其他游戏 → 仅丢弃标志，避免误清新游戏 needUpdate。
+      const pendingReloadGame = modsStore.pendingReloadAfterRecreate
+      if (pendingReloadGame) {
+        modsStore.pendingReloadAfterRecreate = null
+        if (pendingReloadGame === s.currentGame) {
+          logger.info('App', 'pending reload after recreate -> force loadMods')
+          await modsStore.loadMods()
+          modsStore.clearNeedUpdate()
+          nextTick(() => {
+            modsFocusTick.value++
+          })
+          return
+        }
+        logger.info('App', `pending reload dropped (game switched: ${pendingReloadGame} -> ${s.currentGame})`)
+      }
+
       try {
         const cacheValid = await checkModCacheValid(s.currentGame, s.currentModsPath)
         const watcherRunning = await isFileWatcherRunning()

@@ -580,6 +580,7 @@
     "title": "管理模组",
     "updating": "正在修改模组",
     "success": "模组管理成功！",
+    "writtenSkipped": "实际写入 {written} / 跳过 {skipped}",
     "loadTime": "加载耗时",
     "optimizationTip": "如需加快模组加载速度，可以考虑禁用不常用的模组。位于「设置」选项卡中，向下滚动一点即可。",
     "xxmiDetected": "检测到标准 XXMI/3DMigoto。",

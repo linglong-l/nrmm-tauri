@@ -430,6 +430,7 @@
     "title": "Kelola Mod",
     "updating": "Memodifikasi mod",
     "success": "Mod berhasil dikelola!",
+    "writtenSkipped": "Ditulis {written} / Dilewati {skipped}",
     "loadTime": "Waktu muat",
     "optimizationTip": "Untuk mempercepat pemuatan mod, pertimbangkan untuk menonaktifkan mod yang tidak sering digunakan. Ada di tab \"Pengaturan\", gulir ke bawah sedikit.",
     "xxmiDetected": "XXMI/3DMigoto standar terdeteksi.",

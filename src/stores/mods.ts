@@ -10,7 +10,7 @@
  * - 树状导航：groups是顶层列表（NormalGroup + MutexGroup根节点），子分组通过children递归访问
  */
 import { defineStore } from 'pinia'
-import { ref, computed, reactive, watch, shallowRef, triggerRef } from 'vue'
+import { ref, computed, reactive, watch, shallowRef, triggerRef, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getMods, refreshMods, selectMod, switchFileWatcher, stopFileWatcher, updateModData as tauriUpdateModData, deselectGroupMod, disableAllModsInGroup, syncNrmmUpdateFlag } from '../utils/tauri'
 import { predictToggledPath } from '../utils/modPath'
@@ -106,6 +106,13 @@ export const useModsStore = defineStore('mods', () => {
   const isUpdatingModData = ref(false)
   /** 更新模组数据结果（保存最近一次的 UpdateResult） */
   const updateResult = ref<UpdateResult | null>(null)
+  /**
+   * 更新期间发生 clearData/切游戏（epoch 竞态）后的待重载标志。
+   * 记录更新发起时的游戏 id：window-shown 在同游戏恢复时强制 loadMods 并清 needUpdate；
+   * 若期间已切到其他游戏则仅丢弃标志（新游戏有自己的加载流程），避免误清新游戏 needUpdate。
+   * null = 无待重载。
+   */
+  const pendingReloadAfterRecreate = ref<string | null>(null)
   // ========== 全局搜索状态（Ctrl+F） ==========
   /** 搜索栏是否可见 */
   const searchVisible = ref(false)
@@ -1197,6 +1204,39 @@ export const useModsStore = defineStore('mods', () => {
     }
 
     isActivating.value = true
+    // === [selection-latency] 端到端打点（线性增长调试） ===
+    // t0=入口 → t1=乐观更新应用完 → (异步)渲染 flush → t2=selectMod 返回 → t3=校正完成。
+    // 用户用不同模组数量的分组对比各分段耗时，验证「延迟与模组数量线性增长」假设。
+    const latT0 = performance.now()
+    let latT1 = 0
+    let latT2 = 0
+    let latT3 = 0
+    let latRenderFlush: number | null = null
+    let latSummaryDone = false
+    // 全树递归模组总数（含嵌套子组）：setActiveRecursive / collectActiveRecursive 均为 O(全树) 遍历
+    let latTreeMods = 0
+    const latCtx: Record<string, unknown> = {
+      groupModsCount: group.mods.length, // 组第一层模组数（不含 None 槽位）
+      displayedModsCount: displayedMods.length, // 当前视图列表长度（含 None 槽位）
+      flatModsCount: mods.value.length, // 扁平列表总数（收藏/搜索视图高亮同步范围）
+      groupPath: group.groupPath,
+      isRetry,
+    }
+    // t3 与渲染 flush 两端都齐才打一条完整汇总（渲染 flush 通常先到，汇总在 t3 处发出）
+    const latTryEmitSummary = () => {
+      if (latSummaryDone || latRenderFlush === null || latT3 === 0) return
+      latSummaryDone = true
+      logger.info('ModsStore', '[selection-latency] end-to-end timing', {
+        t0Ms: Math.round(latT0),
+        totalMs: Math.round(latT3 - latT0),
+        uiOptimisticMs: Math.round(latT1 - latT0),
+        uiRenderFlushedMs: Math.round(latRenderFlush - latT0),
+        backendMs: Math.round(latT2 - latT1),
+        correctMs: Math.round(latT3 - latT2),
+        groupTreeModsTotal: latTreeMods,
+        ...latCtx,
+      })
+    }
     // 乐观回滚函数（try 内赋值，catch 可见；模块严格模式下块内函数声明不外提）
     let rollbackOptimistic: () => void = () => {}
     try {
@@ -1205,6 +1245,8 @@ export const useModsStore = defineStore('mods', () => {
       // 与后端扫描器的 mod_index / $managed_slot_id 同基准（None=0，真实模组从 1 起）
       const realModIdx = displayedMods.indexOf(mod)
       const modPath2 = mod.modPath || ''
+      latCtx.realModIdx = realModIdx
+      latCtx.modPath = modPath2
       // 使用 group_xx 目录编号（如 group_1 → 1）作为后端 group_index，
       // 而非 groups 数组下标。后端 switch_mod 与按键模拟的 active_group_id
       // 均以该编号为准；若存在互斥组或编号不连续（删除过分组），数组下标会与编号错位，
@@ -1319,6 +1361,14 @@ export const useModsStore = defineStore('mods', () => {
       triggerRef(mods)
       triggerRef(groups)
 
+      // [selection-latency] 乐观更新应用完成（含快照收集 / 递归 isActive / 数组复制）
+      latT1 = performance.now()
+      // 渲染 flush 异步打点：Vue 批量更新提交、UI 实际可呈现的时刻（不阻塞主流程）
+      void nextTick().then(() => {
+        latRenderFlush = performance.now()
+        latTryEmitSummary()
+      })
+
       logger.debug('ModsStore', '[activateModByIndex] calling selectMod', {
         game: s.currentGame,
         modsPath: s.currentModsPath,
@@ -1341,6 +1391,8 @@ export const useModsStore = defineStore('mods', () => {
         undefined, // cursorX - pass undefined for now (no coordinate calculation yet)
         undefined, // cursorY - pass undefined for now (no coordinate calculation yet)
       )
+      // [selection-latency] IPC 返回：后端 select_mod 全程耗时（含锁等待 / 直写 / patch / 按键模拟）
+      latT2 = performance.now()
       logger.debug('ModsStore', '[activateModByIndex] selectMod result', {
         selectedModIndex: result?.selectedModIndex,
       })
@@ -1362,6 +1414,10 @@ export const useModsStore = defineStore('mods', () => {
         modTreeVersion.value++
         triggerRef(groups)
       }
+
+      // [selection-latency] 校正完成 → 打端到端汇总（若渲染 flush 已先到）
+      latT3 = performance.now()
+      latTryEmitSummary()
     } catch (e: unknown) {
       const errMsg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))
       // 防抖命中（P1 修复）：回滚本次乐观变更后不再静默丢弃最后一次选择意图。
@@ -1712,6 +1768,7 @@ export const useModsStore = defineStore('mods', () => {
     needReloadManual,
     isUpdatingModData,
     updateResult,
+    pendingReloadAfterRecreate,
     currentGroup,
     currentGroupMods,
     selectedMod,

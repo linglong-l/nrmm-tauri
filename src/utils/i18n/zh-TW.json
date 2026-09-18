@@ -430,6 +430,7 @@
     "title": "管理模組",
     "updating": "正在修改模組",
     "success": "模組管理成功！",
+    "writtenSkipped": "實際寫入 {written} / 跳過 {skipped}",
     "loadTime": "載入耗時",
     "optimizationTip": "如需加快模組載入速度，可以考慮停用不常用的模組。位於「設定」索引標籤中，向下捲動一點即可。",
     "xxmiDetected": "偵測到標準 XXMI/3DMigoto。",

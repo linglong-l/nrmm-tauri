@@ -292,7 +292,6 @@ pub async fn update_mod_data(
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
     let settings = settings_store::get_settings();
-    let managed_path = mods_path.join(constants::MANAGED_FOLDER);
 
     log::info!("[update_mod_data] Running heavy update...");
     let start = std::time::Instant::now();
@@ -327,7 +326,7 @@ pub async fn update_mod_data(
     // 缓存失效
     {
         let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-        cache.invalidate_by_prefix(&managed_path);
+        cache.invalidate_game(game); // 彻底失效该游戏缓存：invalidate_by_prefix 的 contains 判断对子目录恒为 false，是 no-op 陷阱
     }
 
     Ok(result)
@@ -513,7 +512,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
 
         {
             let mut cache = crate::core::mod_cache::MOD_CACHE.write();
-            cache.invalidate_by_prefix(&managed_path);
+            cache.invalidate_game(game_enum); // 彻底失效该游戏缓存（invalidate_by_prefix 是 no-op 陷阱）
         }
 
         Ok(mod_manager::UpdateResult {
@@ -654,11 +653,11 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             // 整缓存失效（旧行为，确保下次 get_mods 全量扫描）
             {
                 let mut cache = mod_cache::MOD_CACHE.write();
-                cache.invalidate_by_prefix(&managed_path);
+                cache.invalidate_game(game_enum); // 彻底失效该游戏缓存（invalidate_by_prefix 是 no-op 陷阱）
             }
             log::debug!(
-                "[commands::mod_commands] [select_mod] cache invalidated | prefix={:?}",
-                managed_path
+                "[commands::mod_commands] [select_mod] cache invalidated | game={}",
+                game.as_str()
             );
             result
         };
@@ -845,7 +844,7 @@ pub async fn deselect_group_mod(
 
     {
         let mut cache = mod_cache::MOD_CACHE.write();
-        cache.invalidate_by_prefix(&managed_path);
+        cache.invalidate_game(game); // 彻底失效该游戏缓存（invalidate_by_prefix 是 no-op 陷阱）
     }
 
     Ok(result)
@@ -2167,7 +2166,18 @@ mod tests {
     ///
     /// 返回 game_mods_path（必须以 "Mods" 结尾）
     fn restore_dataset_to(runtime: &Path) -> PathBuf {
-        let _ = fs::remove_dir_all(runtime);
+        // fail-fast：remove 静默失败会让旧运行产物（manager_group.ini 等）残留，
+        // 后续「运行前不应存在生成文件」断言确定性失败且极难排查（Windows 下
+        // 目录被杀软/索引/上一进程句柄短暂占用时 remove_dir_all 会失败）。
+        fs::remove_dir_all(runtime)
+            .or_else(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            })
+            .expect("清理运行时目录失败（可能被占用），请手动删除后重试");
         fs::create_dir_all(runtime).expect("创建运行时根目录失败");
 
         let src_root = input_dataset();
@@ -2408,6 +2418,253 @@ mod tests {
             "两次更新 enabled_mods 应一致"
         );
         println!("[PASS] update_mod_data_test_idempotent");
+    }
+
+    // =====================================================================
+    // 还原数据测试（update 目录 → 还原 → 全树比对）
+    //
+    // 流程：输入数据集 → update_mod_data 注入 → restore_all_inis 还原 →
+    //   1) 还原数据 = 注入前原始内容（与输入数据集逐字节一致）
+    //   2) 管理生成文件被清理（manager_group/nrmm_include/keypress/group_X.ini/备份）
+    //   3) 还原安全窗口内重扫不新建管理标记（groupname/modname/selectedindex）
+    //
+    // 持有 TEST_WINDOW_LOCK：restore_all_inis 内部开启还原安全窗口（全局状态），
+    // 与依赖标记创建的并发测试互斥；结束时显式清除窗口，防止 60s 泄漏。
+    // =====================================================================
+    #[test]
+    fn restore_after_update_test() {
+        use crate::core::mod_scanner;
+        use std::collections::BTreeSet;
+        use walkdir::WalkDir;
+
+        // 窗口全局状态互斥（含 mod_scanner 内的标记创建断言测试）
+        let _window_lock = mod_scanner::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // panic 安全：测试退出（含断言失败）即清除窗口
+        struct ClearWindow;
+        impl Drop for ClearWindow {
+            fn drop(&mut self) {
+                mod_scanner::test_clear_restore_safe_window();
+            }
+        }
+        let _clear = ClearWindow;
+
+        println!("\n=== restore_after_update_test ===");
+        let runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(RUNTIME_DIR);
+        let game_mods_path = restore_dataset_to(&runtime);
+        let managed = game_mods_path.join(constants::MANAGED_FOLDER);
+        let input_root = input_dataset();
+
+        // 收集管理标记文件相对路径清单（groupname/modname/selectedindex）
+        fn marker_inventory(root: &Path) -> BTreeSet<String> {
+            let mut set = BTreeSet::new();
+            for entry in WalkDir::new(root).follow_links(false) {
+                let e = entry.unwrap();
+                if !e.file_type().is_file() {
+                    continue;
+                }
+                let name = e.file_name().to_string_lossy().to_string();
+                if name == "groupname" || name == "modname" || name == "selectedindex" {
+                    let rel = e
+                        .path()
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    set.insert(rel);
+                }
+            }
+            set
+        }
+
+        // 1) 注入（与 update_mod_data_test 同款参数保证 parity）
+        let settings = AppSettings::default();
+        let result = mod_manager::update_mod_data(TargetGame::ZZZ, &game_mods_path, &settings)
+            .expect("update_mod_data 执行失败");
+        assert!(result.processed_mods >= 1, "至少应处理 1 个模组");
+        assert_managed_outputs(&managed);
+
+        let markers_before = marker_inventory(&runtime);
+
+        // 2) 还原
+        let restored = mod_manager::restore_all_inis(&game_mods_path)
+            .expect("restore_all_inis 执行失败");
+        println!(
+            "  [restore] restored={} failed={}",
+            restored.restored, restored.failed
+        );
+        assert!(restored.restored >= 1, "至少应还原 1 个 INI");
+        assert_eq!(restored.failed, 0, "还原不应有失败项");
+
+        // 3) 管理生成文件被清理
+        for f in [
+            "manager_group.ini",
+            "nrmm_include.ini",
+            "nrmm_keypress.txt",
+            "group_1.ini",
+        ] {
+            assert!(!managed.join(f).exists(), "[清理] 还原后仍存在: {}", f);
+        }
+        // 注入备份应全部被消费；例外 = 输入数据集自带的孤儿备份
+        // （原 .ini 已被用户删除而备份残留，如 bakup (2).ini_managed_backup，
+        //   Dart 基线同样保留 → 非本次还原产生，不得误报）
+        let mut leftover_backups = Vec::new();
+        for entry in WalkDir::new(&runtime).follow_links(false) {
+            let e = entry.unwrap();
+            if e.file_type().is_file()
+                && e.file_name()
+                    .to_string_lossy()
+                    .ends_with(constants::BACKUP_EXTENSION)
+            {
+                leftover_backups.push(e.path().to_path_buf());
+            }
+        }
+        let orphan_backups: Vec<&PathBuf> = leftover_backups
+            .iter()
+            .filter(|p| {
+                !input_root
+                    .join(p.strip_prefix(&runtime).unwrap())
+                    .exists()
+            })
+            .collect();
+        assert!(
+            orphan_backups.is_empty(),
+            "还原残留非输入数据集自带的注入备份: {:?}",
+            orphan_backups
+        );
+
+        // 4) 还原数据正确性：全树与输入数据集比对
+        //    语义：还原 = 回到「注入前原始内容」。
+        //    - 输入无备份 → 期望运行时 == 输入（update 注入后还原应回到原样）
+        //    - 输入自带备份 → 输入文件本身是上次 NRMM 会话的已注入形态，
+        //      期望运行时 == 输入备份内容（真·原始；备份已存在时 update 不覆盖，
+        //      还原回到备份记录的原始版本，Dart 同语义）
+        //    备份命名与 mod_manager 一致：Path::with_extension（替换 .ini 后缀），
+        //    即 X.ini → X.ini_managed_backup（非追加）。
+        let mut content_diff: Vec<String> = Vec::new();
+        for entry in WalkDir::new(&input_root).follow_links(false) {
+            let e = entry.unwrap();
+            if !e.file_type().is_file() {
+                continue;
+            }
+            let rel = e.path().strip_prefix(&input_root).unwrap();
+            let rt_path = runtime.join(rel);
+            let file_name = e.file_name().to_string_lossy().to_string();
+            let parent = e.path().parent().unwrap();
+            let backup_suffix = format!(".{}", constants::BACKUP_EXTENSION);
+
+            // 输入自带的备份文件（X.ini_managed_backup）：
+            //   主文件存在 → 还原消费备份（拷回主文件后删除）→ 期望运行时缺失
+            //   主文件不存在（孤儿备份，如 bakup (2).ini_managed_backup）→ 原样保留
+            if file_name.ends_with(&backup_suffix) {
+                // 主文件名反推：with_extension 是「替换 .ini」→ Herta.ini_managed_backup
+                // 的主文件是 Herta + ".ini" = Herta.ini（restore 仅对 .ini 建备份）
+                let main_name =
+                    format!("{}.ini", file_name.trim_end_matches(&backup_suffix));
+                if parent.join(&main_name).exists() {
+                    if rt_path.exists() {
+                        content_diff.push(format!(
+                            "备份应被还原消费但仍存在: {}",
+                            rel.display()
+                        ));
+                    }
+                } else if !rt_path.exists() {
+                    content_diff.push(format!("孤儿备份运行时缺失: {}", rel.display()));
+                } else {
+                    let a = fs::read(e.path()).unwrap();
+                    let b = fs::read(&rt_path).unwrap();
+                    if a != b {
+                        content_diff.push(format!("孤儿备份内容不一致: {}", rel.display()));
+                    }
+                }
+                continue;
+            }
+
+            if !rt_path.exists() {
+                content_diff.push(format!("运行时缺失: {}", rel.display()));
+                continue;
+            }
+
+            // 非备份文件：仅 .ini 参与注入/还原（对齐 restore_inis_recursive 条件）；
+            // 输入自带同主名备份 → 期望还原到备份内容
+            let is_ini = Path::new(&file_name)
+                .extension()
+                .map(|x| x.eq_ignore_ascii_case("ini"))
+                .unwrap_or(false)
+                && !constants::is_desktop_ini(e.path());
+            let backup_path = Path::new(&file_name)
+                .with_extension(constants::BACKUP_EXTENSION)
+                .to_string_lossy()
+                .to_string();
+            let has_backup = is_ini && parent.join(&backup_path).exists();
+            let expected = if has_backup {
+                parent.join(&backup_path)
+            } else {
+                e.path().to_path_buf()
+            };
+            let a = fs::read(&expected).unwrap();
+            let b = fs::read(&rt_path).unwrap();
+            if a != b {
+                content_diff.push(format!(
+                    "内容不一致: {}（期望 {}）",
+                    rel.display(),
+                    if has_backup {
+                        "输入备份内容（注入前原始）".to_string()
+                    } else {
+                        "输入内容".to_string()
+                    }
+                ));
+            }
+        }
+        assert!(
+            content_diff.is_empty(),
+            "还原后与输入数据集存在差异（{} 处）:\n{}",
+            content_diff.len(),
+            content_diff.join("\n")
+        );
+
+        let mut extra_files: Vec<String> = Vec::new();
+        for entry in WalkDir::new(&runtime).follow_links(false) {
+            let e = entry.unwrap();
+            if !e.file_type().is_file() {
+                continue;
+            }
+            let rel = e.path().strip_prefix(&runtime).unwrap();
+            if !input_root.join(rel).exists() {
+                extra_files.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+        // 白名单：update 生成、还原按既有语义不回收的文件
+        let extra_unexpected: Vec<&String> = extra_files
+            .iter()
+            .filter(|p| {
+                let name = p.rsplit('/').next().unwrap_or("");
+                // 根/组级 selectedindex：update 显式生成，还原不清理（Dart 同语义）
+                !(name == "selectedindex")
+            })
+            .collect();
+        assert!(
+            extra_unexpected.is_empty(),
+            "还原后存在白名单之外的运行时新增文件: {:?}",
+            extra_unexpected
+        );
+        println!("  [extra] 白名单内新增文件 {} 个: {:?}", extra_files.len(), extra_files);
+
+        // 5) 还原安全窗口内重扫：不新建任何管理标记
+        //    （模拟 watcher 防抖 1s 后的重扫，窗口 60s 内必然处于活跃态）
+        mod_scanner::scan_mods_light(&game_mods_path).expect("还原后重扫失败");
+        let markers_after = marker_inventory(&runtime);
+        let new_markers: Vec<&String> = markers_after.difference(&markers_before).collect();
+        assert!(
+            new_markers.is_empty(),
+            "还原安全窗口内重扫新建了管理标记（违反还原不回写语义）: {:?}",
+            new_markers
+        );
+
+        println!("  [PASS] restore_after_update_test");
+        println!("  运行时产物目录: {:?}", runtime);
+        println!("=== restore_after_update_test 完成 ===\n");
     }
 
     // =====================================================================

@@ -34,6 +34,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::time::Instant;
 
 /// 支持的图标文件扩展名列表
@@ -365,6 +366,91 @@ pub fn strip_disabled_prefix(name: &str) -> String {
         }
         result = stripped.into_owned();
     }
+}
+
+/// 读取组目录 `groupname` 显示名（只读不建）。
+///
+/// 仅在还原安全窗口内使用（见 [`restore_safe_active`]）：还原后的目录通常会被
+/// 用户删除/导出，扫描不得回写 groupname 等专属配置文件。存在则读取显示名，
+/// 缺失时回退目录名（`group_X`）。
+///
+/// # Arguments
+/// - `dir_path`: 组目录路径。
+/// - `fallback`: 文件缺失时的回退显示名（通常为目录名 / 去 DISABLED 前缀目录名）。
+///
+/// # Errors
+/// 文件存在但读取失败（如非 UTF-8）时返回 `Err`（与原 [`read_or_create_marker_file`]
+/// 存在分支语义一致）。
+fn read_groupname_marker(dir_path: &Path, fallback: &str) -> Result<String> {
+    let groupname_path = dir_path.join("groupname");
+    if groupname_path.exists() {
+        Ok(fs::read_to_string(&groupname_path)?.trim().to_string())
+    } else {
+        Ok(fallback.to_string())
+    }
+}
+
+// ---- 还原安全窗口 ----
+// 还原（restore_all_inis / restore_managed_mod）改写 INI 后，watcher 防抖触发重扫；
+// 窗口期内的扫描对 groupname/modname/selectedindex 等管理标记**只读不建**——
+// 还原后的目录通常会被用户删除/导出，项目专属配置文件会干扰其他管理器。
+// 窗口过期后恢复正常扫描语义（缺失标记照常新建）。
+static RESTORE_SAFE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+/// 窗口时长：覆盖 watcher 防抖（1s）+ 大目录重扫耗时
+const RESTORE_SAFE_WINDOW_MS: u64 = 60_000;
+
+/// 读取标记文件（只读不建）：存在则读取（trim），缺失返回默认内容，不写盘。
+///
+/// 用于还原安全窗口内的扫描（见 [`restore_safe_active`]）。
+///
+/// # Errors
+/// 文件存在但读取失败（如非 UTF-8）时返回 `Err`。
+fn read_marker_readonly(path: &Path, default_content: &str) -> Result<String> {
+    if path.exists() {
+        Ok(fs::read_to_string(path)?.trim().to_string())
+    } else {
+        Ok(default_content.to_string())
+    }
+}
+
+/// 标记进入还原安全窗口（还原流程入口调用）
+pub fn mark_restore_safe_window() {
+    set_restore_safe_window(RESTORE_SAFE_WINDOW_MS);
+}
+
+/// 设置还原安全窗口剩余时长（毫秒；0 = 立即关闭），测试可注入
+pub(crate) fn set_restore_safe_window(remaining_ms: u64) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    RESTORE_SAFE_UNTIL_MS.store(now_ms.saturating_add(remaining_ms), AtomicOrdering::SeqCst);
+}
+
+/// 还原安全窗口是否生效；生效时扫描对管理标记文件只读不建
+fn restore_safe_active() -> bool {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    RESTORE_SAFE_UNTIL_MS.load(AtomicOrdering::SeqCst) > now_ms
+}
+
+/// 测试专用：串行化「还原安全窗口」全局状态的使用。
+/// 窗口测试（设置全局窗口）与依赖标记创建的测试（隐式要求窗口未生效）
+/// 必须互斥执行，避免同进程并发测试互扰。
+#[cfg(test)]
+pub(crate) static TEST_WINDOW_LOCK: Lazy<std::sync::Mutex<()>> =
+    Lazy::new(|| std::sync::Mutex::new(()));
+
+/// 测试辅助：立即清除还原安全窗口。
+///
+/// 供跨模块测试（如 mod_commands 的还原集成测试）在持有 [`TEST_WINDOW_LOCK`]
+/// 的前提下结束时恢复全局状态——`restore_all_inis` 内部会开启 60s 窗口，
+/// 不清除会泄漏到后续并发执行的标记创建断言测试。
+#[cfg(test)]
+pub(crate) fn test_clear_restore_safe_window() {
+    RESTORE_SAFE_UNTIL_MS.store(0, AtomicOrdering::SeqCst);
 }
 
 /// 读取或创建标记文件，不存在则用默认内容创建
@@ -816,12 +902,20 @@ fn scan_normal_group_light(
 ) -> Result<(ModGroupData, Vec<Arc<ModData>>)> {
     let mut mods: Vec<ModData> = Vec::with_capacity(32); // 预分配 32 个模组槽位，覆盖绝大多数 NormalGroup
 
-    // 读取/创建标记文件
-    let groupname_path = dir_path.join("groupname");
-    let group_display_name = read_or_create_marker_file(&groupname_path, group_name)?;
+    // 读取标记文件：还原安全窗口内只读不建（还原后目录将被删除/导出，不留专属配置），
+    // 窗口外缺失照常新建
+    let group_display_name = if restore_safe_active() {
+        read_groupname_marker(dir_path, group_name)?
+    } else {
+        read_or_create_marker_file(&dir_path.join("groupname"), group_name)?
+    };
 
     let selectedindex_path = dir_path.join(constants::SELECTED_INDEX_FILE);
-    let selected_index_str = read_or_create_marker_file(&selectedindex_path, "0")?;
+    let selected_index_str = if restore_safe_active() {
+        read_marker_readonly(&selectedindex_path, "0")?
+    } else {
+        read_or_create_marker_file(&selectedindex_path, "0")?
+    };
     let selected_index: i32 = selected_index_str.parse().unwrap_or(0);
     // 磁盘签名组级源（C-3b）：selectedindex mtime，is_active 派生源——
     // select 改写该文件后组内全部模组签名失效，增量合并不复用旧实例。
@@ -979,7 +1073,11 @@ fn build_normal_mod_light(
     // 读取/创建 modname 标记文件（NRMM 逻辑：优先使用 modname 文件中的名称作为展示名，不存在则创建并写入文件夹名）
     let modname_path = mod_dir.join("modname");
     let mod_name = {
-        let n = read_or_create_marker_file(&modname_path, &display_name)?;
+        let n = if restore_safe_active() {
+            read_marker_readonly(&modname_path, &display_name)?
+        } else {
+            read_or_create_marker_file(&modname_path, &display_name)?
+        };
         if n.trim().is_empty() {
             display_name.clone()
         } else {
@@ -1213,10 +1311,14 @@ fn scan_mutex_group_dfs(
     } else {
         root_name.clone()
     };
-    // 仅 group_xx 目录才读/写 groupname 标记文件，非group目录直接使用目录名
+    // 仅 group_xx 目录才读取 groupname 显示名（还原安全窗口内只读不建，窗口外缺失照常新建），
+    // 非group目录直接使用目录名
     let root_display_name = if is_group_xx_dir(&root_name) {
-        let groupname_path = root_path.join("groupname");
-        read_or_create_marker_file(&groupname_path, &base_root_name)?
+        if restore_safe_active() {
+            read_groupname_marker(root_path, &base_root_name)?
+        } else {
+            read_or_create_marker_file(&root_path.join("groupname"), &base_root_name)?
+        }
     } else {
         base_root_name
     };
@@ -1340,10 +1442,14 @@ fn scan_mutex_group_dfs(
         } else {
             dir_name.clone()
         };
-        // 仅 group_xx 目录才读/写 groupname 标记文件，非group目录直接使用目录名
+        // 仅 group_xx 目录才读取 groupname 显示名（还原安全窗口内只读不建，窗口外缺失照常新建），
+        // 非group目录直接使用目录名
         let dir_display_name = if is_group_xx_dir(&dir_name) {
-            let sub_groupname_path = current_path.join("groupname");
-            read_or_create_marker_file(&sub_groupname_path, &base_dir_name)?
+            if restore_safe_active() {
+                read_groupname_marker(&current_path, &base_dir_name)?
+            } else {
+                read_or_create_marker_file(&current_path.join("groupname"), &base_dir_name)?
+            }
         } else {
             base_dir_name.clone()
         };
@@ -2281,7 +2387,15 @@ pub fn scan_partial_path(mods_path: &Path, target_subpath: &Path) -> Result<Scan
     // 解析 target_subpath 相对于 _MANAGED_ 的路径
     let target_full = managed_folder.join(&target_norm);
     if !target_full.exists() {
-        // 目标路径不存在，退化为全量扫描
+        // 目标路径不存在 → 全量兜底（防御路由层 exists 检查后的竞态删除）。
+        // P1 修复后正常批次不会走到这里：模组级消失根在 snap 保留身份后由
+        // 路由层删除 patch 处理；组级消失根由 route_incremental_batch 的
+        // subtree_remove 删除语义处理。命中此日志即说明出现未覆盖的消失路径
+        // 形态，需按日志排查。
+        log::warn!(
+            "[scan_partial_path] 目标路径不存在 → 全量兜底 {}（P1 后不应常态命中，请排查）",
+            target_subpath.display()
+        );
         return scan_mods_light(mods_path);
     }
 
@@ -2985,8 +3099,15 @@ filename = test.dds
     }
 
     /// 测试：轻量扫描会自动创建缺失的标记文件（groupname、selectedindex、modname）
+    ///
+    /// 正常扫描语义（还原安全窗口外）：标记缺失照常新建。
+    /// 还原窗口内的只读行为由 [`test_restore_safe_window_markers_readonly`] 覆盖。
     #[test]
     fn test_light_scan_creates_marker_files() {
+        // 与还原安全窗口测试互斥（窗口生效时不创建标记）
+        let _window_lock = super::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = setup_test_dir();
         create_d3dx_ini(dir.path());
         let group_path = create_group_dir(dir.path(), "group_1");
@@ -3004,6 +3125,70 @@ filename = test.dds
         assert!(group_path.join("groupname").exists());
         assert!(group_path.join("selectedindex").exists());
         assert!(mod_path.join("modname").exists());
+    }
+
+    /// 还原安全窗口 RAII 守卫：测试结束（含 panic）后关闭窗口，避免污染其他测试
+    struct RestoreSafeWindowGuard;
+    impl Drop for RestoreSafeWindowGuard {
+        fn drop(&mut self) {
+            set_restore_safe_window(0);
+        }
+    }
+
+    /// 测试：还原安全窗口内，扫描对 groupname/selectedindex/modname 全部只读不建
+    ///
+    /// 还原（restore_all_inis / restore_managed_mod）会标记 60s 安全窗口，
+    /// 窗口内 watcher 防抖触发的重扫不得向目录回写任何专属配置文件——
+    /// 还原后的目录通常会被用户删除/导出，标记文件会干扰其他管理器。
+    #[test]
+    fn test_restore_safe_window_markers_readonly() {
+        // 与依赖标记创建的测试互斥（全局窗口状态仅本测试设置）
+        let _window_lock = super::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = RestoreSafeWindowGuard;
+        set_restore_safe_window(60_000);
+
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+        let group_path = create_group_dir(dir.path(), "group_1");
+        let mod_path = group_path.join("TestMod");
+        fs::create_dir_all(&mod_path).unwrap();
+
+        let result = scan_mods_light(dir.path()).unwrap();
+
+        // 窗口内所有标记文件都不创建
+        assert!(
+            !group_path.join("groupname").exists(),
+            "还原安全窗口内不应创建 groupname"
+        );
+        assert!(
+            !group_path.join("selectedindex").exists(),
+            "还原安全窗口内不应创建 selectedindex"
+        );
+        assert!(
+            !mod_path.join("modname").exists(),
+            "还原安全窗口内不应创建 modname"
+        );
+        // 显示名回退目录名
+        assert_eq!(result.groups[0].name, "group_1");
+    }
+
+    /// 测试：已存在的 groupname 仍被读取作为显示名（只读语义保留读取路径）
+    #[test]
+    fn test_light_scan_reads_existing_groupname() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+        let group_path = create_group_dir(dir.path(), "group_1");
+        fs::write(group_path.join("groupname"), "My Custom Group\n").unwrap();
+
+        let result = scan_mods_light(dir.path()).unwrap();
+        assert_eq!(result.groups[0].name, "My Custom Group");
+        // 已存在的文件内容不被改写（mtime 之外的直接验证：内容原样保留）
+        assert_eq!(
+            fs::read_to_string(group_path.join("groupname")).unwrap(),
+            "My Custom Group\n"
+        );
     }
 
     /// 测试：轻量扫描 MutexGroup 不会创建标记文件（与 NormalGroup 不同）
@@ -3326,6 +3511,11 @@ filename = test.dds
     /// - 深度扫描不填充（0 = 无签名，永不参与增量复用）。
     #[test]
     fn test_light_scan_disk_signature_sources() {
+        // 首扫依赖标记文件创建（modname/selectedindex 影响 mtime 签名），
+        // 与还原安全窗口测试互斥
+        let _window_lock = super::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = setup_test_dir();
         create_d3dx_ini(dir.path());
         let group_path = create_group_dir(dir.path(), "group_1");
@@ -3439,9 +3629,13 @@ mod tests_non_group_no_markers {
         assert!(mod_names.contains(&"ModA"), "ModA 应被扫描到，名称为 ModA");
     }
 
-    /// 扫描 group_1 仍正常创建标记文件
+    /// 扫描 group_1：正常语义下 groupname / modname 标记文件均创建
     #[test]
     fn test_scan_group_xx_still_creates_markers() {
+        // 与还原安全窗口测试互斥（窗口生效时不创建标记）
+        let _window_lock = super::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = TempDir::new().unwrap();
         let mods_root = tmp.path();
         let managed = mods_root.join(constants::MANAGED_FOLDER);
@@ -3451,7 +3645,7 @@ mod tests_non_group_no_markers {
         fs::create_dir_all(&mod_dir).unwrap();
         fs::write(mod_dir.join("ModA.ini"), "[ShaderOverride]\n").unwrap();
 
-        // 使用轻量扫描，只有它会创建 groupname / modname 标记文件
+        // 使用轻量扫描：正常语义（还原安全窗口外）缺失标记照常新建
         let _result = scan_mods_light(mods_root).expect("scan should succeed");
 
         // group_xx 目录应创建标记文件

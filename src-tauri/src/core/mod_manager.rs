@@ -64,7 +64,10 @@ pub enum MainIniStatus {
 }
 
 /// 模组更新结果结构体
+// rename_all 对齐项目其余模型（mod_data/ScanResult 均为 camelCase）；
+// 缺失时前端按 camelCase 读取 mainIniStatus/needReloadManual 等字段拿到 undefined（潜在缺陷）。
 #[derive(Debug, Clone, serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateResult {
     /// 总分组数
     pub total_groups: u32,
@@ -76,6 +79,12 @@ pub struct UpdateResult {
     pub disabled_mods: u32,
     /// 实际处理（INI 注入）的模组数
     pub processed_mods: u32,
+    /// 实际写盘（INI 内容有变化）的 INI 计数
+    #[serde(default)]
+    pub written_mods: u32,
+    /// 因内容未变化跳过写盘（幂等快速路径）的 INI 计数
+    #[serde(default)]
+    pub skipped_mods: u32,
     /// INI 解析/处理过程中的错误
     pub errors: Vec<ErroredLines>,
     /// 是否需要用户手动重载（3Dmigoto）
@@ -979,6 +988,9 @@ pub fn update_mod_data(
             fs::rename(&tmp_path, &main_ini_path).with_context(|| {
                 format!("Failed to rename temp main INI to: {:?}", main_ini_path)
             })?;
+            // 加固（根因 4，对齐 mod_ini_cache::invalidate_ini）：真实写盘后显式失效
+            // d3dxini_cache 条目，规避 (mtime, len) 粗分辨率同秒等长替换下的陈旧解析。
+            D3DX_INI_CACHE.write().invalidate(&main_ini_path);
             log::debug!(
                 "[mod_manager] [update_mod_data] step=write_main_ini done path={:?}",
                 main_ini_path
@@ -1054,6 +1066,10 @@ struct GroupOutcome {
     errors: Vec<ErroredLines>,
     /// 本组实际处理（INI 注入并写入成功）的计数
     processed: u32,
+    /// 本组实际写盘（内容有变化）的 INI 计数
+    written: u32,
+    /// 本组因内容未变化跳过写盘的 INI 计数
+    skipped: u32,
     /// 本组任务耗时（毫秒），由 panic 兜底包装器统一记录
     elapsed_ms: u128,
 }
@@ -1071,6 +1087,10 @@ struct ModPerOutcome {
     errors: Vec<ErroredLines>,
     /// 本模组实际处理（注入并写入成功）的 INI 计数
     processed: u32,
+    /// 本模组实际写盘（内容有变化）的 INI 计数
+    written: u32,
+    /// 本模组因内容未变化跳过写盘（幂等快速路径）的 INI 计数
+    skipped: u32,
 }
 
 /// 处理单个模组的全部 INI（组内并行任务体，语义与原串行版逐模组循环完全一致）。
@@ -1302,6 +1322,8 @@ fn process_group_task(
         outcome.mod_inis.extend(per.mod_inis);
         outcome.errors.extend(per.errors);
         outcome.processed += per.processed;
+        outcome.written += per.written;
+        outcome.skipped += per.skipped;
     }
 
     // H3：组内全部可见模组写入失败 → 显式告警，避免「组内全失败→create_group_ini 跳过空组→模组被静默移出管理」不可察。
@@ -2496,6 +2518,9 @@ pub fn resolve_mod_index_by_path_from_cache(
     group_path: &Path,
     mod_path: &str,
 ) -> Option<u32> {
+    // [selection-latency] 入口计时：与最终 debug 日志的 elapsed_ms 配对，
+    // 供用户按「组内模组数量」对比线性查找段耗时（验证延迟线性增长假设）
+    let t0 = std::time::Instant::now();
     if mod_path.is_empty() {
         return None;
     }
@@ -2524,10 +2549,12 @@ pub fn resolve_mod_index_by_path_from_cache(
         .find(|m| mod_path_matches(&m.full_path, mod_path))
         .map(|m| m.mod_index);
     log::debug!(
-        "[core::mod_manager] [resolve_mod_index_by_path_from_cache] group={:?} mod_path={:?} resolved={:?}",
+        "[core::mod_manager] [resolve_mod_index_by_path_from_cache] group={:?} mod_path={:?} resolved={:?} group_mods={} elapsed_ms={} (linear-scan probe)",
         group_path,
         mod_path,
-        resolved
+        resolved,
+        group.mods.len(),
+        t0.elapsed().as_millis()
     );
     resolved
 }
@@ -3010,6 +3037,9 @@ pub fn enable_all_mods_in_group(group_path: &Path) -> Result<Vec<(PathBuf, PathB
 /// # 返回
 /// 恢复统计（成功数/失败数）
 pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
+    // 还原安全窗口：随后 watcher 防抖触发的重扫对管理标记只读不建
+    // （还原后的目录通常会被删除/导出，专属配置文件会干扰其他管理器）
+    crate::core::mod_scanner::mark_restore_safe_window();
     let mut restored = 0u32;
     let mut failed = 0u32;
 
@@ -3224,6 +3254,9 @@ pub struct RestoreManagedResult {
 /// # 返回值
 /// 返回 `(处理的 INI 文件数, 失败数)`。单个文件失败不会中断整体流程。
 pub fn restore_managed_mod(mod_dir: &Path) -> (u32, u32) {
+    // 还原安全窗口：随后 watcher 防抖触发的重扫对管理标记只读不建
+    // （还原后的目录通常会被删除/导出，专属配置文件会干扰其他管理器）
+    crate::core::mod_scanner::mark_restore_safe_window();
     let mut total = 0u32;
     let mut failed = 0u32;
 

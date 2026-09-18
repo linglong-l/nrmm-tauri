@@ -25,7 +25,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -201,6 +201,193 @@ pub fn install_panic_hook() {
     }));
 }
 
+// ===== 日志时区（2026-09-08 时区不匹配修复）=====
+//
+// 根因：env_logger 默认格式的时间戳恒为 UTC（如 `2026-09-08T06:51:01Z`），
+// 而日志文件名 / 启动分隔线（open_daily_log）等均为本地时区 → 东八区日志行头
+// 比文件名慢 8 小时（时区不匹配）。env_logger 默认格式不支持改时区，
+// 因此经 `init_logger` 自定义 format 输出 `format_log_timestamp`。
+//
+// 时区来源：默认跟随系统本地时区；配置文件 settings.json 的 `logTimezone`
+// 字段可显式指定（system / UTC / 固定偏移如 UTC+8、+08:00），由
+// settings_store::init_settings（重启生效）与 save_settings（UI 保存即时生效）调用
+// `apply_log_timezone` 应用。
+
+/// 时区模式：跟随系统本地时区（默认）
+const TZ_MODE_SYSTEM: u8 = 0;
+/// 时区模式：固定 UTC
+const TZ_MODE_UTC: u8 = 1;
+/// 时区模式：固定偏移（偏移秒数存于 [`LOG_TZ_OFFSET_SECS`]）
+const TZ_MODE_FIXED: u8 = 2;
+
+/// 当前时区模式（`apply_log_timezone` 写入，format 闭包逐条读取）
+static LOG_TZ_MODE: AtomicU8 = AtomicU8::new(TZ_MODE_SYSTEM);
+
+/// 固定偏移模式的偏移秒数（东八区 = 8 * 3600）
+static LOG_TZ_OFFSET_SECS: AtomicI32 = AtomicI32::new(0);
+
+/// 最近一次应用的原始配置串（变更检测：`save_settings` 高频调用防刷屏）
+static LOG_TZ_LAST_APPLIED: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(None);
+
+/// 解析固定偏移字符串为偏移秒数
+///
+/// 支持形式（`UTC` / `GMT` 前缀大小写不敏感）：`+8`、`+08:00`、`-05:30`、`UTC+8`、`GMT-5:30`。
+/// 不支持 IANA 时区名（如 Asia/Shanghai，避免引入 chrono-tz 依赖）与秒级偏移。
+///
+/// # 返回
+/// 偏移秒数（东区为正）；非偏移形式返回 `None`（由调用方回退 system）
+fn parse_fixed_offset(s: &str) -> Option<i32> {
+    let t = s.trim();
+    // to_ascii_uppercase 逐字节转换，长度与原串一致 → 按长度回切原串安全
+    let upper = t.to_ascii_uppercase();
+    let t = if let Some(rest) = upper.strip_prefix("UTC") {
+        &t[(upper.len() - rest.len())..]
+    } else if let Some(rest) = upper.strip_prefix("GMT") {
+        &t[(upper.len() - rest.len())..]
+    } else {
+        t
+    };
+    let t = t.trim();
+
+    let (sign, rest) = match t.as_bytes().first()? {
+        b'+' => (1, &t[1..]),
+        b'-' => (-1, &t[1..]),
+        _ => return None,
+    };
+    let mut parts = rest.split(':');
+    let hours: i32 = parts.next()?.trim().parse().ok()?;
+    let minutes: i32 = match parts.next() {
+        Some(v) => v.trim().parse().ok()?,
+        None => 0,
+    };
+    if parts.next().is_some() {
+        return None; // ±HH:MM:SS 不支持
+    }
+    if !(0..=23).contains(&hours) || !(0..=59).contains(&minutes) {
+        return None;
+    }
+    Some(sign * (hours * 3600 + minutes * 60))
+}
+
+/// 应用配置文件中的日志时区设置（settings.json 的 `logTimezone` 字段）
+///
+/// 支持值（不区分大小写）：
+/// - `""` / `system` / `local`：系统本地时区（默认）
+/// - `UTC`：固定 UTC
+/// - 固定偏移：`UTC+8`、`+08:00`、`-05:30` 等（见 [`parse_fixed_offset`]）
+///
+/// 无法识别的值回退系统本地时区并告警；同一配置重复应用时静默跳过
+/// （`save_settings` 每次设置保存都会调用，防刷屏）。
+pub fn apply_log_timezone(config: &str) {
+    let cfg = config.trim();
+    let lower = cfg.to_ascii_lowercase();
+    let (mode, offset_secs, desc, invalid) =
+        if lower.is_empty() || lower == "system" || lower == "local" {
+            (
+                TZ_MODE_SYSTEM,
+                0,
+                "system（系统本地时区）".to_string(),
+                None,
+            )
+        } else if lower == "utc" {
+            (TZ_MODE_UTC, 0, "UTC".to_string(), None)
+        } else if let Some(secs) = parse_fixed_offset(cfg) {
+            let abs = secs.unsigned_abs();
+            (
+                TZ_MODE_FIXED,
+                secs,
+                format!("UTC{}{:02}:{:02}", if secs < 0 { '-' } else { '+' }, abs / 3600, (abs % 3600) / 60),
+                None,
+            )
+        } else {
+            (
+                TZ_MODE_SYSTEM,
+                0,
+                "system（系统本地时区）".to_string(),
+                Some(cfg.to_string()),
+            )
+        };
+
+    // 变更检测：同一配置重复应用时静默跳过（防止设置保存刷屏）
+    {
+        let mut last = LOG_TZ_LAST_APPLIED.lock();
+        if last.as_deref() == Some(cfg) {
+            return;
+        }
+        *last = Some(cfg.to_string());
+    }
+
+    // 先写偏移再写模式（缩小 FIXED 模式读到旧偏移的窗口；单条日志受影响的概率可忽略）
+    LOG_TZ_OFFSET_SECS.store(offset_secs, Ordering::Relaxed);
+    LOG_TZ_MODE.store(mode, Ordering::Relaxed);
+
+    match invalid {
+        Some(bad) => log::warn!(
+            "[file_logger] logTimezone 配置无法识别：{:?}，回退 system（支持：system / UTC / 固定偏移如 UTC+8、+08:00）",
+            bad
+        ),
+        None => log::info!("[file_logger] 日志时区已应用：{}", desc),
+    }
+}
+
+/// 获取当前时刻（按已应用的日志时区），日志行时间戳与日志文件名统一使用
+///
+/// 注意：`DualWriter::new` 在 logger 初始化时运行，早于 settings 加载，
+/// 因此启动首个日志文件的文件名恒为系统本地日期（时区配置自次日起生效）。
+///
+/// # 返回
+/// 带固定偏移的当前时刻（System 模式下偏移为系统本地当前偏移）
+pub fn log_now() -> chrono::DateTime<chrono::FixedOffset> {
+    match LOG_TZ_MODE.load(Ordering::Relaxed) {
+        TZ_MODE_UTC => chrono::Utc::now().with_timezone(
+            &chrono::FixedOffset::east_opt(0).expect("east_opt(0) 恒有效"),
+        ),
+        TZ_MODE_FIXED => {
+            let secs = LOG_TZ_OFFSET_SECS.load(Ordering::Relaxed);
+            let off = chrono::FixedOffset::east_opt(secs)
+                .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).expect("east_opt(0) 恒有效"));
+            chrono::Utc::now().with_timezone(&off)
+        }
+        _ => {
+            let local = chrono::Local::now();
+            local.with_timezone(local.offset())
+        }
+    }
+}
+
+/// 格式化当前日志时间戳：`YYYY-MM-DD HH:MM:SS.mmm±HH:MM`
+///
+/// 恒带偏移量后缀（如 `+08:00`），使任意时区配置下的日志均可无歧义对时。
+pub fn format_log_timestamp() -> String {
+    log_now().format("%Y-%m-%d %H:%M:%S%.3f%:z").to_string()
+}
+
+/// 初始化全局日志系统（env_logger → DualWriter 双输出，自定义时区时间戳）
+///
+/// 供 `lib.rs::run` 调用（debug=Debug / release=Info），替代 env_logger 默认格式：
+/// 默认格式时间戳恒为 UTC（时区不匹配的根因），自定义格式输出
+/// [`format_log_timestamp`]（默认本地时区，可经 settings.json `logTimezone` 覆盖），
+/// 行样式与默认格式保持一致：`[<时间> <级别> <target>] <消息>`。
+///
+/// # Panics
+/// 与 env_logger `init()` 一致：全局 logger 已被设置时 panic（进程内仅调用一次）。
+pub fn init_logger(level: log::LevelFilter) {
+    env_logger::Builder::new()
+        .filter_level(level)
+        .format(|buf, record| {
+            writeln!(
+                buf,
+                "[{} {:<5} {}] {}",
+                format_log_timestamp(),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        })
+        .target(env_logger::Target::Pipe(Box::new(DualWriter::new())))
+        .init();
+}
+
 /// 双输出写入器：每日日志文件（同步优先）+ stderr（异步排水）
 ///
 /// 作为 `env_logger::Target::Pipe` 的目标，使所有 `log::xxx!` 调用
@@ -257,8 +444,9 @@ impl DualWriter {
             return None;
         }
 
-        // 按日期命名日志文件
-        let date_str = chrono::Local::now().format("%Y-%m-%d").to_string();
+        // 按日期命名日志文件（与行内时间戳同一时区来源：跟随 logTimezone 配置；
+        // 启动首文件早于 settings 加载，恒为系统本地日期，见 log_now 文档）
+        let date_str = log_now().format("%Y-%m-%d").to_string();
         let log_path = log_dir.join(format!("{}.log", date_str));
 
         // 以追加模式打开文件
@@ -268,7 +456,7 @@ impl DualWriter {
                 let _ = writeln!(
                     f,
                     "\n--- NRMM 启动 {} ---",
-                    chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+                    log_now().format("%Y-%m-%d %H:%M:%S")
                 );
                 Some(f)
             }
@@ -454,5 +642,66 @@ mod tests {
             !matches!(result, Err(TrySendError::Disconnected(_))),
             "排水通道不应断开"
         );
+    }
+
+    // ===== 日志时区测试 =====
+
+    /// 时区全局状态的测试互斥锁：触碰 LOG_TZ_* 的测试必须持锁串行执行，
+    /// 避免并行测试互相覆写全局时区模式
+    static TZ_TEST_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+    /// parse_fixed_offset 变体解析回归（纯函数，不触碰全局状态）
+    #[test]
+    fn test_parse_fixed_offset_variants() {
+        assert_eq!(parse_fixed_offset("+8"), Some(8 * 3600));
+        assert_eq!(parse_fixed_offset("+08:00"), Some(8 * 3600));
+        assert_eq!(parse_fixed_offset("UTC+8"), Some(8 * 3600));
+        assert_eq!(parse_fixed_offset("utc+9:30"), Some(9 * 3600 + 30 * 60));
+        assert_eq!(parse_fixed_offset("GMT-5:30"), Some(-5 * 3600 - 30 * 60));
+        assert_eq!(parse_fixed_offset("+09:30"), Some(9 * 3600 + 30 * 60));
+        assert_eq!(parse_fixed_offset("-0"), Some(0));
+        // 非法形式 → None（由 apply_log_timezone 回退 system）
+        assert_eq!(parse_fixed_offset("Asia/Shanghai"), None);
+        assert_eq!(parse_fixed_offset("25:00"), None);
+        assert_eq!(parse_fixed_offset("+08:00:00"), None);
+        assert_eq!(parse_fixed_offset("abc"), None);
+        assert_eq!(parse_fixed_offset(""), None);
+    }
+
+    /// apply_log_timezone 应用与 format_log_timestamp 后缀回归：
+    /// UTC / 固定偏移模式的时间戳必须带对应偏移后缀；
+    /// 非法值回退 system（偏移后缀 = 本地时区当前偏移）
+    #[test]
+    fn test_apply_log_timezone_and_format_suffix() {
+        let _guard = TZ_TEST_LOCK.lock();
+
+        // UTC 模式
+        apply_log_timezone("UTC");
+        assert!(
+            format_log_timestamp().ends_with("+00:00"),
+            "UTC 模式时间戳应以 +00:00 结尾: {}",
+            format_log_timestamp()
+        );
+
+        // 固定偏移模式（UTC 前缀 + 大小写混合 + 分钟偏移）
+        apply_log_timezone("utc+9:30");
+        assert!(
+            format_log_timestamp().ends_with("+09:30"),
+            "UTC+9:30 模式时间戳应以 +09:30 结尾: {}",
+            format_log_timestamp()
+        );
+
+        // 非法值回退 system：偏移后缀应等于本地时区当前偏移（偏移在测试期间恒定，跨秒比较安全）
+        apply_log_timezone("definitely-not-a-zone");
+        let local_suffix = chrono::Local::now().format("%:z").to_string();
+        assert!(
+            format_log_timestamp().ends_with(&local_suffix),
+            "回退 system 后偏移应与本地时区一致: {} vs {}",
+            format_log_timestamp(),
+            local_suffix
+        );
+
+        // 恢复默认 system（避免影响其它测试对全局状态的假设）
+        apply_log_timezone("system");
     }
 }

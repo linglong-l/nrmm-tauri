@@ -211,48 +211,6 @@ impl ModCache {
         self.invalidated_games.insert(game);
     }
 
-    /// 按路径前缀批量失效缓存条目，用于文件监控。
-    ///
-    /// 遍历所有缓存键，如果路径字符串（大小写不敏感）包含 `managed_path` 前缀则移除。
-    /// 用于文件监控检测到 `_MANAGED_` 目录变化时，失效受影响游戏的缓存。
-    ///
-    /// 同时扫描 `cache` 中剩余的所有游戏，将它们加入 `invalidated_games` 集合，
-    /// 确保 `is_valid()` 能感知到部分条目可能已被删除。
-    ///
-    /// # 参数
-    /// - `managed_path`: `_MANAGED_` 目录的路径，将被规范化为字符串进行前缀匹配。
-    ///
-    /// # Panics
-    ///
-    /// 此方法不会 panic。
-    ///
-    /// # Errors
-    ///
-    /// 此方法不会返回错误。
-    pub fn invalidate_by_prefix(&mut self, managed_path: &Path) {
-        let prefix = match managed_path.canonicalize() {
-            Ok(p) => p.to_string_lossy().to_string(),
-            Err(_) => managed_path.to_string_lossy().to_string(),
-        };
-        let prefix_lower = prefix.to_lowercase();
-
-        // 先收集受影响的游戏（路径包含前缀的条目），再移除条目
-        // 避免误标所有剩余游戏为失效
-        let affected_games: HashSet<TargetGame> = self
-            .cache
-            .keys()
-            .filter(|(_, path_str)| path_str.to_lowercase().contains(&prefix_lower))
-            .map(|(g, _)| *g)
-            .collect();
-
-        self.cache
-            .retain(|(_, path_str), _| !path_str.to_lowercase().contains(&prefix_lower));
-
-        for g in affected_games {
-            self.invalidated_games.insert(g);
-        }
-    }
-
     /// 清空所有缓存条目和失效标记。
     ///
     /// 清空 `cache` 和 `invalidated_games`，恢复到初始空状态。
@@ -1160,6 +1118,87 @@ pub fn find_group_node<'a>(
         .groups
         .iter()
         .find(|g| path_equivalent(&g.full_path, group_full_path))
+}
+
+/// 判断局部重扫产物中的分组与缓存旧节点是否存在**实质差异**（P1 修复：
+/// 全量 partial 的 delta 过滤依据）。
+///
+/// 读锁内定位缓存旧组节点后逐层比较：
+/// - 组头派生字段：`mod_count` / `is_active` / `has_child` /
+///   `active_mod_index` / `group_disabled` / `is_favorite`；
+/// - 组内条目：数量 + 逐条（`full_path` 等价、`disk_signature` 三源 mtime
+///   签名、`is_active` / `disabled` / `mod_disabled` 状态）；
+/// - `children` 递归同款（数量 + 按 `full_path` 匹配 + 递归比较）。
+///
+/// 签名相等 ⇔ 磁盘派生状态一致（C-3b 语义）；缓存无该组节点视为新组（有变化）。
+/// 全量 partial 中与缓存一致的组由此跳过 delta emit，前端不再收到 109 组全量
+/// applyGroupDelta（实测 2 轮 × 110 delta 的 UI 重排抖动来源）。
+///
+/// # 参数
+/// - `game`: 目标游戏（缓存键）。
+/// - `mods_path`: Mods 根目录（缓存键）。
+/// - `new_group`: 局部重扫产物中的组节点。
+///
+/// # 返回
+/// `true` = 有实质差异（应 emit delta）；`false` = 与缓存一致（可跳过）。
+pub fn group_has_real_change(
+    game: TargetGame,
+    mods_path: &Path,
+    new_group: &ModGroupData,
+) -> bool {
+    let cache = MOD_CACHE.read();
+    match cache
+        .get(game, mods_path)
+        .as_ref()
+        .and_then(|scan| find_group_node(scan, &new_group.full_path))
+    {
+        None => true,
+        Some(old) => !group_node_equivalent(new_group, old),
+    }
+}
+
+/// [`group_has_real_change`] 的递归比较实现。
+fn group_node_equivalent(n: &ModGroupData, o: &ModGroupData) -> bool {
+    if n.mod_count != o.mod_count
+        || n.is_active != o.is_active
+        || n.has_child != o.has_child
+        || n.active_mod_index != o.active_mod_index
+        || n.group_disabled != o.group_disabled
+        || n.is_favorite != o.is_favorite
+    {
+        return false;
+    }
+    if n.mods.len() != o.mods.len() {
+        return false;
+    }
+    for (nm, om) in n.mods.iter().zip(o.mods.iter()) {
+        if !path_string_eq(nm.full_path.as_ref(), om.full_path.as_ref())
+            || nm.disk_signature != om.disk_signature
+            || nm.is_active != om.is_active
+            || nm.disabled != om.disabled
+            || nm.mod_disabled != om.mod_disabled
+        {
+            return false;
+        }
+    }
+    if n.children.len() != o.children.len() {
+        return false;
+    }
+    for nc in &n.children {
+        match o
+            .children
+            .iter()
+            .find(|oc| path_equivalent(&oc.full_path, &nc.full_path))
+        {
+            Some(oc) => {
+                if !group_node_equivalent(nc, oc) {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+    true
 }
 
 /// 从缓存收集旧分组状态（old_group_path + 组内全部真实模组的 mod_path）。

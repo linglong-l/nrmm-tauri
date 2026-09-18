@@ -105,3 +105,4 @@ CLAUDE.local.md
 .clinerules/
 overview.md
 src-tauri/tests/
+/*.py

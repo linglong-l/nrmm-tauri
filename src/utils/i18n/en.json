@@ -579,6 +579,7 @@
     "title": "Manage Mods",
     "updating": "Modifying mods",
     "success": "Mods updated successfully!",
+    "writtenSkipped": "Written {written} / Skipped {skipped}",
     "loadTime": "Load time",
     "optimizationTip": "To speed up mod loading, consider disabling mods you don't use. It's in the \"Settings\" tab, scroll down a bit.",
     "xxmiDetected": "Standard XXMI/3DMigoto detected.",

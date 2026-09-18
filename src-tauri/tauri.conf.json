@@ -13,34 +13,30 @@
     "windows": [
       {
         "label": "main",
-        "title": "NRMM",
+        "title": "NRMM-Tauri",
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,WinUseBrowserSpellChecker,Translate,AutofillServerCommunication,MediaRouter,OptimizationGuide,InterestFeedContentSuggestions,BackgroundFetch,PushMessaging,SpareRendererForSitePerProcess --mute-audio --disable-extensions",
         "width": 960,
         "height": 640,
         "minWidth": 750,
-        "minHeight": 500,
-        "decorations": true,
-        "transparent": true,
-        "shadow": false,
-        "center": true,
-        "resizable": true,
-        "focus": true,
-        "focusable": true,
-        "visible": false
+        "minHeight": 500
       }
     ],
     "security": {
       "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:;",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**/*.png",
-          "**/*.jpg",
-          "**/*.jpeg",
-          "**/*.webp",
-          "**/*.bmp",
-          "**/*.gif"
-        ]
+        "scope": {
+          "allow": [
+            "**/*.png",
+            "**/*.jpg",
+            "**/*.jpeg",
+            "**/*.webp",
+            "**/*.bmp",
+            "**/*.gif",
+            "**/*.ico"
+          ],
+          "requireLiteralLeadingDot": false
+        }
       }
     }
   }

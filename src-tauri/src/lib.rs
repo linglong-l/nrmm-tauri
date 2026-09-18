@@ -138,21 +138,14 @@ pub fn run() {
     // 控制台决策必须先于日志系统初始化：AttachConsole/AllocConsole 后标准流才对日志可见
     platform::console::init_console();
 
+    // 自定义格式（file_logger::init_logger）：env_logger 默认格式时间戳恒为 UTC，
+    // 与日志文件名（本地日期）不匹配（东八区差 8 小时）；自定义格式默认本地时区，
+    // 可经 settings.json 的 logTimezone 覆盖（settings 初始化后生效）
     #[cfg(debug_assertions)]
-    env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Debug)
-        .target(env_logger::Target::Pipe(Box::new(
-            crate::core::file_logger::DualWriter::new(),
-        )))
-        .init();
+    crate::core::file_logger::init_logger(log::LevelFilter::Debug);
 
     #[cfg(not(debug_assertions))]
-    env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Info)
-        .target(env_logger::Target::Pipe(Box::new(
-            crate::core::file_logger::DualWriter::new(),
-        )))
-        .init();
+    crate::core::file_logger::init_logger(log::LevelFilter::Info);
     log::info!(
         "[BOOT] T+{:>6}ms - 日志系统初始化完成",
         boot_start.elapsed().as_millis()

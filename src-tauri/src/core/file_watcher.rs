@@ -288,10 +288,20 @@ fn merge_partials_and_build_deltas(
     scan_results: &[(PathBuf, crate::core::mod_scanner::ScanResult)],
 ) -> Vec<GroupDelta> {
     let mut deltas = Vec::new();
+    let mut skipped = 0usize;
     for (_root, partial) in scan_results {
         // a. 合并前（读锁）收集该 partial 各组旧状态（复用命令层共享的
         //    mod_cache::collect_old_group_state；缓存 miss 时 old 为空、键回退目录路径串）
         for g in &partial.groups {
+            // P1 修复（全量 partial 差异过滤）：与缓存无实质差异的组跳过 delta emit。
+            // 全量兜底 partial 携带全部 109 组，无条件 emit 曾导致前端
+            // applyGroupDelta ×110/轮（两轮 220 次）的选择后 UI 重排抖动；
+            // 过滤后仅实际变化的组到达前端（缓存照常 subtree_replace，签名
+            // 复用零拷贝，语义不变）。判定读锁短持有、O(组内) 比较，总 O(全树)。
+            if !crate::core::mod_cache::group_has_real_change(game, mods_path, g) {
+                skipped += 1;
+                continue;
+            }
             let (old_group_path, old_mod_paths) =
                 crate::core::mod_cache::collect_old_group_state(game, mods_path, &g.full_path);
             // c. delta：new_group 为该组重扫后的完整新节点（磁盘为唯一真相源）
@@ -305,6 +315,13 @@ fn merge_partials_and_build_deltas(
         crate::core::mod_cache::MOD_CACHE
             .write()
             .subtree_replace(game, mods_path, partial.clone());
+    }
+    if skipped > 0 {
+        log::info!(
+            "[watcher] delta 差异过滤 | 跳过无变化组={} 实际emit={}",
+            skipped,
+            deltas.len()
+        );
     }
     deltas
 }
@@ -548,9 +565,38 @@ fn route_incremental_batch(
         }
     }
 
-    // 组级根：现状并行整组重扫 + subtree_replace + R2 delta 组装
-    let scan_results = scan_group_roots(game, mods_path, &group_roots);
+    // 组级根：已消失 → 删除语义（P1 修复）；存在 → 现状并行整组重扫 + subtree_replace
+    //
+    // P1 修复：整组被删/整组重命名的收敛根（组级）已不存在时，`scan_partial_path`
+    // 的兜底是全量扫描（6542 模组 × 1.1s）——改为读旧状态 + `subtree_remove`
+    // 裁剪缓存 + 组装 `new_group: None` 删除 delta（remove_group 命令同契约，
+    // 前端 applyGroupDelta 已支持删除语义）。
+    let mut vanished_deltas: Vec<GroupDelta> = Vec::new();
+    let mut live_group_roots: Vec<PathBuf> = Vec::new();
+    for r in &group_roots {
+        if r.exists() {
+            live_group_roots.push(r.clone());
+        } else {
+            let (old_group_path, old_mod_paths) =
+                crate::core::mod_cache::collect_old_group_state(game, mods_path, r);
+            let removed = crate::core::mod_cache::MOD_CACHE
+                .write()
+                .subtree_remove(game, mods_path, r);
+            log::info!(
+                "[Incremental] 组级根已消失 → 删除语义 {} (裁剪 {} 条)",
+                r.display(),
+                removed
+            );
+            vanished_deltas.push(GroupDelta {
+                old_group_path,
+                new_group: None,
+                old_mod_paths,
+            });
+        }
+    }
+    let scan_results = scan_group_roots(game, mods_path, &live_group_roots);
     let mut deltas = merge_partials_and_build_deltas(game, mods_path, &scan_results);
+    deltas.extend(vanished_deltas);
 
     // 模组级批次：按顶层组归并后统一 patch + delta（未命中根收集降级）
     let (mod_deltas, merged_groups, missed_roots) = patch_mod_batch_and_build_deltas(
@@ -571,9 +617,11 @@ fn route_incremental_batch(
 
     // 埋点（批次级，与 R2 静默期埋点并列）
     log::debug!(
-        "[watcher] mod 级 patch | mod_roots={} group_roots={} 合并组={}",
+        "[watcher] mod 级 patch | mod_roots={} group_roots={} (live={} vanished={}) 合并组={}",
         mod_roots_total,
         group_roots.len(),
+        live_group_roots.len(),
+        group_roots.len() - live_group_roots.len(),
         merged_groups
     );
     deltas
@@ -1428,18 +1476,19 @@ mod tests {
         );
         assert_eq!(cached.total_mods_count, 5, "合并后计数应重算：A+B+C+D+E");
 
-        // 同组重复 partial（多 root 收敛到同一组的场景）：第二个 delta 的旧状态
-        // 应反映第一个合并后的缓存，前端连续 apply 不会产生扁平重复条目
+        // 同组重复 partial（多 root 收敛到同一组的场景）：第二个 partial 与
+        // 已合并缓存完全一致 → P1 差异过滤直接跳过 delta emit（前端零打扰；
+        // 「连续 apply 产生扁平重复条目」的问题随过滤不复存在）。缓存侧
+        // subtree_replace 照常幂等合并，终态不变。
         let repeat = vec![(
             group1.clone(),
             mod_scanner::scan_partial_path(&mods_path, &group1).unwrap(),
         )];
         let deltas2 = merge_partials_and_build_deltas(game, &mods_path, &repeat);
-        assert_eq!(deltas2.len(), 1);
-        assert_eq!(
-            deltas2[0].old_mod_paths.len(),
-            3,
-            "重复批次的旧状态应含已合并的 ModD（逐 partial 顺序收集）"
+        assert!(
+            deltas2.is_empty(),
+            "与缓存一致的重复批次应被差异过滤，不 emit delta: {:?}",
+            deltas2
         );
     }
 
@@ -1776,9 +1825,15 @@ mod tests {
         std::fs::write(mod_x.join("fav"), "").unwrap();
         let deltas = route_incremental_batch(game, &mods_path, &managed, &[mod_x]);
 
-        // 降级路径产出 group_1 的组级 delta（整组重扫），缓存组节点健在、条目无损
-        assert_eq!(deltas.len(), 1, "降级组级重扫应产出 group_1 的组 delta");
-        assert!(deltas[0].old_group_path.ends_with("group_1"));
+        // P1 差异过滤：嵌套深层变更（ModX/fav）在轻扫粒度下对缓存与 UI 不可见
+        //（group_1/Sub 条目不受影响）→ 降级组级重扫产物与缓存一致 → 差异过滤
+        // 拦截，不 emit delta（watcher 对嵌套路径「空转不惊动前端」的实证）。
+        // 缓存侧照常合并（幂等），组节点健壮性断言保留。
+        assert!(
+            deltas.is_empty(),
+            "嵌套深层变更的降级组级重扫与缓存一致，应被差异过滤: {:?}",
+            deltas
+        );
         let cached = mod_cache::MOD_CACHE.read().get(game, &mods_path).unwrap();
         let g1 = mod_cache::find_group_node(&cached, &group1).expect("缓存组节点应健在");
         assert!(

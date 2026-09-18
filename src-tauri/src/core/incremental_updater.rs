@@ -166,6 +166,33 @@ impl IncrementalUpdater {
             return Vec::new();
         }
 
+        // P1 修复（Step 1.5）：同父模组级目录群不做 LCP 归并，逐个 snap 后返回。
+        //
+        // 启用/禁用重命名产生「同一组内两个模组目录」的事件（`group_1/x` +
+        // `group_1/DISABLED_x`，或单模组删除仅旧端一个），LCP 会收敛到组级根
+        // `group_1` → 旧端已消失 → `scan_partial_path` 全量退化（6542 模组实测
+        // 2×1.1s 全扫 + 220 delta/轮）。跳过归并保留模组级身份：新端走
+        // `scan_single_mod` + patch、旧端（snap 的 NotFound 分支保留）走删除
+        // patch；同组多模组由路由层 `patch_mod_batch_and_build_deltas` 按顶层
+        // 组归并成一次 delta，无批次放大。
+        //
+        // 深层文件变更（`group_1/ModA/textures` + `group_1/ModA/models`）parent
+        // 不同不命中，维持既有 LCP 收敛；`group_xx`/selectedindex 事件深度 1
+        // 不命中，维持组级语义。
+        let managed_norm = normalize_path(managed_root);
+        let head_parent = parent_segments(&dirs[0]);
+        let same_parent_mod_level = head_parent.is_some()
+            && dirs.iter().all(|d| {
+                parent_segments(d) == head_parent && is_mod_level_depth(d, &managed_norm)
+            });
+        if same_parent_mod_level {
+            let mut set = BTreeSet::new();
+            for d in &dirs {
+                set.insert(snap_to_group_or_mod_boundary(d, managed_root));
+            }
+            return set.into_iter().collect();
+        }
+
         // Step 2: 计算最长公共前缀
         let common = longest_common_prefix(&dirs);
 
@@ -317,16 +344,12 @@ fn snap_to_group_or_mod_boundary(path: &Path, managed_root: &Path) -> PathBuf {
             return cur;
         }
         if let Some(name) = cur.file_name().and_then(|n| n.to_str()) {
-            let bytes = name.as_bytes();
-            let prefix = b"group_";
-            if bytes.len() > prefix.len() && &bytes[..prefix.len()] == prefix {
-                let rest = &bytes[prefix.len()..];
-                if !rest.is_empty() && rest.iter().all(|b| b.is_ascii_digit()) {
-                    return cur;
-                }
+            if is_group_dir_name(name) {
+                return cur;
             }
-            let has_ini = std::fs::read_dir(&cur).ok().and_then(|rd| {
-                rd.filter_map(|e| e.ok())
+            let has_ini = match std::fs::read_dir(&cur) {
+                Ok(rd) => rd
+                    .filter_map(|e| e.ok())
                     .find(|e| {
                         e.path()
                             .extension()
@@ -334,8 +357,20 @@ fn snap_to_group_or_mod_boundary(path: &Path, managed_root: &Path) -> PathBuf {
                             .map(|ext| ext.eq_ignore_ascii_case("ini"))
                             .unwrap_or(false)
                     })
-                    .map(|_| true)
-            });
+                    .map(|_| true),
+                // P1 修复：已消失的模组级目录（启用/禁用重命名的旧端、单模组删除）
+                // 保留自身身份、不再向上归并到组级——向上归并会让路由拿到组级根，
+                // 旧端不存在时 `scan_partial_path` 全量退化（6542 模组实测
+                // 2×1.1s 全扫 + 220 delta）。保留后路由层 `is_mod_level_root` +
+                // `exists()==false` 走删除 patch（file_watcher 增量批次已备好该分支）。
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if is_mod_level_depth(&cur, &norm_managed) {
+                        return cur;
+                    }
+                    None
+                }
+                Err(_) => None,
+            };
             if has_ini == Some(true) {
                 return cur;
             }
@@ -349,6 +384,54 @@ fn snap_to_group_or_mod_boundary(path: &Path, managed_root: &Path) -> PathBuf {
             return cur;
         }
     }
+}
+
+/// `group_xx` 目录名判定（组级 snap 边界；与 `is_normal_group_dir` 同口径）。
+fn is_group_dir_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let prefix = b"group_";
+    bytes.len() > prefix.len()
+        && &bytes[..prefix.len()] == prefix
+        && bytes[prefix.len()..].iter().all(|b| b.is_ascii_digit())
+}
+
+/// 路径段切分（P1 修复私有 helper）：统一分隔符、剥 Windows verbatim 前缀
+/// （`\\?\`）、段比较统一小写。`normalize_path` 对存在路径走 `canonicalize`
+/// （verbatim 形态）、对已消失路径走手动规范化（普通形态），同批次 rename
+/// 两端形态可能不一致——父目录/前缀比较一律用段比较，不用字符串/组件直比。
+fn path_segments_lower(p: &Path) -> Vec<String> {
+    let s = p.to_string_lossy().replace('\\', "/");
+    let s = s.strip_prefix("//?/").map(str::to_string).unwrap_or(s);
+    s.split('/')
+        .filter(|seg| !seg.is_empty() && *seg != ".")
+        .map(|seg| seg.to_lowercase())
+        .collect()
+}
+
+/// 路径的父目录段序列（去末段）；根路径（无父）返回 `None`。
+fn parent_segments(p: &Path) -> Option<Vec<String>> {
+    let segs = path_segments_lower(p);
+    if segs.len() < 2 {
+        return None;
+    }
+    Some(segs[..segs.len() - 1].to_vec())
+}
+
+/// 模组级深度判定（P1 修复私有 helper）：相对 `_MANAGED_` 深度 ≥ 2 且末段非
+/// `group_xx`——与 file_watcher `is_mod_level_root` 的结构判定同口径
+/// （`group_1/x` 模组 → true；`group_1` 组 → false；`_MANAGED_` 外 → false）。
+fn is_mod_level_depth(p: &Path, managed_norm: &Path) -> bool {
+    let p_segs = path_segments_lower(p);
+    let m_segs = path_segments_lower(managed_norm);
+    if p_segs.len() < m_segs.len() + 2 {
+        return false;
+    }
+    for (a, b) in p_segs[..m_segs.len()].iter().zip(&m_segs) {
+        if a != b {
+            return false;
+        }
+    }
+    !is_group_dir_name(&p_segs[p_segs.len() - 1])
 }
 
 // -------------- tests ---------------
@@ -393,5 +476,115 @@ mod tests {
         let c = PathBuf::from("A/B/C/E");
         let r = longest_common_prefix(&[a, b, c]);
         assert_eq!(r, PathBuf::from("A/B"));
+    }
+
+    /// P1 修复回归：启用/禁用重命名的双端事件（同父模组级目录群）不归并到
+    /// 组级——旧端已消失时归并会触发 `scan_partial_path` 全量退化
+    /// （6542 模组实测 2×1.1s 全扫 + 220 delta/轮）。
+    ///
+    /// `group_1/DISABLED_x`（磁盘不存在）+ `group_1/x`（磁盘存在含 .ini）→
+    /// 返回两个模组级根；`snap` 对消失端保留身份（NotFound + 深度 ≥ 2）。
+    #[test]
+    fn consolidate_keeps_mod_level_siblings_for_rename_pair() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        let mod_x = managed.join("group_1").join("x");
+        std::fs::create_dir_all(&mod_x).unwrap();
+        std::fs::write(mod_x.join("mod.ini"), "[Section]\nx=1\n").unwrap();
+        // 旧端 DISABLED_x 不创建（重命名已完成，事件晚于磁盘）
+
+        let mut u = IncrementalUpdater::new(300);
+        u.collect(mod_x.clone());
+        u.collect(managed.join("group_1").join("DISABLED_x"));
+        let result = u.consolidate(&managed);
+
+        assert_eq!(result.len(), 2, "双端应保留为两个模组级根: {:?}", result);
+        let lower: Vec<String> = result
+            .iter()
+            .map(|p| p.to_string_lossy().to_ascii_lowercase())
+            .collect();
+        assert!(
+            lower.iter().any(|s| s.ends_with("\\x") || s.ends_with("/x")),
+            "新端 x 应保留模组级: {:?}",
+            lower
+        );
+        assert!(
+            lower
+                .iter()
+                .any(|s| s.ends_with("disabled_x")),
+            "旧端 DISABLED_x 应保留模组级（删除 patch 依赖此身份）: {:?}",
+            lower
+        );
+    }
+
+    /// P1 修复回归：单模组目录被删除（仅旧端一个事件）时 snap 保留该目录
+    /// 身份（模组级），不向上归并到组级——否则删除操作也触发组级全量重扫。
+    #[test]
+    fn snap_preserves_vanished_mod_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        std::fs::create_dir_all(managed.join("group_1").join("x")).unwrap();
+        std::fs::write(
+            managed.join("group_1").join("x").join("mod.ini"),
+            "[Section]\nx=1\n",
+        )
+        .unwrap();
+        // 现存模组目录：snap 返回自身（含 .ini）
+        let living = snap_to_group_or_mod_boundary(
+            &managed.join("group_1").join("x"),
+            &managed,
+        );
+        assert!(living.ends_with("x"), "现存模组应 snap 到自身: {:?}", living);
+        // 已消失模组目录：NotFound + 模组级深度 → 保留自身（不再向上归并）
+        let vanished = snap_to_group_or_mod_boundary(
+            &managed.join("group_1").join("DISABLED_x"),
+            &managed,
+        );
+        // Path::ends_with 是组件级比较（大小写敏感），断言用实际目录名
+        assert!(
+            vanished.ends_with("DISABLED_x"),
+            "消失的模组级目录应保留身份: {:?}",
+            vanished
+        );
+        // 已消失组目录：末段是 group_xx → 仍 snap 到组级（组删除由路由层
+        // 删除语义处理，不因本修复误判为模组级）
+        let vanished_group = snap_to_group_or_mod_boundary(
+            &managed.join("group_9"),
+            &managed,
+        );
+        assert!(
+            vanished_group.ends_with("group_9"),
+            "组级目录（含消失）snap 到组边界: {:?}",
+            vanished_group
+        );
+    }
+
+    /// P1 修复边界：同模组深层子目录变更（父模组存在）仍收敛到单一模组
+    /// 入口——同父检测命中后逐个 snap，两个子目录经「无 ini 向上」归并到
+    /// 同一父模组，`BTreeSet` 去重后单入口（与既有 LCP 收敛结果一致）。
+    #[test]
+    fn consolidate_deep_files_within_same_mod_still_merges() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        std::fs::create_dir_all(managed.join("group_1").join("ModA")).unwrap();
+        std::fs::write(
+            managed.join("group_1").join("ModA").join("mod.ini"),
+            "[Section]\nx=1\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(managed.join("group_1").join("ModA").join("textures")).unwrap();
+        std::fs::create_dir_all(managed.join("group_1").join("ModA").join("models")).unwrap();
+
+        let mut u = IncrementalUpdater::new(300);
+        u.collect(managed.join("group_1/ModA/textures"));
+        u.collect(managed.join("group_1/ModA/models"));
+        let result = u.consolidate(&managed);
+
+        assert_eq!(result.len(), 1, "深层子目录变更应收敛单入口: {:?}", result);
+        assert!(
+            result[0].to_string_lossy().to_lowercase().ends_with("moda"),
+            "收敛到模组目录: {:?}",
+            result
+        );
     }
 }

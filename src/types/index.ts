@@ -329,6 +329,8 @@ export interface AppSettings {
   simulateKeyOnSelection: boolean;
   /** 是否在启动时打开控制台窗口查看日志（默认 false，重启后生效） */
   showConsoleOnStart: boolean;
+  /** 日志时间戳时区：system=系统本地（默认）/ UTC / 固定偏移（如 UTC+8、+08:00）；仅配置文件生效，无 UI 项 */
+  logTimezone: string;
   /** 是否使用精确热键模式 */
   usePreciseHotkey: boolean;
   /** 是否交换取消按键绑定 */
@@ -490,6 +492,10 @@ export interface UpdateResult {
   disabledMods: number;
   /** 实际处理的模组数 */
   processedMods: number;
+  /** 实际写盘（INI 内容有变化）的 INI 计数 */
+  writtenMods?: number;
+  /** 因内容未变化跳过写盘（幂等快速路径）的 INI 计数 */
+  skippedMods?: number;
   /** 发现的错误行列表 */
   errors: ErroredLines[];
   /** 是否需要用户手动重载 */

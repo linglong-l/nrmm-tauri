@@ -813,6 +813,12 @@ impl IniFile {
                     .with_context(|| format!("Failed to write temp file: {:?}", tmp_path))?;
                 fs::rename(&tmp_path, path)
                     .with_context(|| format!("Failed to rename temp file to {:?}", path))?;
+                // 加固（根因 4）：真实写盘后显式失效 mod_ini_cache 条目。
+                // 常规失效依赖 (mtime, len) 自动未命中，但 mtime 保留型编辑器 / 粗分辨率
+                // 同秒等长替换会让 (mtime, len) 恰好不变 → get_or_parse_ini 返回旧解析，
+                // 下轮 update 基于旧内容渲染并误判「未修改」跳过写盘。写后立即失效，
+                // 强制下次读取重新解析磁盘真实内容。
+                crate::core::mod_ini_cache::invalidate_ini(path);
                 Ok(true)
             }
         }

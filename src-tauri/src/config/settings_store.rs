@@ -63,6 +63,9 @@ pub fn init_settings() -> Result<AppSettings> {
     // 再次确保填充了默认值（防止反序列化缺少字段）
     fill_defaults(&mut settings);
     *SETTINGS.write() = Some(settings.clone());
+    // 应用日志时区配置（settings.json 的 logTimezone；logger 先于本函数初始化，
+    // 此前的启动日志恒为系统本地时区，配置值自此行起生效）
+    crate::core::file_logger::apply_log_timezone(&settings.log_timezone);
     Ok(settings)
 }
 
@@ -162,6 +165,8 @@ pub fn save_settings(settings: &AppSettings) -> Result<()> {
     let path = app_paths::settings_path();
     save_to_file(&path, settings)?;
     *SETTINGS.write() = Some(settings.clone());
+    // 同步应用日志时区（UI 保存即时生效；值未变化时 apply 内部静默跳过）
+    crate::core::file_logger::apply_log_timezone(&settings.log_timezone);
     Ok(())
 }
 
@@ -319,6 +324,8 @@ mod tests {
         assert!(default.dark_mode);
         assert!(default.dynamic_background);
         assert!(default.target_process_per_game.is_empty());
+        // 日志时区默认跟随系统本地时区（logTimezone 配置兼容旧配置缺失字段）
+        assert_eq!(default.log_timezone, "system");
     }
 
     #[test]
