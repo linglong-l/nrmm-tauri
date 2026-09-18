@@ -177,3 +177,51 @@ fn f1_layering_direction_frozen() {
         violations.join("\n")
     );
 }
+
+/// F2：`#[tauri::command]` 归属白名单（commands/ 适配层 + 壳模块 + 存量豁免）。
+///
+/// 行级精确匹配（trim 后等于属性串），文档注释中的提及不会误报。
+#[test]
+fn f2_tauri_command_ownership() {
+    // 存量豁免：core 直挂命令（Phase 6 迁入 commands/ 后清零）
+    const LEGACY: &[&str] = &[
+        "core/file_watcher.rs",
+        "core/archive_handler.rs",
+        "core/cloud_data.rs",
+        "core/mod_cache.rs",
+    ];
+
+    let mut files = Vec::new();
+    collect_files(&src_root(), &["rs"], &mut files);
+    let mut offenders = Vec::new();
+    let mut total = 0usize;
+    for f in &files {
+        let content = read(f);
+        let count = content
+            .lines()
+            .filter(|l| l.trim() == "#[tauri::command]")
+            .count();
+        if count == 0 {
+            continue;
+        }
+        total += count;
+        let rel = rel_to_src(f);
+        let allowed = rel.starts_with("commands/")
+            || matches!(
+                top_module(f).as_deref(),
+                Some("window") | Some("hotkey") | Some("updater") | Some("platform")
+            )
+            || rel == "lib.rs"
+            || LEGACY.contains(&rel.as_str());
+        if !allowed {
+            offenders.push(format!("{}（{} 处）", rel, count));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "F2 命令归属违规（新增命令一律落 commands/）:\n{}",
+        offenders.join("\n")
+    );
+    // 基线锚点：当前 82 个命令（新增/删除命令时同步更新此值，防止静默漂移）
+    assert_eq!(total, 82, "命令总数基线漂移（当前 {}），确认后更新锚点", total);
+}
