@@ -225,3 +225,43 @@ fn f2_tauri_command_ownership() {
     // 基线锚点：当前 82 个命令（新增/删除命令时同步更新此值，防止静默漂移）
     assert_eq!(total, 82, "命令总数基线漂移（当前 {}），确认后更新锚点", total);
 }
+
+/// F4：Rust 文件行数棘轮——新文件 ≤800 行；存量巨石以登记值为上限（只减不增）。
+///
+/// 每完成一次拆分，将对应条目下调至拆分后行数；文件删除时移除条目。
+#[test]
+fn f4_rust_file_line_ratchet() {
+    const MAX_NEW_FILE_LINES: usize = 800;
+    // 存量豁免（上限=2026-09-18 实测行数；随拆分逐域下调）
+    const LEGACY_CAPS: &[(&str, usize)] = &[
+        ("core/mod_manager.rs", 6460),
+        ("core/mod_scanner.rs", 4098),
+        ("core/ini_handler.rs", 3170),
+        ("commands/mod_commands.rs", 2977),
+        ("core/mod_cache.rs", 2710),
+        ("core/archive_handler.rs", 2010),
+        ("core/file_watcher.rs", 1911),
+        ("platform/windows.rs", 868),
+    ];
+
+    let mut files = Vec::new();
+    collect_files(&src_root(), &["rs"], &mut files);
+    let mut violations = Vec::new();
+    for f in &files {
+        let rel = rel_to_src(f);
+        let lines = read(f).lines().count();
+        let cap = LEGACY_CAPS
+            .iter()
+            .find(|(p, _)| *p == rel)
+            .map(|(_, c)| *c)
+            .unwrap_or(MAX_NEW_FILE_LINES);
+        if lines > cap {
+            violations.push(format!("{}：{} 行 > 上限 {}", rel, lines, cap));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "F4 行数棘轮违规:\n{}",
+        violations.join("\n")
+    );
+}
