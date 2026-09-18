@@ -2034,6 +2034,11 @@ mod tests {
     /// 持久化运行时目录：cargo test 后可直接在磁盘查看产物，验证目录确实变化
     const RUNTIME_DIR: &str = "tests/update_mod_data_runtime";
 
+    /// 串行化对共享 `RUNTIME_DIR` 的访问：多个测试并行执行时会互相 `remove_dir_all`
+    /// 同一目录（Windows 下目录句柄占用 → PermissionDenied）。引用该目录的测试入口须持有此锁。
+    static RUNTIME_DIR_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
     /// 输入数据集（原始，未经 update_mod_data 处理）
     fn input_dataset() -> PathBuf {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2230,6 +2235,7 @@ mod tests {
     /// `src-tauri/tests/update_mod_data_runtime/` 下的 _MANAGED_ 产物。
     #[test]
     fn update_mod_data_test() {
+        let _runtime_lock = RUNTIME_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         println!("\n=== update_mod_data_test（集成到 mod_commands.rs）===");
         let runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(RUNTIME_DIR);
         let game_mods_path = restore_dataset_to(&runtime);
@@ -2436,6 +2442,9 @@ mod tests {
         use crate::core::mod_scanner;
         use std::collections::BTreeSet;
         use walkdir::WalkDir;
+
+        // 共享运行时目录互斥：与 update_mod_data_test 并行时不得互删同一目录
+        let _runtime_lock = RUNTIME_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // 窗口全局状态互斥（含 mod_scanner 内的标记创建断言测试）
         let _window_lock = mod_scanner::TEST_WINDOW_LOCK

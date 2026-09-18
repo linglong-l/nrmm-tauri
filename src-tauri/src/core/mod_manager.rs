@@ -3809,6 +3809,19 @@ mod tests {
     use std::time::SystemTime;
     use tempfile::TempDir;
 
+    /// 还原安全窗口全局状态互斥 + RAII 清除。
+    ///
+    /// 调用 `restore_all_inis` / `restore_managed_mod`（内部开启 60s 全局还原安全窗口，
+    /// `mod_scanner::mark_restore_safe_window`）的测试必须持有 `mod_scanner::TEST_WINDOW_LOCK`，
+    /// 并在退出 / panic 时通过本 guard 清除窗口——否则窗口会泄漏到并发执行的
+    /// mod_scanner 标记创建断言测试（窗口期内标记不被创建而误报失败）。
+    struct RestoreWindowGuard;
+    impl Drop for RestoreWindowGuard {
+        fn drop(&mut self) {
+            crate::core::mod_scanner::test_clear_restore_safe_window();
+        }
+    }
+
     fn setup_test_env() -> TempDir {
         let dir = TempDir::new().unwrap();
         let managed = dir.path().join("_MANAGED_");
@@ -4419,6 +4432,10 @@ y = 2
 
     #[test]
     fn test_restore_all_inis() {
+        let _window_lock = crate::core::mod_scanner::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _w = RestoreWindowGuard;
         // d3dx.ini 在游戏根（Mods 父目录）；_MANAGED_ 在 Mods/ 下
         let dir = tempfile::TempDir::new().unwrap();
         let mods_path = dir.path().join("Mods");
@@ -4465,6 +4482,10 @@ y = 2
 
     #[test]
     fn test_restore_managed_mod_single_ini_file() {
+        let _window_lock = crate::core::mod_scanner::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _w = RestoreWindowGuard;
         let dir = setup_test_env();
         // 构造一个含 NRMM 管理注入的单个 .ini 文件
         let ini_path = dir.path().join("mod.ini");
@@ -4484,6 +4505,10 @@ y = 2
 
     #[test]
     fn test_restore_managed_mod_skips_non_ini_file() {
+        let _window_lock = crate::core::mod_scanner::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _w = RestoreWindowGuard;
         let dir = setup_test_env();
         // 非 .ini 文件应被忽略（pass），不报错也不处理
         let txt_path = dir.path().join("readme.txt");
@@ -4496,6 +4521,10 @@ y = 2
 
     #[test]
     fn test_restore_managed_mod_directory_recursive() {
+        let _window_lock = crate::core::mod_scanner::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _w = RestoreWindowGuard;
         let dir = setup_test_env();
         let group_path = create_group_dir(dir.path(), "group_1");
         create_mod_with_ini(
@@ -4530,6 +4559,10 @@ y = 2
     /// 每个被管理的 mod INI 都应从 .ini_managed_backup 精确恢复到更新前字节。
     #[test]
     fn test_restore_all_inis_lossless_roundtrip() {
+        let _window_lock = crate::core::mod_scanner::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _w = RestoreWindowGuard;
         // 结构与真实游戏一致：game_root/Mods/_MANAGED_/group_X/Mod/mod.ini
         // 且 game_root/d3dx.ini 位于 Mods 父目录。
         let dir = TempDir::new().unwrap();
@@ -4587,6 +4620,10 @@ hash = 0x2
     /// 清除全部管理器注入产物，但保留用户原始内容与合法悬空 endif。
     #[test]
     fn test_restore_managed_mod_cleans_injected_artifacts() {
+        let _window_lock = crate::core::mod_scanner::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _w = RestoreWindowGuard;
         let dir = setup_test_env();
         let ini = dir.path().join("mod.ini");
         // 模拟 update_mod_data 输出的真实形态（头注释 + Constants 全局 + 包裹段 + 增强 condition + 悬空 endif）
@@ -4653,6 +4690,10 @@ endif
     /// 确认管理器 if/endif/global/condition 全部清除。
     #[test]
     fn test_restore_managed_mod_after_real_update() {
+        let _window_lock = crate::core::mod_scanner::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _w = RestoreWindowGuard;
         let dir = TempDir::new().unwrap();
         let mods_path = dir.path().join("Mods");
         let managed = mods_path.join("_MANAGED_");

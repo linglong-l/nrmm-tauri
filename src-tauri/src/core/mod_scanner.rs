@@ -3970,6 +3970,10 @@ mod tests_scan_single_mod {
     /// modname 标记不存在时创建并回写目录名（NRMM 对齐）
     #[test]
     fn scan_single_mod_creates_modname_marker() {
+        // 与还原安全窗口测试互斥（窗口生效时不创建标记）
+        let _window_lock = super::TEST_WINDOW_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir = setup();
         let g1 = dir.path().join("_MANAGED_").join("group_1");
         let mod_a = make_mod(&g1, "FreshMod");
