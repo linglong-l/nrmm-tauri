@@ -88,7 +88,8 @@ import type { Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Edit, Delete, FolderOpened, FolderAdd, VideoPause, VideoPlay, Fold } from '@element-plus/icons-vue'
 import type { ModData, ModGroupData } from '@/types'
-import { addGroup, renameGroup, removeGroupEx, openGroupFolder, validateSubfolderName, createSubfolder, handlePathNotFoundError, disableAllModsInGroup, enableAllModsInGroup } from '@/utils/tauri'
+import { addGroup, renameGroup, removeGroupEx, openGroupFolder, validateSubfolderName, createSubfolder, isPathNotFoundError, disableAllModsInGroup, enableAllModsInGroup } from '@/utils/tauri'
+import { recoverFromPathNotFound } from '@/composables/usePathNotFoundRecovery'
 import { predictToggledPath } from '@/utils/modPath'
 import { placeContextMenu } from '@/utils/contextMenuPosition'
 import { useModsStore } from '@/stores/mods'
@@ -479,10 +480,11 @@ async function handleOpenGroupFolder() {
     await openGroupFolder(contextGroup.value.groupPath)
   } catch (e: unknown) {
     // 路径不存在错误 → 清除缓存+重读模组（自动处理，不弹错误提示）
-    const handled = await handlePathNotFoundError(e)
-    if (!handled) {
-      ElMessage.error(t('Failed to open folder') + ': ' + (e instanceof Error ? e.message : String(e)))
+    if (isPathNotFoundError(e)) {
+      await recoverFromPathNotFound()
+      return
     }
+    ElMessage.error(t('Failed to open folder') + ': ' + (e instanceof Error ? e.message : String(e)))
   }
 }
 

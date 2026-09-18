@@ -19,8 +19,11 @@ vi.mock('@/utils/tauri', () => ({
   toggleModDisabled: (...args: unknown[]) => toggleModDisabledMock(...(args as [])),
   toggleFavorite: (...args: unknown[]) => toggleFavoriteMock(...(args as [])),
   openModFolder: vi.fn(),
-  handlePathNotFoundError: vi.fn(),
+  isPathNotFoundError: (e: unknown) => String(e).includes('[PATH_NOT_FOUND]'),
   deselectGroupMod: vi.fn(),
+}))
+vi.mock('./usePathNotFoundRecovery', () => ({
+  recoverFromPathNotFound: vi.fn(),
 }))
 vi.mock('@/stores/mods', () => ({
   useModsStore: () => modsStoreMock,

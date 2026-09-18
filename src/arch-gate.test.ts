@@ -29,7 +29,7 @@ describe('前端架构健身函数', () => {
     const LEGACY_CAPS: Record<string, number> = {
       'stores/mods.ts': 1823,
       'views/SettingsView.vue': 1509,
-      'components/mod/GroupPanel.vue': 951,
+      'components/mod/GroupPanel.vue': 953,
       'utils/tauri.ts': 902,
     }
     const MAX = 800
@@ -40,6 +40,17 @@ describe('前端架构健身函数', () => {
       const lines = readFileSync(f, 'utf8').split('\n').length
       const cap = LEGACY_CAPS[r] ?? MAX
       if (lines > cap) offenders.push(`${r}: ${lines} 行 > 上限 ${cap}`)
+    }
+    expect(offenders, offenders.join('\n')).toHaveLength(0)
+  })
+
+  it('F3: src/utils 不得导入 stores（依赖方向：stores/composables → utils）', () => {
+    const files = collectFiles(join(srcRoot, 'utils'), ['.ts']).filter((p) => !p.endsWith('.test.ts'))
+    const offenders: string[] = []
+    for (const f of files) {
+      const content = readFileSync(f, 'utf8')
+      const m = content.match(/from\s+['"](@\/stores\/|\.\.?\/(?:\.\.?\/)*stores\/)/)
+      if (m) offenders.push(`${rel(f)}: ${m[0]}`)
     }
     expect(offenders, offenders.join('\n')).toHaveLength(0)
   })

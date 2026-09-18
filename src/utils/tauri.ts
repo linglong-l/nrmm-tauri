@@ -11,8 +11,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta, ToggleModResult } from '../types'
-import { useModsStore } from '@/stores/mods'
-import { useSettingsStore } from '@/stores/settings'
 import { logger } from './logger'
 
 /**
@@ -22,37 +20,22 @@ import { logger } from './logger'
 export const ERR_PREFIX_PATH_NOT_FOUND = '[PATH_NOT_FOUND]'
 
 /**
- * 检测错误是否为路径不存在类型，是则清除缓存并重读模组
- * 调用流程：打开文件资源管理器 → 路径不存在异常 → 清除模组缓存数据 → 模组重读取
+ * 检测错误是否为后端返回的「路径不存在」类型错误（纯谓词，零副作用）
  *
- * @param error invoke抛出的原始错误对象（含message属性）或字符串
- * @returns 若为路径不存在错误返回true（已处理完刷新），否则返回false（继续抛出原错误）
+ * 调用方捕获到此类错误时，应调用 composables/usePathNotFoundRecovery 的
+ * recoverFromPathNotFound() 执行缓存清除与模组重读。
+ *
+ * @param error invoke 抛出的原始错误对象（含 message 属性）或字符串
+ * @returns 是否为路径不存在错误
  */
-export async function handlePathNotFoundError(error: unknown): Promise<boolean> {
-  const msg = typeof error === 'string'
-    ? error
-    : error && typeof error === 'object' && 'message' in error
-      ? String((error as { message: unknown }).message)
-      : String(error)
-
-  if (!msg.includes(ERR_PREFIX_PATH_NOT_FOUND)) {
-    return false
-  }
-  logger.warn('tauri', 'Path not found while opening folder, refreshing mods data', msg)
-  try {
-    const modsStore = useModsStore()
-    const settingsStore = useSettingsStore()
-    await modsStore.stopWatching()
-    modsStore.clearData()
-    // clearData 后 currentGroup 会变成 null，因此需要用 settingsStore.currentModsPath 判断是否能加载
-    if (settingsStore.currentModsPath) {
-      await modsStore.startWatching()
-      await modsStore.loadMods()
-    }
-  } catch (e) {
-    logger.error('tauri', 'Failed to refresh mods after path-not-found error', e)
-  }
-  return true
+export function isPathNotFoundError(error: unknown): boolean {
+  const msg =
+    typeof error === 'string'
+      ? error
+      : error && typeof error === 'object' && 'message' in error
+        ? String((error as { message: unknown }).message)
+        : String(error)
+  return msg.includes(ERR_PREFIX_PATH_NOT_FOUND)
 }
 
 /**
@@ -61,20 +44,16 @@ export async function handlePathNotFoundError(error: unknown): Promise<boolean> 
  * 所有后端命令调用均通过此函数统一封装，提供以下保障：
  * - 记录调用日志（debug 级别）：命令名 + 参数摘要
  * - 捕获并记录错误（error 级别）：包含命令名和错误详情
- * - 自动处理路径不存在错误：当 options.suppressPathNotFound 为 true 时，
- *   自动调用 handlePathNotFoundError 执行缓存清除和模组重读取
  * - 统一错误格式：将字符串错误包装为 Error 对象
  *
  * @param cmd 后端命令名（snake_case，如 'get_settings'）
  * @param args 传给后端的参数对象（camelCase 键名）
- * @param options 可选配置：suppressPathNotFound=true 时自动处理路径不存在错误
  * @returns 后端命令的返回值
- * @throws 当后端返回错误且未被自动处理时，抛出 Error 对象
+ * @throws 当后端返回错误时，抛出 Error 对象
  */
 async function safeInvoke<T>(
   cmd: string,
-  args?: Record<string, unknown>,
-  options?: { suppressPathNotFound?: boolean }
+  args?: Record<string, unknown>
 ): Promise<T> {
   logger.debug('Tauri', `invoke: ${cmd}`, args)
   try {
@@ -82,14 +61,6 @@ async function safeInvoke<T>(
   } catch (error) {
     const errObj = error instanceof Error ? error : new Error(String(error))
     logger.error('Tauri', `invoke failed: ${cmd}`, errObj)
-
-    if (options?.suppressPathNotFound) {
-      const handled = await handlePathNotFoundError(error)
-      if (handled) {
-        return undefined as unknown as T
-      }
-    }
-
     throw errObj
   }
 }
@@ -329,7 +300,7 @@ export async function isFavorite(modPath: string): Promise<boolean> {
  * @param modPath 模组文件夹路径
  */
 export async function openModFolder(modPath: string): Promise<void> {
-  return safeInvoke('open_mod_folder', { modPath }, { suppressPathNotFound: true })
+  return safeInvoke('open_mod_folder', { modPath })
 }
 
 /**
@@ -338,7 +309,7 @@ export async function openModFolder(modPath: string): Promise<void> {
  * @param groupPath 分组文件夹路径
  */
 export async function openGroupFolder(groupPath: string): Promise<void> {
-  return safeInvoke('open_group_folder', { groupPath }, { suppressPathNotFound: true })
+  return safeInvoke('open_group_folder', { groupPath })
 }
 
 /**

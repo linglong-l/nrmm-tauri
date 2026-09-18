@@ -17,7 +17,8 @@
 import { ref, inject, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { ModData } from '@/types'
-import { toggleModDisabled, toggleFavorite, openModFolder, handlePathNotFoundError, deselectGroupMod } from '@/utils/tauri'
+import { toggleModDisabled, toggleFavorite, openModFolder, deselectGroupMod, isPathNotFoundError } from '@/utils/tauri'
+import { recoverFromPathNotFound } from './usePathNotFoundRecovery'
 import { predictToggledPath } from '@/utils/modPath'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
@@ -170,10 +171,11 @@ export function useModContextMenu(
       await openModFolder(mod.value.modPath)
     } catch (e: unknown) {
       // 路径不存在错误 → 清除缓存+重读模组（自动处理，不弹错误提示）
-      const handled = await handlePathNotFoundError(e)
-      if (!handled) {
-        ElMessage.error(t('Failed to open mod folder.') + ': ' + (e instanceof Error ? e.message : String(e)))
+      if (isPathNotFoundError(e)) {
+        await recoverFromPathNotFound()
+        return
       }
+      ElMessage.error(t('Failed to open mod folder.') + ': ' + (e instanceof Error ? e.message : String(e)))
     }
   }
 
