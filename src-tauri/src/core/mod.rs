@@ -29,6 +29,7 @@ pub mod ini_backup_scheduler;
 pub mod ini_codec;
 pub mod ini_condition;
 pub mod ini_handler;
+pub mod ini_model;
 pub mod key_combo;
 pub mod mod_cache;
 pub mod mod_ini_cache;
