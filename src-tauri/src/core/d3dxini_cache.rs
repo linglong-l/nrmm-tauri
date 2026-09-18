@@ -3,7 +3,7 @@
 //! 核心思路：以 canonicalize 后的路径作为键，将 `IniFile` 解析结果缓存到内存中，
 //! 配合文件修改时间（`modified_at`）判断缓存是否失效。
 
-use crate::core::ini_handler::IniFile;
+use crate::core::ini_model::IniFile;
 use anyhow::Result;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;

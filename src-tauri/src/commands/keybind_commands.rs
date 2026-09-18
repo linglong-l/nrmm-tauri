@@ -10,7 +10,7 @@
 //! 注意：后端 `IniFile::parse` 只识别 `;-;`，`;+;` 会落入注释分支被丢弃。
 //! 因此本模块统一用 `IniFile::force_read_as_utf8` 读原始行 + NRMM 正则解析（最忠实）。
 
-use crate::core::ini_handler::IniFile;
+use crate::core::ini_model::IniFile;
 use crate::core::key_combo;
 use crate::models::{KeybindEntry, KeybindFile, KeybindSection, SaveKeybindResult};
 use crate::platform::get_key_simulator;

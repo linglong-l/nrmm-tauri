@@ -1,5 +1,5 @@
 use crate::core::constants;
-use crate::core::ini_handler::{IniFile, IniLine};
+use crate::core::ini_model::{IniFile, IniLine};
 use anyhow::Result;
 use regex::RegexBuilder;
 use std::collections::HashSet;

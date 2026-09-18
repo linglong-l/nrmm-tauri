@@ -3,7 +3,7 @@
 //! 本模块包含 NRMM 的核心业务逻辑：
 //! - `constants`: 全局常量定义（文件名、前缀、正则等）
 //! - `file_watcher`: 文件系统监控器（使用 notify 库，带防抖功能）
-//! - `ini_handler`: INI 文件解析和处理
+//! - `ini_codec`/`ini_condition`/`ini_model`/`ini_transform`/`ini_maintain`/`ini_analysis`: INI 处理六域（2026-09-18 由 ini_handler.rs 拆分）
 //! - `mod_manager`: 模组管理核心逻辑（启用/禁用、互斥选择、INI 注入）
 //! - `mod_scanner`: 模组扫描器（轻量扫描和深度扫描两种模式）
 //! - `namespace_handler`: 命名空间处理（namespace 变量展开）
@@ -29,7 +29,6 @@ pub mod ini_backup;
 pub mod ini_backup_scheduler;
 pub mod ini_codec;
 pub mod ini_condition;
-pub mod ini_handler;
 pub mod ini_maintain;
 pub mod ini_model;
 pub mod ini_transform;

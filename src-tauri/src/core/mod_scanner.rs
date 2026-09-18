@@ -20,7 +20,7 @@
 use crate::core::constants;
 use crate::core::file_watcher::WatcherGuard;
 use crate::core::fs_walk::{self, SkippedEntry, TraversalStats};
-use crate::core::ini_handler::IniFile;
+use crate::core::ini_model::IniFile;
 use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::namespace_handler;
 use crate::models::enums::{GroupType, ModsPathStatus, TargetGame};

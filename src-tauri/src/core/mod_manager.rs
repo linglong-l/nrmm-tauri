@@ -24,7 +24,7 @@ use crate::core::constants;
 use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::file_lock::AdvisoryLock;
 use crate::core::file_watcher::WatcherGuard;
-use crate::core::ini_handler::IniFile;
+use crate::core::ini_model::IniFile;
 use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::mod_scanner;
 use crate::core::namespace_handler;
@@ -1702,15 +1702,15 @@ fn fix_non_managed_crash_lines(
 /// 为 UTF-8 并原子写回，使后续任何 `get_or_parse_ini` / INI 写回链路读取到一致的 UTF-8。
 /// UTF-8 文件仅读取不改写（零副作用），保证纯 UTF-8 数据集字节级不变。
 fn ensure_ini_utf8(path: &Path) {
-    let (converted, info) = match crate::core::ini_handler::read_ini_safe(path) {
+    let (converted, info) = match crate::core::ini_codec::read_ini_safe(path) {
         Ok(t) => t,
         Err(e) => {
             log::warn!("[mod_manager] ensure_ini_utf8: 读取失败 {:?}: {}", path, e);
             return;
         }
     };
-    if info.encoding == crate::core::ini_handler::SourceEncoding::Gbk {
-        if let Err(e) = crate::core::ini_handler::write_utf8_atomic(path, &converted, info) {
+    if info.encoding == crate::core::ini_codec::SourceEncoding::Gbk {
+        if let Err(e) = crate::core::ini_codec::write_utf8_atomic(path, &converted, info) {
             log::warn!(
                 "[mod_manager] ensure_ini_utf8: 转换写回失败 {:?}: {}",
                 path,
@@ -1730,7 +1730,7 @@ fn ensure_ini_utf8(path: &Path) {
 /// `read_ini_safe` 无损转换为 UTF-8，命中崩溃行时前置 `;-;` 并保留
 /// BOM/CRLF/末尾换行后原子写回（不再拒绝，全数据集统一 UTF-8）。
 fn comment_crash_lines_in_file(path: &Path, crash_lines: &[(u32, String)]) -> bool {
-    let (content, info) = match crate::core::ini_handler::read_ini_safe(path) {
+    let (content, info) = match crate::core::ini_codec::read_ini_safe(path) {
         Ok(t) => t,
         Err(_) => return false,
     };
@@ -1754,7 +1754,7 @@ fn comment_crash_lines_in_file(path: &Path, crash_lines: &[(u32, String)]) -> bo
         if content.ends_with('\n') {
             out.push_str(if crlf { "\r\n" } else { "\n" });
         }
-        if crate::core::ini_handler::write_utf8_atomic(path, &out, info).is_ok() {
+        if crate::core::ini_codec::write_utf8_atomic(path, &out, info).is_ok() {
             return true;
         }
     }
@@ -3409,7 +3409,7 @@ fn restore_single_ini(ini_path: &Path) -> Result<()> {
             );
         }
     }
-    let (content, info) = crate::core::ini_handler::read_ini_safe(ini_path)?;
+    let (content, info) = crate::core::ini_codec::read_ini_safe(ini_path)?;
     let raw_lines: Vec<&str> = content.lines().collect();
     let mut lines: Vec<String> = raw_lines.iter().map(|s| s.to_string()).collect();
     let mut modified = false;
@@ -3508,7 +3508,7 @@ fn restore_single_ini(ini_path: &Path) -> Result<()> {
             .map(|s| s.as_str())
             .collect::<Vec<&str>>()
             .join("\n");
-        crate::core::ini_handler::write_utf8_atomic(ini_path, &new_content, info)?;
+        crate::core::ini_codec::write_utf8_atomic(ini_path, &new_content, info)?;
     }
 
     Ok(())
@@ -3531,9 +3531,9 @@ fn remove_first_four_spaces(line: &str) -> String {
 
 /// 净化 condition 表达式中的管理器注入部分（对齐 NRMM `_sanitizeKeyConditionExpressionFromModManager`）
 ///
-/// 复用 `ini_handler::sanitize_condition_expression` 的核心逻辑，通过公开包装调用。
+/// 复用 `ini_condition::sanitize_condition_expression` 的核心逻辑，通过公开包装调用。
 fn sanitize_condition_expression_inline(expression: &str) -> String {
-    crate::core::ini_handler::sanitize_condition_expression_public(expression)
+    crate::core::ini_condition::sanitize_condition_expression_public(expression)
 }
 
 /// 移除模组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED + 还原 INI）

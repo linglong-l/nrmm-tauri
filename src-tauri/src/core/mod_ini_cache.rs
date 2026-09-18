@@ -18,7 +18,7 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 
-use crate::core::ini_handler::IniFile;
+use crate::core::ini_model::IniFile;
 
 /// 缓存条目：解析结果（共享所有权）与失效判定信息。
 #[derive(Debug, Clone)]
