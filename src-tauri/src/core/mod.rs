@@ -24,6 +24,7 @@ pub mod file_logger;
 pub mod file_watcher;
 pub mod fs_walk;
 pub mod incremental_updater;
+pub mod ini_analysis;
 pub mod ini_backup;
 pub mod ini_backup_scheduler;
 pub mod ini_codec;
