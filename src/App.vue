@@ -42,6 +42,7 @@ import { switchTargetGame, checkModCacheValid, isFileWatcherRunning, currentWatc
 import { startPendingNoticeObserver } from '@/utils/pendingNotice'
 import { clearThumbnailUrlCache } from '@/composables/useThumbnailUrl'
 import type { TargetGame, OverlayController } from '@/types'
+import { IpcEvent } from '@/events'
 
 /**
  * 三个Tab视图使用异步组件懒加载
@@ -370,7 +371,7 @@ onMounted(async () => {
   // 事件名：target-game-switched
   // 处理逻辑：更新当前游戏设置，保存配置，如在模组页则重新加载模组列表
   try {
-    unlistenTargetGame = await listen<TargetGame>('target-game-switched', async (event) => {
+    unlistenTargetGame = await listen<TargetGame>(IpcEvent.TargetGameSwitched, async (event) => {
       const game = event.payload
       logger.info('App', `Target game switched to: ${game}`)
       // 幂等去重（C13）：短时间内自发切换的事件回声且 game 与当前一致 → 本地已加载，跳过
@@ -394,7 +395,7 @@ onMounted(async () => {
   // Phase 2 策略：窗口隐藏时保留所有缓存数据和文件监控，避免重新加载开销
   // 触发时机：点击关闭按钮、按热键隐藏窗口
   try {
-    unlistenWindowHidden = await listen('window-hidden', async () => {
+    unlistenWindowHidden = await listen(IpcEvent.WindowHidden, async () => {
       logger.info('App', 'window hidden -> keeping cache and watcher alive')
     })
   } catch (e) {
@@ -404,7 +405,7 @@ onMounted(async () => {
   // 监听窗口隐藏 120s 后清空模组数据事件：释放前端内存（保留后端缓存与文件监控）
   // 触发时机：窗口隐藏超过 120s 且无待处理模态框，后端回收模组数据后 emit
   try {
-    unlistenWindowHiddenClear = await listen('window-hidden-clear-data', async () => {
+    unlistenWindowHiddenClear = await listen(IpcEvent.WindowHiddenClearData, async () => {
       logger.info('App', 'window hidden 120s -> clearing mod data (cache kept)')
       modsStore.clearData()
       clearThumbnailUrlCache() // 释放模块级缩略图 URL 缓存
@@ -422,7 +423,7 @@ onMounted(async () => {
   //   5. 缓存失效或监控异常 → 重启监控 + 完整 loadMods
   // 触发时机：按热键显示窗口（未检测到游戏时）
   try {
-    unlistenWindowShown = await listen('window-shown', async () => {
+    unlistenWindowShown = await listen(IpcEvent.WindowShown, async () => {
       reportBootStage('window-shown')
       logger.info('App', 'window shown -> checking cache validity')
 
@@ -523,7 +524,7 @@ onMounted(async () => {
   // 监听窗口显示并检测到前台游戏事件：自动切换到对应游戏并导航到模组页
   // 触发时机：按热键显示窗口且前台是受支持的游戏进程
   try {
-    unlistenWindowShowWithGame = await listen<TargetGame>('window-show-with-game', async (event) => {
+    unlistenWindowShowWithGame = await listen<TargetGame>(IpcEvent.WindowShowWithGame, async (event) => {
       const game = event.payload
       logger.info('App', `Window shown with detected game: ${game}`)
       await applyDetectedGameSwitch(game, true)

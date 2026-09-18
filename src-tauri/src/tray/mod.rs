@@ -88,7 +88,7 @@ fn handle_game_switch(app: &AppHandle, game: TargetGame) {
     if let Err(e) = settings_store::set_target_game(game) {
         log::warn!("Failed to switch target game: {}", e);
     }
-    let _ = app.emit("target-game-switched", game);
+    let _ = app.emit(crate::core::events::TARGET_GAME_SWITCHED, game);
     crate::window::show_main_window(app);
 }
 

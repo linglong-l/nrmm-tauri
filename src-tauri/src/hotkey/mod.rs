@@ -239,7 +239,7 @@ fn handle_window_hotkey(app_handle: &AppHandle) {
                 "Window hotkey: showing window, detected foreground game: {:?}",
                 game
             );
-            let _ = app_handle.emit("window-show-with-game", game);
+            let _ = app_handle.emit(crate::core::events::WINDOW_SHOW_WITH_GAME, game);
             crate::window::show_main_window(app_handle);
         }
         HotkeyDecision::PickGameWithMenu {
@@ -394,7 +394,7 @@ fn execute_action(app_handle: &AppHandle, action: HotkeyAction) {
         }
         HotkeyAction::Refresh => {
             log::debug!("Hotkey triggered: Refresh");
-            let _ = app_handle.emit("hotkey-refresh", ());
+            let _ = app_handle.emit(crate::core::events::HOTKEY_REFRESH, ());
         }
     }
 }
@@ -462,7 +462,7 @@ fn show_game_select_menu(app_handle: &AppHandle, action: &HotkeyAction) {
     let detector = platform::get_foreground_detector();
     let (x, y) = detector.get_cursor_position().unwrap_or((100, 100));
     let _ = app_handle.emit(
-        "show-game-select",
+        crate::core::events::SHOW_GAME_SELECT,
         serde_json::json!({
             "x": x,
             "y": y,

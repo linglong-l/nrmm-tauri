@@ -221,7 +221,7 @@ pub fn run() {
                     log::info!("[Menu] game_menu clicked: {}", game_str);
                     match parse_game(game_str) {
                         Ok(game) => {
-                            let _ = app_h.emit("window-show-with-game", game);
+                            let _ = app_h.emit(crate::core::events::WINDOW_SHOW_WITH_GAME, game);
                             crate::window::show_main_window(&app_handle_clone);
                         }
                         Err(e) => {

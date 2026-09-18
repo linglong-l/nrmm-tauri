@@ -71,7 +71,7 @@ fn hidden_timer(app: AppHandle, gen: u64) {
         "[lifecycle] 隐藏 {}s，通知前端清空模组数据",
         HIDDEN_CLEAR_DATA_SECS
     );
-    let _ = app.emit("window-hidden-clear-data", ());
+    let _ = app.emit(crate::core::events::WINDOW_HIDDEN_CLEAR_DATA, ());
 
     // 第二级：空白页回收 WebView（不足条件则每 DESTROY_RETRY_SECS 重试）
     std::thread::sleep(Duration::from_secs(

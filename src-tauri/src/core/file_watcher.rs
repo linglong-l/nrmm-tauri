@@ -650,14 +650,12 @@ fn window_visible(app_handle: &AppHandle) -> bool {
 
 /// 处理完成后通知前端：窗口可见时 emit `managed-folder-changed`（全量 refresh
 /// 兜底信号）；窗口隐藏时静默（缓存已更新）。
-///
-/// # 参数
-/// - `app_handle`: Tauri 应用句柄
-/// - `managed_path`: `_MANAGED_` 目录路径
 fn emit_folder_changed(app_handle: &AppHandle, managed_path: &Path) {
     if window_visible(app_handle) {
-        // emit managed-folder-changed：通知前端扫描目录变化
-        let _ = app_handle.emit("managed-folder-changed", managed_path.as_os_str());
+        let _ = app_handle.emit(
+            crate::core::events::MANAGED_FOLDER_CHANGED,
+            managed_path.as_os_str(),
+        );
     } else {
         log::info!("[Incremental] window hidden -> merged cache silently");
     }
@@ -684,7 +682,7 @@ fn emit_managed_partial_update(
             game: format!("{game:?}"),
             deltas: deltas.to_vec(),
         };
-        let _ = app_handle.emit("managed-partial-update", payload);
+        let _ = app_handle.emit(crate::core::events::MANAGED_PARTIAL_UPDATE, payload);
     }
 }
 

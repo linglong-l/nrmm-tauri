@@ -54,4 +54,16 @@ describe('前端架构健身函数', () => {
     }
     expect(offenders, offenders.join('\n')).toHaveLength(0)
   })
+
+  it('F5: listen 调用不得使用裸字符串事件名（须引用 src/events.ts 的 IpcEvent）', () => {
+    const files = collectFiles(srcRoot, ['.ts', '.vue']).filter((p) => !p.endsWith('.test.ts'))
+    const offenders: string[] = []
+    const re = /listen(?:<[^>]*>)?\(\s*['"`]([^'"`]+)['"`]/g
+    for (const f of files) {
+      const content = readFileSync(f, 'utf8')
+      let m: RegExpExecArray | null
+      while ((m = re.exec(content)) !== null) offenders.push(`${rel(f)}: '${m[1]}'`)
+    }
+    expect(offenders, offenders.join('\n')).toHaveLength(0)
+  })
 })

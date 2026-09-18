@@ -151,7 +151,9 @@ fn f1_layering_direction_frozen() {
     let mut violations = Vec::new();
 
     for f in &files {
-        let Some(module) = top_module(f) else { continue };
+        let Some(module) = top_module(f) else {
+            continue;
+        };
         let Some((_, banned)) = FORBIDDEN.iter().find(|(m, _)| *m == module) else {
             continue;
         };
@@ -162,7 +164,9 @@ fn f1_layering_direction_frozen() {
             while let Some(idx) = search.find(b) {
                 let occurrence = &search[idx..];
                 let exempted = F1_EXEMPTIONS.iter().any(|(file, allowed)| {
-                    rel == *file && occurrence.starts_with(allowed) && occurrence.len() > allowed.len()
+                    rel == *file
+                        && occurrence.starts_with(allowed)
+                        && occurrence.len() > allowed.len()
                 });
                 if !exempted {
                     violations.push(format!("{} 引用 {}", rel, b));
@@ -223,7 +227,11 @@ fn f2_tauri_command_ownership() {
         offenders.join("\n")
     );
     // 基线锚点：当前 82 个命令（新增/删除命令时同步更新此值，防止静默漂移）
-    assert_eq!(total, 82, "命令总数基线漂移（当前 {}），确认后更新锚点", total);
+    assert_eq!(
+        total, 82,
+        "命令总数基线漂移（当前 {}），确认后更新锚点",
+        total
+    );
 }
 
 /// F4：Rust 文件行数棘轮——新文件 ≤800 行；存量巨石以登记值为上限（只减不增）。
@@ -264,4 +272,84 @@ fn f4_rust_file_line_ratchet() {
         "F4 行数棘轮违规:\n{}",
         violations.join("\n")
     );
+}
+
+/// F5-1：emit 调用禁止裸字符串字面量（必须引用 core::events 常量）。
+#[test]
+fn f5_emit_calls_use_event_constants() {
+    let mut files = Vec::new();
+    collect_files(&src_root(), &["rs"], &mut files);
+    let mut offenders = Vec::new();
+    for f in &files {
+        let content = read(f);
+        let mut rest = content.as_str();
+        while let Some(idx) = rest.find(".emit") {
+            let after = &rest[idx + 5..];
+            let after = after.strip_prefix("_to").unwrap_or(after);
+            let after = after
+                .strip_prefix('(')
+                .map(str::trim_start)
+                .unwrap_or(after);
+            if let Some(literal) = after.strip_prefix('"') {
+                if let Some(end) = literal.find('"') {
+                    offenders.push(format!(
+                        "{}: emit 裸字面量 \"{}\"",
+                        rel_to_src(f),
+                        &literal[..end]
+                    ));
+                }
+            }
+            rest = &rest[idx + 5..];
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "F5 emit 裸字符串（改用 core::events 常量）:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// 从 events.rs 源码提取全部 `pub const X: &str = "...";` 的字符串值（文本解析，独立 crate 可编译）。
+fn rust_event_values(src: &str) -> Vec<String> {
+    src.lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            if !t.starts_with("pub const") || !t.contains(": &str = ") {
+                return None;
+            }
+            let start = t.find('"')?;
+            let end = t[start + 1..].find('"')? + start + 1;
+            Some(t[start + 1..end].to_string())
+        })
+        .collect()
+}
+
+/// F5-2：Rust 事件常量集合与前端 src/events.ts 登记值严格相等（双向，文本解析）。
+#[test]
+fn f5_event_registry_matches_frontend() {
+    let rust_src = read(&src_root().join("core/events.rs"));
+    let rs_values = rust_event_values(&rust_src);
+    assert!(
+        !rs_values.is_empty(),
+        "events.rs 未解析到任何 `pub const ...: &str` 事件常量"
+    );
+
+    let ts = read(&frontend_root().join("events.ts"));
+    // 提取 events.ts 中全部单引号字符串（登记值；文件内不得出现其他单引号字面量）
+    let mut ts_values: Vec<String> = Vec::new();
+    let mut rest = ts.as_str();
+    while let Some(idx) = rest.find('\'') {
+        let Some(end) = rest[idx + 1..].find('\'') else {
+            break;
+        };
+        ts_values.push(rest[idx + 1..idx + 1 + end].to_string());
+        rest = &rest[idx + 1 + end + 1..];
+    }
+
+    for v in &ts_values {
+        assert!(rs_values.contains(v), "前端登记但 Rust 未登记: {}", v);
+    }
+    for c in &rs_values {
+        assert!(ts_values.contains(c), "Rust 登记但前端未登记: {}", c);
+    }
 }

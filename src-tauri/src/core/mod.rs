@@ -17,6 +17,7 @@ pub mod constants;
 pub mod d3dxini_cache;
 pub mod dll_capability;
 pub mod error_normalizer;
+pub mod events;
 pub mod exit_log;
 pub mod file_lock;
 pub mod file_logger;

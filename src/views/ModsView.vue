@@ -50,6 +50,7 @@ import { logger } from '@/utils/logger'
 import { listen } from '@tauri-apps/api/event'
 import type { ImportItemResult } from '@/utils/tauri'
 import type { ManagedPartialUpdatePayload } from '@/types'
+import { IpcEvent } from '@/events'
 
 const { t } = useI18n()
 const modsStore = useModsStore()
@@ -210,7 +211,7 @@ onMounted(async () => {
   }
 
   try {
-    unlistenManagedFolderChanged = await listen('managed-folder-changed', () => {
+    unlistenManagedFolderChanged = await listen(IpcEvent.ManagedFolderChanged, () => {
       // 回声抑制（R1）：命令 patch 后短窗口内的 watcher 回声事件跳过（缓存已由命令内局部重扫合并，
       // 批次处理为幂等重复）；外部真实变更不受影响（窗口外）
       if (Date.now() - modsStore.lastLocalPatchAt < 2000) {
@@ -239,7 +240,7 @@ onMounted(async () => {
 
   try {
     unlistenManagedPartialUpdate = await listen<ManagedPartialUpdatePayload>(
-      'managed-partial-update',
+      IpcEvent.ManagedPartialUpdate,
       (event) => {
         const { deltas } = event.payload
         if (!Array.isArray(deltas) || deltas.length === 0) return
@@ -264,7 +265,7 @@ onMounted(async () => {
   }
 
   try {
-    unlistenHotkeyRefresh = await listen('hotkey-refresh', () => {
+    unlistenHotkeyRefresh = await listen(IpcEvent.HotkeyRefresh, () => {
       logger.debug('ModsView', 'Hotkey refresh triggered')
       modsStore.refresh()
     })

@@ -248,7 +248,7 @@ pub fn show_main_window(app: &AppHandle) {
         log::warn!("[window] main window missing unexpectedly on show");
     }
     lifecycle::on_window_shown();
-    let _ = app.emit("window-shown", ());
+    let _ = app.emit(crate::core::events::WINDOW_SHOWN, ());
 }
 
 /// 隐藏主窗口
@@ -265,7 +265,7 @@ pub fn hide_main_window(app: &AppHandle) {
     }
     // 触发分级回收计时（清空数据 / 超时销毁）与前端通知
     lifecycle::on_window_hidden(app);
-    let _ = app.emit("window-hidden", ());
+    let _ = app.emit(crate::core::events::WINDOW_HIDDEN, ());
 }
 
 /// 切换主窗口显示/隐藏状态

@@ -71,7 +71,7 @@ pub async fn switch_target_game(app: AppHandle, game: TargetGame) -> Result<(), 
     let app_clone = app.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         settings_store::set_target_game(game).map_err(|e| e.to_string())?;
-        let _ = app_clone.emit("target-game-switched", game);
+        let _ = app_clone.emit(crate::core::events::TARGET_GAME_SWITCHED, game);
         Ok(())
     })
     .await
