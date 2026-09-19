@@ -136,10 +136,6 @@ fn f1_layering_direction_frozen() {
     const F1_EXEMPTIONS: &[(&str, &str)] = &[
         // 控制台基础设施：日志双输出直连（长期放行）
         ("core/file_logger.rs", "crate::platform::console"),
-        // check_mod_cache_valid 命令体引用 parse_game（Phase 6 迁 commands/ 后删除）
-        ("core/mod_cache.rs", "crate::hotkey"),
-        // archive import 命令体的 BusyOpGuard（Phase 6 迁移后删除）
-        ("core/archive_handler.rs", "crate::window"),
         // 日志时区钩子（长期放行，待 file_logger 归位后再评估）
         ("config/settings_store.rs", "crate::core::file_logger"),
         // 设置持久化的 atomically 写盘（utils 原子写，基线存量；重估 config→utils 归属后收紧）
@@ -187,12 +183,8 @@ fn f1_layering_direction_frozen() {
 /// 行级精确匹配（trim 后等于属性串），文档注释中的提及不会误报。
 #[test]
 fn f2_tauri_command_ownership() {
-    // 存量豁免：core 直挂命令（Phase 6 迁入 commands/ 后清零）
-    const LEGACY: &[&str] = &[
-        "core/archive_handler.rs",
-        "core/cloud_data.rs",
-        "core/mod_cache.rs",
-    ];
+    // 存量豁免：core 直挂命令（Phase 6 迁入 commands/ 后已清零，2026-09-19）
+    const LEGACY: &[&str] = &[];
 
     let mut files = Vec::new();
     collect_files(&src_root(), &["rs"], &mut files);
@@ -242,8 +234,8 @@ fn f4_rust_file_line_ratchet() {
     // 存量豁免（上限=2026-09-18 实测行数；随拆分逐域下调）
     const LEGACY_CAPS: &[(&str, usize)] = &[
         ("commands/mod_commands.rs", 1329),
-        ("core/mod_cache.rs", 2710),
-        ("core/archive_handler.rs", 2010),
+        ("core/mod_cache.rs", 2681),
+        ("core/archive_handler.rs", 1839),
         ("core/file_watcher.rs", 1790),
         ("platform/windows.rs", 868),
     ];

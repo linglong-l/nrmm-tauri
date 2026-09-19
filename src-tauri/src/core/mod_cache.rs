@@ -1274,30 +1274,6 @@ impl Default for ModCache {
 /// 以 `parking_lot::RwLock` 包装支持并发读和独占写。
 pub static MOD_CACHE: Lazy<RwLock<ModCache>> = Lazy::new(|| RwLock::new(ModCache::new()));
 
-/// Tauri IPC 命令：检查指定游戏的模组缓存是否有效。
-///
-/// 供前端通过 `checkModCacheValid` 调用，返回 `bool` 表示缓存是否可用。
-///
-/// # 参数
-/// - `game`: 游戏名称的字符串，将调用 `parse_game` 解析为 `TargetGame`。
-/// - `mods_path`: Mods 目录路径的字符串。
-///
-/// # 返回
-///
-/// - `true`: 缓存有效，可直接使用。
-/// - `false`: 缓存已失效或不存在。
-///
-/// # 注意
-///
-/// 若 `parse_game` 解析失败（未知游戏名称），使用 `unwrap_or(TargetGame::GenshinImpact)` 作为兜底。
-#[tauri::command]
-pub fn check_mod_cache_valid(game: String, mods_path: String) -> bool {
-    use crate::models::enums::TargetGame;
-    let parsed = crate::hotkey::parse_game(&game).unwrap_or(TargetGame::GenshinImpact);
-    let cache = MOD_CACHE.read();
-    cache.is_valid(parsed, Path::new(&mods_path))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
