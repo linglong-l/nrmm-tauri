@@ -13,6 +13,7 @@
 //! - `mod_scanner`: 模组扫描器（轻量扫描和深度扫描两种模式）
 //! - `mod_scan_util`: 模组扫描公共基础（正则/目录判定/排序/计数真源，mod_scanner 六域拆分）
 //! - `mod_scan_marker`: 还原安全窗口与标记文件读写（只读不建，mod_scanner 六域拆分）
+//! - `mod_scan_light`: 轻量扫描域（ScanResult / scan_mods_light / scan_single_mod，mod_scanner 六域拆分）
 //! - `namespace_handler`: 命名空间处理（namespace 变量展开）
 //! - `archive_handler`: 压缩包处理（7z/zip/rar 解压导入）
 //! - `cloud_data`: 云端数据管理（链接、消息、图标库等远程资源）
@@ -52,6 +53,7 @@ pub mod mod_remove;
 pub mod mod_restore;
 pub mod mod_results;
 pub mod mod_scan_marker;
+pub mod mod_scan_light;
 pub mod mod_scan_util;
 pub mod mod_scanner;
 pub mod mod_select;
