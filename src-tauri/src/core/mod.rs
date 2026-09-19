@@ -16,6 +16,7 @@
 //! - `mod_scan_light`: 轻量扫描域（ScanResult / scan_mods_light / scan_single_mod，mod_scanner 六域拆分）
 //! - `mod_scan_mutex`: 互斥组扫描域（栈式 DFS / build_mutex_mod_light，mod_scanner 六域拆分）
 //! - `mod_scan_deep`: 深度扫描域（完整解析 INI / build_mod_data_deep，mod_scanner 六域拆分）
+//! - `mod_scan_partial`: 局部扫描域（scan_partial_path / normalize_subpath，mod_scanner 六域拆分）
 //! - `namespace_handler`: 命名空间处理（namespace 变量展开）
 //! - `archive_handler`: 压缩包处理（7z/zip/rar 解压导入）
 //! - `cloud_data`: 云端数据管理（链接、消息、图标库等远程资源）
@@ -58,6 +59,7 @@ pub mod mod_scan_deep;
 pub mod mod_scan_light;
 pub mod mod_scan_marker;
 pub mod mod_scan_mutex;
+pub mod mod_scan_partial;
 pub mod mod_scan_util;
 pub mod mod_scanner;
 pub mod mod_select;
