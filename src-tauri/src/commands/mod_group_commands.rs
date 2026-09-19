@@ -120,7 +120,7 @@ pub async fn remove_group(group_path: String) -> Result<GroupDelta, String> {
 
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
         // 抑制 watcher 批次在删除/裁剪中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
-        let _guard = crate::core::file_watcher::WatcherGuard::new();
+        let _guard = crate::core::watcher_ring::WatcherGuard::new();
         if !path.exists() {
             return Err("Group path does not exist".to_string());
         }
@@ -158,7 +158,7 @@ pub async fn remove_mod(
     let result = tauri::async_runtime::spawn_blocking(
         move || -> Result<crate::core::mod_results::RemoveModResult, String> {
             // 抑制 watcher 批次在移动/还原中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
-            let _guard = crate::core::file_watcher::WatcherGuard::new();
+            let _guard = crate::core::watcher_ring::WatcherGuard::new();
             let mut result =
                 crate::core::mod_remove::remove_mod(&path).map_err(|e| e.to_string())?;
             // 零扫描缓存剔除：组树 + 扁平列表移除该模组条目；未命中（缓存无此条）→ 降级增量重扫
@@ -208,7 +208,7 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<GroupDelta
 
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
         // 抑制 watcher 批次在重命名/写标记文件中途读取中间态
-        let _guard = crate::core::file_watcher::WatcherGuard::new();
+        let _guard = crate::core::watcher_ring::WatcherGuard::new();
         if !path.exists() {
             return Err("Mod path does not exist".to_string());
         }
@@ -291,7 +291,7 @@ pub async fn rename_group(
 
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
         // 抑制 watcher 批次在重命名/写标记文件中途读取中间态
-        let _guard = crate::core::file_watcher::WatcherGuard::new();
+        let _guard = crate::core::watcher_ring::WatcherGuard::new();
         if !path.exists() {
             return Err("Group path does not exist".to_string());
         }
@@ -583,7 +583,7 @@ pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<Gr
     let path_for_log = path.clone();
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
         // 抑制 watcher 批次在批量移动中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
-        let _guard = crate::core::file_watcher::WatcherGuard::new();
+        let _guard = crate::core::watcher_ring::WatcherGuard::new();
         crate::core::mod_remove::remove_group_ex(&path, is_group_xx, &mods_root_for_move)
             .map_err(|e| e.to_string())?;
         let delta = build_removed_group_delta(game, &mods_root, &group_dir);

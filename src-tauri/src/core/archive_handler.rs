@@ -11,9 +11,9 @@
 //! - 支持指定分组导入和自动选择分组导入（扫描 `group_1`, `group_2`... 找到第一个存在的分组）
 //! - 支持直接导入已解压的模组目录（同盘移动 / 跨盘复制 + trash 回收站）
 
-use crate::core::file_watcher::WatcherGuard;
 use crate::core::operation_registry::OperationGuard;
 use crate::core::resolution::compute_limits;
+use crate::core::watcher_ring::WatcherGuard;
 use anyhow::{anyhow, Context, Result};
 use infer;
 use rayon::prelude::*;

@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-use crate::core::file_watcher::WatcherGuard;
+use crate::core::watcher_ring::WatcherGuard;
 #[cfg(test)]
 use once_cell::sync::Lazy;
 

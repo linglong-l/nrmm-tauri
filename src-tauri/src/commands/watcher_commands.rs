@@ -4,7 +4,7 @@
 //! 承载文件监控器的启停 / 切换 / 暂停 / 恢复 / 状态查询命令。
 //! `FileWatcher` 作为 managed state 由 lib.rs `.manage()` 注入，跨模块 `tauri::State` 提取合法。
 
-use crate::core::file_watcher::FileWatcher;
+use crate::core::watcher_core::FileWatcher;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;

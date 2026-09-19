@@ -43,7 +43,7 @@ pub async fn toggle_mod_disabled(
     let result =
         tauri::async_runtime::spawn_blocking(move || -> Result<ToggleModResult, String> {
             // 抑制 watcher 批次在目录重命名中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
-            let _guard = crate::core::file_watcher::WatcherGuard::new();
+            let _guard = crate::core::watcher_ring::WatcherGuard::new();
             if is_mutex {
                 if enable {
                     crate::core::mod_toggle::enable_mutex_mod(&path).map_err(|e| e.to_string())?;
@@ -321,7 +321,7 @@ async fn batch_toggle_group_impl(
     let result =
         tauri::async_runtime::spawn_blocking(move || -> Result<BatchGroupDelta, String> {
             // 抑制 watcher 批次在批量重命名中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
-            let _guard = crate::core::file_watcher::WatcherGuard::new();
+            let _guard = crate::core::watcher_ring::WatcherGuard::new();
             let renamed = if disable {
                 crate::core::mod_toggle::disable_all_mods_in_group(&group_path)
                     .map_err(|e| e.to_string())?

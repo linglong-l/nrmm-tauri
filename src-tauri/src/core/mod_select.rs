@@ -2,15 +2,15 @@
 //!
 //! 从 mod_manager.rs 拆出（2026-09-19 Phase 4-4）。
 //! 依赖 mod_scanner（轻扫定位分组）、mod_path_utils（路径匹配）、
-//! file_watcher::WatcherGuard、mod_results（UpdateResult）。
+//! watcher_ring::WatcherGuard、mod_results（UpdateResult）。
 
 use anyhow::{anyhow, bail, Result};
 use std::path::Path;
 
 use crate::core::constants;
-use crate::core::file_watcher::WatcherGuard;
 use crate::core::mod_path_utils::{mod_path_matches, path_eq_ignore_case};
 use crate::core::mod_results::UpdateResult;
+use crate::core::watcher_ring::WatcherGuard;
 
 use crate::models::enums::{GroupType, TargetGame};
 use crate::models::settings::AppSettings;

@@ -8,8 +8,9 @@ use crate::core::archive_handler::{
     export_mod, import_item, import_mod, import_mod_auto, is_supported_archive, ExtractResult,
     ImportItemRequest,
 };
-use crate::core::file_watcher::{FileWatcher, WatcherGuard};
 use crate::core::resolution::{compute_limits, ResolutionLimits};
+use crate::core::watcher_core::FileWatcher;
+use crate::core::watcher_ring::WatcherGuard;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::State;

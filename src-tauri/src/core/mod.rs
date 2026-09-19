@@ -2,7 +2,7 @@
 //!
 //! 本模块包含 NRMM 的核心业务逻辑：
 //! - `constants`: 全局常量定义（文件名、前缀、正则等）
-//! - `file_watcher`: 文件系统监控器（使用 notify 库，带防抖功能）
+//! - `watcher_ring`/`watcher_incremental`/`watcher_emit`/`watcher_core`: 文件系统监控四域（事件环形缓冲/暂停守卫 / 增量根分类与批次路由 / 事件发射 / FileWatcher 主体，由 file_watcher.rs 拆分）
 //! - `ini_codec`/`ini_condition`/`ini_model`/`ini_transform`/`ini_maintain`/`ini_analysis`: INI 处理六域（2026-09-18 由 ini_handler.rs 拆分）
 //! - `mod_path_utils`: 模组路径工具（路径匹配、Mods 根定位、可用文件夹名）
 //! - `mod_remove`: 模组删除域（remove_mod / remove_group_ex / 移至移除目录）
@@ -34,7 +34,6 @@ pub mod events;
 pub mod exit_log;
 pub mod file_lock;
 pub mod file_logger;
-pub mod file_watcher;
 pub mod fs_walk;
 pub mod incremental_updater;
 pub mod ini_analysis;
@@ -72,3 +71,7 @@ pub mod nrmm_prefs;
 pub mod operation_registry;
 pub mod resolution;
 pub mod thumbnail;
+pub mod watcher_core;
+pub mod watcher_emit;
+pub mod watcher_incremental;
+pub mod watcher_ring;

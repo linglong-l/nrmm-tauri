@@ -2,7 +2,7 @@
 //!
 //! 从 mod_manager.rs 拆出（2026-09-19 Phase 4-3）。
 //! 依赖 mod_scanner（DISABLED 前缀识别/剥离、目录扫描）、mod_path_utils（路径比较）、
-//! constants、file_watcher::WatcherGuard；被 commands/toggle_mod_disabled、
+//! constants、watcher_ring::WatcherGuard；被 commands/toggle_mod_disabled、
 //! batch_toggle_mods、disable/enable_all 消费。
 
 use anyhow::{Context, Result};
@@ -10,8 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::core::constants;
-use crate::core::file_watcher::WatcherGuard;
 use crate::core::mod_path_utils::path_eq_ignore_case;
+use crate::core::watcher_ring::WatcherGuard;
 
 use crate::sel_dbg;
 

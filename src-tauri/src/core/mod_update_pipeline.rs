@@ -13,7 +13,6 @@ use std::time::Duration;
 use crate::core::constants;
 use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::file_lock::AdvisoryLock;
-use crate::core::file_watcher::WatcherGuard;
 use crate::core::ini_model::IniFile;
 use crate::core::mod_detect::{
     collect_libraries_parallel, detect_orfix_texfx, detect_standard_xxmi,
@@ -25,6 +24,7 @@ use crate::core::mod_ini_admin::{
     validate_group_ini_consistency,
 };
 use crate::core::mod_results::{MainIniStatus, UpdateResult};
+use crate::core::watcher_ring::WatcherGuard;
 
 use crate::core::mod_update_lowlevel::{
     process_group_task, run_group_with_panic_guard, GroupOutcome,

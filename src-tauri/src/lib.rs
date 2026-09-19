@@ -35,7 +35,7 @@ pub mod tray;
 pub mod updater;
 pub mod utils;
 pub mod window;
-use crate::core::file_watcher::FileWatcher;
+use crate::core::watcher_core::FileWatcher;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{Emitter, Manager};
