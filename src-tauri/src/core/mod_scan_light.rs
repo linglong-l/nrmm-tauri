@@ -22,9 +22,9 @@ use crate::core::mod_scan_util::{
     find_icon_path, get_managed_folder, group_order_cmp, is_disabled_dir, is_normal_group_dir,
     metadata_mtime_nanos, mod_order_cmp, recount_mods, DISABLED_PREFIX_RE,
 };
-use crate::core::mod_scanner::{
-    build_mutex_mod_light, normalize_subpath, scan_mods_deep, scan_mutex_group_dfs,
-};
+use crate::core::mod_scan_deep::scan_mods_deep;
+use crate::core::mod_scan_mutex::{build_mutex_mod_light, scan_mutex_group_dfs};
+use crate::core::mod_scanner::normalize_subpath;
 use crate::models::enums::{GroupType, ModsPathStatus, TargetGame};
 use crate::models::mod_data::{ModData, ModGroupData};
 
