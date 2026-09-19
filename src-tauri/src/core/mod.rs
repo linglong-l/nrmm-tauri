@@ -10,8 +10,7 @@
 //! - `mod_select`: 模组选择/selectedindex 切换与取消选中
 //! - `mod_toggle`: 模组启停/互斥组/批量启停
 //! - `mod_update_pipeline`: update_mod_data 全量更新编排域（mod_update_lowlevel 为并行底层）
-//! - `mod_scanner`: 模组扫描器（轻量扫描和深度扫描两种模式）
-//! - `mod_scan_util`: 模组扫描公共基础（正则/目录判定/排序/计数真源，mod_scanner 六域拆分）
+//! - `mod_scan_util`: 模组扫描公共基础（正则/目录判定/排序/计数真源）
 //! - `mod_scan_marker`: 还原安全窗口与标记文件读写（只读不建，mod_scanner 六域拆分）
 //! - `mod_scan_light`: 轻量扫描域（ScanResult / scan_mods_light / scan_single_mod，mod_scanner 六域拆分）
 //! - `mod_scan_mutex`: 互斥组扫描域（栈式 DFS / build_mutex_mod_light，mod_scanner 六域拆分）
@@ -61,7 +60,6 @@ pub mod mod_scan_marker;
 pub mod mod_scan_mutex;
 pub mod mod_scan_partial;
 pub mod mod_scan_util;
-pub mod mod_scanner;
 pub mod mod_select;
 pub mod mod_toggle;
 pub mod mod_update_lowlevel;

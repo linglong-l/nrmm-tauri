@@ -712,3 +712,7 @@ fn build_mod_data_deep(
         ..Default::default()
     })
 }
+
+#[cfg(test)]
+#[path = "mod_scan_deep_tests.rs"]
+mod tests;

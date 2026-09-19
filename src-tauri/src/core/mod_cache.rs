@@ -4,9 +4,8 @@
 //! 缓存键为 (TargetGame, 规范化路径字符串)，值为轻量扫描结果 ScanResult。
 //! 使用 parking_lot::RwLock 保证线程安全的并发读写。
 
-use crate::core::mod_scanner::{
-    derive_group_active_state, group_order_cmp, recount_mods, ScanResult,
-};
+use crate::core::mod_scan_light::ScanResult;
+use crate::core::mod_scan_util::{derive_group_active_state, group_order_cmp, recount_mods};
 use crate::models::enums::{GroupType, TargetGame};
 use crate::models::mod_data::{ModData, ModGroupData};
 use once_cell::sync::Lazy;
@@ -1302,7 +1301,7 @@ pub fn check_mod_cache_valid(game: String, mods_path: String) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::mod_scanner;
+    
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -1330,7 +1329,7 @@ mod tests {
     #[test]
     fn test_cache_set_and_get() {
         let (_dir, mods_path) = setup_test_mods();
-        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let result = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
 
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
@@ -1352,7 +1351,7 @@ mod tests {
     #[test]
     fn test_cache_invalidate() {
         let (_dir, mods_path) = setup_test_mods();
-        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let result = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
 
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result);
@@ -1366,7 +1365,7 @@ mod tests {
     #[test]
     fn test_cache_invalidate_game() {
         let (_dir, mods_path) = setup_test_mods();
-        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let result = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
 
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
@@ -1381,7 +1380,7 @@ mod tests {
     #[test]
     fn test_cache_invalidate_all() {
         let (_dir, mods_path) = setup_test_mods();
-        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let result = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
 
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result.clone());
@@ -1396,7 +1395,7 @@ mod tests {
     #[test]
     fn test_cache_different_games_isolated() {
         let (_dir, mods_path) = setup_test_mods();
-        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let result = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
 
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result);
@@ -1409,7 +1408,7 @@ mod tests {
     #[test]
     fn test_patch_mod_entry_updates_path_and_disabled() {
         let (_dir, mods_path) = setup_test_mods();
-        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let result = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         let old_full = result
             .groups
             .iter()
@@ -1499,7 +1498,7 @@ mod tests {
     #[test]
     fn test_patch_mod_entry_miss_returns_false() {
         let (_dir, mods_path) = setup_test_mods();
-        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let result = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         let mut cache = ModCache::new();
         cache.set(TargetGame::GenshinImpact, &mods_path, result);
 
@@ -1521,7 +1520,7 @@ mod tests {
     #[test]
     fn test_remove_mod_entry_removes_from_tree_and_flat() {
         let (_dir, mods_path) = setup_test_mods();
-        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let result = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         let full = result
             .groups
             .iter()
@@ -1574,7 +1573,7 @@ mod tests {
     /// 在 UI 中残留至全量重扫；修复后应即时消失。
     #[test]
     fn test_subtree_replace_propagates_deletion() {
-        use crate::core::mod_scanner::scan_partial_path;
+        use crate::core::mod_scan_partial::scan_partial_path;
         let (dir, mods_path) = setup_test_mods();
         let group1 = dir.path().join("_MANAGED_").join("group_1");
         let mod_gone = group1.join("ModGone");
@@ -1582,7 +1581,7 @@ mod tests {
         fs::write(mod_gone.join("mod.ini"), "[Section]\nx=1\n").unwrap();
 
         let mut cache = ModCache::new();
-        let result = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let result = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         cache.set(TargetGame::GenshinImpact, &mods_path, result);
         assert!(
             cache
@@ -1616,7 +1615,7 @@ mod tests {
     /// 空槽位、enabled 用 is_active 冒充 disabled 语义 → 计数/排序/扁平列表与全量扫描不一致。
     #[test]
     fn subtree_replace_matches_light_scan_semantics() {
-        use crate::core::mod_scanner::scan_partial_path;
+        use crate::core::mod_scan_partial::scan_partial_path;
         let dir = TempDir::new().unwrap();
         let mods_path = dir.path().to_path_buf();
         let managed = dir.path().join("_MANAGED_");
@@ -1640,7 +1639,7 @@ mod tests {
         .unwrap();
 
         let mut cache = ModCache::new();
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         // 前置：全量扁平 mods 不含 None，计数口径（total/enabled/disabled）
         assert!(full.mods.iter().all(|m| m.name != "None"));
         assert_eq!(
@@ -1682,7 +1681,7 @@ mod tests {
     /// 产生重复分组。修复后按路径等价（大小写不敏感）比较原位替换。
     #[test]
     fn subtree_replace_no_duplicate_group_on_case_diff() {
-        use crate::core::mod_scanner::scan_partial_path;
+        use crate::core::mod_scan_partial::scan_partial_path;
         let dir = TempDir::new().unwrap();
         let mods_path = dir.path().to_path_buf();
         let g2 = dir.path().join("_MANAGED_").join("group_2");
@@ -1690,7 +1689,7 @@ mod tests {
         fs::write(g2.join("ModB").join("mod.ini"), "[Section]\nx=1\n").unwrap();
 
         let mut cache = ModCache::new();
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         cache.set(TargetGame::GenshinImpact, &mods_path, full);
 
         // 构造仅大小写不同的 partial（group_path 大写化，模拟 Windows 大小写不敏感路径差异）
@@ -1743,7 +1742,7 @@ mod tests {
         .unwrap();
 
         let mut cache = ModCache::new();
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         cache.set(TargetGame::GenshinImpact, &mods_path, full);
         assert_eq!(
             cache
@@ -1837,7 +1836,7 @@ mod tests {
         )
         .unwrap();
 
-        let scan = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let scan = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
 
         let g1 = find_group_node(&scan, &managed.join("group_1"));
         assert!(g1.is_some(), "应能定位 group_1 节点");
@@ -1870,7 +1869,7 @@ mod tests {
         )
         .unwrap();
 
-        let scan = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let scan = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         let g1 = managed.join("group_1");
         // verbatim 前缀形态（canonicalize 产物）
         let verbatim = PathBuf::from(format!("\\\\?\\{}", g1.to_string_lossy()));
@@ -1916,7 +1915,7 @@ mod tests {
         )
         .unwrap();
 
-        let scan = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let scan = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
 
         // 普通分组：None 空槽位被排除，仅收集真实模组
         let g1 = find_group_node(&scan, &managed.join("group_1")).unwrap();
@@ -1982,12 +1981,12 @@ mod tests {
     ///（`Arc::ptr_eq` 证明零重分配），且签名保持 → 再次合并仍命中。
     #[test]
     fn subtree_replace_reuses_unchanged_mods_by_signature() {
-        use crate::core::mod_scanner::scan_partial_path;
+        use crate::core::mod_scan_partial::scan_partial_path;
         let (dir, mods_path) = setup_test_mods();
         let group1 = setup_two_mod_group(&dir);
 
         let mut cache = ModCache::new();
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         cache.set(TargetGame::GenshinImpact, &mods_path, full);
 
         // 快照旧实例（get 返回共享 Arc，subtree_replace 的 make_mut 对其 COW 保护）
@@ -2043,12 +2042,12 @@ mod tests {
     /// 反映新收藏状态），未变兄弟仍复用。
     #[test]
     fn subtree_replace_replaces_entry_when_fav_changes() {
-        use crate::core::mod_scanner::scan_partial_path;
+        use crate::core::mod_scan_partial::scan_partial_path;
         let (dir, mods_path) = setup_test_mods();
         let group1 = setup_two_mod_group(&dir);
 
         let mut cache = ModCache::new();
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         cache.set(TargetGame::GenshinImpact, &mods_path, full);
         let old = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
         let old_group_test = group_mod_arc(&old, "group_1", "TestMod");
@@ -2097,7 +2096,7 @@ mod tests {
     /// 扁平列表同步（共享同一实例）、组级派生与计数重算。
     #[test]
     fn patch_single_mod_replaces_preserving_mod_index_and_siblings() {
-        use crate::core::mod_scanner::scan_single_mod;
+        use crate::core::mod_scan_light::scan_single_mod;
         let (dir, mods_path) = setup_test_mods();
         let group1 = setup_two_mod_group(&dir);
 
@@ -2105,7 +2104,7 @@ mod tests {
         cache.set(
             TargetGame::GenshinImpact,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
         // 旧实例快照（持有共享 Arc → patch 的 make_mut 走写时拷贝路径，指针断言有效）
         let old = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
@@ -2167,7 +2166,7 @@ mod tests {
     /// C-3a：新增——无匹配条目时追加组内末位、mod_index 为末位、计数/扁平同步。
     #[test]
     fn patch_single_mod_inserts_at_end() {
-        use crate::core::mod_scanner::scan_single_mod;
+        use crate::core::mod_scan_light::scan_single_mod;
         let (dir, mods_path) = setup_test_mods();
         let group1 = setup_two_mod_group(&dir);
 
@@ -2175,7 +2174,7 @@ mod tests {
         cache.set(
             TargetGame::GenshinImpact,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
 
         // 磁盘新增 ModC
@@ -2222,7 +2221,7 @@ mod tests {
         cache.set(
             TargetGame::GenshinImpact,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
         let old = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
         let old_test = group_mod_arc(&old, "group_1", "TestMod");
@@ -2261,7 +2260,7 @@ mod tests {
     /// Arc 指针不变（make_mut 语义验证）。
     #[test]
     fn patch_single_mod_deep_mutex_chain_rebuild_and_sibling_reuse() {
-        use crate::core::mod_scanner::scan_single_mod;
+        use crate::core::mod_scan_light::scan_single_mod;
         let dir = tempfile::TempDir::new().unwrap();
         let mods_path = dir.path().to_path_buf();
         fs::write(dir.path().join("d3dx.ini"), "; test\n").unwrap();
@@ -2271,7 +2270,7 @@ mod tests {
         cache.set(
             TargetGame::GenshinImpact,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
         let old = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
         let old_mutex = old
@@ -2355,7 +2354,7 @@ mod tests {
     /// C-3a：缓存 miss / 无定位（路径实为子分组节点）/ 删除无匹配 → None。
     #[test]
     fn patch_single_mod_miss_and_no_match_return_none() {
-        use crate::core::mod_scanner::scan_single_mod;
+        use crate::core::mod_scan_light::scan_single_mod;
         // 缓存 miss
         let mut empty_cache = ModCache::new();
         let fake = PathBuf::from("/nonexistent");
@@ -2372,7 +2371,7 @@ mod tests {
         cache.set(
             TargetGame::GenshinImpact,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
         assert!(
             cache
@@ -2415,7 +2414,7 @@ mod tests {
     /// selectedindex 源，未动模组被复用旧实例，is_active 停留在旧值。
     #[test]
     fn subtree_replace_signature_covers_selectedindex_source() {
-        use crate::core::mod_scanner::scan_partial_path;
+        use crate::core::mod_scan_partial::scan_partial_path;
         let dir = tempfile::TempDir::new().unwrap();
         let mods_path = dir.path().to_path_buf();
         let managed = dir.path().join("_MANAGED_");
@@ -2427,7 +2426,7 @@ mod tests {
         fs::write(group1.join("ModB").join("mod.ini"), "[Section]\nx=1\n").unwrap();
 
         let mut cache = ModCache::new();
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         cache.set(TargetGame::GenshinImpact, &mods_path, full);
         // 前置：两启用 → 多启用回退 selectedindex（首扫创建为 0）→ 无模组激活
         let old = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
@@ -2459,7 +2458,7 @@ mod tests {
     /// C-3b：互斥组嵌套 children 的深层组内模组同样按签名递归复用。
     #[test]
     fn subtree_replace_reuses_mutex_children_entries() {
-        use crate::core::mod_scanner::scan_partial_path;
+        use crate::core::mod_scan_partial::scan_partial_path;
         let dir = tempfile::TempDir::new().unwrap();
         let mods_path = dir.path().to_path_buf();
         let managed = dir.path().join("_MANAGED_");
@@ -2475,7 +2474,7 @@ mod tests {
         fs::write(mutex_root.join("ModY").join("mod.ini"), "[Section]\nx=1\n").unwrap();
 
         let mut cache = ModCache::new();
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         cache.set(TargetGame::GenshinImpact, &mods_path, full);
         let old = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
         let old_mutex = old
@@ -2547,7 +2546,7 @@ mod tests {
         fs::write(group1.join("ModB").join("mod.ini"), "[Section]\nx=1\n").unwrap();
 
         let mut cache = ModCache::new();
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         cache.set(TargetGame::GenshinImpact, &mods_path, full);
         // 前置：首扫 selectedindex=0（多启用回退）→ 无模组激活
         {
@@ -2565,7 +2564,7 @@ mod tests {
 
         // 与全量轻扫等价性校验：落盘同一 selectedindex 后重扫对比
         fs::write(group1.join("selectedindex"), "1").unwrap();
-        let rescan = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let rescan = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         let rescan_g = rescan
             .groups
             .iter()
@@ -2623,7 +2622,7 @@ mod tests {
         cache.set(
             TargetGame::GenshinImpact,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
 
         // 单启用 → 无论 selectedindex 写何值，激活位恒为该启用模组（索引 1）
@@ -2658,7 +2657,7 @@ mod tests {
         cache.set(
             TargetGame::GenshinImpact,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
         assert!(!cache.patch_selected_index(
             TargetGame::GenshinImpact,
@@ -2682,7 +2681,7 @@ mod tests {
         cache.set(
             TargetGame::GenshinImpact,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
 
         // 模拟外部持有：get() 克隆 Arc 并保活（strong_count>1）

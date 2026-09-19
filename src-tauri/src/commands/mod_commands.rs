@@ -23,7 +23,7 @@
 use crate::config::settings_store;
 use crate::core::constants;
 use crate::core::mod_cache;
-use crate::core::mod_scanner;
+
 use crate::core::resolution;
 use crate::models::enums::TargetGame;
 use crate::models::mod_data::{BatchGroupDelta, GroupDelta};
@@ -112,7 +112,7 @@ fn is_direct_writable_group(group_path: &Path, managed_path: &Path) -> bool {
         return false;
     }
     match group_path.file_name() {
-        Some(name) => mod_scanner::is_normal_group_dir(&name.to_string_lossy()).is_some(),
+        Some(name) => crate::core::mod_scan_util::is_normal_group_dir(&name.to_string_lossy()).is_some(),
         None => false,
     }
 }
@@ -153,7 +153,7 @@ pub struct SelectModArgs {
 pub async fn get_mods(
     game: String,
     mods_path: String,
-) -> Result<Arc<mod_scanner::ScanResult>, String> {
+) -> Result<Arc<crate::core::mod_scan_light::ScanResult>, String> {
     log::debug!(
         "[commands::mod_commands] [get_mods] game={} mods_path={}",
         game,
@@ -193,8 +193,8 @@ pub async fn get_mods(
 
     let scan_path = mods_path.clone();
     let result =
-        tauri::async_runtime::spawn_blocking(move || -> Result<mod_scanner::ScanResult, String> {
-            mod_scanner::scan_mods_light(&scan_path)
+        tauri::async_runtime::spawn_blocking(move || -> Result<crate::core::mod_scan_light::ScanResult, String> {
+            crate::core::mod_scan_light::scan_mods_light(&scan_path)
                 .map_err(crate::core::error_normalizer::err_to_ui)
         })
         .await
@@ -229,7 +229,7 @@ pub fn check_mods_path_status(
 ) -> Result<crate::models::enums::ModsPathStatus, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
-    Ok(mod_scanner::check_mods_path(game, &mods_path))
+    Ok(crate::core::mod_scan_light::check_mods_path(game, &mods_path))
 }
 
 /// 刷新模组列表（轻量扫描，更新缓存）
@@ -237,7 +237,7 @@ pub fn check_mods_path_status(
 pub async fn refresh_mods(
     game: String,
     mods_path: String,
-) -> Result<Arc<mod_scanner::ScanResult>, String> {
+) -> Result<Arc<crate::core::mod_scan_light::ScanResult>, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
@@ -250,8 +250,8 @@ pub async fn refresh_mods(
 
     let scan_path = mods_path.clone();
     let result =
-        tauri::async_runtime::spawn_blocking(move || -> Result<mod_scanner::ScanResult, String> {
-            mod_scanner::scan_mods_light(&scan_path)
+        tauri::async_runtime::spawn_blocking(move || -> Result<crate::core::mod_scan_light::ScanResult, String> {
+            crate::core::mod_scan_light::scan_mods_light(&scan_path)
                 .map_err(crate::core::error_normalizer::err_to_ui)
         })
         .await
@@ -1054,7 +1054,7 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<GroupDelta
             .to_string();
 
         // NRMM 逻辑：group_xx 普通分组下的模组，重命名仅修改 modname 标记文件（展示名），文件夹名保持不变
-        let new_path = if mod_scanner::is_group_xx_dir(&parent_name) {
+        let new_path = if crate::core::mod_scan_util::is_group_xx_dir(&parent_name) {
             let modname_path = path.join("modname");
             crate::utils::atomic_write(&modname_path, new_name.as_bytes())
                 .map_err(|e| format!("Failed to write modname file: {}", e))?;
@@ -1066,12 +1066,12 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<GroupDelta
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
+            let is_disabled = crate::core::mod_scan_util::is_disabled_dir(&dir_name);
             let final_name = if is_disabled {
                 format!(
                     "{}{}",
                     constants::DISABLED_PREFIX,
-                    mod_scanner::strip_disabled_prefix(&new_name)
+                    crate::core::mod_scan_util::strip_disabled_prefix(&new_name)
                 )
             } else {
                 new_name.clone()
@@ -1263,13 +1263,13 @@ fn derive_toggled_path(path: &Path, enable: bool) -> PathBuf {
         .unwrap_or_default();
     let parent = path.parent().unwrap_or(path);
     if enable {
-        let stripped = mod_scanner::strip_disabled_prefix(&name);
+        let stripped = crate::core::mod_scan_util::strip_disabled_prefix(&name);
         if stripped == name || stripped.is_empty() {
             path.to_path_buf() // 已启用（幂等）
         } else {
             parent.join(stripped)
         }
-    } else if mod_scanner::is_disabled_dir(&name) {
+    } else if crate::core::mod_scan_util::is_disabled_dir(&name) {
         path.to_path_buf() // 已禁用（幂等）
     } else {
         parent.join(format!("{}{}", constants::DISABLED_PREFIX, name))
@@ -1587,7 +1587,7 @@ fn build_group_delta(
     old_group_dir: &Path,
     rescan_dir: &Path,
 ) -> Result<GroupDelta> {
-    let partial = mod_scanner::scan_partial_path(mods_path, rescan_dir)
+    let partial = crate::core::mod_scan_partial::scan_partial_path(mods_path, rescan_dir)
         .with_context(|| format!("partial rescan failed for {:?}", rescan_dir))?;
     // 新分组节点：partial 中覆盖 rescan_dir 的分组（可能含多个节点，按 full_path 前缀匹配）
     let new_group = partial
@@ -2439,7 +2439,7 @@ mod tests {
     // =====================================================================
     #[test]
     fn restore_after_update_test() {
-        use crate::core::mod_scanner;
+        
         use std::collections::BTreeSet;
         use walkdir::WalkDir;
 
@@ -2447,14 +2447,14 @@ mod tests {
         let _runtime_lock = RUNTIME_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // 窗口全局状态互斥（含 mod_scanner 内的标记创建断言测试）
-        let _window_lock = mod_scanner::TEST_WINDOW_LOCK
+        let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         // panic 安全：测试退出（含断言失败）即清除窗口
         struct ClearWindow;
         impl Drop for ClearWindow {
             fn drop(&mut self) {
-                mod_scanner::test_clear_restore_safe_window();
+                crate::core::mod_scan_marker::test_clear_restore_safe_window();
             }
         }
         let _clear = ClearWindow;
@@ -2658,7 +2658,7 @@ mod tests {
 
         // 5) 还原安全窗口内重扫：不新建任何管理标记
         //    （模拟 watcher 防抖 1s 后的重扫，窗口 60s 内必然处于活跃态）
-        mod_scanner::scan_mods_light(&game_mods_path).expect("还原后重扫失败");
+        crate::core::mod_scan_light::scan_mods_light(&game_mods_path).expect("还原后重扫失败");
         let markers_after = marker_inventory(&runtime);
         let new_markers: Vec<&String> = markers_after.difference(&markers_before).collect();
         assert!(
@@ -2687,7 +2687,7 @@ mod tests {
     #[test]
     fn toggle_group_delta_assembly_smoke() {
         use crate::core::mod_cache;
-        use crate::core::mod_scanner;
+        
         use tempfile::TempDir;
 
         // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
@@ -2714,7 +2714,7 @@ mod tests {
         .unwrap();
 
         // 预填充缓存（模拟 get_mods 已加载该游戏）
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         mod_cache::MOD_CACHE
             .write()
             .set(TargetGame::GenshinImpact, &mods_path, full);
@@ -2822,7 +2822,7 @@ mod tests {
     #[test]
     fn remove_group_delta_clears_cache_subtree() {
         use crate::core::mod_cache;
-        use crate::core::mod_scanner;
+        
         use tempfile::TempDir;
 
         // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
@@ -2847,7 +2847,7 @@ mod tests {
         )
         .unwrap();
 
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         mod_cache::MOD_CACHE
             .write()
             .set(TargetGame::GenshinImpact, &mods_path, full);
@@ -2903,7 +2903,7 @@ mod tests {
     #[test]
     fn rename_mutex_mod_delta_uses_new_path() {
         use crate::core::mod_cache;
-        use crate::core::mod_scanner;
+        
         use tempfile::TempDir;
 
         // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
@@ -2920,7 +2920,7 @@ mod tests {
         fs::create_dir_all(mutex_root.join("ModY")).unwrap();
         fs::write(mutex_root.join("ModY").join("mod.ini"), "[Section]\nx=1\n").unwrap();
 
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         mod_cache::MOD_CACHE
             .write()
             .set(TargetGame::GenshinImpact, &mods_path, full);

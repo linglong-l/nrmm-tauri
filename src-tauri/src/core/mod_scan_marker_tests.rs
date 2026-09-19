@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::mod_scanner::scan_mods_light;
+use crate::core::mod_scan_light::scan_mods_light;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;

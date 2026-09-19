@@ -8,7 +8,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::core::constants;
-use crate::core::mod_scanner;
+
 
 /// 路径比较（Windows 大小写不敏感，其他平台敏感）
 ///
@@ -87,8 +87,8 @@ pub(crate) fn mod_path_matches(disk_path: &str, want_path: &str) -> bool {
     if d_parent != w_parent {
         return false;
     }
-    let d_name = mod_scanner::strip_disabled_prefix(d_name);
-    let w_name = mod_scanner::strip_disabled_prefix(w_name);
+    let d_name = crate::core::mod_scan_util::strip_disabled_prefix(d_name);
+    let w_name = crate::core::mod_scan_util::strip_disabled_prefix(w_name);
     !d_name.is_empty() && d_name == w_name
 }
 

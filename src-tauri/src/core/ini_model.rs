@@ -127,7 +127,8 @@ impl IniFile {
     pub fn parse(path: &Path) -> Result<Self> {
         let file =
             fs::File::open(path).with_context(|| format!("Failed to open file: {:?}", path))?;
-        let mut reader = BufReader::with_capacity(crate::core::ini_codec::READ_BUFFER_CAPACITY, file);
+        let mut reader =
+            BufReader::with_capacity(crate::core::ini_codec::READ_BUFFER_CAPACITY, file);
 
         // 从线程级缓冲池取出可复用缓冲区（取出后 RefCell 内留下默认空串，跨调用复用，降低分配开销）
         let mut line_buf = LINE_BUF.with(|lb| std::mem::take(&mut *lb.borrow_mut()));

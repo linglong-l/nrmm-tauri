@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use crate::core::constants;
 use crate::core::file_watcher::WatcherGuard;
 use crate::core::mod_path_utils::path_eq_ignore_case;
-use crate::core::mod_scanner;
+
 use crate::sel_dbg;
 
 /// 切换单个模组的启用/禁用状态（独立开关，不影响同组其他模组）
@@ -32,13 +32,13 @@ pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
         .to_string_lossy()
         .to_string();
     let parent = mod_path.parent().unwrap_or(mod_path);
-    let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
+    let is_disabled = crate::core::mod_scan_util::is_disabled_dir(&dir_name);
 
     if enable {
         if mod_path.exists() {
             // 传入路径存在 → 检查是否需要启用
             if is_disabled {
-                let new_name = mod_scanner::strip_disabled_prefix(&dir_name);
+                let new_name = crate::core::mod_scan_util::strip_disabled_prefix(&dir_name);
                 let new_path = parent.join(new_name);
                 if mod_path != new_path {
                     fs::rename(mod_path, &new_path)
@@ -49,7 +49,7 @@ pub fn toggle_mod(mod_path: &Path, enable: bool) -> Result<()> {
         } else {
             // 传入路径不存在 → 检查父目录下是否有启用版本
             if is_disabled {
-                let enabled_name = mod_scanner::strip_disabled_prefix(&dir_name);
+                let enabled_name = crate::core::mod_scan_util::strip_disabled_prefix(&dir_name);
                 let enabled_path = parent.join(enabled_name);
                 if enabled_path.exists() {
                     // 已启用 → 幂等，直接返回
@@ -136,7 +136,7 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
             continue;
         }
 
-        let has_ini = mod_scanner::dir_has_ini_file(&path)?;
+        let has_ini = crate::core::mod_scan_util::dir_has_ini_file(&path)?;
         if !has_ini {
             continue;
         }
@@ -147,9 +147,9 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let is_disabled = mod_scanner::is_disabled_dir(&current_name);
+            let is_disabled = crate::core::mod_scan_util::is_disabled_dir(&current_name);
             if is_disabled {
-                let new_name = mod_scanner::strip_disabled_prefix(&current_name);
+                let new_name = crate::core::mod_scan_util::strip_disabled_prefix(&current_name);
                 let new_path = path.parent().unwrap_or(&path).join(new_name);
                 if path != new_path {
                     if new_path.exists() {
@@ -176,7 +176,7 @@ pub fn enable_mutex_mod(mod_path: &Path) -> Result<()> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let is_disabled = mod_scanner::is_disabled_dir(&current_name);
+            let is_disabled = crate::core::mod_scan_util::is_disabled_dir(&current_name);
             if !is_disabled {
                 let new_name = format!("{}{}", constants::DISABLED_PREFIX, current_name);
                 let new_path = path.parent().unwrap_or(&path).join(new_name);
@@ -212,7 +212,7 @@ pub fn disable_mutex_mod(mod_path: &Path) -> Result<()> {
         .to_string_lossy()
         .to_string();
     let parent = mod_path.parent().unwrap_or(mod_path);
-    let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
+    let is_disabled = crate::core::mod_scan_util::is_disabled_dir(&dir_name);
 
     // 传入路径不存在 → 检查磁盘上是否已禁用
     if !mod_path.exists() {
@@ -292,7 +292,7 @@ pub fn disable_all_mods_in_group(group_path: &Path) -> Result<Vec<(PathBuf, Path
         }
 
         // 仅处理含 .ini 的叶子模组节点（不含 .ini 的是分组节点/子分组，跳过）
-        let has_ini = match mod_scanner::dir_has_ini_file(&path) {
+        let has_ini = match crate::core::mod_scan_util::dir_has_ini_file(&path) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -301,7 +301,7 @@ pub fn disable_all_mods_in_group(group_path: &Path) -> Result<Vec<(PathBuf, Path
         }
 
         // 检查是否已禁用（名称以 DISABLED 开头，大小写不敏感）
-        let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
+        let is_disabled = crate::core::mod_scan_util::is_disabled_dir(&dir_name);
         if is_disabled {
             continue;
         }
@@ -342,7 +342,7 @@ pub fn is_mutex_mod(mod_path: &Path, managed_path: &Path) -> bool {
     match first_component {
         Some(std::path::Component::Normal(name)) => {
             let name_str = name.to_string_lossy();
-            mod_scanner::is_normal_group_dir(&name_str).is_none()
+            crate::core::mod_scan_util::is_normal_group_dir(&name_str).is_none()
         }
         _ => false,
     }
@@ -368,7 +368,7 @@ pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> 
             .to_string_lossy()
             .to_string();
         let parent = path.parent().unwrap_or(&path);
-        let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
+        let is_disabled = crate::core::mod_scan_util::is_disabled_dir(&dir_name);
 
         // 判断是否需要操作
         let needs_change = if enable {
@@ -377,7 +377,7 @@ pub fn batch_toggle_mods(mod_paths: &[String], enable: bool, is_mutex: bool) -> 
                 is_disabled
             } else {
                 !is_disabled || {
-                    let enabled_name = mod_scanner::strip_disabled_prefix(&dir_name);
+                    let enabled_name = crate::core::mod_scan_util::strip_disabled_prefix(&dir_name);
                     !parent.join(enabled_name).exists()
                 }
             }
@@ -456,7 +456,7 @@ pub fn enable_all_mods_in_group(group_path: &Path) -> Result<Vec<(PathBuf, PathB
         }
 
         // 仅处理含 .ini 的叶子模组节点
-        let has_ini = match mod_scanner::dir_has_ini_file(&path) {
+        let has_ini = match crate::core::mod_scan_util::dir_has_ini_file(&path) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -465,13 +465,13 @@ pub fn enable_all_mods_in_group(group_path: &Path) -> Result<Vec<(PathBuf, PathB
         }
 
         // 检查是否已禁用（名称以 DISABLED 开头，大小写不敏感）
-        let is_disabled = mod_scanner::is_disabled_dir(&dir_name);
+        let is_disabled = crate::core::mod_scan_util::is_disabled_dir(&dir_name);
         if !is_disabled {
             continue;
         }
 
         // 去除 DISABLED 前缀及前导分隔符 _ 空格 - 等
-        let new_name = mod_scanner::strip_disabled_prefix(&dir_name);
+        let new_name = crate::core::mod_scan_util::strip_disabled_prefix(&dir_name);
         let new_name = if new_name.is_empty() {
             // 极端情况：整个目录名就是前缀，跳过
             continue;

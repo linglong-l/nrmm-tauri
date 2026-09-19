@@ -127,9 +127,10 @@ endif\n";
         .iter()
         .find(|s| s.name.eq_ignore_ascii_case("Constants"))
         .expect("Constants 段应存在");
-    assert!(!constants.lines.iter().any(
-        |l| matches!(l, IniLine::KeyValue { key, .. } if key.contains("$managed_slot_id"))
-    ));
+    assert!(!constants
+        .lines
+        .iter()
+        .any(|l| matches!(l, IniLine::KeyValue { key, .. } if key.contains("$managed_slot_id"))));
     // 注：manager if 守卫的清理属已知限制（与幂等性语义耦合），此处不断言其移除；
     // 仅断言头注释与 Constants 清理生效（见 remove_old_managed_content 内注释说明）。
 }

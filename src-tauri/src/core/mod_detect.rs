@@ -14,7 +14,7 @@ use crate::core::constants;
 use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::mod_restore::collect_mod_ini_files;
-use crate::core::mod_scanner;
+
 use crate::models::enums::GroupType;
 use crate::models::mod_data::{
     DuplicateLib, HashConflict, HashConflictEntry, HashConflictResult, LibInMod, ModData,
@@ -153,7 +153,7 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
     // 使用 scan_mods_light 而非 scan_mods_deep：
     // 深度扫描仅处理 group_xx 目录，会遗漏 MutexGroup（非group目录）下的模组。
     // 需求要求非group目录参与 hash 冲突检测，故改用轻量扫描以包含两类分组。
-    let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
+    let scan_result = crate::core::mod_scan_light::scan_mods_light(game_mods_path)?;
     // 三元组：(mod_name, mod_path, ini_path)
     // 记录 INI 文件路径以支持前端悬浮提示和点击展开详情
     let mut hash_to_mods: HashMap<String, Vec<(String, String, PathBuf)>> = HashMap::new();

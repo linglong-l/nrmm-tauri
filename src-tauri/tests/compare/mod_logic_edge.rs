@@ -16,7 +16,7 @@ use std::io;
 use std::path::PathBuf;
 
 use xxmi_nrmm_lib::core::error_normalizer::{friendly_errored_line, normalize};
-use xxmi_nrmm_lib::core::mod_scanner::strip_disabled_prefix;
+use xxmi_nrmm_lib::core::mod_scan_util::strip_disabled_prefix;
 use xxmi_nrmm_lib::utils::atomic_write;
 
 /// 在系统临时目录下创建唯一子目录，返回路径；带控制变量用于并行安全与清理。

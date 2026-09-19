@@ -15,7 +15,9 @@ use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::file_lock::AdvisoryLock;
 use crate::core::file_watcher::WatcherGuard;
 use crate::core::ini_model::IniFile;
-use crate::core::mod_detect::{collect_libraries_parallel, detect_orfix_texfx, detect_standard_xxmi};
+use crate::core::mod_detect::{
+    collect_libraries_parallel, detect_orfix_texfx, detect_standard_xxmi,
+};
 use crate::core::mod_ini_admin::{
     auto_modify_duplicate_namespace, create_group_ini, create_nrmm_include_ini,
     delete_group_ini_files, detect_include_recursive, fix_non_managed_crash_lines,
@@ -23,14 +25,14 @@ use crate::core::mod_ini_admin::{
     validate_group_ini_consistency,
 };
 use crate::core::mod_results::{MainIniStatus, UpdateResult};
-use crate::core::mod_scanner;
-use crate::core::mod_update_lowlevel::{process_group_task, run_group_with_panic_guard, GroupOutcome};
+
+use crate::core::mod_update_lowlevel::{
+    process_group_task, run_group_with_panic_guard, GroupOutcome,
+};
 use crate::core::operation_registry::OperationGuard;
 use crate::models::enums::TargetGame;
 use crate::models::mod_data::{ErroredLines, ModData};
 use crate::models::settings::AppSettings;
-
-
 
 /// 备份调度器暂停守卫：构造时暂停 [`crate::core::ini_backup_scheduler`]，
 /// Drop 时恢复（RAII）。
@@ -133,7 +135,7 @@ pub fn update_mod_data(
 
     // 步骤2: 扫描模组
     let t_scan = std::time::Instant::now();
-    let scan_result = mod_scanner::scan_mods(game_mods_path)?;
+    let scan_result = crate::core::mod_scan_light::scan_mods(game_mods_path)?;
     log::debug!(
         "[mod_manager] [update_mod_data] step=scan_mods done total_mods={} total_groups={}",
         scan_result.total_mods_count,

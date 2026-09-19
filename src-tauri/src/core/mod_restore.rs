@@ -28,7 +28,7 @@ use crate::core::mod_results::RestoredCount;
 pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
     // 还原安全窗口：随后 watcher 防抖触发的重扫对管理标记只读不建
     // （还原后的目录通常会被删除/导出，专属配置文件会干扰其他管理器）
-    crate::core::mod_scanner::mark_restore_safe_window();
+    crate::core::mod_scan_marker::mark_restore_safe_window();
     let mut restored = 0u32;
     let mut failed = 0u32;
 
@@ -202,7 +202,7 @@ fn restore_inis_recursive(dir: &Path, restored: &mut u32, failed: &mut u32) -> R
 pub fn restore_managed_mod(mod_dir: &Path) -> (u32, u32) {
     // 还原安全窗口：随后 watcher 防抖触发的重扫对管理标记只读不建
     // （还原后的目录通常会被删除/导出，专属配置文件会干扰其他管理器）
-    crate::core::mod_scanner::mark_restore_safe_window();
+    crate::core::mod_scan_marker::mark_restore_safe_window();
     let mut total = 0u32;
     let mut failed = 0u32;
 

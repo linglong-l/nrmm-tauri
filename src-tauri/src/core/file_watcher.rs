@@ -215,7 +215,7 @@ fn classify_overflow_roots(dirty: &[PathBuf], managed_path: &Path) -> Vec<PathBu
                 Some(first) => {
                     let name = first.as_os_str().to_string_lossy().to_string();
                     let root = managed_path.join(first);
-                    if crate::core::mod_scanner::is_normal_group_dir(&name).is_some() {
+                    if crate::core::mod_scan_util::is_normal_group_dir(&name).is_some() {
                         if !group_roots.contains(&root) {
                             group_roots.push(root);
                         }
@@ -285,7 +285,7 @@ fn consolidate_incremental_roots(dirty: &[PathBuf], managed_path: &Path) -> Vec<
 fn merge_partials_and_build_deltas(
     game: crate::models::enums::TargetGame,
     mods_path: &Path,
-    scan_results: &[(PathBuf, crate::core::mod_scanner::ScanResult)],
+    scan_results: &[(PathBuf, crate::core::mod_scan_light::ScanResult)],
 ) -> Vec<GroupDelta> {
     let mut deltas = Vec::new();
     let mut skipped = 0usize;
@@ -386,7 +386,7 @@ fn is_mod_level_root(root: &Path, managed_path: &Path) -> bool {
         segs.len() >= 2
             && segs
                 .last()
-                .is_some_and(|last| !crate::core::mod_scanner::is_group_xx_dir(last))
+                .is_some_and(|last| !crate::core::mod_scan_util::is_group_xx_dir(last))
     })
 }
 
@@ -407,7 +407,7 @@ fn scan_group_roots(
     game: crate::models::enums::TargetGame,
     mods_path: &Path,
     roots: &[PathBuf],
-) -> Vec<(PathBuf, crate::core::mod_scanner::ScanResult)> {
+) -> Vec<(PathBuf, crate::core::mod_scan_light::ScanResult)> {
     roots
         .par_iter()
         .filter_map(|sub| {
@@ -420,7 +420,7 @@ fn scan_group_roots(
                 cache_guard.invalidate_game(game);
                 return None;
             }
-            match crate::core::mod_scanner::scan_partial_path(mods_path, sub) {
+            match crate::core::mod_scan_partial::scan_partial_path(mods_path, sub) {
                 Ok(partial) => Some((sub.clone(), partial)),
                 Err(e) => {
                     log::error!(
@@ -544,7 +544,7 @@ fn route_incremental_batch(
         if is_mod_level_root(root, managed_path) {
             mod_roots_total += 1;
             if root.exists() {
-                match crate::core::mod_scanner::scan_single_mod(mods_path, root) {
+                match crate::core::mod_scan_light::scan_single_mod(mods_path, root) {
                     Ok((arc, _group_dir)) => mod_batch.push((root.clone(), Some(arc))),
                     Err(e) => {
                         log::warn!(
@@ -1394,7 +1394,7 @@ mod tests {
     #[test]
     fn merge_partials_and_build_deltas_assembly() {
         use crate::core::mod_cache;
-        use crate::core::mod_scanner;
+        
         use tempfile::TempDir;
 
         // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰）
@@ -1415,7 +1415,7 @@ mod tests {
 
         // 预填充缓存（模拟 get_mods 已加载该游戏）
         let game = crate::models::enums::TargetGame::GenshinImpact;
-        let full = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         mod_cache::MOD_CACHE.write().set(game, &mods_path, full);
 
         // 模拟外部变更：group_1 新增 ModD、group_2 新增 ModE（各自局部重扫产物）
@@ -1426,11 +1426,11 @@ mod tests {
         let scan_results = vec![
             (
                 group1.clone(),
-                mod_scanner::scan_partial_path(&mods_path, &group1).unwrap(),
+                crate::core::mod_scan_partial::scan_partial_path(&mods_path, &group1).unwrap(),
             ),
             (
                 group2.clone(),
-                mod_scanner::scan_partial_path(&mods_path, &group2).unwrap(),
+                crate::core::mod_scan_partial::scan_partial_path(&mods_path, &group2).unwrap(),
             ),
         ];
 
@@ -1480,7 +1480,7 @@ mod tests {
         // subtree_replace 照常幂等合并，终态不变。
         let repeat = vec![(
             group1.clone(),
-            mod_scanner::scan_partial_path(&mods_path, &group1).unwrap(),
+            crate::core::mod_scan_partial::scan_partial_path(&mods_path, &group1).unwrap(),
         )];
         let deltas2 = merge_partials_and_build_deltas(game, &mods_path, &repeat);
         assert!(
@@ -1606,7 +1606,7 @@ mod tests {
     #[test]
     fn route_incremental_batch_mod_level_not_group_rescan() {
         use crate::core::mod_cache;
-        use crate::core::mod_scanner;
+        
         use tempfile::TempDir;
 
         let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
@@ -1627,7 +1627,7 @@ mod tests {
         mod_cache::MOD_CACHE.write().set(
             game,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
 
         // 磁盘侧「删除 ModB + 深部变更 ModA」，但收敛根仅指向 ModA：
@@ -1666,7 +1666,7 @@ mod tests {
     #[test]
     fn route_incremental_batch_inserts_at_end_not_sorted_position() {
         use crate::core::mod_cache;
-        use crate::core::mod_scanner;
+        
         use tempfile::TempDir;
 
         let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
@@ -1685,7 +1685,7 @@ mod tests {
         mod_cache::MOD_CACHE.write().set(
             game,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
 
         // 新增 AAAMod（自然序在 ZZZMod 之前；整组重扫会将其排到组首真实模组位）
@@ -1709,7 +1709,7 @@ mod tests {
     #[test]
     fn route_incremental_batch_mixed_and_aggregation() {
         use crate::core::mod_cache;
-        use crate::core::mod_scanner;
+        
         use tempfile::TempDir;
 
         let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
@@ -1734,7 +1734,7 @@ mod tests {
         mod_cache::MOD_CACHE.write().set(
             game,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
 
         // 混合批次：group_2（组级）+ group_1/ModA + group_1/ModB（同组两个模组级）
@@ -1790,7 +1790,7 @@ mod tests {
     #[test]
     fn route_incremental_batch_nested_normal_group_falls_back_to_group_rescan() {
         use crate::core::mod_cache;
-        use crate::core::mod_scanner;
+        
         use tempfile::TempDir;
 
         let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
@@ -1811,7 +1811,7 @@ mod tests {
         mod_cache::MOD_CACHE.write().set(
             game,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
         let before = mod_cache::MOD_CACHE.read().get(game, &mods_path).unwrap();
         assert!(
@@ -1849,7 +1849,7 @@ mod tests {
     #[test]
     fn route_incremental_batch_mod_level_parity_with_full_scan() {
         use crate::core::mod_cache;
-        use crate::core::mod_scanner;
+        
         use tempfile::TempDir;
 
         let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
@@ -1881,7 +1881,7 @@ mod tests {
         mod_cache::MOD_CACHE.write().set(
             game,
             &mods_path,
-            mod_scanner::scan_mods_light(&mods_path).unwrap(),
+            crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
 
         // 深部变更（外部工具写入场景）：普通组 ModA 与互斥树深层 ModX 各加 fav
@@ -1898,7 +1898,7 @@ mod tests {
 
         // 金标准：缓存序列化产物与同一磁盘状态的全量轻量扫描完全一致
         let cached = mod_cache::MOD_CACHE.read().get(game, &mods_path).unwrap();
-        let fresh = mod_scanner::scan_mods_light(&mods_path).unwrap();
+        let fresh = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         let cached_json = serde_json::to_value(&*cached).expect("缓存序列化失败");
         let fresh_json = serde_json::to_value(&fresh).expect("全量扫描序列化失败");
         assert_eq!(

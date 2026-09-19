@@ -15,7 +15,7 @@ use crate::core::constants;
 use crate::core::ini_model::IniFile;
 use crate::core::mod_ini_cache::get_or_parse_ini;
 use crate::core::mod_results::SaveCustomizationsResult;
-use crate::core::mod_scanner;
+
 use crate::core::namespace_handler;
 use crate::models::enums::TargetGame;
 use crate::models::mod_data::ModData;
@@ -457,7 +457,7 @@ pub(crate) fn delete_group_ini_files(managed_path: &Path) -> Result<()> {
                     // 避免误删 group_01 / group_0 / groupxx 等非标准目录下的文件。
                     let is_group_ini = name
                         .strip_suffix(".ini")
-                        .map(|stem| mod_scanner::is_normal_group_dir(stem).is_some())
+                        .map(|stem| crate::core::mod_scan_util::is_normal_group_dir(stem).is_some())
                         .unwrap_or(false);
                     // 也清理 ModFolder.ini（旧版本命名）
                     if is_group_ini || name == "ModFolder.ini" {
@@ -469,7 +469,7 @@ pub(crate) fn delete_group_ini_files(managed_path: &Path) -> Result<()> {
             } else if path.is_dir() {
                 // 仅递归清理严格 group_<int> 目录；绝不触碰 # / XX / groupxx 等非标准目录
                 let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if mod_scanner::is_normal_group_dir(dir_name).is_some() {
+                if crate::core::mod_scan_util::is_normal_group_dir(dir_name).is_some() {
                     let _ = delete_in_dir(&path);
                 }
             }

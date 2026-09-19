@@ -323,7 +323,10 @@ pub(crate) fn process_group_task(
 /// # 返回
 /// 任务正常完成时返回其产出（补充耗时）；任务 panic 时返回仅含一条 `error_type=3`
 /// 错误条目的 [`GroupOutcome`]（组内已收集的局部结果被丢弃，避免半成品路径进入 group INI）
-pub(crate) fn run_group_with_panic_guard(group_id: u32, task: impl FnOnce() -> GroupOutcome) -> GroupOutcome {
+pub(crate) fn run_group_with_panic_guard(
+    group_id: u32,
+    task: impl FnOnce() -> GroupOutcome,
+) -> GroupOutcome {
     let start = std::time::Instant::now();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(task)) {
         Ok(mut outcome) => {

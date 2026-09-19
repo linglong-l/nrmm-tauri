@@ -658,3 +658,7 @@ pub fn scan_single_mod(mods_path: &Path, mod_dir: &Path) -> Result<(Arc<ModData>
     };
     Ok((Arc::new(mod_data), group_dir))
 }
+
+#[cfg(test)]
+#[path = "mod_scan_light_tests.rs"]
+mod tests;

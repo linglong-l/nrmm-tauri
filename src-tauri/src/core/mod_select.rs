@@ -11,7 +11,7 @@ use crate::core::constants;
 use crate::core::file_watcher::WatcherGuard;
 use crate::core::mod_path_utils::{mod_path_matches, path_eq_ignore_case};
 use crate::core::mod_results::UpdateResult;
-use crate::core::mod_scanner;
+
 use crate::models::enums::{GroupType, TargetGame};
 use crate::models::settings::AppSettings;
 use crate::sel_dbg;
@@ -36,7 +36,7 @@ pub fn write_selectedindex_direct(group_path: &Path, index: u32) -> Result<()> {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .ok_or_else(|| anyhow!("group_path has no file name: {:?}", group_path))?;
-    if mod_scanner::is_normal_group_dir(&dir_name).is_none() {
+    if crate::core::mod_scan_util::is_normal_group_dir(&dir_name).is_none() {
         bail!("not a group_xx directory: {:?}", group_path);
     }
     let selectedindex_path = group_path.join(constants::SELECTED_INDEX_FILE);
@@ -102,7 +102,7 @@ pub fn switch_mod(
     );
     let _s = std::time::Instant::now();
     // 使用轻量扫描以匹配前端索引（None 在 mod_index=0，真实模组从 1 开始）
-    let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
+    let scan_result = crate::core::mod_scan_light::scan_mods_light(game_mods_path)?;
     log::debug!(
         "[core::mod_manager] [switch_mod] scan completed | total_groups={} total_mods={}",
         scan_result.groups.len(),
@@ -330,7 +330,7 @@ pub fn deselect_group_mods(
     _settings: &AppSettings,
     group_index: u32,
 ) -> Result<UpdateResult> {
-    let scan_result = mod_scanner::scan_mods_light(game_mods_path)?;
+    let scan_result = crate::core::mod_scan_light::scan_mods_light(game_mods_path)?;
 
     // 仅 NormalGroup 写入 selectedindex，MutexGroup 不参与标记文件
     let group_dir = scan_result
@@ -557,7 +557,7 @@ mod tests_select_switch {
         create_mod_with_ini(&group1, "ModC", "[Section]\n");
 
         // 先扫一次拿到后端确定序（用于推导期望下标），避免把「目录枚举序」当期望值
-        let scan = crate::core::mod_scanner::scan_mods_light(dir.path()).unwrap();
+        let scan = crate::core::mod_scan_light::scan_mods_light(dir.path()).unwrap();
         let backend_mods: Vec<_> = scan
             .mods
             .iter()

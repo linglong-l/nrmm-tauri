@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 
 use crate::core::constants;
 use crate::core::mod_path_utils::{get_available_folder_name, locate_mods_root};
-use crate::core::mod_results::RemoveModResult;
 use crate::core::mod_restore::restore_managed_mod;
-use crate::core::mod_scanner;
+use crate::core::mod_results::RemoveModResult;
+
 use crate::models::mod_data::GroupDelta;
 
 /// 移除模组（NRMM 对齐：移至 DISABLED_MANAGED_REMOVED + 还原 INI）
@@ -194,7 +194,7 @@ pub fn remove_group_ex(group_path: &Path, is_group_xx: bool, mods_root: &Path) -
                 continue;
             }
             // 含 .ini → 叶子模组节点，不是子分组，跳过（会随父目录一起被移除）
-            let has_ini = match mod_scanner::dir_has_ini_file(&child_path) {
+            let has_ini = match crate::core::mod_scan_util::dir_has_ini_file(&child_path) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
