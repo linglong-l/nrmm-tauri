@@ -177,7 +177,7 @@ fn f1_layering_direction_frozen() {
     }
     assert!(
         violations.is_empty(),
-        "F1 分层违规（豁免表见 tests/arch_gate.rs F1_EXEMPTIONS）:\n{}",
+        "F1 分层违规（豁免表见 tests/arch/arch_gate.rs F1_EXEMPTIONS）:\n{}",
         violations.join("\n")
     );
 }
@@ -242,7 +242,7 @@ fn f4_rust_file_line_ratchet() {
     const MAX_NEW_FILE_LINES: usize = 800;
     // 存量豁免（上限=2026-09-18 实测行数；随拆分逐域下调）
     const LEGACY_CAPS: &[(&str, usize)] = &[
-        ("core/mod_manager.rs", 2578),
+        ("core/mod_manager.rs", 1735),
         ("core/mod_scanner.rs", 4098),
         ("commands/mod_commands.rs", 2977),
         ("core/mod_cache.rs", 2710),

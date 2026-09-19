@@ -111,3 +111,7 @@ tempfile = "3"
 # release 性能配置位于工作区根 Cargo.toml（非 root package 的 profile 会被 Cargo 忽略）。
 [package.metadata.cargo-machete]
 ignored = ["tauri-build", "x11-dl", "core-graphics", "core-foundation"]
+
+[[test]]
+name = "arch_gate"
+path = "tests/arch/arch_gate.rs"

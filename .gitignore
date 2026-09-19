@@ -104,5 +104,10 @@ CLAUDE.local.md
 .gemini/
 .clinerules/
 overview.md
-src-tauri/tests/
+# 测试目录：源码子目录入库，数据集/运行时产物忽略
+src-tauri/tests/datasets/
+src-tauri/tests/runtime/
+src-tauri/tests/.tmp_deep_compare_out/
+src-tauri/tests/*.py
+!src-tauri/tests/compare/
 /*.py
