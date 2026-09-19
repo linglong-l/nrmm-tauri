@@ -3,9 +3,9 @@
 //! 从 mod_commands.rs 拆出（2026-09-19 Phase 6-2）。
 //! 承载分组增删改、模组重命名、批量移除分组、F10 按键模拟与子文件夹合法性校验。
 //! 选择类命令 select_mod / deselect_group_mod 已迁 mod_selection_commands。
-//! 共享辅助经 `use crate::commands::mod_commands::{...}` 引用。
+//! 共享辅助经 `use crate::commands::mod_commands_util::{...}` 引用。
 
-use crate::commands::mod_commands::{
+use crate::commands::mod_commands_util::{
     build_group_delta, build_removed_group_delta, log_delta, parse_game, resolve_managed_context,
     trash_delete, UPDATE_LOCK,
 };

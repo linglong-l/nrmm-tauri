@@ -17,6 +17,7 @@ pub mod cloud_commands;
 pub mod keybind_commands;
 pub mod log_commands;
 pub mod mod_commands;
+pub mod mod_commands_util;
 pub mod mod_group_commands;
 pub mod mod_mod_commands;
 pub mod mod_query_commands;

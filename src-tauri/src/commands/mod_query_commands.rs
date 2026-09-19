@@ -2,10 +2,10 @@
 //!
 //! 从 mod_commands.rs 拆出（2026-09-19 Phase 6-1）。
 //! 承载模组列表查询、路径有效性检查、强制刷新、重量级更新、更新标记同步与 hash 冲突检测。
-//! 共享辅助（parse_game / SCAN_LOCK / UPDATE_LOCK）经 `use crate::commands::mod_commands::{...}`
+//! 共享辅助（parse_game / SCAN_LOCK / UPDATE_LOCK）经 `use crate::commands::mod_commands_util::{...}`
 //! 引用，保持单一实现，避免重复。
 
-use crate::commands::mod_commands::{parse_game, SCAN_LOCK, UPDATE_LOCK};
+use crate::commands::mod_commands_util::{parse_game, SCAN_LOCK, UPDATE_LOCK};
 use crate::config::settings_store;
 use std::path::PathBuf;
 use std::sync::Arc;

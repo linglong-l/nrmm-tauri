@@ -231,13 +231,9 @@ fn f2_tauri_command_ownership() {
 #[test]
 fn f4_rust_file_line_ratchet() {
     const MAX_NEW_FILE_LINES: usize = 800;
-    // 存量豁免（上限=2026-09-18 实测行数；随拆分逐域下调）
-    const LEGACY_CAPS: &[(&str, usize)] = &[
-        ("commands/mod_commands.rs", 1329),
-        ("core/mod_cache.rs", 2681),
-        ("core/archive_handler.rs", 1836),
-        ("core/file_watcher.rs", 1790),
-    ];
+    // 存量豁免：PA-1~PA-5 已拆尽全部巨石（mod_cache/archive_handler/file_watcher/
+    // mod_commands 均 ≤800），2026-09-19 已清零。
+    const LEGACY_CAPS: &[(&str, usize)] = &[];
 
     let mut files = Vec::new();
     collect_files(&src_root(), &["rs"], &mut files);

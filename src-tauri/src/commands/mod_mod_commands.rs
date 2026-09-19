@@ -2,11 +2,13 @@
 //!
 //! 从 mod_commands.rs 拆出（2026-09-19 Phase 6-2）。
 //! 承载单模组启停、收藏切换、目录打开、INI 还原、自定义保存与批量启停。
-//! 共享辅助经 `use crate::commands::mod_commands::{...}` 引用。
+//! 命令契约（ToggleModResult）经 `mod_commands`，共享辅助经
+//! `use crate::commands::mod_commands_util::{...}` 引用。
 
-use crate::commands::mod_commands::{
+use crate::commands::mod_commands::ToggleModResult;
+use crate::commands::mod_commands_util::{
     build_group_delta, derive_toggled_path, log_delta, open_path_in_explorer, parse_game,
-    resolve_managed_context, ToggleModResult, UPDATE_LOCK,
+    resolve_managed_context, UPDATE_LOCK,
 };
 use crate::config::settings_store;
 use crate::core::constants;

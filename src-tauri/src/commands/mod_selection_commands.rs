@@ -3,10 +3,12 @@
 //! 从 mod_commands.rs 拆出（2026-09-19 Phase 6-2）。
 //! 承载 select_mod / deselect_group_mod 两个选择类命令（含按键模拟），
 //! 因体量较大独立成文件以满足 F4 新文件 ≤800 行棘轮。
-//! 共享辅助经 `use crate::commands::mod_commands::{...}` 引用。
+//! 命令契约（SelectModArgs）经 `mod_commands`，共享辅助经
+//! `use crate::commands::mod_commands_util::{...}` 引用。
 
-use crate::commands::mod_commands::{
-    is_direct_writable_group, parse_game, selection_debounce_hit, SelectModArgs, UPDATE_LOCK,
+use crate::commands::mod_commands::SelectModArgs;
+use crate::commands::mod_commands_util::{
+    is_direct_writable_group, parse_game, selection_debounce_hit, UPDATE_LOCK,
 };
 use crate::config::settings_store;
 use crate::core::constants;
