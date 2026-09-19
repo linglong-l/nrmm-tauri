@@ -453,7 +453,7 @@ pub(crate) fn scan_normal_group_light(
 /// - `is_active`: 构建期激活位（组扫描为目录枚举序对 selectedindex 的初值，组级派生
 ///   随后统一覆盖；单模组扫描为组语义近似派生值）。
 /// - `mod_index`: 组内索引（组扫描为枚举序，重排后统一重分配；单模组扫描为占位 0，
-///   由 `mod_cache::patch_single_mod` 保留旧值/置末位）。
+///   由 `mod_cache_patch::patch_single_mod` 保留旧值/置末位）。
 ///
 /// # Errors
 /// 当 `modname` 标记文件无法读取/创建时传播错误。
@@ -591,7 +591,7 @@ fn group_has_single_enabled_mod(group_dir: &Path, target_file_name: &str) -> boo
 ///   selectedindex mtime 源（文件不存在时源为 0）。
 /// - 其他（MutexGroup 树节点）→ 互斥模组；`is_active` 恒 false（运行时管理），签名无组源。
 ///
-/// `mod_index` 无法独立得出（依赖组内排序）：替换场景由 `mod_cache::patch_single_mod`
+/// `mod_index` 无法独立得出（依赖组内排序）：替换场景由 `mod_cache_patch::patch_single_mod`
 /// 保留旧实例值，新增场景置组内末位，均由下次组级扫描校正。
 ///
 /// # 参数

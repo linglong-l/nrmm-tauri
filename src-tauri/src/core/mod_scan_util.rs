@@ -423,7 +423,7 @@ pub(crate) fn compute_disk_signature(
 /// 统一重算模组计数，口径与全量轻量扫描一致。
 ///
 /// 排除 `None` 空槽位（`name == "None"`），以 `!disabled && !mod_disabled` 判定启用。
-/// 供全量扫描与增量合并（`mod_cache::subtree_replace`）共用，保证两处计数一致。
+/// 供全量扫描与增量合并（`mod_cache_patch::subtree_replace`）共用，保证两处计数一致。
 ///
 /// # 返回
 ///
@@ -449,7 +449,7 @@ pub(crate) fn recount_mods(mods: &[Arc<ModData>]) -> (usize, usize, usize) {
 /// 分组排序比较（对齐 NRMM）：NormalGroup 角色分组永远置顶、按整数索引序；
 /// MutexGroup 互斥分组按名称字符串序。
 ///
-/// 供全量扫描与增量合并（`mod_cache::subtree_replace`）共用分组排序规则。
+/// 供全量扫描与增量合并（`mod_cache_patch::subtree_replace`）共用分组排序规则。
 pub(crate) fn group_order_cmp(a: &ModGroupData, b: &ModGroupData) -> CmpOrdering {
     let a_mutex = a.group_type == GroupType::MutexGroup;
     let b_mutex = b.group_type == GroupType::MutexGroup;

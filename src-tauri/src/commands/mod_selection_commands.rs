@@ -10,13 +10,15 @@ use crate::commands::mod_commands::{
 };
 use crate::config::settings_store;
 use crate::core::constants;
-use crate::core::mod_cache;
+use crate::core::mod_cache_core;
 use crate::sel_dbg;
 use std::path::{Path, PathBuf};
 
 /// 选择模组（支持互斥组）
 #[tauri::command]
-pub async fn select_mod(args: SelectModArgs) -> Result<crate::core::mod_results::UpdateResult, String> {
+pub async fn select_mod(
+    args: SelectModArgs,
+) -> Result<crate::core::mod_results::UpdateResult, String> {
     // 「_MANAGED_ 写操作全局锁」（C12）：select/switch 与 update/导入互斥，
     // 防止 update 批量写入期间全量扫描读到中间态，并交错写 selectedindex。
     // 命令体入口即获取，跨下方两个分支的所有 spawn_blocking + .await 持锁。
@@ -119,7 +121,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<crate::core::mod_results:
         .map_err(|e| e.to_string())??;
 
         {
-            let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+            let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
             cache.invalidate_game(game_enum); // 彻底失效该游戏缓存（invalidate_by_prefix 是 no-op 陷阱）
         }
 
@@ -204,7 +206,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<crate::core::mod_results:
             // 拿不到锁即跳过本次 patch —— 降级语义是现成的：磁盘 selectedindex 已由
             // write_selectedindex_direct 写成功，缓存对账由 watcher 增量 / 下次全量扫描完成。
             // MOD_CACHE 为 parking_lot::RwLock：try_write() 返回 Option（持锁时为 None）
-            let patched = match mod_cache::MOD_CACHE.try_write() {
+            let patched = match mod_cache_core::MOD_CACHE.try_write() {
                 Some(mut cache) => {
                     cache.patch_selected_index(game_enum, &mods_path, &group_path_buf, direct_index)
                 }
@@ -260,7 +262,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<crate::core::mod_results:
 
             // 整缓存失效（旧行为，确保下次 get_mods 全量扫描）
             {
-                let mut cache = mod_cache::MOD_CACHE.write();
+                let mut cache = mod_cache_core::MOD_CACHE.write();
                 cache.invalidate_game(game_enum); // 彻底失效该游戏缓存（invalidate_by_prefix 是 no-op 陷阱）
             }
             log::debug!(
@@ -420,7 +422,7 @@ pub async fn deselect_group_mod(
         })?;
         // 同 select_mod：非阻塞 try_write，避免排在 watcher 增量合并的写锁段后空等
         // （selectedindex=0 已落盘，缓存对账交给 watcher / 下次全量扫描）
-        let patched = match mod_cache::MOD_CACHE.try_write() {
+        let patched = match mod_cache_core::MOD_CACHE.try_write() {
             Some(mut cache) => cache.patch_selected_index(game, &mods_path, &gp, 0),
             None => {
                 log::warn!(
@@ -451,7 +453,7 @@ pub async fn deselect_group_mod(
     .map_err(|e| e.to_string())??;
 
     {
-        let mut cache = mod_cache::MOD_CACHE.write();
+        let mut cache = mod_cache_core::MOD_CACHE.write();
         cache.invalidate_game(game); // 彻底失效该游戏缓存（invalidate_by_prefix 是 no-op 陷阱）
     }
 

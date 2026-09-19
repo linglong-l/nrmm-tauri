@@ -3,7 +3,7 @@
 //! 从 core/mod_cache.rs 迁出（2026-09-19 Phase 6-4）。
 //! 承载缓存有效性查询命令，内部经 `crate::hotkey::parse_game` 解析游戏标识。
 
-use crate::core::mod_cache::MOD_CACHE;
+use crate::core::mod_cache_core::MOD_CACHE;
 use std::path::Path;
 
 /// 检查缓存有效性

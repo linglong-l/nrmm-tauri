@@ -7,7 +7,7 @@
 //! - 增量更新：通过 `IncrementalUpdater` 收集变更路径 → consolidate → 局部重扫 → subtree_replace 写入缓存，避免全量刷新；
 //!   未溢出批次额外 emit `managed-partial-update`（直接携带 GroupDelta 列表，前端原地 patch）
 //! - 双粒度路由（R3/C-3a）：未溢出批次的收敛根为模组级（组目录下含 .ini 的模组目录）时，
-//!   走单模组扫描 + `mod_cache::patch_single_mod`（组内位置 patch + 兄弟 Arc 复用）；
+//!   走单模组扫描 + `mod_cache_patch::patch_single_mod`（组内位置 patch + 兄弟 Arc 复用）；
 //!   组级根（group_xx / mutex 顶层根）维持整组重扫 + subtree_replace 现状路径
 //! - 暂停/恢复功能：程序自身写文件时暂停监控避免循环触发
 //! - 过滤无关事件：临时文件、备份文件、隐藏文件不触发刷新
@@ -291,19 +291,19 @@ fn merge_partials_and_build_deltas(
     let mut skipped = 0usize;
     for (_root, partial) in scan_results {
         // a. 合并前（读锁）收集该 partial 各组旧状态（复用命令层共享的
-        //    mod_cache::collect_old_group_state；缓存 miss 时 old 为空、键回退目录路径串）
+        //    mod_cache_delta::collect_old_group_state；缓存 miss 时 old 为空、键回退目录路径串）
         for g in &partial.groups {
             // P1 修复（全量 partial 差异过滤）：与缓存无实质差异的组跳过 delta emit。
             // 全量兜底 partial 携带全部 109 组，无条件 emit 曾导致前端
             // applyGroupDelta ×110/轮（两轮 220 次）的选择后 UI 重排抖动；
             // 过滤后仅实际变化的组到达前端（缓存照常 subtree_replace，签名
             // 复用零拷贝，语义不变）。判定读锁短持有、O(组内) 比较，总 O(全树)。
-            if !crate::core::mod_cache::group_has_real_change(game, mods_path, g) {
+            if !crate::core::mod_cache_path::group_has_real_change(game, mods_path, g) {
                 skipped += 1;
                 continue;
             }
             let (old_group_path, old_mod_paths) =
-                crate::core::mod_cache::collect_old_group_state(game, mods_path, &g.full_path);
+                crate::core::mod_cache_delta::collect_old_group_state(game, mods_path, &g.full_path);
             // c. delta：new_group 为该组重扫后的完整新节点（磁盘为唯一真相源）
             deltas.push(GroupDelta {
                 old_group_path,
@@ -312,7 +312,7 @@ fn merge_partials_and_build_deltas(
             });
         }
         // b. 写锁 subtree_replace 就地合并缓存（现状逻辑；缓存 miss 时内部跳过）
-        crate::core::mod_cache::MOD_CACHE
+        crate::core::mod_cache_core::MOD_CACHE
             .write()
             .subtree_replace(game, mods_path, partial.clone());
     }
@@ -416,7 +416,7 @@ fn scan_group_roots(
                     "[Incremental] scan root no longer exists, invalidating game cache: {:?}",
                     sub
                 );
-                let mut cache_guard = crate::core::mod_cache::MOD_CACHE.write();
+                let mut cache_guard = crate::core::mod_cache_core::MOD_CACHE.write();
                 cache_guard.invalidate_game(game);
                 return None;
             }
@@ -483,11 +483,11 @@ fn patch_mod_batch_and_build_deltas(
         let items = buckets.remove(top).unwrap_or_default();
         // 读锁收集旧状态（缓存 miss 时 old 为空、键回退目录路径串）
         let (old_group_path, old_mod_paths) =
-            crate::core::mod_cache::collect_old_group_state(game, mods_path, top);
+            crate::core::mod_cache_delta::collect_old_group_state(game, mods_path, top);
         // 写锁逐模组 patch（同组批次一次锁定；返回顶层组节点含定位链重建结果）
         let mut final_node: Option<crate::models::mod_data::ModGroupData> = None;
         {
-            let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+            let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
             for (root, new_mod) in items {
                 match cache.patch_single_mod(game, mods_path, &root, new_mod) {
                     Some(node) => final_node = Some(node),
@@ -578,8 +578,8 @@ fn route_incremental_batch(
             live_group_roots.push(r.clone());
         } else {
             let (old_group_path, old_mod_paths) =
-                crate::core::mod_cache::collect_old_group_state(game, mods_path, r);
-            let removed = crate::core::mod_cache::MOD_CACHE
+                crate::core::mod_cache_delta::collect_old_group_state(game, mods_path, r);
+            let removed = crate::core::mod_cache_core::MOD_CACHE
                 .write()
                 .subtree_remove(game, mods_path, r);
             log::info!(
@@ -950,7 +950,7 @@ impl FileWatcher {
                             if scan_roots.is_empty() {
                                 // 分类返回空 = 走 invalidate_game 全量兜底（无需扫描根）
                                 {
-                                    let mut cache_guard = crate::core::mod_cache::MOD_CACHE.write();
+                                    let mut cache_guard = crate::core::mod_cache_core::MOD_CACHE.write();
                                     cache_guard.invalidate_game(current_game);
                                 }
                                 log::info!(
@@ -985,7 +985,7 @@ impl FileWatcher {
                                 let scan_results =
                                     scan_group_roots(current_game, &mods_path_buf, &scan_roots);
                                 if !scan_results.is_empty() {
-                                    let mut cache_guard = crate::core::mod_cache::MOD_CACHE.write();
+                                    let mut cache_guard = crate::core::mod_cache_core::MOD_CACHE.write();
                                     for (_root, partial) in &scan_results {
                                         cache_guard.subtree_replace(
                                             current_game,
@@ -1274,12 +1274,12 @@ mod tests {
     /// 故意不 invalidate_all 以免破坏并行测试前置数据）。
     #[test]
     fn merge_partials_and_build_deltas_assembly() {
-        use crate::core::mod_cache;
+        use crate::core::{mod_cache_core, mod_cache_delta, mod_cache_path};
         
         use tempfile::TempDir;
 
         // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰）
-        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+        let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
@@ -1297,7 +1297,7 @@ mod tests {
         // 预填充缓存（模拟 get_mods 已加载该游戏）
         let game = crate::models::enums::TargetGame::GenshinImpact;
         let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
-        mod_cache::MOD_CACHE.write().set(game, &mods_path, full);
+        mod_cache_core::MOD_CACHE.write().set(game, &mods_path, full);
 
         // 模拟外部变更：group_1 新增 ModD、group_2 新增 ModE（各自局部重扫产物）
         std::fs::create_dir_all(group1.join("ModD")).unwrap();
@@ -1337,19 +1337,19 @@ mod tests {
         // new_group 为重扫后完整组节点（含新增 ModD）
         let ng = d1.new_group.as_ref().expect("new_group 不应为 None");
         assert_eq!(
-            mod_cache::collect_group_mod_paths(ng).len(),
+            mod_cache_delta::collect_group_mod_paths(ng).len(),
             3,
             "新分组应含 3 个真实模组（ModA/ModB/ModD）"
         );
 
         // 缓存已合并（后端缓存与 delta 一致）
-        let cached = mod_cache::MOD_CACHE
+        let cached = mod_cache_core::MOD_CACHE
             .read()
             .get(game, &mods_path)
             .expect("缓存应命中");
-        let g1 = mod_cache::find_group_node(&cached, &group1).expect("缓存应含 group_1");
+        let g1 = mod_cache_path::find_group_node(&cached, &group1).expect("缓存应含 group_1");
         assert_eq!(
-            mod_cache::collect_group_mod_paths(g1).len(),
+            mod_cache_delta::collect_group_mod_paths(g1).len(),
             3,
             "缓存 group_1 应已含新增 ModD"
         );
@@ -1486,11 +1486,11 @@ mod tests {
     /// 组内**未被指向的兄弟**的陈旧状态保留（整组重扫会以磁盘为准重扫并传播删除）。
     #[test]
     fn route_incremental_batch_mod_level_not_group_rescan() {
-        use crate::core::mod_cache;
+        use crate::core::{mod_cache_core, mod_cache_path};
         
         use tempfile::TempDir;
 
-        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+        let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
@@ -1505,7 +1505,7 @@ mod tests {
         }
 
         let game = crate::models::enums::TargetGame::GenshinImpact;
-        mod_cache::MOD_CACHE.write().set(
+        mod_cache_core::MOD_CACHE.write().set(
             game,
             &mods_path,
             crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
@@ -1534,8 +1534,8 @@ mod tests {
             "模组级 patch 不应触碰兄弟条目（证明未走整组重扫路径）"
         );
         // 缓存与 delta 一致
-        let cached = mod_cache::MOD_CACHE.read().get(game, &mods_path).unwrap();
-        let g1 = mod_cache::find_group_node(&cached, &group1).unwrap();
+        let cached = mod_cache_core::MOD_CACHE.read().get(game, &mods_path).unwrap();
+        let g1 = mod_cache_path::find_group_node(&cached, &group1).unwrap();
         assert!(
             g1.mods.iter().any(|m| m.name == "ModB"),
             "缓存同样保留兄弟（等其自身批次收敛）"
@@ -1546,11 +1546,11 @@ mod tests {
     /// 插入自然位），以此证明模组级路径被命中。
     #[test]
     fn route_incremental_batch_inserts_at_end_not_sorted_position() {
-        use crate::core::mod_cache;
+        use crate::core::{mod_cache_core, mod_cache_path};
         
         use tempfile::TempDir;
 
-        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+        let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
@@ -1563,7 +1563,7 @@ mod tests {
         std::fs::write(group1.join("ZZZMod").join("mod.ini"), "[Section]\nx=1\n").unwrap();
 
         let game = crate::models::enums::TargetGame::GenshinImpact;
-        mod_cache::MOD_CACHE.write().set(
+        mod_cache_core::MOD_CACHE.write().set(
             game,
             &mods_path,
             crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
@@ -1575,8 +1575,8 @@ mod tests {
 
         route_incremental_batch(game, &mods_path, &managed, &[group1.join("AAAMod")]);
 
-        let cached = mod_cache::MOD_CACHE.read().get(game, &mods_path).unwrap();
-        let g1 = mod_cache::find_group_node(&cached, &group1).unwrap();
+        let cached = mod_cache_core::MOD_CACHE.read().get(game, &mods_path).unwrap();
+        let g1 = mod_cache_path::find_group_node(&cached, &group1).unwrap();
         let names: Vec<&str> = g1.mods.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(
             names,
@@ -1589,11 +1589,11 @@ mod tests {
     /// 同组多个模组级根合并为**一次**组 delta。
     #[test]
     fn route_incremental_batch_mixed_and_aggregation() {
-        use crate::core::mod_cache;
+        use crate::core::mod_cache_core;
         
         use tempfile::TempDir;
 
-        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+        let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
@@ -1612,7 +1612,7 @@ mod tests {
         }
 
         let game = crate::models::enums::TargetGame::GenshinImpact;
-        mod_cache::MOD_CACHE.write().set(
+        mod_cache_core::MOD_CACHE.write().set(
             game,
             &mods_path,
             crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
@@ -1657,7 +1657,7 @@ mod tests {
             "旧状态为合并前（两模组均未 fav）"
         );
         // 缓存终态一致
-        let cached = mod_cache::MOD_CACHE.read().get(game, &mods_path).unwrap();
+        let cached = mod_cache_core::MOD_CACHE.read().get(game, &mods_path).unwrap();
         assert_eq!(cached.total_mods_count, 3);
         assert!(
             cached.mods.iter().filter(|m| m.is_favorite).count() == 3,
@@ -1670,11 +1670,11 @@ mod tests {
     /// patch 未命中 → 降级组级重扫，与变更前行为一致（缓存不漏更新、不损坏）。
     #[test]
     fn route_incremental_batch_nested_normal_group_falls_back_to_group_rescan() {
-        use crate::core::mod_cache;
+        use crate::core::{mod_cache_core, mod_cache_path};
         
         use tempfile::TempDir;
 
-        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+        let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
@@ -1689,12 +1689,12 @@ mod tests {
         std::fs::write(mod_x.join("mod.ini"), "[Section]\nx=1\n").unwrap();
 
         let game = crate::models::enums::TargetGame::GenshinImpact;
-        mod_cache::MOD_CACHE.write().set(
+        mod_cache_core::MOD_CACHE.write().set(
             game,
             &mods_path,
             crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
         );
-        let before = mod_cache::MOD_CACHE.read().get(game, &mods_path).unwrap();
+        let before = mod_cache_core::MOD_CACHE.read().get(game, &mods_path).unwrap();
         assert!(
             before.groups.iter().any(|g| g.group_name == "group_1"),
             "前置：group_1 已入缓存"
@@ -1713,8 +1713,8 @@ mod tests {
             "嵌套深层变更的降级组级重扫与缓存一致，应被差异过滤: {:?}",
             deltas
         );
-        let cached = mod_cache::MOD_CACHE.read().get(game, &mods_path).unwrap();
-        let g1 = mod_cache::find_group_node(&cached, &group1).expect("缓存组节点应健在");
+        let cached = mod_cache_core::MOD_CACHE.read().get(game, &mods_path).unwrap();
+        let g1 = mod_cache_path::find_group_node(&cached, &group1).expect("缓存组节点应健在");
         assert!(
             g1.mods.iter().any(|m| m.name == "Sub"),
             "Sub 条目保留（轻扫粒度：嵌套内容对其不可见，与变更前行为一致）"
@@ -1729,11 +1729,11 @@ mod tests {
     /// 对同一磁盘状态的全量轻量扫描完全一致。
     #[test]
     fn route_incremental_batch_mod_level_parity_with_full_scan() {
-        use crate::core::mod_cache;
+        use crate::core::mod_cache_core;
         
         use tempfile::TempDir;
 
-        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+        let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
@@ -1759,7 +1759,7 @@ mod tests {
         }
 
         let game = crate::models::enums::TargetGame::GenshinImpact;
-        mod_cache::MOD_CACHE.write().set(
+        mod_cache_core::MOD_CACHE.write().set(
             game,
             &mods_path,
             crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
@@ -1778,7 +1778,7 @@ mod tests {
         assert_eq!(deltas.len(), 2, "两个顶层组各一个 delta");
 
         // 金标准：缓存序列化产物与同一磁盘状态的全量轻量扫描完全一致
-        let cached = mod_cache::MOD_CACHE.read().get(game, &mods_path).unwrap();
+        let cached = mod_cache_core::MOD_CACHE.read().get(game, &mods_path).unwrap();
         let fresh = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
         let cached_json = serde_json::to_value(&*cached).expect("缓存序列化失败");
         let fresh_json = serde_json::to_value(&fresh).expect("全量扫描序列化失败");

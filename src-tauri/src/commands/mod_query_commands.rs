@@ -29,7 +29,7 @@ pub async fn get_mods(
 
     // 先在锁作用域内取出缓存结果，锁释放后再触发启动备份（fire-and-forget）
     let cached = {
-        let cache = crate::core::mod_cache::MOD_CACHE.read();
+        let cache = crate::core::mod_cache_core::MOD_CACHE.read();
         cache.get(game, &mods_path)
     };
     if let Some(result) = cached {
@@ -45,7 +45,7 @@ pub async fn get_mods(
     // 已回填，直接取缓存免扫（并发 N 次 cache miss 只扫一次）
     let _scan_guard = SCAN_LOCK.lock().await;
     {
-        let cache = crate::core::mod_cache::MOD_CACHE.read();
+        let cache = crate::core::mod_cache_core::MOD_CACHE.read();
         if let Some(result) = cache.get(game, &mods_path) {
             log::info!(
                 "[get_mods] concurrent scan deduplicated (cache filled by first caller), waited {}ms",
@@ -57,16 +57,17 @@ pub async fn get_mods(
     }
 
     let scan_path = mods_path.clone();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || -> Result<crate::core::mod_scan_light::ScanResult, String> {
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<crate::core::mod_scan_light::ScanResult, String> {
             crate::core::mod_scan_light::scan_mods_light(&scan_path)
                 .map_err(crate::core::error_normalizer::err_to_ui)
-        })
-        .await
-        .map_err(|e| {
-            log::error!("[get_mods] spawn_blocking join error: {}", e);
-            crate::core::error_normalizer::join_error_to_ui()
-        })??;
+        },
+    )
+    .await
+    .map_err(|e| {
+        log::error!("[get_mods] spawn_blocking join error: {}", e);
+        crate::core::error_normalizer::join_error_to_ui()
+    })??;
 
     let elapsed = start.elapsed();
     log::info!(
@@ -77,7 +78,7 @@ pub async fn get_mods(
     );
 
     {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
         cache.set(game, &mods_path, result.clone());
     }
 
@@ -94,7 +95,9 @@ pub fn check_mods_path_status(
 ) -> Result<crate::models::enums::ModsPathStatus, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
-    Ok(crate::core::mod_scan_light::check_mods_path(game, &mods_path))
+    Ok(crate::core::mod_scan_light::check_mods_path(
+        game, &mods_path,
+    ))
 }
 
 /// 刷新模组列表（轻量扫描，更新缓存）
@@ -114,16 +117,17 @@ pub async fn refresh_mods(
     let _scan_guard = SCAN_LOCK.lock().await;
 
     let scan_path = mods_path.clone();
-    let result =
-        tauri::async_runtime::spawn_blocking(move || -> Result<crate::core::mod_scan_light::ScanResult, String> {
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> Result<crate::core::mod_scan_light::ScanResult, String> {
             crate::core::mod_scan_light::scan_mods_light(&scan_path)
                 .map_err(crate::core::error_normalizer::err_to_ui)
-        })
-        .await
-        .map_err(|e| {
-            log::error!("[refresh_mods] spawn_blocking join error: {}", e);
-            crate::core::error_normalizer::join_error_to_ui()
-        })??;
+        },
+    )
+    .await
+    .map_err(|e| {
+        log::error!("[refresh_mods] spawn_blocking join error: {}", e);
+        crate::core::error_normalizer::join_error_to_ui()
+    })??;
 
     let elapsed = start.elapsed();
     log::info!(
@@ -134,7 +138,7 @@ pub async fn refresh_mods(
     );
 
     {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
         cache.set(game, &mods_path, result.clone());
     }
 
@@ -189,7 +193,7 @@ pub async fn update_mod_data(
 
     // 缓存失效
     {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
         cache.invalidate_game(game); // 彻底失效该游戏缓存：invalidate_by_prefix 的 contains 判断对子目录恒为 false，是 no-op 陷阱
     }
 

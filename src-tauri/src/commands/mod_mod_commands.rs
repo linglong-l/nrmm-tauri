@@ -10,7 +10,7 @@ use crate::commands::mod_commands::{
 };
 use crate::config::settings_store;
 use crate::core::constants;
-use crate::core::mod_cache;
+use crate::core::mod_cache_core;
 use crate::models::enums::TargetGame;
 use crate::models::mod_data::{BatchGroupDelta, GroupDelta};
 use std::fs;
@@ -62,7 +62,7 @@ pub async fn toggle_mod_disabled(
             // 零扫描缓存 patch；未命中（缓存无此条目/组树无定位）→ 降级增量重扫
             let mut degraded = false;
             {
-                let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+                let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
                 if !cache.patch_mod_entry(game, &mods_root, &path, &new_path, target_disabled) {
                     degraded = true;
                 }
@@ -134,7 +134,7 @@ pub fn open_mod_folder(mod_path: String) -> Result<(), String> {
     let path = PathBuf::from(&mod_path);
     if !path.exists() {
         // 路径不存在 → 清除后端模组缓存，返回带标识的错误通知前端刷新数据
-        let mut cache = mod_cache::MOD_CACHE.write();
+        let mut cache = mod_cache_core::MOD_CACHE.write();
         cache.invalidate_all();
         drop(cache);
         log::warn!("Open mod folder: path not found, invalidated cache and requesting frontend refresh: {:?}", path);
@@ -151,7 +151,7 @@ pub fn open_group_folder(group_path: String) -> Result<(), String> {
     let path = PathBuf::from(&group_path);
     if !path.exists() {
         // 路径不存在 → 清除后端模组缓存，返回带标识的错误通知前端刷新数据
-        let mut cache = mod_cache::MOD_CACHE.write();
+        let mut cache = mod_cache_core::MOD_CACHE.write();
         cache.invalidate_all();
         drop(cache);
         log::warn!("Open group folder: path not found, invalidated cache and requesting frontend refresh: {:?}", path);
@@ -165,7 +165,9 @@ pub fn open_group_folder(group_path: String) -> Result<(), String> {
 
 /// 恢复所有INI文件备份
 #[tauri::command]
-pub async fn restore_all_inis(mods_path: String) -> Result<crate::core::mod_results::RestoredCount, String> {
+pub async fn restore_all_inis(
+    mods_path: String,
+) -> Result<crate::core::mod_results::RestoredCount, String> {
     let _busy = crate::window::lifecycle::BusyOpGuard::new();
     let path = PathBuf::from(&mods_path);
 
@@ -178,7 +180,7 @@ pub async fn restore_all_inis(mods_path: String) -> Result<crate::core::mod_resu
     .map_err(|e| e.to_string())??;
 
     {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
         cache.invalidate_all();
     }
 
@@ -211,18 +213,20 @@ pub async fn restore_managed_folder(
         ));
     }
 
-    let result =
-        tauri::async_runtime::spawn_blocking(move || -> crate::core::mod_results::RestoreManagedResult {
-            let (ini_count, failed_count) = crate::core::mod_restore::restore_managed_mod(&path_buf);
+    let result = tauri::async_runtime::spawn_blocking(
+        move || -> crate::core::mod_results::RestoreManagedResult {
+            let (ini_count, failed_count) =
+                crate::core::mod_restore::restore_managed_mod(&path_buf);
             crate::core::mod_results::RestoreManagedResult {
                 path: path_buf,
                 ini_count,
                 failed_count,
                 success: failed_count == 0,
             }
-        })
-        .await
-        .map_err(|e| e.to_string())?;
+        },
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     Ok(result)
 }
@@ -258,13 +262,14 @@ pub async fn batch_toggle_mods(
     // P2：批量启停会重命名 _MANAGED_ 下多个模组目录，须与选择、更新串行。
     let _update_guard = UPDATE_LOCK.lock().await;
     let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
-        crate::core::mod_toggle::batch_toggle_mods(&mod_paths, enable, is_mutex).map_err(|e| e.to_string())
+        crate::core::mod_toggle::batch_toggle_mods(&mod_paths, enable, is_mutex)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
 
     {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
         cache.invalidate_all();
     }
 
@@ -329,7 +334,7 @@ async fn batch_toggle_group_impl(
             // 零扫描缓存 patch：逐条就地更新（组树 + 扁平列表）；任一条未命中 → 降级
             let mut degraded = false;
             {
-                let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+                let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
                 for (old, new) in &renamed {
                     if !cache.patch_mod_entry(game, &mods_root, old, new, disable) {
                         degraded = true;

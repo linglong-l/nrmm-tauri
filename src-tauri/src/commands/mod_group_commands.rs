@@ -95,7 +95,7 @@ pub async fn add_group(
     .map_err(|e| e.to_string())??;
 
     {
-        let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+        let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
         cache.invalidate_all();
     }
 
@@ -164,7 +164,7 @@ pub async fn remove_mod(
             // 零扫描缓存剔除：组树 + 扁平列表移除该模组条目；未命中（缓存无此条）→ 降级增量重扫
             let mut degraded = false;
             {
-                let mut cache = crate::core::mod_cache::MOD_CACHE.write();
+                let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
                 if !cache.remove_mod_entry(game, &mods_root, &path) {
                     degraded = true;
                 }

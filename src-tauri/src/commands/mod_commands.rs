@@ -27,7 +27,7 @@
 //! > `mod tests`（测试直接调用模块内组装函数 build_group_delta / build_removed_group_delta）。
 
 use crate::core::constants;
-use crate::core::mod_cache;
+use crate::core::{mod_cache_core, mod_cache_delta, mod_cache_path};
 
 use crate::models::enums::TargetGame;
 use crate::models::mod_data::GroupDelta;
@@ -111,7 +111,7 @@ pub(crate) fn is_direct_writable_group(group_path: &Path, managed_path: &Path) -
     if group_path.as_os_str().is_empty() {
         return false;
     }
-    if !mod_cache::path_within(group_path, managed_path) {
+    if !mod_cache_path::path_within(group_path, managed_path) {
         return false;
     }
     match group_path.file_name() {
@@ -276,13 +276,13 @@ pub(crate) fn build_group_delta(
     let new_group = partial
         .groups
         .iter()
-        .find(|g| mod_cache::path_within(rescan_dir, &g.full_path))
+        .find(|g| mod_cache_path::path_within(rescan_dir, &g.full_path))
         .cloned();
     // 旧状态收集（读锁；必须在写锁合并前完成——subtree_replace 会覆盖旧数据）
     let (old_group_path, old_mod_paths) =
-        mod_cache::collect_old_group_state(game, mods_path, old_group_dir);
+        mod_cache_delta::collect_old_group_state(game, mods_path, old_group_dir);
     // 缓存合并（写锁）
-    mod_cache::MOD_CACHE
+    mod_cache_core::MOD_CACHE
         .write()
         .subtree_replace(game, mods_path, partial);
     Ok(GroupDelta {
@@ -309,8 +309,8 @@ pub(crate) fn build_group_delta(
 pub(crate) fn build_removed_group_delta(game: TargetGame, mods_path: &Path, group_dir: &Path) -> GroupDelta {
     // 旧状态收集（读锁；必须在写锁裁剪前完成）
     let (old_group_path, old_mod_paths) =
-        mod_cache::collect_old_group_state(game, mods_path, group_dir);
-    mod_cache::MOD_CACHE
+        mod_cache_delta::collect_old_group_state(game, mods_path, group_dir);
+    mod_cache_core::MOD_CACHE
         .write()
         .subtree_remove(game, mods_path, group_dir);
     GroupDelta {
@@ -328,7 +328,7 @@ pub(crate) fn log_delta(command_name: &str, delta: &GroupDelta) {
     let affected_mods = delta
         .new_group
         .as_ref()
-        .map(mod_cache::collect_group_mod_paths)
+        .map(mod_cache_delta::collect_group_mod_paths)
         .map_or(0, |paths| paths.len());
     log::debug!(
         "[delta] {} 命令 | 组={} affected_mods={} removed={}",
@@ -1042,13 +1042,13 @@ mod tests {
     /// 冒烟测试：toggle 禁用后 delta.new_group 与磁盘一致、old_mod_paths 正确、缓存已合并。
     #[test]
     fn toggle_group_delta_assembly_smoke() {
-        use crate::core::mod_cache;
+        use crate::core::{mod_cache_core, mod_cache_delta, mod_cache_path};
         
         use tempfile::TempDir;
 
         // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
-        // 见 mod_cache::CACHE_WRITER_TEST_LOCK 文档）
-        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+        // 见 mod_cache_core::CACHE_WRITER_TEST_LOCK 文档）
+        let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
@@ -1071,7 +1071,7 @@ mod tests {
 
         // 预填充缓存（模拟 get_mods 已加载该游戏）
         let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
-        mod_cache::MOD_CACHE
+        mod_cache_core::MOD_CACHE
             .write()
             .set(TargetGame::GenshinImpact, &mods_path, full);
 
@@ -1109,7 +1109,7 @@ mod tests {
         let new_group = delta.new_group.as_ref().expect("new_group 不应为 None");
         assert_eq!(new_group.group_name, "group_1");
         assert_eq!(
-            mod_cache::collect_group_mod_paths(new_group).len(),
+            mod_cache_delta::collect_group_mod_paths(new_group).len(),
             2,
             "新分组应含 2 个真实模组"
         );
@@ -1128,11 +1128,11 @@ mod tests {
         );
 
         // 缓存已合并：group_1 节点反映禁用后状态，扁平列表剔除旧路径、计数重算
-        let cached = mod_cache::MOD_CACHE
+        let cached = mod_cache_core::MOD_CACHE
             .read()
             .get(TargetGame::GenshinImpact, &mods_path)
             .expect("缓存应命中");
-        let g1 = mod_cache::find_group_node(&cached, &group1).expect("缓存应含 group_1");
+        let g1 = mod_cache_path::find_group_node(&cached, &group1).expect("缓存应含 group_1");
         assert!(
             g1.mods
                 .iter()
@@ -1177,13 +1177,13 @@ mod tests {
     /// 冒烟测试：remove_group 场景 delta（new_group=None，缓存子树被裁剪）。
     #[test]
     fn remove_group_delta_clears_cache_subtree() {
-        use crate::core::mod_cache;
+        use crate::core::{mod_cache_core, mod_cache_path};
         
         use tempfile::TempDir;
 
         // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
-        // 见 mod_cache::CACHE_WRITER_TEST_LOCK 文档）
-        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+        // 见 mod_cache_core::CACHE_WRITER_TEST_LOCK 文档）
+        let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
@@ -1204,7 +1204,7 @@ mod tests {
         .unwrap();
 
         let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
-        mod_cache::MOD_CACHE
+        mod_cache_core::MOD_CACHE
             .write()
             .set(TargetGame::GenshinImpact, &mods_path, full);
 
@@ -1224,12 +1224,12 @@ mod tests {
             "应收集被移除组的 2 个模组路径"
         );
 
-        let cached = mod_cache::MOD_CACHE
+        let cached = mod_cache_core::MOD_CACHE
             .read()
             .get(TargetGame::GenshinImpact, &mods_path)
             .expect("缓存应命中");
         assert!(
-            mod_cache::find_group_node(&cached, &group1).is_none(),
+            mod_cache_path::find_group_node(&cached, &group1).is_none(),
             "缓存中 group_1 节点应被移除"
         );
         assert!(
@@ -1258,13 +1258,13 @@ mod tests {
     /// 冒烟测试：互斥组模组重命名场景，以重命名后的新目录局部重扫。
     #[test]
     fn rename_mutex_mod_delta_uses_new_path() {
-        use crate::core::mod_cache;
+        use crate::core::{mod_cache_core, mod_cache_delta};
         
         use tempfile::TempDir;
 
         // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
-        // 见 mod_cache::CACHE_WRITER_TEST_LOCK 文档）
-        let _cache_guard = mod_cache::CACHE_WRITER_TEST_LOCK
+        // 见 mod_cache_core::CACHE_WRITER_TEST_LOCK 文档）
+        let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
 
@@ -1277,7 +1277,7 @@ mod tests {
         fs::write(mutex_root.join("ModY").join("mod.ini"), "[Section]\nx=1\n").unwrap();
 
         let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
-        mod_cache::MOD_CACHE
+        mod_cache_core::MOD_CACHE
             .write()
             .set(TargetGame::GenshinImpact, &mods_path, full);
 
@@ -1297,7 +1297,7 @@ mod tests {
         // new_group 为 #Mutex 整组（局部重扫自动扩展到所属分组），含新目录模组
         let new_group = delta.new_group.as_ref().expect("new_group 不应为 None");
         assert_eq!(new_group.group_name, "#Mutex");
-        let new_paths = mod_cache::collect_group_mod_paths(new_group);
+        let new_paths = mod_cache_delta::collect_group_mod_paths(new_group);
         assert!(
             new_paths.iter().any(|p| p.ends_with("NewY")),
             "新分组应含重命名后的 NewY"
@@ -1312,7 +1312,7 @@ mod tests {
             "old_mod_paths 应含旧 ModY 路径"
         );
         // 缓存合并后同样无旧条目
-        let cached = mod_cache::MOD_CACHE
+        let cached = mod_cache_core::MOD_CACHE
             .read()
             .get(TargetGame::GenshinImpact, &mods_path)
             .expect("缓存应命中");

@@ -283,7 +283,7 @@ pub fn resolve_mod_index_by_path_from_cache(
     // （实测 6542 模组下可达数秒）。此处若用阻塞 read() 会陪等同样时长，把
     // 「启用后选择延迟」从写锁段搬到读锁段 —— 与修复初衷相悖。
     // 拿不到锁即放弃纠正，回退到调用方传入的下标（行为等同修复前，不引入新延迟）。
-    let cache = match crate::core::mod_cache::MOD_CACHE.try_read() {
+    let cache = match crate::core::mod_cache_core::MOD_CACHE.try_read() {
         Some(c) => c,
         None => {
             log::warn!(
