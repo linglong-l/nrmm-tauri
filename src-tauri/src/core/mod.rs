@@ -16,6 +16,7 @@
 //! - `mod_cache`: 模组数据内存缓存（避免重复文件系统扫描）
 //! - `mod_detect`: 模组环境/冲突检测（标准 XXMI、hash 冲突、orfix·texfx）
 //! - `mod_ini_admin`: INI 管理编排（managed 准备、组 INI 生成、自定义保存）
+//! - `mod_restore`: INI 恢复（restore_all_inis / restore_managed_mod）
 
 pub mod archive_handler;
 pub mod cloud_data;
@@ -46,6 +47,7 @@ pub mod mod_ini_cache;
 pub mod mod_manager;
 pub mod mod_path_utils;
 pub mod mod_results;
+pub mod mod_restore;
 pub mod mod_scanner;
 pub mod mod_select;
 pub mod mod_toggle;

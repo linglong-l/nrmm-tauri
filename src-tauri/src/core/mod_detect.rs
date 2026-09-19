@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::core::constants;
 use crate::core::d3dxini_cache::D3DX_INI_CACHE;
 use crate::core::mod_ini_cache::get_or_parse_ini;
-use crate::core::mod_manager::collect_mod_ini_files;
+use crate::core::mod_restore::collect_mod_ini_files;
 use crate::core::mod_scanner;
 use crate::models::enums::GroupType;
 use crate::models::mod_data::{
