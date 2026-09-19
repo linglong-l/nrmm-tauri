@@ -14,5 +14,6 @@
 pub mod keybind_commands;
 pub mod log_commands;
 pub mod mod_commands;
+pub mod mod_query_commands;
 pub mod settings_commands;
 pub mod thumbnail_commands;
