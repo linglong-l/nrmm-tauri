@@ -446,6 +446,10 @@ async function handleAddSubGroupAutoNamed() {
 async function handleRenameGroup() {
   if (!guardDuringUpdate()) return
   if (!contextGroup.value) return
+  // closeContextMenu 会置空 contextGroup，先捕获所需字段（避免 null 解引用）
+  const groupPath = contextGroup.value.groupPath
+  const groupType = contextGroup.value.groupType
+  const displayName = contextGroup.value.name || contextGroup.value.groupName
   closeContextMenu()
   try {
     const { value } = await ElMessageBox.prompt(
@@ -454,16 +458,16 @@ async function handleRenameGroup() {
       {
         confirmButtonText: t('common.confirm'),
         cancelButtonText: t('common.cancel'),
-        inputValue: contextGroup.value.name || contextGroup.value.groupName,
+        inputValue: displayName,
         inputValidator: (val) => {
           if (!val || !val.trim()) return t('Group name cannot be empty')
           return true
         }
       }
     )
-    if (value && contextGroup.value.groupPath) {
-      const isGroupXx = contextGroup.value.groupType !== 'mutexGroup'
-      const delta = await renameGroup(contextGroup.value.groupPath, value.trim(), isGroupXx)
+    if (value && groupPath) {
+      const isGroupXx = groupType !== 'mutexGroup'
+      const delta = await renameGroup(groupPath, value.trim(), isGroupXx)
       // 命令级增量：重命名后的分组新状态原地 patch（零全量 refresh）
       modsStore.applyGroupDelta(delta)
       ElMessage.success(t('Group renamed successfully'))
@@ -475,9 +479,11 @@ async function handleRenameGroup() {
 /** 在文件管理器中打开分组文件夹 */
 async function handleOpenGroupFolder() {
   if (!contextGroup.value) return
+  // closeContextMenu 会置空 contextGroup，先捕获路径（避免 null 解引用）
+  const groupPath = contextGroup.value.groupPath
   closeContextMenu()
   try {
-    await openGroupFolder(contextGroup.value.groupPath)
+    await openGroupFolder(groupPath)
   } catch (e: unknown) {
     // 路径不存在错误 → 清除缓存+重读模组（自动处理，不弹错误提示）
     if (isPathNotFoundError(e)) {
@@ -608,6 +614,9 @@ function isGroupXx(group: ModGroupData): boolean {
 async function handleRemoveGroup() {
   if (!contextGroup.value || !contextGroup.value.groupPath) return
   if (modsStore.isUpdatingModData) return
+  // closeContextMenu 会置空 contextGroup，先捕获所需字段（避免 null 解引用）
+  const groupPath = contextGroup.value.groupPath
+  const isGx = isGroupXx(contextGroup.value)
   closeContextMenu()
   try {
     await ElMessageBox.confirm(
@@ -620,9 +629,8 @@ async function handleRemoveGroup() {
         customClass: 'app-confirm-box'
       }
     )
-    if (contextGroup.value.groupPath) {
-      const isGx = isGroupXx(contextGroup.value)
-      const delta = await removeGroupEx(contextGroup.value.groupPath, isGx)
+    if (groupPath) {
+      const delta = await removeGroupEx(groupPath, isGx)
       // 命令级增量：分组移除后原地 patch（树剔除 + 扁平剔除 + 选中回退，零全量 refresh）
       modsStore.applyGroupDelta(delta)
       ElMessage.success(t('Group removed successfully'))
@@ -650,11 +658,11 @@ function isMutexGroup(group: ModGroupData): boolean {
 async function handleAddSubGroup() {
   if (!guardDuringUpdate()) return
   if (!contextGroup.value) return
-  closeContextMenu()
-
+  // closeContextMenu 会置空 contextGroup，先捕获所需字段（避免 null 解引用）
   const parentGroup = contextGroup.value
   const parentPath = parentGroup.groupPath
   const parentDisplayName = parentGroup.name || parentGroup.groupName
+  closeContextMenu()
 
   // 非法字符集合（Windows）
   const illegalCharsRegex = /[\\/:*?"<>|\x00-\x1F]/g
