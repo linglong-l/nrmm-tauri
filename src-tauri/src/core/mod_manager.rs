@@ -5427,6 +5427,41 @@ mod tests_disable_all {
         let count = disable_all_mods_in_group(&group).unwrap().len() as u32;
         assert_eq!(count, 0);
     }
+
+    /// 组目录含 `groupname` 标记文件时，批量禁用不得将其重命名为 `DISABLEDgroupname`
+    ///
+    /// 真实磁盘上 group_xx 目录必有 `groupname` 标记文件（与模组目录并存）。
+    /// 批量禁用仅处理「目录 + 含 .ini」的叶子模组节点；标记文件（groupname/
+    /// selectedindex/modname）虽位于组目录下，但为普通文件，必须原样保留——
+    /// 若逻辑误按条目名加 DISABLED 前缀，会产生 `DISABLEDgroupname` 垃圾文件。
+    #[test]
+    fn test_disable_all_keeps_groupname_marker() {
+        let tmp = TempDir::new().unwrap();
+        let group = tmp.path().join("group_1");
+        fs::create_dir_all(&group).unwrap();
+
+        // 模拟真实组目录：标记文件 + 模组子目录并存
+        fs::write(group.join("groupname"), "My Custom Group\n").unwrap();
+        fs::write(group.join("selectedindex"), "1\n").unwrap();
+        create_mod_dir(&group, "ModA");
+
+        let count = disable_all_mods_in_group(&group).unwrap().len() as u32;
+        assert_eq!(count, 1, "仅 ModA 应被禁用");
+
+        assert!(
+            fs::read_to_string(group.join("groupname")).unwrap() == "My Custom Group\n",
+            "groupname 标记文件内容应原样保留"
+        );
+        assert!(
+            group.join("selectedindex").exists(),
+            "selectedindex 标记文件应原样保留"
+        );
+        assert!(
+            !group.join("DISABLEDgroupname").exists(),
+            "不得把 groupname 标记文件重命名为 DISABLEDgroupname"
+        );
+        assert!(group.join("DISABLEDModA").exists(), "ModA 应被禁用");
+    }
 }
 
 #[cfg(test)]
@@ -5749,6 +5784,40 @@ mod tests_enable_all {
         assert!(entries.iter().any(|n| n == "MyMod"));
         assert!(entries.iter().any(|n| n == "OtherMod"));
         assert!(entries.iter().any(|n| n == "Third"));
+    }
+
+    /// 组目录含 `groupname` 标记文件时，批量启用不得误将其当模组名处理
+    ///
+    /// 与 `tests_disable_all::test_disable_all_keeps_groupname_marker` 对称：
+    /// 启用侧同样必须保留组内标记文件（groupname/selectedindex/modname），
+    /// 不得把它们当作 `DISABLED*` 模组目录去剥前缀或改名。
+    #[test]
+    fn test_enable_all_keeps_groupname_marker() {
+        let tmp = TempDir::new().unwrap();
+        let group = tmp.path().join("group_1");
+        fs::create_dir_all(&group).unwrap();
+
+        // 标记文件 + 已禁用模组并存（真实组目录形态）
+        fs::write(group.join("groupname"), "My Custom Group\n").unwrap();
+        fs::write(group.join("selectedindex"), "1\n").unwrap();
+        create_mod_dir(&group, "DISABLEDModA");
+
+        let count = enable_all_mods_in_group(&group).unwrap().len() as u32;
+        assert_eq!(count, 1, "仅 DISABLEDModA 应被启用");
+
+        assert!(
+            fs::read_to_string(group.join("groupname")).unwrap() == "My Custom Group\n",
+            "groupname 标记文件内容应原样保留"
+        );
+        assert!(
+            group.join("selectedindex").exists(),
+            "selectedindex 标记文件应原样保留"
+        );
+        assert!(
+            !group.join("DISABLEDgroupname").exists(),
+            "不得把 groupname 标记文件重命名为 DISABLEDgroupname"
+        );
+        assert!(group.join("ModA").exists(), "ModA 应被启用");
     }
 }
 
