@@ -18,7 +18,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use xxmi_nrmm_lib::core::mod_manager;
+use xxmi_nrmm_lib::core::mod_update_pipeline::update_mod_data;
 use xxmi_nrmm_lib::models::enums::TargetGame;
 use xxmi_nrmm_lib::models::settings::AppSettings;
 
@@ -161,7 +161,7 @@ fn test_dataset_parity_update_mod_data() {
     );
     let settings = AppSettings::default();
     let result =
-        match mod_manager::update_mod_data(TargetGame::GenshinImpact, &game_mods_path, &settings) {
+        match update_mod_data(TargetGame::GenshinImpact, &game_mods_path, &settings) {
             Ok(r) => r,
             Err(e) => panic!("update_mod_data 失败: {:#}", e),
         };

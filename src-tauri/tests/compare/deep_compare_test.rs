@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use xxmi_nrmm_lib::core::mod_manager;
+use xxmi_nrmm_lib::core::mod_update_pipeline::update_mod_data;
 use xxmi_nrmm_lib::models::enums::TargetGame;
 use xxmi_nrmm_lib::models::settings::AppSettings;
 
@@ -175,7 +175,7 @@ fn deep_compare_after_update_mod_data() {
 
     // Step 2: Run update_mod_data
     println!("\n[2] Running update_mod_data...");
-    let result = mod_manager::update_mod_data(
+    let result = update_mod_data(
         TargetGame::GenshinImpact,
         &mods_dir,
         &AppSettings::default(),

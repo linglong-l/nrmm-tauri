@@ -23,7 +23,6 @@
 use crate::config::settings_store;
 use crate::core::constants;
 use crate::core::mod_cache;
-use crate::core::mod_manager;
 use crate::core::mod_scanner;
 use crate::core::resolution;
 use crate::models::enums::TargetGame;
@@ -282,7 +281,7 @@ pub async fn refresh_mods(
 pub async fn update_mod_data(
     game: String,
     mods_path: String,
-) -> Result<mod_manager::UpdateResult, String> {
+) -> Result<crate::core::mod_results::UpdateResult, String> {
     let _busy = crate::window::lifecycle::BusyOpGuard::new();
     log::debug!(
         "[commands::mod_commands] [update_mod_data] game={} mods_path={}",
@@ -301,8 +300,8 @@ pub async fn update_mod_data(
     let _update_guard = UPDATE_LOCK.lock().await;
     // spawn_blocking 内部若 panic，JoinError 会被转为 String 错误返回，不会导致应用崩溃
     let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<mod_manager::UpdateResult, String> {
-            mod_manager::update_mod_data(game, &update_path, &settings)
+        move || -> Result<crate::core::mod_results::UpdateResult, String> {
+            crate::core::mod_update_pipeline::update_mod_data(game, &update_path, &settings)
                 .map_err(crate::core::error_normalizer::err_to_ui)
         },
     )
@@ -376,7 +375,7 @@ pub async fn sync_nrmm_update_flag(game: String, needed: bool) -> Result<(), Str
 #[tauri::command]
 pub async fn detect_hash_conflicts(
     mods_path: String,
-) -> Result<mod_manager::HashConflictResult, String> {
+) -> Result<crate::models::mod_data::HashConflictResult, String> {
     let _busy = crate::window::lifecycle::BusyOpGuard::new();
     let mods_path = PathBuf::from(mods_path);
     log::info!(
@@ -387,8 +386,8 @@ pub async fn detect_hash_conflicts(
 
     let scan_path = mods_path.clone();
     let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<mod_manager::HashConflictResult, String> {
-            mod_manager::detect_hash_conflicts(&scan_path)
+        move || -> Result<crate::models::mod_data::HashConflictResult, String> {
+            crate::core::mod_detect::detect_hash_conflicts(&scan_path)
                 .map_err(crate::core::error_normalizer::err_to_ui)
         },
     )
@@ -408,7 +407,7 @@ pub async fn detect_hash_conflicts(
 
 /// 选择模组（支持互斥组）
 #[tauri::command]
-pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult, String> {
+pub async fn select_mod(args: SelectModArgs) -> Result<crate::core::mod_results::UpdateResult, String> {
     // 「_MANAGED_ 写操作全局锁」（C12）：select/switch 与 update/导入互斥，
     // 防止 update 批量写入期间全量扫描读到中间态，并交错写 selectedindex。
     // 命令体入口即获取，跨下方两个分支的所有 spawn_blocking + .await 持锁。
@@ -490,7 +489,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         let managed_path = mods_path.join(constants::MANAGED_FOLDER);
         // 守卫：mod_path 必须位于 _MANAGED_ 下且第一段非 group_xx（互斥模组），
         // 否则禁止调用 enable_mutex_mod，避免作用于错误父目录成批禁用其下含 ini 的目录。
-        if !mod_manager::is_mutex_mod(&mod_path_buf, &managed_path) {
+        if !crate::core::mod_toggle::is_mutex_mod(&mod_path_buf, &managed_path) {
             return Err(format!(
                 "Invalid mutex mod path (not under _MANAGED_ or is a group_xx): {:?}",
                 mod_path_buf
@@ -505,7 +504,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         );
 
         tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-            mod_manager::enable_mutex_mod(&mod_path_buf).map_err(|e| e.to_string())
+            crate::core::mod_toggle::enable_mutex_mod(&mod_path_buf).map_err(|e| e.to_string())
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -515,7 +514,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             cache.invalidate_game(game_enum); // 彻底失效该游戏缓存（invalidate_by_prefix 是 no-op 陷阱）
         }
 
-        Ok(mod_manager::UpdateResult {
+        Ok(crate::core::mod_results::UpdateResult {
             need_reload_manual: false,
             ..Default::default()
         })
@@ -542,7 +541,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
         // 分叉，直接写前端传入的 mod_index 会把 selectedindex 落到错误模组上。
         // 缓存快照即最近一次后端扫描结果（权威后端序，无磁盘 I/O，保持 O(1) 意图）；
         // 缓存缺失 / 路径未命中时回退到传入下标（行为不劣化）。
-        let resolved_index = mod_manager::resolve_mod_index_by_path_from_cache(
+        let resolved_index = crate::core::mod_select::resolve_mod_index_by_path_from_cache(
             game_enum,
             &mods_path,
             &group_path_buf,
@@ -571,7 +570,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             let write_path = group_path_buf.clone();
             let write_start = std::time::Instant::now();
             tauri::async_runtime::spawn_blocking(move || {
-                mod_manager::write_selectedindex_direct(&write_path, direct_index)
+                crate::core::mod_select::write_selectedindex_direct(&write_path, direct_index)
             })
             .await
             .map_err(|e| {
@@ -613,7 +612,7 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
                 patched,
                 direct_index
             );
-            mod_manager::UpdateResult {
+            crate::core::mod_results::UpdateResult {
                 selected_mod_index: Some(direct_index as i32),
                 ..Default::default()
             }
@@ -628,8 +627,8 @@ pub async fn select_mod(args: SelectModArgs) -> Result<mod_manager::UpdateResult
             // mod_index（前端近似重排后的整数下标不可信），路径未命中时后端自动回退。
             let mod_path_for_switch = mod_path.clone();
             let result = tauri::async_runtime::spawn_blocking(
-                move || -> Result<mod_manager::UpdateResult, String> {
-                    mod_manager::switch_mod(
+                move || -> Result<crate::core::mod_results::UpdateResult, String> {
+                    crate::core::mod_select::switch_mod(
                         game_enum,
                         &mods_path,
                         &settings,
@@ -780,7 +779,7 @@ pub async fn deselect_group_mod(
     mods_path: String,
     group_index: u32,
     group_path: Option<String>,
-) -> Result<mod_manager::UpdateResult, String> {
+) -> Result<crate::core::mod_results::UpdateResult, String> {
     // P2：「_MANAGED_ 写操作全局锁」覆盖不全的补齐。取消选择同样写 selectedindex
     // 标记文件，此前游离于锁外，可与 select_mod / update_mod_data 并发交错。
     let _update_guard = UPDATE_LOCK.lock().await;
@@ -799,7 +798,7 @@ pub async fn deselect_group_mod(
         );
         let write_path = gp.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            mod_manager::write_selectedindex_direct(&write_path, 0)
+            crate::core::mod_select::write_selectedindex_direct(&write_path, 0)
         })
         .await
         .map_err(|e| e.to_string())?
@@ -825,7 +824,7 @@ pub async fn deselect_group_mod(
             "[commands::mod_commands] [deselect_group_mod] direct write done | patched={}",
             patched
         );
-        return Ok(mod_manager::UpdateResult {
+        return Ok(crate::core::mod_results::UpdateResult {
             selected_mod_index: Some(0),
             ..Default::default()
         });
@@ -834,8 +833,8 @@ pub async fn deselect_group_mod(
     // 回退：全量轻扫定位分组（旧行为，含整缓存失效）
     let settings = settings_store::get_settings();
     let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<mod_manager::UpdateResult, String> {
-            mod_manager::deselect_group_mods(game, &mods_path, &settings, group_index)
+        move || -> Result<crate::core::mod_results::UpdateResult, String> {
+            crate::core::mod_select::deselect_group_mods(game, &mods_path, &settings, group_index)
                 .map_err(|e| e.to_string())
         },
     )
@@ -856,12 +855,12 @@ pub async fn add_group(
     game: String,
     mods_path: String,
     group_name: Option<String>,
-) -> Result<mod_manager::UpdateResult, String> {
+) -> Result<crate::core::mod_results::UpdateResult, String> {
     let game = parse_game(&game)?;
     let mods_path = PathBuf::from(mods_path);
 
     let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<mod_manager::UpdateResult, String> {
+        move || -> Result<crate::core::mod_results::UpdateResult, String> {
             let managed_folder = mods_path.join(constants::MANAGED_FOLDER);
             if !managed_folder.exists() {
                 fs::create_dir_all(&managed_folder).map_err(|e| e.to_string())?;
@@ -921,7 +920,7 @@ pub async fn add_group(
                 }
             }
 
-            Ok(mod_manager::UpdateResult::default())
+            Ok(crate::core::mod_results::UpdateResult::default())
         },
     )
     .await
@@ -979,7 +978,7 @@ pub async fn remove_group(group_path: String) -> Result<GroupDelta, String> {
 #[tauri::command]
 pub async fn remove_mod(
     mod_path: String,
-) -> Result<crate::core::mod_manager::RemoveModResult, String> {
+) -> Result<crate::core::mod_results::RemoveModResult, String> {
     // P2：移除模组会把目录移入 DISABLED_MANAGED_REMOVED 并改写组内 INI，
     // 与 select_mod / update_mod_data 同属 _MANAGED_ 写路径，须统一串行化。
     let _update_guard = UPDATE_LOCK.lock().await;
@@ -989,11 +988,11 @@ pub async fn remove_mod(
     let game = settings_store::get_settings().target_game;
 
     let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<crate::core::mod_manager::RemoveModResult, String> {
+        move || -> Result<crate::core::mod_results::RemoveModResult, String> {
             // 抑制 watcher 批次在移动/还原中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
             let _guard = crate::core::file_watcher::WatcherGuard::new();
             let mut result =
-                crate::core::mod_manager::remove_mod(&path).map_err(|e| e.to_string())?;
+                crate::core::mod_remove::remove_mod(&path).map_err(|e| e.to_string())?;
             // 零扫描缓存剔除：组树 + 扁平列表移除该模组条目；未命中（缓存无此条）→ 降级增量重扫
             let mut degraded = false;
             {
@@ -1204,12 +1203,12 @@ pub async fn toggle_mod_disabled(
             let _guard = crate::core::file_watcher::WatcherGuard::new();
             if is_mutex {
                 if enable {
-                    mod_manager::enable_mutex_mod(&path).map_err(|e| e.to_string())?;
+                    crate::core::mod_toggle::enable_mutex_mod(&path).map_err(|e| e.to_string())?;
                 } else {
-                    mod_manager::disable_mutex_mod(&path).map_err(|e| e.to_string())?;
+                    crate::core::mod_toggle::disable_mutex_mod(&path).map_err(|e| e.to_string())?;
                 }
             } else {
-                mod_manager::toggle_mod(&path, enable).map_err(|e| e.to_string())?;
+                crate::core::mod_toggle::toggle_mod(&path, enable).map_err(|e| e.to_string())?;
             }
             // 推导操作后路径（与 toggle_mod 同口径；幂等时返回原路径）
             let new_path = derive_toggled_path(&path, enable);
@@ -1255,7 +1254,7 @@ pub async fn toggle_mod_disabled(
     Ok(result)
 }
 
-/// 推导启用/禁用后模组目录路径（与 `mod_manager::toggle_mod` 的重命名口径一致：
+/// 推导启用/禁用后模组目录路径（与 `crate::core::mod_toggle::toggle_mod` 的重命名口径一致：
 /// 禁用 = 前缀 `DISABLED`；启用 = 去除 `DISABLED` 前缀；幂等命中时返回原路径）。
 fn derive_toggled_path(path: &Path, enable: bool) -> PathBuf {
     let name = path
@@ -1348,13 +1347,13 @@ pub fn open_group_folder(group_path: String) -> Result<(), String> {
 
 /// 恢复所有INI文件备份
 #[tauri::command]
-pub async fn restore_all_inis(mods_path: String) -> Result<mod_manager::RestoredCount, String> {
+pub async fn restore_all_inis(mods_path: String) -> Result<crate::core::mod_results::RestoredCount, String> {
     let _busy = crate::window::lifecycle::BusyOpGuard::new();
     let path = PathBuf::from(&mods_path);
 
     let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<mod_manager::RestoredCount, String> {
-            mod_manager::restore_all_inis(&path).map_err(|e| e.to_string())
+        move || -> Result<crate::core::mod_results::RestoredCount, String> {
+            crate::core::mod_restore::restore_all_inis(&path).map_err(|e| e.to_string())
         },
     )
     .await
@@ -1384,7 +1383,7 @@ pub async fn restore_all_inis(mods_path: String) -> Result<mod_manager::Restored
 #[tauri::command]
 pub async fn restore_managed_folder(
     path: String,
-) -> Result<mod_manager::RestoreManagedResult, String> {
+) -> Result<crate::core::mod_results::RestoreManagedResult, String> {
     let path_buf = settings_store::validate_managed_path(&path).map_err(|e| e.to_string())?;
     if !path_buf.exists() {
         log::warn!("Restore managed folder: path not found: {:?}", path_buf);
@@ -1395,9 +1394,9 @@ pub async fn restore_managed_folder(
     }
 
     let result =
-        tauri::async_runtime::spawn_blocking(move || -> mod_manager::RestoreManagedResult {
-            let (ini_count, failed_count) = mod_manager::restore_managed_mod(&path_buf);
-            mod_manager::RestoreManagedResult {
+        tauri::async_runtime::spawn_blocking(move || -> crate::core::mod_results::RestoreManagedResult {
+            let (ini_count, failed_count) = crate::core::mod_restore::restore_managed_mod(&path_buf);
+            crate::core::mod_results::RestoreManagedResult {
                 path: path_buf,
                 ini_count,
                 failed_count,
@@ -1415,14 +1414,14 @@ pub async fn restore_managed_folder(
 pub async fn save_customizations(
     game: String,
     mods_path: String,
-) -> Result<mod_manager::SaveCustomizationsResult, String> {
+) -> Result<crate::core::mod_results::SaveCustomizationsResult, String> {
     let _busy = crate::window::lifecycle::BusyOpGuard::new();
     let game = parse_game(&game)?;
     let path = PathBuf::from(&mods_path);
 
     let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<mod_manager::SaveCustomizationsResult, String> {
-            mod_manager::save_customizations(&path, game).map_err(|e| e.to_string())
+        move || -> Result<crate::core::mod_results::SaveCustomizationsResult, String> {
+            crate::core::mod_ini_admin::save_customizations(&path, game).map_err(|e| e.to_string())
         },
     )
     .await
@@ -1441,7 +1440,7 @@ pub async fn batch_toggle_mods(
     // P2：批量启停会重命名 _MANAGED_ 下多个模组目录，须与选择、更新串行。
     let _update_guard = UPDATE_LOCK.lock().await;
     let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
-        mod_manager::batch_toggle_mods(&mod_paths, enable, is_mutex).map_err(|e| e.to_string())
+        crate::core::mod_toggle::batch_toggle_mods(&mod_paths, enable, is_mutex).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -1887,10 +1886,10 @@ async fn batch_toggle_group_impl(
             // 抑制 watcher 批次在批量重命名中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
             let _guard = crate::core::file_watcher::WatcherGuard::new();
             let renamed = if disable {
-                crate::core::mod_manager::disable_all_mods_in_group(&group_path)
+                crate::core::mod_toggle::disable_all_mods_in_group(&group_path)
                     .map_err(|e| e.to_string())?
             } else {
-                crate::core::mod_manager::enable_all_mods_in_group(&group_path)
+                crate::core::mod_toggle::enable_all_mods_in_group(&group_path)
                     .map_err(|e| e.to_string())?
             };
             let changed = renamed.len() as u32;
@@ -1990,7 +1989,7 @@ pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<Gr
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
         // 抑制 watcher 批次在批量移动中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
         let _guard = crate::core::file_watcher::WatcherGuard::new();
-        crate::core::mod_manager::remove_group_ex(&path, is_group_xx, &mods_root_for_move)
+        crate::core::mod_remove::remove_group_ex(&path, is_group_xx, &mods_root_for_move)
             .map_err(|e| e.to_string())?;
         let delta = build_removed_group_delta(game, &mods_root, &group_dir);
         log_delta("remove_group_ex", &delta);
@@ -2025,7 +2024,6 @@ pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<Gr
 mod tests {
     use super::{build_group_delta, build_removed_group_delta};
     use crate::core::constants;
-    use crate::core::mod_manager;
     use crate::models::enums::TargetGame;
     use crate::models::settings::AppSettings;
     use std::fs;
@@ -2257,7 +2255,7 @@ mod tests {
         let settings = AppSettings::default();
         // 注意：NRMM-test 基线由 NRMM 以 Zenless（nrmm_name = "Zenless_Zone_Zero"）生成，
         // keypress 模板 `{game}` 替换依赖游戏标识，故此处必须用同款游戏以保证 parity 比对一致。
-        let result = mod_manager::update_mod_data(TargetGame::ZZZ, &game_mods_path, &settings)
+        let result = crate::core::mod_update_pipeline::update_mod_data(TargetGame::ZZZ, &game_mods_path, &settings)
             .expect("update_mod_data 执行失败");
 
         println!(
@@ -2294,7 +2292,7 @@ mod tests {
         fs::create_dir_all(&managed).unwrap();
 
         let settings = AppSettings::default();
-        let result = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+        let result = crate::core::mod_update_pipeline::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
             .expect("update_mod_data 失败");
         assert_eq!(result.processed_mods, 0, "空目录不应处理任何模组");
         // 仍应生成 managed 基础文件（目录发生变化）
@@ -2341,7 +2339,7 @@ mod tests {
         .unwrap();
 
         let settings = AppSettings::default();
-        let result = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+        let result = crate::core::mod_update_pipeline::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
             .expect("update_mod_data 失败");
         assert_eq!(result.enabled_mods, 1, "应只有 1 个启用模组");
         assert_eq!(result.disabled_mods, 1, "应有 1 个禁用模组");
@@ -2383,7 +2381,7 @@ mod tests {
         }
 
         let settings = AppSettings::default();
-        let result = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+        let result = crate::core::mod_update_pipeline::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
             .expect("update_mod_data 失败");
         assert!(result.total_groups >= 2, "应检测到至少 2 个分组");
         assert!(result.processed_mods >= 4, "应处理至少 4 个模组");
@@ -2413,9 +2411,9 @@ mod tests {
         fs::write(en.join("mod.ini"), "[TextureOverride]\nhash = 0xAAAA\n").unwrap();
 
         let settings = AppSettings::default();
-        let r1 = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+        let r1 = crate::core::mod_update_pipeline::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
             .expect("第一次 update_mod_data 失败");
-        let r2 = mod_manager::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
+        let r2 = crate::core::mod_update_pipeline::update_mod_data(TargetGame::GenshinImpact, &mods, &settings)
             .expect("第二次 update_mod_data 失败");
         assert_eq!(
             r1.processed_mods, r2.processed_mods,
@@ -2491,7 +2489,7 @@ mod tests {
 
         // 1) 注入（与 update_mod_data_test 同款参数保证 parity）
         let settings = AppSettings::default();
-        let result = mod_manager::update_mod_data(TargetGame::ZZZ, &game_mods_path, &settings)
+        let result = crate::core::mod_update_pipeline::update_mod_data(TargetGame::ZZZ, &game_mods_path, &settings)
             .expect("update_mod_data 执行失败");
         assert!(result.processed_mods >= 1, "至少应处理 1 个模组");
         assert_managed_outputs(&managed);
@@ -2500,7 +2498,7 @@ mod tests {
 
         // 2) 还原
         let restored =
-            mod_manager::restore_all_inis(&game_mods_path).expect("restore_all_inis 执行失败");
+            crate::core::mod_restore::restore_all_inis(&game_mods_path).expect("restore_all_inis 执行失败");
         println!(
             "  [restore] restored={} failed={}",
             restored.restored, restored.failed
@@ -2723,7 +2721,7 @@ mod tests {
 
         // 执行禁用（目录重命名：ModA → DISABLED 前缀形态）
         let mod_a = group1.join("ModA");
-        mod_manager::toggle_mod(&mod_a, false).expect("toggle_mod 失败");
+        crate::core::mod_toggle::toggle_mod(&mod_a, false).expect("toggle_mod 失败");
 
         // delta 组装：toggle 场景对 parent（分组目录）局部重扫
         let delta = build_group_delta(
