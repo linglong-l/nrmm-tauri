@@ -2,12 +2,11 @@
 //!
 //! 从 core/archive_handler.rs 迁出（2026-09-19 Phase 6-4）。
 //! 承载压缩包支持检测、导入（含自动导入/批量导入）与导出、分辨率上限查询命令。
-//! 底层解压/归档逻辑保留于 core/archive_handler.rs，此处仅薄适配。
+//! 底层解压/归档逻辑分散于 core/archive_detect|extract|import|export（archive_handler.rs 拆分），此处仅薄适配。
 
-use crate::core::archive_handler::{
-    export_mod, import_item, import_mod, import_mod_auto, is_supported_archive, ExtractResult,
-    ImportItemRequest,
-};
+use crate::core::archive_detect::{is_supported_archive, ExtractResult, ImportItemRequest};
+use crate::core::archive_export::export_mod;
+use crate::core::archive_import::{import_item, import_mod, import_mod_auto};
 use crate::core::resolution::{compute_limits, ResolutionLimits};
 use crate::core::watcher_core::FileWatcher;
 use crate::core::watcher_ring::WatcherGuard;

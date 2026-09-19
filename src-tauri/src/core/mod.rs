@@ -17,14 +17,17 @@
 //! - `mod_scan_deep`: 深度扫描域（完整解析 INI / build_mod_data_deep，mod_scanner 六域拆分）
 //! - `mod_scan_partial`: 局部扫描域（scan_partial_path / normalize_subpath，mod_scanner 六域拆分）
 //! - `namespace_handler`: 命名空间处理（namespace 变量展开）
-//! - `archive_handler`: 压缩包处理（7z/zip/rar 解压导入）
+//! - `archive_detect`/`archive_extract`/`archive_import`/`archive_export`: 压缩包处理四域（类型契约与探测 / 解压与编排 / 扁平化与导入 / 导出，由 archive_handler.rs 拆分）
 //! - `cloud_data`: 云端数据管理（链接、消息、图标库等远程资源）
 //! - `mod_cache_core`/`mod_cache_path`/`mod_cache_patch`/`mod_cache_delta`: 模组数据内存缓存四域（结构+生命周期 / 路径判断 / 子树与模组级 patch / 旧状态收集，由 mod_cache.rs 拆分）
 //! - `mod_detect`: 模组环境/冲突检测（标准 XXMI、hash 冲突、orfix·texfx）
 //! - `mod_ini_admin`: INI 管理编排（managed 准备、组 INI 生成、自定义保存）
 //! - `mod_restore`: INI 恢复（restore_all_inis / restore_managed_mod）
 
-pub mod archive_handler;
+pub mod archive_detect;
+pub mod archive_export;
+pub mod archive_extract;
+pub mod archive_import;
 pub mod cloud_data;
 pub mod constants;
 pub mod d3dxini_cache;

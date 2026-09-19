@@ -170,7 +170,7 @@ pub const SEVEN_Z_EXECUTABLE: &str = "7zz";
 ///
 /// 所有打包产物（NSIS 用户安装 / portable zip）都将 7z 落在 `exe_dir/7z/` 下，
 /// 与 `tauri.windows.conf.json` 的 resources 映射（`7z/7za.exe` 等）保持一致。
-/// 解析逻辑见 `archive_handler::get_bundled_7z_path`。
+/// 解析逻辑见 `archive_detect::get_bundled_7z_path`。
 #[cfg(target_os = "windows")]
 pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7za.exe";
 
@@ -178,7 +178,7 @@ pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7za.exe";
 ///
 /// deb/rpm 资源装在 `/usr/lib/<productName>/7z/`，portable 与系统安装均落在 `exe_dir/7z/`。
 /// （AppImage 已于 2026-08-29 取消：Tauri 强依赖 WebKit/glibc 等无法静态链接的 C/C++ 库。）
-/// 解析逻辑见 `archive_handler::get_bundled_7z_path`。
+/// 解析逻辑见 `archive_detect::get_bundled_7z_path`。
 #[cfg(target_os = "linux")]
 pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7zz";
 
