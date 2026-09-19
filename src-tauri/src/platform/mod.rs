@@ -21,7 +21,11 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "windows")]
-pub mod windows;
+pub mod windows_key_sim;
+#[cfg(target_os = "windows")]
+pub mod windows_cursor_sim;
+#[cfg(target_os = "windows")]
+pub mod windows_foreground;
 
 /// 平台信息结构体
 #[derive(Debug, Clone, serde::Serialize)]
@@ -124,7 +128,7 @@ pub trait ForegroundDetector: Send + Sync {
 pub fn get_key_simulator() -> Box<dyn KeySimulator> {
     #[cfg(target_os = "windows")]
     {
-        Box::new(windows::WindowsKeySimulator::default())
+        Box::new(windows_key_sim::WindowsKeySimulator::default())
     }
     #[cfg(target_os = "linux")]
     {
@@ -140,7 +144,7 @@ pub fn get_key_simulator() -> Box<dyn KeySimulator> {
 pub fn get_foreground_detector() -> Box<dyn ForegroundDetector> {
     #[cfg(target_os = "windows")]
     {
-        Box::new(windows::WindowsForegroundDetector)
+        Box::new(windows_foreground::WindowsForegroundDetector)
     }
     #[cfg(target_os = "linux")]
     {
