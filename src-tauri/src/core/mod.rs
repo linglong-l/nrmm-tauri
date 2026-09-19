@@ -14,6 +14,7 @@
 //! - `archive_handler`: 压缩包处理（7z/zip/rar 解压导入）
 //! - `cloud_data`: 云端数据管理（链接、消息、图标库等远程资源）
 //! - `mod_cache`: 模组数据内存缓存（避免重复文件系统扫描）
+//! - `mod_detect`: 模组环境/冲突检测（标准 XXMI、hash 冲突、orfix·texfx）
 
 pub mod archive_handler;
 pub mod cloud_data;
@@ -38,6 +39,7 @@ pub mod ini_model;
 pub mod ini_transform;
 pub mod key_combo;
 pub mod mod_cache;
+pub mod mod_detect;
 pub mod mod_ini_cache;
 pub mod mod_manager;
 pub mod mod_path_utils;
