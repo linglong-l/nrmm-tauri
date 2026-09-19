@@ -189,7 +189,6 @@ fn f1_layering_direction_frozen() {
 fn f2_tauri_command_ownership() {
     // 存量豁免：core 直挂命令（Phase 6 迁入 commands/ 后清零）
     const LEGACY: &[&str] = &[
-        "core/file_watcher.rs",
         "core/archive_handler.rs",
         "core/cloud_data.rs",
         "core/mod_cache.rs",
@@ -245,7 +244,7 @@ fn f4_rust_file_line_ratchet() {
         ("commands/mod_commands.rs", 1329),
         ("core/mod_cache.rs", 2710),
         ("core/archive_handler.rs", 2010),
-        ("core/file_watcher.rs", 1911),
+        ("core/file_watcher.rs", 1790),
         ("platform/windows.rs", 868),
     ];
 

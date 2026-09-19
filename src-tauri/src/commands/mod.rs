@@ -20,3 +20,4 @@ pub mod mod_query_commands;
 pub mod mod_selection_commands;
 pub mod settings_commands;
 pub mod thumbnail_commands;
+pub mod watcher_commands;
