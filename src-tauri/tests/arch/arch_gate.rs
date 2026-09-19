@@ -235,7 +235,7 @@ fn f4_rust_file_line_ratchet() {
     const LEGACY_CAPS: &[(&str, usize)] = &[
         ("commands/mod_commands.rs", 1329),
         ("core/mod_cache.rs", 2681),
-        ("core/archive_handler.rs", 1839),
+        ("core/archive_handler.rs", 1836),
         ("core/file_watcher.rs", 1790),
         ("platform/windows.rs", 868),
     ];
