@@ -115,3 +115,15 @@ ignored = ["tauri-build", "x11-dl", "core-graphics", "core-foundation"]
 [[test]]
 name = "arch_gate"
 path = "tests/arch/arch_gate.rs"
+
+[[test]]
+name = "deep_compare_test"
+path = "tests/compare/deep_compare_test.rs"
+
+[[test]]
+name = "dataset_parity"
+path = "tests/compare/dataset_parity.rs"
+
+[[test]]
+name = "mod_logic_edge"
+path = "tests/compare/mod_logic_edge.rs"
