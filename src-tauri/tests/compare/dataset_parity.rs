@@ -29,11 +29,11 @@ fn manifest_dir() -> PathBuf {
 }
 
 fn baseline_dir() -> PathBuf {
-    manifest_dir().join("tests").join("NRMM-test")
+    manifest_dir().join("tests").join("datasets").join("NRMM-test")
 }
 
 fn input_dir() -> PathBuf {
-    manifest_dir().join("tests").join("NRMM-Rust-test")
+    manifest_dir().join("tests").join("datasets").join("NRMM-Rust-test")
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -103,6 +103,16 @@ fn normalize_ini_content(s: &str) -> String {
 
 #[test]
 fn test_dataset_parity_update_mod_data() {
+    assert!(
+        baseline_dir().exists(),
+        "测试数据集缺失：{:?}。请将 NRMM-test 与 NRMM-Rust-test 拷贝到 src-tauri/tests/datasets/ 后再运行本测试。",
+        baseline_dir()
+    );
+    assert!(
+        input_dir().exists(),
+        "测试数据集缺失：{:?}。请将 NRMM-test 与 NRMM-Rust-test 拷贝到 src-tauri/tests/datasets/ 后再运行本测试。",
+        input_dir()
+    );
     let temp_dir = tempfile::TempDir::new().expect("创建临时目录失败");
     // 架构约定：game_mods_path 必须以 "Mods" 结尾。
     // 将数据集复制到 temp/Mods/ 下，使所有文件（d3dx.ini, _MANAGED_, Core/...）位于 Mods/ 内。

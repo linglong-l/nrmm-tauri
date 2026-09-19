@@ -2032,7 +2032,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     /// 持久化运行时目录：cargo test 后可直接在磁盘查看产物，验证目录确实变化
-    const RUNTIME_DIR: &str = "tests/update_mod_data_runtime";
+    const RUNTIME_DIR: &str = "tests/runtime/update_mod_data_runtime";
 
     /// 串行化对共享 `RUNTIME_DIR` 的访问：多个测试并行执行时会互相 `remove_dir_all`
     /// 同一目录（Windows 下目录句柄占用 → PermissionDenied）。引用该目录的测试入口须持有此锁。
@@ -2043,6 +2043,7 @@ mod tests {
     fn input_dataset() -> PathBuf {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
+            .join("datasets")
             .join("NRMM-Rust-test");
         if !manifest_dir.exists() {
             panic!(
@@ -2057,6 +2058,7 @@ mod tests {
     fn baseline_managed() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
+            .join("datasets")
             .join("NRMM-test")
             .join("Mods")
             .join("_MANAGED_")

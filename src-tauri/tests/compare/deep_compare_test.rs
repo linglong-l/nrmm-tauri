@@ -19,11 +19,13 @@ use xxmi_nrmm_lib::models::settings::AppSettings;
 fn input_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
+        .join("datasets")
         .join("NRMM-Rust-test")
 }
 fn baseline_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
+        .join("datasets")
         .join("NRMM-test")
 }
 
@@ -150,6 +152,17 @@ fn is_managed_file(name: &str) -> bool {
 
 #[test]
 fn deep_compare_after_update_mod_data() {
+    let input = input_dir();
+    assert!(
+        input.exists(),
+        "测试数据集缺失：{:?}。请将 NRMM-Rust-test 与 NRMM-test 拷贝到 src-tauri/tests/datasets/ 后再运行本测试。",
+        input
+    );
+    assert!(
+        baseline_dir().exists(),
+        "基线数据集缺失：{}。请检查 src-tauri/tests/datasets/。",
+        baseline_dir().display()
+    );
     println!("\n============================================================");
     println!("  Deep Compare: NRMM-Rust-test -> update_mod_data -> NRMM-test");
     println!("============================================================");
