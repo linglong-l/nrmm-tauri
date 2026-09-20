@@ -168,8 +168,21 @@ const TRANSIENT_RETRY_INTERVAL_MS: u64 = 120;
 /// # 返回
 /// 解码后的动态图像；类型不支持/多次重试仍失败返回 `Err`
 pub fn decode_by_header(path: &Path) -> anyhow::Result<image::DynamicImage> {
+    decode_by_header_with_retry(path, TRANSIENT_RETRY, TRANSIENT_RETRY_INTERVAL_MS)
+}
+
+/// [`decode_by_header`] 的可参数化重试内核。
+///
+/// 提取自 `decode_by_header` 供测试注入宽预算（`cargo test --lib` 并行整跑时
+/// 后台补写线程可能被 CPU 饥饿延迟超过生产默认 720ms 预算，属测试密封性问题
+/// 而非产品缺陷）；生产路径仍走 [`TRANSIENT_RETRY`]/[`TRANSIENT_RETRY_INTERVAL_MS`] 默认值。
+fn decode_by_header_with_retry(
+    path: &Path,
+    max_retry: usize,
+    interval_ms: u64,
+) -> anyhow::Result<image::DynamicImage> {
     let mut last_err: Option<anyhow::Error> = None;
-    for attempt in 0..=TRANSIENT_RETRY {
+    for attempt in 0..=max_retry {
         match decode_attempt(path) {
             Ok(img) => return Ok(img),
             Err(e) => {
@@ -179,7 +192,7 @@ pub fn decode_by_header(path: &Path) -> anyhow::Result<image::DynamicImage> {
                 }
                 // 类型已判定成功但解码失败（瞬态），记录并重试
                 last_err = Some(e);
-                if attempt < TRANSIENT_RETRY {
+                if attempt < max_retry {
                     log::warn!(
                         "[thumbnail] 解码 {} 第 {} 次失败（瞬态重试），将重试: {:?}",
                         path.display(),
@@ -187,7 +200,7 @@ pub fn decode_by_header(path: &Path) -> anyhow::Result<image::DynamicImage> {
                         last_err.as_ref().map(|e| e.to_string())
                     );
                     std::thread::sleep(std::time::Duration::from_millis(
-                        TRANSIENT_RETRY_INTERVAL_MS * (attempt as u64 + 1),
+                        interval_ms * (attempt as u64 + 1),
                     ));
                 }
             }
@@ -545,8 +558,12 @@ mod tests {
             }
         });
 
-        // decode_by_header 应在前 1~2 次尝试失败后因文件补齐而成功
-        let img = decode_by_header(&original).expect("残缺文件补齐后应经重试成功");
+        // decode_by_header 应在前 1~2 次尝试失败后因文件补齐而成功。
+        // 注入宽预算（20 次 × 50ms 递增 ≈ 10.5s 窗口）：并行整跑时后台补写线程
+        // 可能被 CPU 饥饿延迟超过生产默认 720ms（历史 flake 现场：高负载整跑
+        // 64s 时该测试偶发失败），宽预算使调度竞态实际不可能触发。
+        let img = decode_by_header_with_retry(&original, 20, 50)
+            .expect("残缺文件补齐后应经重试成功");
         assert_eq!(
             (img.width(), img.height()),
             (64, 64),
