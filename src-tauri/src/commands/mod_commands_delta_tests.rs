@@ -29,6 +29,10 @@ fn toggle_group_delta_assembly_smoke() {
 
     use tempfile::TempDir;
 
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
     // 见 mod_cache_core::CACHE_WRITER_TEST_LOCK 文档）
     let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
@@ -164,6 +168,10 @@ fn remove_group_delta_clears_cache_subtree() {
 
     use tempfile::TempDir;
 
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
     // 见 mod_cache_core::CACHE_WRITER_TEST_LOCK 文档）
     let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
@@ -245,6 +253,10 @@ fn rename_mutex_mod_delta_uses_new_path() {
 
     use tempfile::TempDir;
 
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰，
     // 见 mod_cache_core::CACHE_WRITER_TEST_LOCK 文档）
     let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK

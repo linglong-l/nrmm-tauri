@@ -5,6 +5,10 @@ use tempfile::TempDir;
 /// 分层分类规则 1：脏目录全部位于同一 group → 仅该分组全量
 #[test]
 fn classify_single_group() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let managed = Path::new("/mods/_MANAGED_");
     let dirty = vec![
         managed.join("group_1/ModA"),
@@ -17,6 +21,10 @@ fn classify_single_group() {
 /// 分层分类规则 2：跨多个 group、无 mutex → 各涉及分组全量
 #[test]
 fn classify_multiple_groups() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let managed = Path::new("/mods/_MANAGED_");
     let dirty = vec![
         managed.join("group_1/ModA"),
@@ -34,6 +42,10 @@ fn classify_multiple_groups() {
 /// 分层分类规则 3：仅 mutex 目录 → 各 mutex 全量
 #[test]
 fn classify_mutex_only() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let managed = Path::new("/mods/_MANAGED_");
     let dirty = vec![managed.join("#Mutex1/ModA"), managed.join("#Mutex2/ModB")];
     let mut roots = classify_overflow_roots(&dirty, managed);
@@ -47,6 +59,10 @@ fn classify_mutex_only() {
 /// 分层分类规则 4：group/mutex 混合或 _MANAGED_ 之外 → 空（全量兜底）
 #[test]
 fn classify_mixed_or_external() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let managed = Path::new("/mods/_MANAGED_");
     // 混合
     let dirty = vec![managed.join("group_1/ModA"), managed.join("#M/ModB")];
@@ -65,6 +81,10 @@ fn classify_mixed_or_external() {
 /// 故意不 invalidate_all 以免破坏并行测试前置数据）。
 #[test]
 fn merge_partials_and_build_deltas_assembly() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // 写全局 MOD_CACHE 的测试串行（容量 3 + 4 个写者，防 LRU 跨测试淘汰）
     let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
         .lock()
@@ -166,6 +186,10 @@ fn merge_partials_and_build_deltas_assembly() {
 /// 切换游戏触发 `start_watching`（世代递增）后，旧监听批次捕获的快照过时 → 丢弃。
 #[test]
 fn generation_stale_check() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // 同一监听内：世代一致 → 不过期
     assert!(!is_generation_stale(1, 1));
     assert!(!is_generation_stale(5, 5));
@@ -185,6 +209,10 @@ fn generation_stale_check() {
 /// C-3a 粒度路由判定：组级根（group_xx / _MANAGED_ 一级子目录）与模组级根分类
 #[test]
 fn is_mod_level_root_classification() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let managed = Path::new("/mods/_MANAGED_");
     // 组级：group_xx 目录
     assert!(!is_mod_level_root(&managed.join("group_1"), managed));
@@ -230,6 +258,10 @@ fn is_mod_level_root_classification() {
 /// C-3a 顶层组目录推导：模组级根 → `_MANAGED_` 一级子目录（含 verbatim/大小写容忍）
 #[test]
 fn top_level_group_dir_derivation() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let managed = Path::new("/mods/_MANAGED_");
     assert_eq!(
         top_level_group_dir(&managed.join("group_1").join("ModA"), managed),
@@ -250,6 +282,10 @@ fn top_level_group_dir_derivation() {
 /// 组内**未被指向的兄弟**的陈旧状态保留（整组重扫会以磁盘为准重扫并传播删除）。
 #[test]
 fn route_incremental_batch_mod_level_not_group_rescan() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -309,6 +345,10 @@ fn route_incremental_batch_mod_level_not_group_rescan() {
 /// 插入自然位），以此证明模组级路径被命中。
 #[test]
 fn route_incremental_batch_inserts_at_end_not_sorted_position() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -351,6 +391,10 @@ fn route_incremental_batch_inserts_at_end_not_sorted_position() {
 /// 同组多个模组级根合并为**一次**组 delta。
 #[test]
 fn route_incremental_batch_mixed_and_aggregation() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -431,6 +475,10 @@ fn route_incremental_batch_mixed_and_aggregation() {
 /// patch 未命中 → 降级组级重扫，与变更前行为一致（缓存不漏更新、不损坏）。
 #[test]
 fn route_incremental_batch_nested_normal_group_falls_back_to_group_rescan() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -492,6 +540,10 @@ fn route_incremental_batch_nested_normal_group_falls_back_to_group_rescan() {
 /// 对同一磁盘状态的全量轻量扫描完全一致。
 #[test]
 fn route_incremental_batch_mod_level_parity_with_full_scan() {
+    // 还原安全窗口互斥：扫描会读/建 modname 标记，与 restore 系测试的 60s 全局窗口串行
+    let _window_lock = crate::core::mod_scan_marker::TEST_WINDOW_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let _cache_guard = mod_cache_core::CACHE_WRITER_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
