@@ -24,11 +24,12 @@ const MAX_CACHE_ENTRIES: usize = 3;
 
 /// 测试专用：写全局 [`MOD_CACHE`] 的 delta 组装类测试的串行锁。
 ///
-/// 全局缓存上限 [`MAX_CACHE_ENTRIES`] = 3，而使用全局缓存的测试共 4 个
-/// （mod_commands 的 3 个 R1 delta 测试 + file_watcher 的 R2 delta 组装测试）。
+/// 全局缓存上限 [`MAX_CACHE_ENTRIES`] = 3，而使用全局缓存的测试共 9 个
+/// （commands 的 3 个 R1 delta 测试 + watcher_incremental 的 6 个合并/路由测试）。
 /// 并行执行时第 4 个 `set()` 触发 LRU 淘汰，可能在他测「set → 读旧分组状态」
 /// 窗口内淘汰其条目，导致 old_mod_paths 随机为空的偶发断言失败；
 /// 相关测试持此锁串行（顺序执行下各自的读紧跟自己的 set，无跨测试淘汰）。
+/// 新增写全局缓存的测试时必须同样持锁（见 watcher_incremental_tests 的用法）。
 #[cfg(test)]
 pub static CACHE_WRITER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
