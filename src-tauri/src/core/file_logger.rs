@@ -9,13 +9,14 @@
 //! # 防阻塞设计（2026-08-18）
 //! - **文件优先**：`write()` 先同步写文件（失败忽略），日志落盘不依赖 stderr 状态
 //! - **stderr 异步排水**：stderr 写入投递到有界通道（`sync_channel(1024)`），
-//!   由后台线程 "stderr-drain" 消费后调用 `platform::console::write_console_err`
+//!   由后台线程 "stderr-drain" 消费后调用注入的控制台 sink
+//!   （生产为 `platform::console::write_console_err`，见 [`set_console_sink`]）
 //! - **阻塞隔离动机**：Windows 控制台 QuickEdit 选择模式下 `io::stderr()` 同步写会
 //!   无限期阻塞，而 `env_logger` 全局 `Mutex` 会因单次阻塞写卡死全应用；异步排水把
 //!   阻塞点移出日志调用方，通道满时 `try_send` 丢弃本条日志而非阻塞（取舍：stderr
 //!   仅是调试辅助输出，丢弃远优于冻结 UI / 无界涨内存）
 //! - **降级策略**：排水线程启动失败或接收端断开时，退化回同步直写
-//!   `write_console_err`（仍绕过 `io::stderr()` 直连，由 console 模块保证不 panic）
+//!   `console_write`（仍绕过 `io::stderr()` 直连，由 console sink 保证不 panic）
 //! - 目录或文件创建失败时降级为仅 stderr（`file = None`），不 panic
 //!
 //! 另提供 `install_panic_hook()`：进程级 panic hook，将 panic 信息经 `log::error!`
@@ -51,10 +52,55 @@ static DRAIN_THREAD_SPAWNED: AtomicBool = AtomicBool::new(false);
 /// 此后 `DualWriter` 退化为在调用方线程直接调用 `write_console_err`
 static DRAIN_DEGRADED: AtomicBool = AtomicBool::new(false);
 
+/// 控制台写入函数指针（`&[u8]` 入参、无返回；写入失败由实现方静默处理，不 panic）。
+type ConsoleWriter = fn(&[u8]);
+
+/// 控制台输出 sink：`(普通写入, 红色告警写入)` 函数指针对。
+type ConsoleSink = (ConsoleWriter, ConsoleWriter);
+
+/// 控制台输出 sink（由组合根 `lib.rs` 注入，见 [`set_console_sink`]）。
+///
+/// 日志层（core）不得依赖 platform 层（F1 分层纪律），因此控制台写能力
+/// （生产为 `platform::console::{write_console_err, write_console_red}`）经组合根接出。
+/// 未注入时（单元测试等）降级写 `io::stderr()`——与 console 模块在未附加/自建控制台时的
+/// 降级行为一致，均静默且不 panic。
+static CONSOLE_SINK: OnceLock<ConsoleSink> = OnceLock::new();
+
+/// 注入控制台输出 sink（组合根在 `init_console()` 之后、`init_logger()` 之前调用一次）。
+///
+/// 重复调用忽略首次之后的值（`OnceLock` 语义）。
+///
+/// # 参数
+/// - `write_err`: 普通控制台写入（生产为 `platform::console::write_console_err`）
+/// - `write_red`: 红色告警写入（生产为 `platform::console::write_console_red`）
+pub fn set_console_sink(write_err: ConsoleWriter, write_red: ConsoleWriter) {
+    let _ = CONSOLE_SINK.set((write_err, write_red));
+}
+
+/// 写控制台（已注入 sink 时转交；未注入降级 stderr）。不 panic。
+fn console_write(buf: &[u8]) {
+    match CONSOLE_SINK.get() {
+        Some((write_err, _)) => write_err(buf),
+        None => {
+            let _ = io::stderr().write_all(buf);
+        }
+    }
+}
+
+/// 写控制台红色告警（已注入 sink 时转交；未注入降级 stderr 原样）。不 panic。
+fn console_write_red(buf: &[u8]) {
+    match CONSOLE_SINK.get() {
+        Some((_, write_red)) => write_red(buf),
+        None => {
+            let _ = io::stderr().write_all(buf);
+        }
+    }
+}
+
 /// 把日志投递到 stderr（异步排水或降级直写）
 ///
 /// 投递路径优先级：
-/// 1. 排水降级（线程不可用）→ 调用方线程直写 `write_console_err`
+/// 1. 排水降级（线程不可用）→ 调用方线程直写 `console_write`
 /// 2. 通道可用 → `try_send` 非阻塞投递；通道满丢弃本条，接收端断开则置降级标记并直写
 /// 3. 通道未初始化（防御分支，`DualWriter::new` 已保证初始化）→ 直写
 ///
@@ -63,15 +109,15 @@ static DRAIN_DEGRADED: AtomicBool = AtomicBool::new(false);
 /// # 参数
 /// - `buf`: 待写入 stderr 的字节缓冲区
 fn dispatch_stderr(buf: &[u8]) {
-    // 降级路径：排水线程不可用，退化为同步直写（console 模块保证不 panic）
+    // 降级路径：排水线程不可用，退化为同步直写（console sink 契约保证不 panic）
     if DRAIN_DEGRADED.load(Ordering::Relaxed) {
-        crate::platform::console::write_console_err(buf);
+        console_write(buf);
         return;
     }
 
     let Some(tx) = STDERR_TX.get() else {
         // 防御分支：通道未初始化（理论不可达，DualWriter::new 已 ensure），直写兜底
-        crate::platform::console::write_console_err(buf);
+        console_write(buf);
         return;
     };
 
@@ -82,24 +128,24 @@ fn dispatch_stderr(buf: &[u8]) {
         // 接收端断开（排水线程已退出）：置降级标记，本条直写，后续走降级路径
         Err(TrySendError::Disconnected(_)) => {
             DRAIN_DEGRADED.store(true, Ordering::Relaxed);
-            crate::platform::console::write_console_err(buf);
+            console_write(buf);
         }
     }
 }
 
 /// stderr 排水线程主循环
 ///
-/// 循环接收通道消息并调用 `write_console_err`；每次迭代独立 `catch_unwind`，
+/// 循环接收通道消息并调用 `console_write`；每次迭代独立 `catch_unwind`，
 /// 单条日志写入 panic 不会退出循环（等效自动恢复），仅丢弃该条。
 ///
 /// # 参数
 /// - `rx`: 排水通道接收端（通道断开时 `recv` 返回 `Err`，线程自然退出）
 fn stderr_drain_loop(rx: Receiver<Arc<[u8]>>) {
     while let Ok(buf) = rx.recv() {
-        // write_console_err 契约保证不 panic，此处 catch_unwind 为纵深防御：
+        // console_write 契约保证不 panic，此处 catch_unwind 为纵深防御：
         // 即使意外 panic 也仅丢弃本条，排水线程继续服务
         let _ = std::panic::catch_unwind(|| {
-            crate::platform::console::write_console_err(&buf);
+            console_write(&buf);
         });
     }
 }
@@ -442,7 +488,7 @@ impl DualWriter {
 
         // 创建日志目录（若不存在）
         if let Err(e) = std::fs::create_dir_all(&log_dir) {
-            crate::platform::console::write_console_red(
+            console_write_red(
                 format!("[file_logger] 创建日志目录失败 {:?}: {}\n", log_dir, e).as_bytes(),
             );
             return None;
@@ -465,7 +511,7 @@ impl DualWriter {
                 Some(f)
             }
             Err(e) => {
-                crate::platform::console::write_console_red(
+                console_write_red(
                     format!("[file_logger] 打开日志文件失败 {:?}: {}\n", log_path, e).as_bytes(),
                 );
                 None
@@ -501,7 +547,7 @@ impl Write for DualWriter {
             if let Err(e) = file.write_all(buf) {
                 if !self.file_err_notified {
                     self.file_err_notified = true;
-                    crate::platform::console::write_console_red(
+                    console_write_red(
                         format!("[file_logger] 日志文件写入失败（降级仅终端）: {}\n", e).as_bytes(),
                     );
                 }

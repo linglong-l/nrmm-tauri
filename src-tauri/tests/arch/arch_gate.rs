@@ -113,7 +113,10 @@ fn f1_layering_direction_frozen() {
                 "crate::updater",
                 "crate::debug",
                 "crate::platform",
-                "crate::utils",
+                // 注：utils 不在禁止之列——utils 为**无任何内部依赖的公共叶层**（其自身 rows
+                // 禁止引用全部内部模块），任何层向下引用都不可能形成环；config 的设置持久化
+                // 需要 utils::atomic_write 这一共享原语（core/commands 同样复用），
+                // 禁止 config→utils 属早期过严规格（2026-09-20 修正，原登记豁免随之清零）。
             ],
         ),
         (
@@ -132,15 +135,12 @@ fn f1_layering_direction_frozen() {
             ],
         ),
     ];
-    // 存量豁免：(文件, 该文件内允许出现的上层前缀)；Phase 6 命令迁移后收缩
-    const F1_EXEMPTIONS: &[(&str, &str)] = &[
-        // 控制台基础设施：日志双输出直连（长期放行）
-        ("core/file_logger.rs", "crate::platform::console"),
-        // 日志时区钩子（长期放行，待 file_logger 归位后再评估）
-        ("config/settings_store.rs", "crate::core::file_logger"),
-        // 设置持久化的 atomically 写盘（utils 原子写，基线存量；重估 config→utils 归属后收紧）
-        ("config/settings_store.rs", "crate::utils"),
-    ];
+    // 存量豁免：(文件, 该文件内允许出现的上层前缀)。
+    // 2026-09-20 清零：① core/file_logger→platform::console 经组合根 sink 注入解耦；
+    // ② config/settings_store→core::file_logger 经「设置已应用」钩子注入解耦；
+    // ③ config/settings_store→utils 为过严规格修正（utils 系无内部依赖的公共叶层）。
+    // 仅当出现无法以注入/归属修正化解的存量越界时才登记新条目，并在注释中记录消解路径。
+    const F1_EXEMPTIONS: &[(&str, &str)] = &[];
 
     let mut files = Vec::new();
     collect_files(&src_root(), &["rs"], &mut files);

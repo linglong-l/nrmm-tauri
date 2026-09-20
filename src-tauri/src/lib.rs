@@ -138,6 +138,19 @@ pub fn run() {
     // 控制台决策必须先于日志系统初始化：AttachConsole/AllocConsole 后标准流才对日志可见
     platform::console::init_console();
 
+    // 组合根注入控制台 sink：core 日志层不得依赖 platform 层（F1 分层纪律），
+    // 控制台写入能力由此处接出。须在 init_logger 之前完成，避免首条日志走 stderr 降级
+    crate::core::file_logger::set_console_sink(
+        platform::console::write_console_err,
+        platform::console::write_console_red,
+    );
+
+    // 组合根注入「设置已应用」副作用：config 层不得反向依赖 core 日志层（F1），
+    // 因此 logTimezone → 日志时区的同步由此处接出（须在 init_settings 之前注册）
+    config::settings_store::set_on_settings_applied(|settings| {
+        crate::core::file_logger::apply_log_timezone(&settings.log_timezone);
+    });
+
     // 自定义格式（file_logger::init_logger）：env_logger 默认格式时间戳恒为 UTC，
     // 与日志文件名（本地日期）不匹配（东八区差 8 小时）；自定义格式默认本地时区，
     // 可经 settings.json 的 logTimezone 覆盖（settings 初始化后生效）

@@ -26,6 +26,32 @@ use std::path::{Path, PathBuf};
 /// Option 表示是否已初始化（init_settings 后变为 Some）
 static SETTINGS: Lazy<RwLock<Option<AppSettings>>> = Lazy::new(|| RwLock::new(None));
 
+/// 「设置已应用」回调（组合根 `lib.rs` 注入，见 [`set_on_settings_applied`]）。
+///
+/// 设置生效后的副作用（日志时区同步等）由组合根接出：config 层不得反向依赖 core
+/// 日志层（F1 分层纪律），故此处只保留一个不含捕获环境的函数指针。
+static ON_SETTINGS_APPLIED: parking_lot::Mutex<Option<fn(&AppSettings)>> =
+    parking_lot::Mutex::new(None);
+
+/// 注册「设置已应用」回调（组合根在 `init_settings()` 之前调用；重复注册以最后一次为准）。
+///
+/// 回调在 `init_settings` 完成加载与 `save_settings` 完成写盘后各触发一次，
+/// 覆盖 save_settings 的全部调用路径（含 update/reset/import 等内部路径）。
+///
+/// # 参数
+/// - `hook`: 设置应用后的副作用函数（生产为把 logTimezone 应用到日志时区）
+pub fn set_on_settings_applied(hook: fn(&AppSettings)) {
+    *ON_SETTINGS_APPLIED.lock() = Some(hook);
+}
+
+/// 触发「设置已应用」回调（未注册时静默跳过）。
+fn notify_settings_applied(settings: &AppSettings) {
+    let hook = *ON_SETTINGS_APPLIED.lock();
+    if let Some(f) = hook {
+        f(settings);
+    }
+}
+
 /// 初始化设置（应用启动时调用）
 ///
 /// 流程：
@@ -63,9 +89,9 @@ pub fn init_settings() -> Result<AppSettings> {
     // 再次确保填充了默认值（防止反序列化缺少字段）
     fill_defaults(&mut settings);
     *SETTINGS.write() = Some(settings.clone());
-    // 应用日志时区配置（settings.json 的 logTimezone；logger 先于本函数初始化，
-    // 此前的启动日志恒为系统本地时区，配置值自此行起生效）
-    crate::core::file_logger::apply_log_timezone(&settings.log_timezone);
+    // 通知已注册的副作用钩子（生产为应用日志时区配置：logger 先于本函数初始化，
+    // 此前的启动日志恒为系统本地时区，自此行起配置值生效）
+    notify_settings_applied(&settings);
     Ok(settings)
 }
 
@@ -165,8 +191,8 @@ pub fn save_settings(settings: &AppSettings) -> Result<()> {
     let path = app_paths::settings_path();
     save_to_file(&path, settings)?;
     *SETTINGS.write() = Some(settings.clone());
-    // 同步应用日志时区（UI 保存即时生效；值未变化时 apply 内部静默跳过）
-    crate::core::file_logger::apply_log_timezone(&settings.log_timezone);
+    // 通知已注册的副作用钩子（生产为同步日志时区，UI 保存即时生效；值未变化时内部静默跳过）
+    notify_settings_applied(settings);
     Ok(())
 }
 
