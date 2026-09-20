@@ -150,6 +150,22 @@ fn is_managed_file(name: &str) -> bool {
     )
 }
 
+/// 用户交互/数据集噪声类「期望缺失」文件：update_mod_data 管线不产出、缺失不构成 parity 分歧。
+///
+/// - `icon_<timestamp>.ico`：NRMM 用户「设置分组图标」交互功能的落盘产物
+///   （基线快照含真实用户设置，输入集无）；本管线无该功能（commands 层无
+///   set icon 命令），图标由 find_icon_path 读取而非管线写入。
+/// - `*.bak`：数据集制作占位噪声（基线 help.ini.bak / Stelle.ini.bak 均为
+///   0 字节空文件；Rust 管线备份扩展名为 .ini_managed_backup/.ini_manager_backup，
+///   从不生成 .bak）。
+///
+/// 证据：上述文件在基线中全部 0 字节；输入侧同款 0 字节 .bak（Stelle.ini.bak）
+/// 已存在，证明其为数据集构造产物而非 NRMM 处理输出。
+fn is_user_interaction_or_noise_file(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    (lower.starts_with("icon_") && lower.ends_with(".ico")) || lower.ends_with(".bak")
+}
+
 #[test]
 fn deep_compare_after_update_mod_data() {
     let input = input_dir();
@@ -304,7 +320,7 @@ fn deep_compare_after_update_mod_data() {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            !is_managed_file(&name)
+            !is_managed_file(&name) && !is_user_interaction_or_noise_file(&name)
         })
         .collect();
 
@@ -315,7 +331,7 @@ fn deep_compare_after_update_mod_data() {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            is_managed_file(&name)
+            is_managed_file(&name) || is_user_interaction_or_noise_file(&name)
         })
         .collect();
 
