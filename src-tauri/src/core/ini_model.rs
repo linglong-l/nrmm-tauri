@@ -178,6 +178,19 @@ impl IniFile {
                 continue;
             }
 
+            // 带缩进的注释行（`;` / `;-;` / `;+;` 等）：按注释态保留整行原文（含缩进）。
+            // Dart/NRMM 对缩进注释行不做 KV 解析；此前误入 parse_key_value 会把
+            // `;if $X == 1` 切成 key=`;if $X` / value=`= 1`，写回时 `==` 退化为
+            // ` = = `（deep_compare 基线分歧现场：merged.ini / Master1.ini）。
+            if !line.starts_with(';') && line.trim_start().starts_with(';') {
+                let c = IniLine::Comment(line.to_string());
+                match current_section {
+                    Some(idx) => sections[idx].lines.push(c),
+                    None => preamble.push(c),
+                }
+                continue;
+            }
+
             if line.starts_with(";-;") {
                 let after_prefix = line.strip_prefix(";-;").unwrap_or(line).trim_start();
                 match crate::core::ini_condition::parse_key_value(after_prefix) {

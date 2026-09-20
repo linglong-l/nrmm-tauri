@@ -62,13 +62,23 @@ pub fn has_namespace(ini: &IniFile) -> bool {
 
 pub fn expand_variable(var_name: &str, namespace: &str) -> String {
     let trimmed = var_name.trim();
-    if trimmed.starts_with("$\\") {
+    if trimmed.starts_with("$\\") || is_manager_reserved_var(trimmed) {
         trimmed.to_string()
     } else if let Some(stripped) = trimmed.strip_prefix('$') {
         format!("$\\{}\\{}", namespace, stripped)
     } else {
         trimmed.to_string()
     }
+}
+
+/// NRMM 管理器保留变量（`$managed_slot_id`，由 update_mod_data 注入的槽位守卫/赋值使用）。
+///
+/// 不属于模组命名空间，展开会把它改写为 `$\<ns>\managed_slot_id`——manager 守卫
+/// 被变形为 legacy 旧槽位守卫形态，注入阶段不再识别为「已注入」而重复包裹
+/// （deep_compare 基线分歧现场：Master1.ini [KeySwap]/[Present] 双重包裹）。
+/// 基线证据：NRMM-test 中 `$managed_slot_id` 引用原样保留，从未被命名空间展开。
+fn is_manager_reserved_var(var: &str) -> bool {
+    var == "$managed_slot_id"
 }
 
 pub fn expand_variables_in_value(value: &str, namespace: &str) -> String {
@@ -97,14 +107,23 @@ pub fn expand_variables_in_value(value: &str, namespace: &str) -> String {
                 }
                 continue;
             } else if next.is_alphanumeric() || next == '_' {
-                result.push_str("$\\");
-                result.push_str(namespace);
-                result.push('\\');
-                i += 1;
-                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                    result.push(chars[i]);
-                    i += 1;
+                let mut j = i + 1;
+                while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                    j += 1;
                 }
+                let name: String = chars[i + 1..j].iter().collect();
+                if name == "managed_slot_id" {
+                    // NRMM 管理器保留变量：原样保留，不做命名空间展开（见 is_manager_reserved_var）
+                    result.push(c);
+                    result.extend(chars[i + 1..j].iter());
+                } else {
+                    result.push('$');
+                    result.push('\\');
+                    result.push_str(namespace);
+                    result.push('\\');
+                    result.extend(chars[i + 1..j].iter());
+                }
+                i = j;
                 continue;
             }
         }

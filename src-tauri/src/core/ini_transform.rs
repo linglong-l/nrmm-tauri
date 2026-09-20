@@ -276,12 +276,10 @@ impl IniFile {
                     comment,
                     ..
                 } => (key, value, *disabled, comment.clone(), false),
-                IniLine::DisabledKeyValue {
-                    key,
-                    value,
-                    comment,
-                    ..
-                } => (key, value, true, comment.clone(), true),
+                // `;-;` 注释态 condition 行为已注释的历史内容，冻结不动：
+                // 追加守卫会使注释行内容漂移（deep_compare 基线证据：
+                // Master1.ini `;-;condition = (...)` 原样保留，NRMM 不追加）。
+                IniLine::DisabledKeyValue { .. } => continue,
                 _ => continue,
             };
             if key.eq_ignore_ascii_case("condition") {
