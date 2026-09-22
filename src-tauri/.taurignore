@@ -1,0 +1,7 @@
+# tauri dev 文件监控忽略规则（语法同 .gitignore，置于 src-tauri/ 下生效）。
+#
+# tests/：测试数据集与测试运行时产物。开发者本地调试时常把「游戏 Mods 路径」指向
+# tests/datasets/<数据集>/，应用运行时会写入其中（update_mod_data 生成 group_X.ini /
+# nrmm_include.ini、改写模组 ini、写备份与标记文件等）。若这些写入被 tauri dev 监控，
+# 会形成「应用写入 → 触发重编译 → 重启应用 → 再次写入」的无限重启循环。
+tests/
