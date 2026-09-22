@@ -645,11 +645,18 @@ fn patch_selected_index_skips_cow_when_arc_externally_held() {
     let group1 = mods_path.join("_MANAGED_").join("group_1");
 
     let mut cache = ModCache::new();
-    cache.set(
-        TargetGame::GenshinImpact,
-        &mods_path,
-        crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap(),
-    );
+    // 构造「大树」fixture（扁平模组数达 COW_GUARD_MIN_MODS）：零拷贝保护**仅对大树生效**
+    // （小库深拷贝代价可忽略，降级走重扫反而更慢），故须达到阈值才触发降级。
+    let mut big = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
+    let unit = big
+        .mods
+        .first()
+        .cloned()
+        .expect("fixture 应含至少一个模组条目");
+    while big.mods.len() < crate::core::mod_cache_core::COW_GUARD_MIN_MODS {
+        big.mods.push(unit.clone());
+    }
+    cache.set(TargetGame::GenshinImpact, &mods_path, big);
 
     // 模拟外部持有：get() 克隆 Arc 并保活（strong_count>1）
     {

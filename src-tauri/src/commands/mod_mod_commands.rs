@@ -7,7 +7,7 @@
 
 use crate::commands::mod_commands::ToggleModResult;
 use crate::commands::mod_commands_util::{
-    build_group_delta, derive_toggled_path, log_delta, open_path_in_explorer, parse_game,
+    build_group_delta, derive_toggled_path, open_path_in_explorer, parse_game,
     resolve_managed_context, UPDATE_LOCK,
 };
 use crate::config::settings_store;
@@ -37,7 +37,8 @@ pub async fn toggle_mod_disabled(
     // 与 select_mod（写 selectedindex + 清缓存）可并发交错，是「选择 vs 启用状态」
     // 竞态的核心缺口——统一在此入口串行化。
     let _update_guard = UPDATE_LOCK.lock().await;
-    let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
+    // 组目录原用于降级路径的组级重扫；P1 起降级不再同步重扫（见下），故不再需要
+    let (mods_root, _old_group_dir) = resolve_managed_context(Path::new(&mod_path))
         .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
     let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
     let game = settings_store::get_settings().target_game;
@@ -61,36 +62,21 @@ pub async fn toggle_mod_disabled(
             // 注意不可直接传 `enable`（它是"目标启用"语义；曾以反相交入缓存导致启用后缓存态为禁用、
             // 禁用后为启用的三方一致性污染）。
             let target_disabled = !enable;
-            // 零扫描缓存 patch；未命中（缓存无此条目/组树无定位）→ 降级增量重扫
-            let mut degraded = false;
+            // 零扫描缓存 patch；未命中或大树被外部持有（COW 保护）→ 标记该游戏缓存失效，
+            // **不同步重扫**：交互路径不得因扫描阻塞（原同步组级重扫在连续操作时叠加为
+            // 秒级卡顿 + 命令排队 + 通知齐发）。磁盘操作已成功、前端乐观更新已即时呈现，
+            // 缓存由 watcher 增量 / 下次 get_mods 全量兜底修正。
             {
                 let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
                 if !cache.patch_mod_entry(game, &mods_root, &path, &new_path, target_disabled) {
-                    degraded = true;
+                    cache.invalidate_game(game);
                 }
             } // 释放写锁
-            let group_delta = if degraded {
-                build_group_delta(
-                    game,
-                    &mods_root,
-                    &old_group_dir,
-                    &path
-                        .parent()
-                        .map(Path::to_path_buf)
-                        .unwrap_or_else(|| old_group_dir.clone()),
-                )
-                .map_err(|e| e.to_string())?
-            } else {
-                GroupDelta::default()
-            };
-            if degraded {
-                log_delta("toggle_mod_disabled(degraded)", &group_delta);
-            }
             Ok(ToggleModResult {
                 new_path: new_path.to_string_lossy().to_string(),
                 disabled: target_disabled,
-                degraded,
-                group_delta,
+                degraded: false,
+                group_delta: GroupDelta::default(),
             })
         })
         .await

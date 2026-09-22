@@ -22,6 +22,14 @@ use std::time::Instant;
 /// 被淘汰条目再次进入该游戏/路径时需触发一次全量重扫（~3-4s），内存优先。
 const MAX_CACHE_ENTRIES: usize = 3;
 
+/// 零拷贝保护的最小小库阈值（扁平模组数）。
+///
+/// [`ModCache::try_get_owned_result`] 仅在树规模 ≥ 本值时才于 Arc 被外部持有期间降级：
+/// - **大树**（万级模组，实测深拷贝数秒～数十秒）：必须降级，否则 UI 卡顿 3~15s；
+/// - **小库**（新用户/测试 fixture，几十个模组）：深拷贝仅毫秒级，降级反而要走组级
+///   重扫（更慢），故仍走 `Arc::make_mut` 就地改。
+pub(crate) const COW_GUARD_MIN_MODS: usize = 1000;
+
 /// 测试专用：写全局 [`MOD_CACHE`] 的 delta 组装类测试的串行锁。
 ///
 /// 全局缓存上限 [`MAX_CACHE_ENTRIES`] = 3，而使用全局缓存的测试共 9 个
@@ -209,6 +217,51 @@ impl ModCache {
     pub fn invalidate_game(&mut self, game: TargetGame) {
         self.cache.retain(|(g, _), _| *g != game);
         self.invalidated_games.insert(game);
+    }
+
+    /// 取缓存结果的**独占**可变引用用于零拷贝就地改；不可独占时返回 `None`（调用方降级）。
+    ///
+    /// 缓存以 `Arc<ScanResult>` 共享，`Arc::make_mut` 在 Arc 被外部持有（如 `get_mods`
+    /// 序列化在途 clone）时会**深拷贝整棵万级模组树**（实测数秒～数十秒，表现为 UI
+    /// 3~15s 卡顿 + 命令排队后通知齐发）。故仅当唯一持有、或树规模小于
+    /// [`COW_GUARD_MIN_MODS`]（深拷贝代价可忽略）时才返回 `Some`；否则 `None`，
+    /// 由调用方降级（返回 miss 值 / 标记失效 / 走增量重扫）。
+    ///
+    /// # 参数
+    /// - `game`: 目标游戏（缓存键）
+    /// - `mods_path`: Mods 根目录（缓存键）
+    /// - `op`: 调用方标识（降级度量日志用，如 `"patch_mod_entry"`）
+    ///
+    /// # 返回
+    /// - `Some(&mut ScanResult)`：可安全就地改（唯一持有零拷贝，或小库深拷贝可忽略）
+    /// - `None`：缓存未命中，或大树被外部持有 → 调用方降级
+    pub(crate) fn try_get_owned_result(
+        &mut self,
+        game: TargetGame,
+        mods_path: &Path,
+        op: &str,
+    ) -> Option<&mut ScanResult> {
+        let key = Self::make_key(game, mods_path);
+        let Some(existing) = self.cache.get_mut(&key) else {
+            log::debug!("[mod_cache] {} 跳过：缓存未命中 (game={:?})", op, game);
+            return None;
+        };
+        let strong = Arc::strong_count(&existing.result);
+        let mods = existing.result.mods.len();
+        if strong > 1 && mods >= COW_GUARD_MIN_MODS {
+            // 度量点（P2）：COW 保护降级**发生率**。P0/P1 后单次降级已降至微秒级
+            // （跳过 patch + 标失效，不做同步重扫），但频繁降级仍意味着 Arc 被外部
+            // 长期持有（如 get_mods 的 IPC 序列化在途）。用 info 级便于统计与检索。
+            log::info!(
+                "[mod_cache] COW 保护降级 | op={} game={} mods={} strong_count={}",
+                op,
+                game.as_str(),
+                mods,
+                strong
+            );
+            return None;
+        }
+        Some(Arc::make_mut(&mut existing.result))
     }
 
     /// 清空所有缓存条目和失效标记。

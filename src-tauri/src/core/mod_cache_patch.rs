@@ -53,15 +53,12 @@ impl ModCache {
         mods_path: &Path,
         partial_result: ScanResult,
     ) {
-        let key = Self::make_key(game, mods_path);
-        let existing = match self.cache.get_mut(&key) {
-            Some(e) => e,
-            None => {
-                // 缓存未命中时跳过：partial_result 仅包含变更的 groups/mods，
-                // 直接创建缓存条目会导致残缺数据。下次 get_mods 会全量扫描填充完整缓存。
-                log::debug!("[mod_cache] subtree_replace: cache miss for {:?}, skipping (will full-scan on next get_mods)", game);
-                return;
-            }
+        let Some(owned) = self.try_get_owned_result(game, mods_path, "subtree_replace") else {
+            // 缓存未命中、或大树被外部持有（深拷贝万级树代价数秒～数十秒）→ 降级：
+            // partial 仅含变更集，跳过合并后旧缓存不可保留（否则前端读到陈旧数据）
+            // → 标记该游戏缓存失效，下次 get_mods 全量重扫兜底（宁全量不陈旧）。
+            self.invalidate_game(game);
+            return;
         };
 
         // 记录 partial 各分组子树根（用于删除传播；必须在消费 partial_result.groups 之前计算）
@@ -70,10 +67,6 @@ impl ModCache {
             .iter()
             .map(|g| std::path::PathBuf::from(&g.full_path))
             .collect();
-
-        // Arc::make_mut：缓存是 Arc 的唯一长期持有者，通常原地可变（零拷贝）；
-        // 若调用方已通过 get() 克隆了该 Arc，则此处写时拷贝一份再改（语义安全）。
-        let owned = Arc::make_mut(&mut existing.result);
 
         // 将现有 groups 就地合并：按 group_path（路径等价、大小写不敏感）原位替换，
         // 避免 BTreeMap 按字典序破坏分组数值序、或大小写路径差异产生重复分组。
@@ -179,21 +172,12 @@ impl ModCache {
         mods_path: &Path,
         group_full_path: &Path,
     ) -> usize {
-        let key = Self::make_key(game, mods_path);
-        let existing = match self.cache.get_mut(&key) {
-            Some(e) => e,
-            None => {
-                // 缓存未命中：无旧状态可裁剪，下次 get_mods 全量扫描自然不含已删分组
-                log::debug!(
-                    "[mod_cache] subtree_remove: cache miss for {:?}, skipping",
-                    game
-                );
-                return 0;
-            }
+        let Some(owned) = self.try_get_owned_result(game, mods_path, "subtree_remove") else {
+            // 缓存未命中、或大树被外部持有 → 降级：磁盘分组已移除，缓存不可保留
+            // 陈旧子树 → 标记失效，下次 get_mods 全量重扫兜底
+            self.invalidate_game(game);
+            return 0;
         };
-
-        // Arc::make_mut：缓存为唯一长期持有者，通常原地可变（零拷贝）
-        let owned = Arc::make_mut(&mut existing.result);
 
         // 1. 移除顶层组节点（按路径等价比较，容忍 verbatim 前缀 / 大小写形态差异）
         let group_before = owned.groups.len();
@@ -270,13 +254,8 @@ impl ModCache {
         mod_full_path: &Path,
         new_mod: Option<Arc<ModData>>,
     ) -> Option<ModGroupData> {
-        let key = Self::make_key(game, mods_path);
-        let existing = self.cache.get_mut(&key)?;
-
-        // Arc::make_mut：缓存为唯一长期持有者，通常原地可变（零拷贝）；
-        // 若调用方已通过 get() 克隆了该 Arc，则写时拷贝（此时深层 children 经
-        // make_mut 逐级写时拷贝，链外兄弟仍共享旧 Arc 指针）
-        let owned = Arc::make_mut(&mut existing.result);
+        // 缓存未命中、或大树被外部持有 → None 交调用方降级组级重扫
+        let owned = self.try_get_owned_result(game, mods_path, "patch_single_mod")?;
 
         // 树定位 + 组内 patch：含该模组的顶层组唯一（_MANAGED_ 一级子目录互斥）。
         // 返回组内最终条目（删除为 None），供扁平同步复用同一 Arc 实例。
@@ -341,12 +320,10 @@ impl ModCache {
         new_full_path: &Path,
         disabled: bool,
     ) -> bool {
-        let key = Self::make_key(game, mods_path);
-        let existing = match self.cache.get_mut(&key) {
-            Some(e) => e,
-            None => return false,
+        // 缓存未命中、或大树被外部持有 → false 交调用方降级（组级重扫修正缓存）
+        let Some(owned) = self.try_get_owned_result(game, mods_path, "patch_mod_entry") else {
+            return false;
         };
-        let owned = Arc::make_mut(&mut existing.result);
 
         // 组树递归定位并就地修改（含 children 递归，深度优先唯一包含）
         fn patch_in_node(
@@ -428,12 +405,10 @@ impl ModCache {
         mods_path: &Path,
         mod_full_path: &Path,
     ) -> bool {
-        let key = Self::make_key(game, mods_path);
-        let existing = match self.cache.get_mut(&key) {
-            Some(e) => e,
-            None => return false,
+        // 缓存未命中、或大树被外部持有 → false 交调用方降级（组级重扫修正缓存）
+        let Some(owned) = self.try_get_owned_result(game, mods_path, "remove_mod_entry") else {
+            return false;
         };
-        let owned = Arc::make_mut(&mut existing.result);
         let mut group_hit = false;
         for g in owned.groups.iter_mut() {
             if path_within(mod_full_path, &g.full_path) {
@@ -490,25 +465,10 @@ impl ModCache {
         group_path: &Path,
         index: u32,
     ) -> bool {
-        let key = Self::make_key(game, mods_path);
-        let existing = match self.cache.get_mut(&key) {
-            Some(e) => e,
-            None => return false,
-        };
-
-        // 快路径：缓存 Arc 无外部持有（strong_count==1）→ 原地改，零拷贝。
-        // Arc 被外部持有（如 get_mods 序列化在途 clone）时，`Arc::make_mut` 会深拷贝
-        // 整棵万级模组树（实测数秒～数十秒），绝不可走默认 COW。
-        // 慢路径降级返回 false：调用方跳过缓存 patch，selectedindex 文件变更必然触发
-        // watcher 增量重扫修正缓存 + 推送组 delta 至前端（静默期后，远优于阻塞数十秒）。
+        // 缓存未命中、或大树被外部持有 → false（调用方跳过缓存 patch，
+        // selectedindex 文件变更由 watcher 增量重扫修正）
         let start = Instant::now();
-        let Some(owned) = Arc::get_mut(&mut existing.result) else {
-            log::debug!(
-                "[mod_cache] patch_selected_index skip COW | group={} strong_count={} elapsed_ms={}",
-                group_path.display(),
-                Arc::strong_count(&existing.result),
-                start.elapsed().as_millis()
-            );
+        let Some(owned) = self.try_get_owned_result(game, mods_path, "patch_selected_index") else {
             return false;
         };
 

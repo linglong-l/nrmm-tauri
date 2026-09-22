@@ -58,7 +58,12 @@ pub struct SelectModArgs {
     pub cursor_y: Option<i32>,
 }
 
-/// 单模组启用/禁用结果（零扫描路径；degraded=true 时前端消费 group_delta 并提示异常）
+/// 单模组启用/禁用结果（零扫描路径）。
+///
+/// 缓存 patch 未命中、或大树被外部持有（COW 保护）时**不再同步重扫**——交互路径不得因
+/// 扫描阻塞（原组级重扫在连续操作时叠加为秒级卡顿 + 命令排队 + 通知齐发）；改为标记该
+/// 游戏缓存失效，由 watcher 增量 / 下次 get_mods 全量兜底修正，前端乐观更新已即时呈现。
+/// 故两字段恒为 `false` / 空占位（保留以兼容 IPC 契约）。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToggleModResult {
@@ -66,9 +71,9 @@ pub struct ToggleModResult {
     pub new_path: String,
     /// 操作后的禁用状态（true=已禁用）
     pub disabled: bool,
-    /// 是否降级为增量扫描（缓存条目未命中等异常）；true 时请用 `group_delta` 整体 patch 并告知用户
+    /// 恒为 `false`：启停不再走同步重扫降级（保留字段以兼容 IPC 契约）
     pub degraded: bool,
-    /// 异常降级时的受影响分组增量（degraded=false 时为空占位）
+    /// 恒为空占位（同上；保留字段以兼容 IPC 契约）
     pub group_delta: GroupDelta,
 }
 
