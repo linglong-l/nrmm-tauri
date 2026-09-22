@@ -500,7 +500,7 @@ impl ModCache {
         // Arc 被外部持有（如 get_mods 序列化在途 clone）时，`Arc::make_mut` 会深拷贝
         // 整棵万级模组树（实测数秒～数十秒），绝不可走默认 COW。
         // 慢路径降级返回 false：调用方跳过缓存 patch，selectedindex 文件变更必然触发
-        // watcher 增量重扫修正缓存 + 推送组 delta 至前端（~1s 静默期，远优于阻塞数十秒）。
+        // watcher 增量重扫修正缓存 + 推送组 delta 至前端（静默期后，远优于阻塞数十秒）。
         let start = Instant::now();
         let Some(owned) = Arc::get_mut(&mut existing.result) else {
             log::debug!(

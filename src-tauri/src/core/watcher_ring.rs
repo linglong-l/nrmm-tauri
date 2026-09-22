@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 /// 设计意图：正常人工操作（增删改少量模组）产生的脏目录数远小于容量，走精确增量路径；
 /// 风暴场景（INI 备份/更新模组数据写入数万文件，目录数远超容量）必然溢出，
 /// 快速转入分层全量降级路径（按顶层 group/mutex 分类全量），避免逐目录精确处理
-/// 数千至上万个根路径的串行开销。R2 配合 1s 事件平息静默期 + 溢出退避
+/// 数千至上万个根路径的串行开销。R2 配合事件平息静默期 + 溢出退避
 /// （连续溢出逐轮 +1s 封顶 3s），风暴批次合并更大、溢出率进一步下降。
 const RING_CAPACITY: usize = 256;
 
@@ -80,7 +80,8 @@ impl EventRingBuffer {
     /// 防抖是否到期：队列非空且距最近一次 push 已超过静默期时长
     ///
     /// # 参数
-    /// - `debounce`: 静默期时长（事件平息 1s；溢出退避时由调用方传入延长后的值）
+    /// - `debounce`: 静默期时长（事件平息 [`constants::FILE_WATCHER_DEBOUNCE_MS`]；
+    ///   溢出退避时由调用方传入 [`backoff_quiet_period`] 计算后的延长值）
     pub(crate) fn is_ready(&self, debounce: Duration) -> bool {
         match self.last_push_at {
             None => false,
@@ -109,14 +110,22 @@ impl EventRingBuffer {
     }
 }
 
-/// 溢出退避静默期计算（R2）：`base + min(连续溢出轮数 - 1, 2) × 1000ms`，
+/// 静默期计算：非溢出批次使用普通静默期 `base`；溢出批次切换到**独立**退避阶梯
+/// `FILE_WATCHER_OVERFLOW_BACKOFF_BASE_MS + min(连续溢出轮数 - 1, 2) × 1000ms`，
 /// 绝对上限 [`constants::FILE_WATCHER_MAX_BACKOFF_MS`]。
 ///
 /// 连续溢出 1/2/3 轮 → 1000/2000/3000ms；退避拉长静默期使风暴合并更大批次，
 /// 降低 ring 溢出频率；非溢出批次（计数清零）回到 base。
+///
+/// 退避阶梯与 `base` 解耦（2026-09-20）：溢出意味着事件风暴已填满事件环，需要足够长的
+/// 静默期压制；若退避以普通静默期为基数，调小普通静默期会同步削弱溢出首次保护。
 pub(crate) fn backoff_quiet_period(base: Duration, consecutive_overflows: u32) -> Duration {
-    let extra_ms = u64::from(std::cmp::min(consecutive_overflows.saturating_sub(1), 2) * 1000);
-    let quiet = base + Duration::from_millis(extra_ms);
+    if consecutive_overflows == 0 {
+        return base;
+    }
+    let step_ms = u64::from(std::cmp::min(consecutive_overflows.saturating_sub(1), 2) * 1000);
+    let quiet =
+        Duration::from_millis(constants::FILE_WATCHER_OVERFLOW_BACKOFF_BASE_MS + step_ms);
     quiet.min(Duration::from_millis(
         constants::FILE_WATCHER_MAX_BACKOFF_MS,
     ))

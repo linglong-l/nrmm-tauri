@@ -35,7 +35,8 @@ impl IncrementalUpdater {
     /// 创建一个新的增量更新器。
     ///
     /// # 参数
-    /// - `debounce_ms`: 防抖时长（毫秒），通常为 300。
+    /// - `debounce_ms`: 防抖时长（毫秒），生产取值见
+    ///   [`crate::core::constants::FILE_WATCHER_DEBOUNCE_MS`]。
     ///
     /// # Panics
     ///

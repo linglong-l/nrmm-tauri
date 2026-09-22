@@ -62,26 +62,41 @@ fn ring_is_overflowed(r: &EventRingBuffer) -> bool {
     r.overflow
 }
 
-/// 溢出退避静默期计算：连续溢出 1/2/3 轮 → 1000/2000/3000ms，非溢出（0 轮）为 base；
-/// 连续溢出 3 轮起封顶 FILE_WATCHER_MAX_BACKOFF_MS（R2 规格锁定）
+/// 静默期计算（R2 + 解耦）：非溢出（0 轮）用普通静默期 base；连续溢出 1/2/3 轮 →
+/// 1000/2000/3000ms 的**独立**退避阶梯（与 base 解耦，调小 base 不削弱溢出保护）；
+/// 3 轮起封顶 FILE_WATCHER_MAX_BACKOFF_MS
 #[test]
 fn backoff_quiet_period_levels() {
     let base = Duration::from_millis(constants::FILE_WATCHER_DEBOUNCE_MS);
     assert_eq!(
         base.as_millis(),
-        1000,
-        "静默期基线应为事件平息 1s（R2：300ms → 1000ms）"
+        200,
+        "普通静默期基线应为 200ms（2026-09-20 由 1000ms 下调：交互式单次操作的尾部等待）"
     );
-    // 无溢出 / 首轮溢出后 → base
+    // 无溢出 → 普通静默期
     assert_eq!(backoff_quiet_period(base, 0), base);
-    assert_eq!(backoff_quiet_period(base, 1), base);
-    // 连续溢出 2 轮 → +1s；3 轮 → +2s；更多轮封顶
+    // 连续溢出 1/2/3 轮 → 独立退避阶梯（与 base 无关）
+    assert_eq!(backoff_quiet_period(base, 1), Duration::from_millis(1000));
     assert_eq!(backoff_quiet_period(base, 2), Duration::from_millis(2000));
     assert_eq!(backoff_quiet_period(base, 3), Duration::from_millis(3000));
     assert_eq!(backoff_quiet_period(base, 9), Duration::from_millis(3000));
-    // 封顶为绝对上限：base 过大时不超过 FILE_WATCHER_MAX_BACKOFF_MS
+    // 解耦验证：base 取值不影响溢出退避阶梯（调小普通静默期不削弱溢出首次保护）
+    let tiny_base = Duration::from_millis(50);
     assert_eq!(
-        backoff_quiet_period(Duration::from_millis(2500), 5),
+        backoff_quiet_period(tiny_base, 1),
+        Duration::from_millis(1000)
+    );
+    assert_eq!(
+        backoff_quiet_period(tiny_base, 2),
+        Duration::from_millis(2000)
+    );
+    assert_eq!(
+        backoff_quiet_period(tiny_base, 3),
+        Duration::from_millis(3000)
+    );
+    // 封顶为绝对上限：更大轮数不越 FILE_WATCHER_MAX_BACKOFF_MS
+    assert_eq!(
+        backoff_quiet_period(base, 5),
         Duration::from_millis(constants::FILE_WATCHER_MAX_BACKOFF_MS)
     );
 }

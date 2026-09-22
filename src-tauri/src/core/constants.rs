@@ -247,9 +247,23 @@ pub const CRASH_LINE_PATTERNS: &[&str] = &[
 /// Windows 最大路径长度限制（用于路径过长检测）
 pub const MAX_PATH: usize = 260;
 
-/// 文件监控事件平息静默期（毫秒）：距最后一次事件 1s 才处理批次（trailing 静默），
-/// 使风暴合并更大批次、降低事件环溢出频率
-pub const FILE_WATCHER_DEBOUNCE_MS: u64 = 1000;
+/// 文件监控事件平息静默期（毫秒）：距最后一次事件 200ms 即处理批次（trailing 静默）。
+///
+/// 取值动机（2026-09-20 由 1000 下调）：交互式单次操作（右键菜单启停模组）的文件事件
+/// 平息后，用户需等到本静默期到期才收到 watcher 的 delta；1000ms 的尾部等待在连续操作
+/// 场景下（每次操作重置计时器）被感知为明显卡顿。200ms 足以覆盖单次操作产生的连续
+/// 事件（同批目录重命名/标记写入），同时把尾部等待压到感知阈值以内。
+/// 风暴合并与溢出保护由独立的溢出退避阶梯承担（见 [`FILE_WATCHER_OVERFLOW_BACKOFF_BASE_MS`]），
+/// 故本值调小不会削弱风暴场景的保护强度。
+pub const FILE_WATCHER_DEBOUNCE_MS: u64 = 200;
+
+/// 文件监控**溢出退避**基准（毫秒）：连续溢出批次的静默期自此阶梯起算，逐轮 +1s。
+///
+/// 与 [`FILE_WATCHER_DEBOUNCE_MS`] 解耦的原因：溢出意味着事件风暴已填满事件环
+/// （[`crate::core::watcher_ring::RING_CAPACITY`]），需要足够长的静默期合并更大批次；
+/// 若退避直接以普通静默期为基数，则调小普通静默期会同步削弱溢出首次保护。
+/// 解耦后溢出阶梯恒为 1000/2000/3000ms，与普通静默期取值无关。
+pub const FILE_WATCHER_OVERFLOW_BACKOFF_BASE_MS: u64 = 1000;
 
 /// 文件监控溢出退避上限（毫秒）：连续溢出批次的静默期逐轮 +1s，封顶此值（R2）
 pub const FILE_WATCHER_MAX_BACKOFF_MS: u64 = 3000;

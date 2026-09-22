@@ -102,7 +102,7 @@ impl FileWatcher {
     ///    并 send 空信号唤醒防抖线程
     /// 4. **初始化 notify watcher**：使用 `recommended_watcher` 递归监控整个目录
     /// 5. **启动防抖线程**：队列空时无限期阻塞（空闲零轮询）；非空时 50ms 超时检测
-    ///    事件平息静默期到期（1s，溢出退避时延长）→ drain 环形队列 → 增量/分层处理
+    ///    事件平息静默期到期（FILE_WATCHER_DEBOUNCE_MS，溢出退避时延长）→ drain 环形队列 → 增量/分层处理
     ///    → emit 前端事件
     ///
     /// # 防抖 & 增量/分层更新管线（防抖线程内部）
@@ -221,8 +221,8 @@ impl FileWatcher {
                     match rx.recv_timeout(Duration::from_millis(50)) {
                         Ok(()) => {}
                         Err(mpsc::RecvTimeoutError::Timeout) => {
-                            // 事件平息静默期（R2）：距最后事件 1s 才处理批次；
-                            // 溢出退避：连续溢出轮数逐轮 +1s（封顶 FILE_WATCHER_MAX_BACKOFF_MS），
+                            // 事件平息静默期：距最后事件 FILE_WATCHER_DEBOUNCE_MS 才处理批次；
+                            // 溢出退避：连续溢出轮数逐轮 +1s（独立阶梯，封顶 FILE_WATCHER_MAX_BACKOFF_MS），
                             // 使风暴合并更大批次、降低 ring 溢出频率
                             let (ready, backoff_rounds) = ring_debounce
                                 .lock()
