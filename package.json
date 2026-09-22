@@ -16,7 +16,7 @@
     "tsc:strict": "npx tsc --noEmit --strict",
     "biome:check": "npx biome check .",
     "build:linux": "bash scripts/build-linux-gnu.sh",
-    "build:windows": "powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1"
+    "build:windows": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1"
   },
   "engines": {
     "node": ">=22.23.2"

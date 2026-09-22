@@ -74,7 +74,7 @@ jobs:
           if ($latest) { Copy-Item $latest.FullName -Destination "latest-windows.json" }
           # 便携 zip（build-portable.mjs 已输出规范名 nrmm-tauri_<ver>_x64-Win.zip）
           Get-ChildItem nrmm-tauri_*,latest-* | Format-Table Name, Length
-        shell: powershell
+        shell: pwsh
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4

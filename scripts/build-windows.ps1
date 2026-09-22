@@ -1,5 +1,19 @@
-#Requires -Version 5.1
+#Requires -Version 7
+
+# param 必须是脚本的首个可执行语句（#Requires 与注释可前置）。此前置于编码设置之后，
+# PowerShell 报「术语 'param' 不会被识别为 cmdlet...」→ -TargetTriple 无法传入。
 param([string]$TargetTriple = "x86_64-pc-windows-msvc")
+
+# 强制控制台输入/输出编码为 UTF-8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+$OutputEncoding            = [System.Text.Encoding]::UTF8
+
+# (可选) 如果是在 Windows 上，建议同时设置代码页为 65001
+# 注意：chcp 仅对当前控制台窗口有效，不影响管道传输
+if ($IsWindows) {
+    chcp 65001 | Out-Null
+}
 <#
 .SYNOPSIS
     NRMM Windows 手动构建脚本（与 build-linux-gnu.sh 对等：手动编译 + 手动上传发布）。
@@ -20,8 +34,9 @@ param([string]$TargetTriple = "x86_64-pc-windows-msvc")
     产物文件名按 nrmm-tauri_<版本>_x64-Win.<ext> 规范；Windows 仅支持 x86_64。
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File scripts/build-windows.ps1
-    # 或 npm run build:windows
+    pwsh -ExecutionPolicy Bypass -File scripts/build-windows.ps1
+    # 或 npm run build:windows（必须 pwsh 7+：脚本含中文，Windows PowerShell 5.1 按 ANSI
+    # 解码无 BOM 的 UTF-8 脚本会乱码致解析失败，且 chcp 65001 不改变脚本读取编码）
 #>
 
 $ErrorActionPreference = "Stop"

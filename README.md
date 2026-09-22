@@ -152,6 +152,11 @@ npm run build
 
 ### 构建命令
 
+> **Windows 构建依赖 PowerShell 7+（`pwsh`）**：`scripts/build-windows.ps1` 含中文提示，
+> 而 Windows PowerShell 5.1 对**无 BOM** 的 UTF-8 脚本按系统 ANSI 代码页解码（中文变乱码 →
+> 引号配对错乱 → 解析失败）。`chcp 65001` **不能**解决：脚本读取编码由 .NET 默认编码
+> （系统区域）决定，与控制台代码页无关。请勿改用 `powershell` 调用。
+
 ```bash
 # Windows（NSIS 安装包 + 免安装 zip，均内置 7z）：
 npm run build:windows
