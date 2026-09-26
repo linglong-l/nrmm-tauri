@@ -119,6 +119,7 @@ describe('mods store 选择链路乐观更新（activateModByIndex UI 先行）'
     setActivePinia(createPinia())
     selectModMock.mockReset()
     vi.mocked(ElMessage.error).mockClear()
+    vi.mocked(ElMessage.success).mockClear()
     settingsState.currentModsPath = '/mods/GI'
     settingsState.currentGame = 'GI'
   })
@@ -218,6 +219,41 @@ describe('mods store 选择链路乐观更新（activateModByIndex UI 先行）'
 
     expect(store.selectedModIndex).toBe(3)
     expect(group.activeModIndex).toBe(3)
+  })
+
+  it('成功后无条件重断言 UI：并发回退（索引一致时）也被后端确认恢复', async () => {
+    const { store, group, modA } = setupStore()
+    let resolveSelect: (v: UpdateResult) => void = () => {}
+    selectModMock.mockReturnValueOnce(
+      new Promise<UpdateResult>((r) => (resolveSelect = r)),
+    )
+
+    const pending = store.activateModByIndex(0, modA.modPath)
+    expect(store.selectedModIndex).toBe(1)
+    expect(modA.isActive).toBe(true)
+
+    // 模拟乐观更新后、后端返回前被并发 refresh/增量 patch 回退（旧选中态残留）
+    group.mods = [...group.mods]
+    for (const m of group.mods) m.isActive = false
+    modA.isActive = false
+    group.activeModIndex = -1
+
+    // 后端写入 selectedindex=1 成功返回（与乐观值一致 → 旧实现走空分支不恢复）
+    resolveSelect(fakeUpdateResult(1))
+    await pending
+
+    expect(store.selectedModIndex).toBe(1)
+    expect(group.activeModIndex).toBe(1)
+    expect(modA.isActive).toBe(true)
+  })
+
+  it('成功通知：写入成功后发出（乐观 UI 更新之后）', async () => {
+    const { store, modA } = setupStore()
+    selectModMock.mockResolvedValueOnce(fakeUpdateResult(1))
+
+    await store.activateModByIndex(0, modA.modPath)
+
+    expect(vi.mocked(ElMessage.success)).toHaveBeenCalledTimes(1)
   })
 
   it('并发守卫：selectMod 在途时再次点击为 no-op', async () => {

@@ -42,9 +42,11 @@ pub struct PlatformInfo {
 ///
 /// 实现模拟键盘按键来操作 3Dmigoto 内置菜单
 pub trait KeySimulator: Send + Sync {
-    /// 设置目标进程名（用于定向按键发送）
+    /// 设置目标进程名（兼容接口，保留供跨平台使用）
     ///
-    /// 默认空实现，返回 Ok(())。各平台 override 实现窗口查找逻辑。
+    /// 默认空实现，返回 Ok(())。Windows 自 2026-09-23 起统一使用全局
+    /// SendInput（防作弊/底层钩子不捕获 PostMessage 定向消息），不再
+    /// 依赖目标窗口句柄；本接口保留为兼容占位。Linux 仍可用之做窗口激活。
     fn set_target_process(&mut self, process_name: &str) -> Result<()> {
         let _ = process_name;
         Ok(())
@@ -128,7 +130,7 @@ pub trait ForegroundDetector: Send + Sync {
 pub fn get_key_simulator() -> Box<dyn KeySimulator> {
     #[cfg(target_os = "windows")]
     {
-        Box::new(windows_key_sim::WindowsKeySimulator::default())
+        Box::new(windows_key_sim::WindowsKeySimulator)
     }
     #[cfg(target_os = "linux")]
     {

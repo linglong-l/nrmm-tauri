@@ -152,8 +152,15 @@ pub(crate) fn process_single_mod(
                 // 对齐 NRMM _reorderByIniKeyPriority：按段类型重排已知优先键到段首
                 ini.reorder_by_ini_key_priority();
 
-                // 注入槽位条件（含 $managed_slot_id 赋值）
-                ini.inject_slot_conditions(group_id, mod_data.mod_index);
+                // 注入槽位条件（含 $managed_slot_id 赋值）。槽位身份以 slot_id 为准
+                // （目录序，对齐 Dart realIndex / 轻扫 slot_id）；深扫产物两者恒等，
+                // slot_id==0 仅见于手构 ModData（如测试），回退 mod_index 保持旧行为。
+                let slot = if mod_data.slot_id > 0 {
+                    mod_data.slot_id
+                } else {
+                    mod_data.mod_index
+                };
+                ini.inject_slot_conditions(group_id, slot);
 
                 // 注释崩溃行
                 let crash_lines = ini.comment_crash_lines();

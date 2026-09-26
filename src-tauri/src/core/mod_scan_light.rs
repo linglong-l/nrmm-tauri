@@ -395,7 +395,9 @@ pub(crate) fn scan_normal_group_light(
     mods.push(none_slot.unwrap_or_else(|| create_empty_slot_mod(group_index)));
     mods.extend(other_mods);
 
-    // 重新分配 mod_index（None 始终在 0，真实模组从 1 开始）
+    // 重新分配 mod_index（None 始终在 0，真实模组从 1 开始）——仅展示序；
+    // slot_id（目录序槽位身份，与 $managed_slot_id 同源）保持构建期目录枚举值，
+    // 不随展示重排覆盖（否则收藏/禁用重排会错位游戏内槽位 → 选择失效）
     for (idx, m) in mods.iter_mut().enumerate() {
         m.mod_index = idx as u32;
     }
@@ -452,8 +454,9 @@ pub(crate) fn scan_normal_group_light(
 /// - `selectedindex_nanos`: 组 selectedindex 文件 mtime（签名源，组内模组共享）。
 /// - `is_active`: 构建期激活位（组扫描为目录枚举序对 selectedindex 的初值，组级派生
 ///   随后统一覆盖；单模组扫描为组语义近似派生值）。
-/// - `mod_index`: 组内索引（组扫描为枚举序，重排后统一重分配；单模组扫描为占位 0，
-///   由 `mod_cache_patch::patch_single_mod` 保留旧值/置末位）。
+/// - `mod_index`: 组内索引（组扫描为目录枚举序 real_index，重排后统一重分配为展示序；
+///   单模组扫描为占位 0，由 `mod_cache_patch::patch_single_mod` 保留旧值/置末位）。
+///   该入参同时作为 `slot_id`（目录序槽位身份）落入构建产物——见函数体注释。
 ///
 /// # Errors
 /// 当 `modname` 标记文件无法读取/创建时传播错误。
@@ -524,6 +527,9 @@ fn build_normal_mod_light(
         mod_disabled: disabled,
         group_index,
         mod_index,
+        // 槽位身份 = 构建期目录枚举序（组扫描入参即 real_index；单模组扫描为占位 0，
+        // 由 mod_cache_patch::apply_mod_patch 保留旧值/占位）。展示排序不改动本字段。
+        slot_id: mod_index,
         is_mutex: false,
         has_nonmanaged_mods_crashline_fix: mod_forced,
         disk_signature,

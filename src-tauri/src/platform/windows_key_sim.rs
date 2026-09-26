@@ -1,11 +1,12 @@
 //! Windows 平台实现模块
 //!
 //! 使用 Win32 API 实现：
-//! - 按键模拟：SendInput 发送键盘事件（全局）或 PostMessageW 发送到指定窗口（定向）
+//! - 按键模拟：SendInput 发送键盘事件（全局统一，不走 PostMessageW 定向——
+//!   3Dmigoto 底层键盘钩子与防作弊均忽略/不信任 PostMessage 合成的按键）
 //! - 前台窗口检测：GetForegroundWindow + GetWindowThreadProcessId + QueryFullProcessImageNameW
 //! - 光标位置获取：GetCursorPos
 //!
-//! 本文件为按键模拟域（SafeHWND / WindowsKeySimulator / 键盘事件发送）。
+//! 本文件为按键模拟域（WindowsKeySimulator / 键盘事件发送）。
 //!
 //! # unsafe 说明
 //! 所有 Win32 API 调用都在 unsafe 块中，因为它们是 C FFI 调用。
@@ -15,66 +16,39 @@
 //! - 检查句柄有效性后再使用
 //!
 //! ## Send/Sync 安全性
-//! - `SafeHWND`: HWND 是进程级窗口句柄，Win32 API 接受 HWND 的调用
-//!   （PostMessageW 等）均为线程安全；HWND 在窗口生命周期内有效
-//! - `WindowsKeySimulator`: 仅包含 SafeHWND，所有 Win32 调用线程安全
+//! - `WindowsKeySimulator` 无内部可变状态，所有 Win32 调用
+//!   （SendInput / SetCursorPos / ClipCursor / GetCursorPos）均为线程安全。
 //!
-//! ## 回调安全性
-//! - `enum_proc`: Win32 `EnumWindows` 在调用线程上同步执行回调，
-//!   无并发重入风险；回调内访问 `ENUM_WINDOWS_STATE` 的 Mutex 被外层
-//!   `find_game_window` 的锁获取/释放正确包裹（状态在回调前设置、回调后读取）
+//! ## 发送策略（2026-09-23 起全局化）
+//! 全部按键统一经 SendInput 全局输入队列发送，不再做 PostMessageW 定向投递：
+//! - 3Dmigoto/xxmi 的底层键盘钩子只捕获真实输入队列事件；
+//! - 游戏进程对 WM_KEYDOWN/UP 消息的防作弊/反注入校验会忽略合成消息。
+//!
+//! 故 `set_target_process` 保留为兼容空实现，不再查找窗口句柄。
 
-use super::windows_cursor_sim::{simulate_key_with_cursor, simulate_key_with_cursor_window};
+use super::windows_cursor_sim::simulate_key_with_cursor;
 use crate::sel_dbg;
 use anyhow::Result;
-use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use windows::core::PWSTR;
 use windows::Win32::Foundation::*;
-use windows::Win32::System::Threading::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-static ENUM_WINDOWS_STATE: Mutex<Option<(String, Option<isize>)>> = Mutex::new(None);
-
-struct SafeHWND(HWND);
-// SAFETY: HWND is a process-scoped window handle (isize). All Win32 API calls
-// that accept HWND are thread-safe for the lifetime of the window. Since we
-// only use HWND to send window messages (PostMessageW is thread-safe), and
-// the window is guaranteed to exist until the application exits, sending
-// SafeHWND across threads is safe.
-unsafe impl Send for SafeHWND {}
-// SAFETY: HWND is an opaque handle; &HWND is safe to share across threads
-// because Win32 API calls that accept HWND by value do not mutate the caller's
-// copy. PostMessageW is documented as thread-safe.
-unsafe impl Sync for SafeHWND {}
-
 /// Windows 按键模拟器
 #[derive(Default)]
-pub struct WindowsKeySimulator {
-    target_hwnd: Option<SafeHWND>,
-}
+pub struct WindowsKeySimulator;
 
-// SAFETY: WindowsKeySimulator contains only SafeHWND (already Send) and
-// uses Win32 API calls (SendInput/PostMessageW) that are thread-safe.
-// The struct is #[derive(Default)] and has no unsynchronized mutable state
-// that would be UB to share across threads.
+// SAFETY: WindowsKeySimulator 无内部可变状态，所有 Win32 调用
+// （SendInput/SetCursorPos/ClipCursor/GetCursorPos）均为线程安全。
 unsafe impl Send for WindowsKeySimulator {}
-// SAFETY: &WindowsKeySimulator provides only immutable access to SafeHWND;
-// all Win32 API calls through it are thread-safe as documented by MSDN.
+// SAFETY: &WindowsKeySimulator 仅提供不可变访问；Win32 API 调用线程安全。
 unsafe impl Sync for WindowsKeySimulator {}
 
 impl WindowsKeySimulator {
     fn dispatch_key(&mut self, vk: VIRTUAL_KEY) -> Result<()> {
-        if let Some(safe_hwnd) = &self.target_hwnd {
-            match send_key_to_window(vk, safe_hwnd.0) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    log::warn!("PostMessage 失败 target_hwnd，fallback to SendInput: {}", e);
-                }
-            }
-        }
+        // 全局统一走 SendInput（与 simulate_f10 / simulate_combo 同路径）：
+        // 3Dmigoto/xxmi 底层键盘钩子与防作弊均忽略 PostMessage 合成的按键
         send_key(vk)
     }
 
@@ -90,38 +64,17 @@ impl WindowsKeySimulator {
     }
 
     fn dispatch_simulate_key_with_cursor(&mut self, vk: VIRTUAL_KEY, x: i32, y: i32) -> Result<()> {
-        let hwnd_exists = self.target_hwnd.is_some();
-        if let Some(safe_hwnd) = &self.target_hwnd {
-            match simulate_key_with_cursor_window(vk, x, y, safe_hwnd.0) {
-                Ok(()) => {
-                    log::debug!("[dispatch_simulate_key_with_cursor] target_hwnd exists=true vk={:04x} fallback_triggered=false", vk.0);
-                    return Ok(());
-                }
-                Err(e) => {
-                    log::warn!("[dispatch_simulate_key_with_cursor] target_hwnd exists=true vk={:04x} fallback_triggered=true err={}", vk.0, e);
-                }
-            }
-        }
-        let result = simulate_key_with_cursor(vk, x, y);
-        match &result {
-            Ok(()) => {
-                if hwnd_exists {
-                    log::debug!("[dispatch_simulate_key_with_cursor] target_hwnd exists=true vk={:04x} fallback completed ok (window path failed, global path succeeded)", vk.0);
-                } else {
-                    log::debug!("[dispatch_simulate_key_with_cursor] target_hwnd exists=false vk={:04x} fallback completed ok (global path only)", vk.0);
-                }
-            }
-            Err(e) => {
-                log::warn!("[dispatch_simulate_key_with_cursor] target_hwnd exists={} vk={:04x} fallback completed with err={}", hwnd_exists, vk.0, e);
-            }
-        }
-        result
+        // 全局统一走 SendInput（光标联动）：window 版定向路径已移除，
+        // 与 simulate_key_with_cursor 同构（SetCursorPos + ClipCursor + SendInput）
+        simulate_key_with_cursor(vk, x, y)
     }
 }
 
 impl super::KeySimulator for WindowsKeySimulator {
-    fn set_target_process(&mut self, process_name: &str) -> Result<()> {
-        self.target_hwnd = find_game_window(process_name).map(SafeHWND);
+    fn set_target_process(&mut self, _process_name: &str) -> Result<()> {
+        // 自 2026-09-23 起统一使用全局 SendInput（防作弊/底层钩子不捕获
+        // PostMessage 定向消息），不再需要目标窗口句柄；保留接口以兼容
+        // 调用方与跨平台 trait 契约。
         Ok(())
     }
 
@@ -174,16 +127,14 @@ impl super::KeySimulator for WindowsKeySimulator {
         sel_dbg!(
             "platform::windows",
             "simulate_select_full",
-            "调用链末端(最终执行函数) | 入口 | target_hwnd={:?} 分组索引={} 模组索引={} 映射光标坐标 x(模组)={} y(分组)={}",
-            self.target_hwnd.is_some(),
+            "调用链末端(最终执行函数) | 入口 | 全局 SendInput 模式 分组索引={} 模组索引={} 映射光标坐标 x(模组)={} y(分组)={}",
             group_idx,
             mod_idx,
             x,
             y
         );
         log::debug!(
-            "[platform::windows] [simulate_select_full] target_hwnd exists: {:?} | group={} mod={}",
-            self.target_hwnd.is_some(),
+            "[platform::windows] [simulate_select_full] 全局 SendInput 模式 | group={} mod={}",
             group_idx,
             mod_idx
         );
@@ -307,113 +258,6 @@ impl super::KeySimulator for WindowsKeySimulator {
     fn check_support(&self) -> Result<(), String> {
         Ok(())
     }
-}
-
-fn find_game_window(process_name: &str) -> Option<HWND> {
-    {
-        let mut state = ENUM_WINDOWS_STATE.lock().ok()?;
-        *state = Some((process_name.to_lowercase(), None));
-    }
-
-    unsafe extern "system" fn enum_proc(hwnd: HWND, _lparam: LPARAM) -> windows::core::BOOL {
-        let mut pid: u32 = 0;
-        unsafe {
-            GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        }
-        if pid == 0 {
-            return TRUE;
-        }
-
-        let handle = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
-            Ok(h) => h,
-            Err(_) => return TRUE,
-        };
-        if handle.is_invalid() {
-            return TRUE;
-        }
-
-        let mut exe_name = [0u16; 260];
-        let mut buf_len = 260u32;
-        let result = unsafe {
-            QueryFullProcessImageNameW(
-                handle,
-                PROCESS_NAME_FORMAT(0),
-                PWSTR(exe_name.as_mut_ptr()),
-                &mut buf_len,
-            )
-        };
-        let _ = unsafe { CloseHandle(handle) };
-
-        if result.is_err() {
-            return TRUE;
-        }
-
-        let path = String::from_utf16_lossy(&exe_name[..buf_len as usize]);
-        if let Some(name) = std::path::Path::new(&path).file_name() {
-            let mut state_guard = match ENUM_WINDOWS_STATE.lock() {
-                Ok(g) => g,
-                Err(_) => return TRUE,
-            };
-            if let Some((target_lower, found)) = state_guard.as_mut() {
-                if found.is_some() {
-                    return FALSE;
-                }
-                if name
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(target_lower.as_str())
-                {
-                    *found = Some(hwnd.0 as isize);
-                    return FALSE;
-                }
-            }
-        }
-
-        TRUE
-    }
-
-    let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(0)) };
-
-    let state = ENUM_WINDOWS_STATE.lock().ok()?;
-    let raw = state.as_ref().and_then(|s| s.1)?;
-    Some(HWND(raw as *mut _))
-}
-
-fn get_scan_code(vk: VIRTUAL_KEY) -> u32 {
-    unsafe { MapVirtualKeyW(vk.0 as u32, MAPVK_VK_TO_VSC) as u32 }
-}
-
-fn send_key_to_window(vk: VIRTUAL_KEY, hwnd: HWND) -> Result<()> {
-    let scan_code = get_scan_code(vk);
-    let lparam_down: LPARAM = LPARAM(0x00000001 | ((scan_code as isize) << 16));
-    let lparam_up: LPARAM = LPARAM(0xC0000001 | ((scan_code as isize) << 16));
-    let wparam = WPARAM(vk.0 as usize);
-
-    let down_ok = unsafe { PostMessageW(Some(hwnd), WM_KEYDOWN, wparam, lparam_down).is_ok() };
-    if !down_ok {
-        log::warn!(
-            "[send_key_to_window] vk={:04x} hwnd={:?} down_ok=false up_ok=skipped | WM_KEYDOWN failed, bailing",
-            vk.0, hwnd
-        );
-        anyhow::bail!("PostMessageW WM_KEYDOWN failed");
-    }
-    thread::sleep(Duration::from_millis(30));
-
-    let up_ok = unsafe { PostMessageW(Some(hwnd), WM_KEYUP, wparam, lparam_up).is_ok() };
-    if !up_ok {
-        log::warn!(
-            "[send_key_to_window] vk={:04x} hwnd={:?} down_ok=true up_ok=false | WM_KEYUP failed, bailing",
-            vk.0, hwnd
-        );
-        anyhow::bail!("PostMessageW WM_KEYUP failed");
-    }
-    log::debug!(
-        "[send_key_to_window] vk={:04x} hwnd={:?} down_ok={} up_ok={}",
-        vk.0,
-        hwnd,
-        down_ok,
-        up_ok
-    );
-    Ok(())
 }
 
 pub(crate) fn send_key(vk: VIRTUAL_KEY) -> Result<()> {

@@ -13,8 +13,32 @@ use crate::commands::mod_commands_util::{
 use crate::config::settings_store;
 use crate::core::constants;
 use crate::core::mod_cache_core;
+use crate::models::enums::TargetGame;
 use crate::sel_dbg;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// 有限重试获取 MOD_CACHE 写锁（≤250ms）。
+///
+/// select/deselect 的缓存定向 patch 与 watcher 增量合并（大树下写锁段可达
+/// 秒级）互斥。历史曾用阻塞 `write()`，选择命令会排在合并后空等数秒，
+/// 连带按键模拟（游戏内真正生效的动作）一起推迟；后改一次性 `try_write()`，
+/// 瞬时锁忙即跳过 patch，UI 高亮只能等 watcher 对账而感知滞后。
+/// 此处折衷：短窗口重试，瞬时锁忙不再丢 patch；持久锁忙仍在 ~250ms 内
+/// 放弃，不退回长阻塞。
+async fn cache_write_guard(
+) -> Option<parking_lot::RwLockWriteGuard<'static, mod_cache_core::ModCache>> {
+    tokio::time::timeout(Duration::from_millis(250), async {
+        loop {
+            if let Some(guard) = mod_cache_core::MOD_CACHE.try_write() {
+                break guard;
+            }
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+    })
+    .await
+    .ok()
+}
 
 /// 选择模组（支持互斥组）
 #[tauri::command]
@@ -161,6 +185,14 @@ pub async fn select_mod(
             &mod_path,
         );
         let direct_index = resolved_index.unwrap_or(mod_index);
+        // 槽位身份（目录序）同步解析：按键模拟光标 X 必须与 $managed_slot_id 同源
+        // （直写路径经缓存快照返回；switch_mod 回退路径自行解析后随结果返回）
+        let resolved_slot = crate::core::mod_select::resolve_slot_id_by_path_from_cache(
+            game_enum,
+            &mods_path,
+            &group_path_buf,
+            &mod_path,
+        );
         if let Some(r) = resolved_index {
             if r != mod_index {
                 log::warn!(
@@ -198,7 +230,8 @@ pub async fn select_mod(
                 "[select_mod] direct write_selectedindex done | elapsed_ms={}",
                 write_start.elapsed().as_millis()
             );
-            // 缓存定向 patch：命中则免整缓存失效；未命中不失效（watcher / 下次全量扫描对账）
+            // 缓存定向 patch：命中则免整缓存失效；未命中不失效（下次全量扫描按磁盘对账；
+            // watcher 已忽略 selectedindex 事件，不产生共鸣重扫）。
             // 注意须用按路径解析后的 direct_index（与磁盘写入值同源），否则缓存与磁盘不一致。
             //
             // 改为 try_write（非阻塞）：实测启用模组的目录重命名必然触发 watcher 增量合并，
@@ -206,16 +239,18 @@ pub async fn select_mod(
             // write() 会排在它后面空等（实测 6.7s），连带把后续按键模拟（游戏内真正生效的
             // 动作）一起推迟，用户感知为「启用后选择延迟 ~7 秒」。
             // 拿不到锁即跳过本次 patch —— 降级语义是现成的：磁盘 selectedindex 已由
-            // write_selectedindex_direct 写成功，缓存对账由 watcher 增量 / 下次全量扫描完成。
-            // MOD_CACHE 为 parking_lot::RwLock：try_write() 返回 Option（持锁时为 None）
-            let patched = match mod_cache_core::MOD_CACHE.try_write() {
+            // write_selectedindex_direct 写成功，缓存对账由下次全量扫描完成。
+            // MOD_CACHE 为 parking_lot::RwLock：短窗口重试 try_write（≤250ms）。
+            // 瞬时锁忙（watcher merge 持锁）不再跳过 patch，避免 UI 高亮滞后；
+            // 持久锁忙仍快速放弃，不阻塞按键模拟（游戏内真正生效的切换）。
+            let patched = match cache_write_guard().await {
                 Some(mut cache) => {
                     cache.patch_selected_index(game_enum, &mods_path, &group_path_buf, direct_index)
                 }
                 None => {
                     log::warn!(
-                        "[select_mod] cache patch skipped: MOD_CACHE write lock busy (watcher merge in progress); \
-                         selectedindex already persisted, cache reconciled by watcher/next full scan"
+                        "[select_mod] cache patch skipped: MOD_CACHE write lock busy ≥250ms (watcher merge in progress); \
+                         selectedindex already persisted, cache reconciled by next full scan"
                     );
                     false
                 }
@@ -227,6 +262,7 @@ pub async fn select_mod(
             );
             crate::core::mod_results::UpdateResult {
                 selected_mod_index: Some(direct_index as i32),
+                selected_slot_id: resolved_slot,
                 ..Default::default()
             }
         } else {
@@ -308,30 +344,39 @@ pub async fn select_mod(
             // 否则 fallback 到 (mod_index, group_index) 作为虚拟坐标（3Dmigoto/xxmi 据此识别）。
             // 注意：NRMM 将 x=realModIndex y=realGroupIndex 直接传入 SetCursorPos，
             // 因此当未传像素坐标时，索引值本身即作为坐标输入。
-            // P3 合并修正：x 坐标必须与磁盘写入的 selectedindex **同源**——
-            // 取本命令两条路径（直写快路径 / switch_mod 全量路径）返回的权威
-            // selected_mod_index（均已按 mod_path 校正），否则会出现「持久化 X 而
-            // 按键模拟用旧 x」的分歧：分组 Y 坐标正确、模组 X 坐标无模组匹配而失效。
+            //
+            // 槽位身份修复（P0，2026-09-26 最佳修复）：光标 X 与 `$managed_slot_id`
+            // 同源——取按 mod_path 解析的目录序 slot_id（`selected_slot_id`），
+            // 而非展示序 mod_index。组内含禁用/收藏模组时 `mod_order_cmp` 展示序
+            // 与目录序分叉，旧实现以展示序为 X → 游戏内
+            // `$managed_slot_id == $active_slot` 守卫永不命中（选择失效根因）。
+            // slot_id 未解析到（缓存缺失/路径未命中）时回退展示序（降级，不劣于修复前）。
             let sim_mod_index = result
                 .selected_mod_index
                 .and_then(|v| u32::try_from(v).ok())
                 .unwrap_or(mod_index);
+            let sim_slot = result
+                .selected_slot_id
+                .filter(|&s| s > 0)
+                .unwrap_or(sim_mod_index);
             let (sim_g, sim_m) = match (cursor_x, cursor_y) {
                 (Some(px), Some(py)) => {
                     let g = u32::try_from(py.max(0)).unwrap_or(group_index);
-                    let m = u32::try_from(px.max(0)).unwrap_or(sim_mod_index);
+                    let m = u32::try_from(px.max(0)).unwrap_or(sim_slot);
                     (g, m)
                 }
-                _ => (group_index, sim_mod_index),
+                _ => (group_index, sim_slot),
             };
             sel_dbg!(
                 "mod_commands",
                 "select_mod",
-                "坐标传递 | cursor_x_input={:?} cursor_y_input={:?} sim_g={} sim_m={} coordinate_mode={} 模组名称={}",
+                "坐标传递 | cursor_x_input={:?} cursor_y_input={:?} sim_g={} sim_m={} 展示序={} 槽位身份={} 坐标模式={} 模组名称={}",
                 cursor_x,
                 cursor_y,
                 sim_g,
                 sim_m,
+                sim_mod_index,
+                sim_slot,
                 if cursor_x.is_some() && cursor_y.is_some() { "屏幕像素坐标" } else { "索引虚拟坐标" },
                 mod_name
             );
@@ -422,13 +467,13 @@ pub async fn deselect_group_mod(
             );
             e.to_string()
         })?;
-        // 同 select_mod：非阻塞 try_write，避免排在 watcher 增量合并的写锁段后空等
-        // （selectedindex=0 已落盘，缓存对账交给 watcher / 下次全量扫描）
-        let patched = match mod_cache_core::MOD_CACHE.try_write() {
+        // 同 select_mod：短窗口重试 try_write（≤250ms），瞬时锁忙不再跳过 patch
+        // （selectedindex=0 已落盘，持久锁忙时缓存对账交给下次全量扫描按磁盘兜底）
+        let patched = match cache_write_guard().await {
             Some(mut cache) => cache.patch_selected_index(game, &mods_path, &gp, 0),
             None => {
                 log::warn!(
-                    "[deselect_group_mod] cache patch skipped: MOD_CACHE write lock busy (watcher merge in progress)"
+                    "[deselect_group_mod] cache patch skipped: MOD_CACHE write lock busy ≥250ms (watcher merge in progress)"
                 );
                 false
             }
@@ -437,6 +482,9 @@ pub async fn deselect_group_mod(
             "[commands::mod_commands] [deselect_group_mod] direct write done | patched={}",
             patched
         );
+        // None 槽位按键模拟（对齐 NRMM None 点击：光标 X=0 → $active_slot=0，
+        // 游戏内立即停用当前模组；此前仅写 selectedindex=0，游戏侧保持旧值）
+        simulate_none_slot_if_enabled(game, group_index);
         return Ok(crate::core::mod_results::UpdateResult {
             selected_mod_index: Some(0),
             ..Default::default()
@@ -459,5 +507,40 @@ pub async fn deselect_group_mod(
         cache.invalidate_game(game); // 彻底失效该游戏缓存（invalidate_by_prefix 是 no-op 陷阱）
     }
 
+    // 回退路径同样补 None 槽位按键模拟（与直写路径同语义）
+    simulate_none_slot_if_enabled(game, group_index);
+
     Ok(result)
+}
+
+/// 取消选择（None 槽位）后的按键模拟（对齐 NRMM `simulateKeySelectMod(g, 0)`）
+///
+/// Dart 点击 None 槽位与选择真实模组走同一条 onSelected 链路：光标移至
+/// `(0, groupRealIdx)` → `$active_slot = cursor_screen_x = 0` → 槽位守卫
+/// `$managed_slot_id == $active_slot` 全部落空，游戏内立即停用当前模组。
+/// 此前 Rust 端 deselect 仅写 `selectedindex=0`（UI 态），游戏侧 `$active_slot`
+/// 保持旧值直到下次自然重载——补齐该 parity 缺口。
+///
+/// 受 `simulate_key_on_selection` 设置门控（与 `select_mod` 同口径）。
+fn simulate_none_slot_if_enabled(game: TargetGame, group_index: u32) {
+    let settings = settings_store::get_settings();
+    if !settings.simulate_key_on_selection {
+        log::debug!(
+            "[commands::mod_commands] [deselect_group_mod] simulate_key_on_selection=false, skip none-slot key simulation"
+        );
+        return;
+    }
+    let mut simulator = crate::platform::get_key_simulator();
+    for pn in game.process_names() {
+        if simulator.set_target_process(pn).is_ok() {
+            break;
+        }
+    }
+    if let Err(e) = simulator.simulate_select_full(group_index, 0) {
+        log::warn!(
+            "deselect_group_mod: simulate_select_full(g={}, 0) failed: {}",
+            group_index,
+            e
+        );
+    }
 }

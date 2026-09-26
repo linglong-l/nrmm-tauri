@@ -449,7 +449,8 @@ impl ModCache {
     ///
     /// # 返回
     /// 缓存命中且定位到该分组返回 `true`；缓存未命中或分组不在缓存中返回 `false`
-    /// （调用方不失效整缓存，由 watcher 增量 / 下次全量扫描对账兜底）。
+    /// （调用方不失效整缓存，由下次全量扫描按磁盘对账兜底；watcher 忽略
+    /// `selectedindex` 事件，见 `watcher_core::is_ignored_watcher_path`）。
     ///
     /// # Panics
     ///
@@ -466,7 +467,7 @@ impl ModCache {
         index: u32,
     ) -> bool {
         // 缓存未命中、或大树被外部持有 → false（调用方跳过缓存 patch，
-        // selectedindex 文件变更由 watcher 增量重扫修正）
+        // selectedindex 按磁盘对账由下次全量扫描兜底——watcher 已忽略该文件事件）
         let start = Instant::now();
         let Some(owned) = self.try_get_owned_result(game, mods_path, "patch_selected_index") else {
             return false;
@@ -657,8 +658,11 @@ fn apply_mod_patch(
             let mut arc = new_arc;
             match pos {
                 Some(pos) => {
-                    // 替换：保留旧 mod_index（单模组扫描无法得出组内索引；位置不变 → 索引语义不变）
-                    Arc::make_mut(&mut arc).mod_index = group.mods[pos].mod_index;
+                    // 替换：保留旧 mod_index / slot_id（单模组扫描无法得出组内序；
+                    // 目录位置不变 → 展示序与目录序槽位身份语义均不变）
+                    let patched = Arc::make_mut(&mut arc);
+                    patched.mod_index = group.mods[pos].mod_index;
+                    patched.slot_id = group.mods[pos].slot_id;
                     group.mods[pos] = Arc::clone(&arc);
                     log::debug!(
                         "[mod_cache] mod 级 patch | mod={} op=replace",
@@ -666,8 +670,13 @@ fn apply_mod_patch(
                     );
                 }
                 None => {
-                    // 新增：组内末位（排序位/兄弟索引漂移由下次组级扫描校正）
-                    Arc::make_mut(&mut arc).mod_index = group.mods.len() as u32;
+                    // 新增：组内末位占位（mod_index / slot_id 同置 len；真实目录序
+                    // 槽位由下次组级扫描校正。占位值与既有槽位集合 {1..len-1} 不冲突；
+                    // 删除后的稀疏场景可能撞号，但新模组在下一次 update 前本无
+                    // $managed_slot_id 注入，不影响已注入模组的选择判定）
+                    let patched = Arc::make_mut(&mut arc);
+                    patched.mod_index = group.mods.len() as u32;
+                    patched.slot_id = group.mods.len() as u32;
                     group.mods.push(Arc::clone(&arc));
                     log::debug!(
                         "[mod_cache] mod 级 patch | mod={} op=insert",

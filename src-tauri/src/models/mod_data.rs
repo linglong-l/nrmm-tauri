@@ -219,6 +219,15 @@ pub struct ModData {
     pub path_too_long: bool,
     /// 模组在分组内的索引
     pub mod_index: u32,
+    /// 槽位身份：组内目录枚举序 1-based（对齐 NRMM `realIndex` / `$managed_slot_id`）
+    ///
+    /// 与 `mod_index`（展示序，`mod_order_cmp` 排序后位次）**刻意分离**：游戏侧
+    /// 槽位判定（`$managed_slot_id == $active_slot`，按键模拟光标 X）以目录序为
+    /// 唯一真源，展示重排（收藏前置/禁用后置）不得改变槽位身份。深扫（BFS 发现序）
+    /// 与轻扫（一级目录枚举序）在「组下一级目录即模组」的仓库约定下同值。
+    /// None 空槽位 / 未知（单模组扫描占位）为 0。
+    #[serde(default)]
+    pub slot_id: u32,
     /// 所属分组索引
     #[serde(default)]
     pub group_index: u32,
@@ -285,6 +294,7 @@ impl Default for ModData {
             disabled: false,
             path_too_long: false,
             mod_index: 0,
+            slot_id: 0,
             group_index: 0,
             key_sections: 0,
             texture_override_sections: 0,

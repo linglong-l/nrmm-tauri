@@ -163,23 +163,15 @@ impl FileWatcher {
                     }
                     let mut pushed = false;
                     for p in event.paths {
-                        let path_str = p.to_string_lossy();
-                        let file_name = p
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        // 过滤临时文件（.tmp）、备份文件（NRMM 注入备份 + INI 启动备份）、隐藏文件
-                        let relevant = !path_str.contains(".tmp")
-                            && !path_str.ends_with(&backup_suffix)
-                            && !path_str.ends_with(&manager_backup_suffix)
-                            && !file_name.starts_with('.');
-                        if relevant {
-                            if let Some(parent) = p.parent() {
-                                if let Ok(mut ring) = ring_cb.lock() {
-                                    ring.push(parent.to_path_buf());
-                                }
-                                pushed = true;
+                        // 临时/备份/隐藏文件 + selectedindex（命令内联维护）不触发缓存对账
+                        if is_ignored_watcher_path(&p, &backup_suffix, &manager_backup_suffix) {
+                            continue;
+                        }
+                        if let Some(parent) = p.parent() {
+                            if let Ok(mut ring) = ring_cb.lock() {
+                                ring.push(parent.to_path_buf());
                             }
+                            pushed = true;
                         }
                     }
                     if pushed {
@@ -428,5 +420,62 @@ impl FileWatcher {
     ) -> Result<()> {
         self.stop_watching();
         self.start_watching(app_handle, game_mods_path)
+    }
+}
+
+/// 事件路径是否应被监控管线忽略（不触发增量/全量缓存对账）。
+///
+/// 除临时（.tmp）/ 备份（NRMM 注入备份 + INI 启动备份）/ 隐藏文件外，
+/// `selectedindex` 亦被忽略：该文件由 select/deselect 命令原子写 + 缓存定向
+/// patch（`ModCache::patch_selected_index`）内联维护，watcher 对它的共鸣
+/// （整组轻扫 + `subtree_replace` 深拷贝合并）属冗余工作——即选择交互高延迟
+/// 的来源（单次选择 ≈1s 轻扫 + ~7s 合并）。外部对 `selectedindex` 的修改由
+/// 下次自然全量扫描时按磁盘重读对账，不依赖事件共鸣。
+fn is_ignored_watcher_path(p: &Path, backup_suffix: &str, manager_backup_suffix: &str) -> bool {
+    let path_str = p.to_string_lossy();
+    let file_name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    path_str.contains(".tmp")
+        || path_str.ends_with(backup_suffix)
+        || path_str.ends_with(manager_backup_suffix)
+        || file_name.starts_with('.')
+        || file_name == constants::SELECTED_INDEX_FILE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_ignored_watcher_path;
+    use std::path::Path;
+
+    const BACKUP: &str = ".ini_managed_backup";
+    const MANAGER_BACKUP: &str = ".ini_manager_backup";
+
+    #[test]
+    fn selectedindex_file_is_ignored() {
+        // select/deselect 命令内联维护该文件，watcher 不得因它触发扫描/合并（选择高延迟根因）
+        let selected = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\selectedindex");
+        assert!(is_ignored_watcher_path(selected, BACKUP, MANAGER_BACKUP));
+    }
+
+    #[test]
+    fn normal_ini_and_dirs_still_trigger() {
+        let ini = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\some.ini");
+        assert!(!is_ignored_watcher_path(ini, BACKUP, MANAGER_BACKUP));
+        let dir = Path::new(r"D:\Games\Mods\_MANAGED_\group_2");
+        assert!(!is_ignored_watcher_path(dir, BACKUP, MANAGER_BACKUP));
+    }
+
+    #[test]
+    fn tmp_backup_hidden_still_ignored() {
+        let tmp = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\x.tmp");
+        assert!(is_ignored_watcher_path(tmp, BACKUP, MANAGER_BACKUP));
+        let backup = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\a.mod.ini.ini_managed_backup");
+        assert!(is_ignored_watcher_path(backup, BACKUP, MANAGER_BACKUP));
+        let mbackup = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\a.ini.ini_manager_backup");
+        assert!(is_ignored_watcher_path(mbackup, BACKUP, MANAGER_BACKUP));
+        let hidden = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\.hidden");
+        assert!(is_ignored_watcher_path(hidden, BACKUP, MANAGER_BACKUP));
     }
 }

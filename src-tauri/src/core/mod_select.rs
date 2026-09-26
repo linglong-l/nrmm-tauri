@@ -144,13 +144,18 @@ pub fn switch_mod(
     // P3 修复：按路径解析后端排序后的真实 mod_index。
     // 前端展示序与后端 mod_order_cmp 排序序可能分叉（收藏前置/新增置末位等本地近似
     // 重排），故优先以 mod_path 定位；未传或路径未命中时回退到传入下标（行为不劣化）。
-    let resolved_mod_index = match mod_path {
+    // 槽位身份（P0，2026-09-26 最佳修复）：同一次定位同时取出 slot_id（组内目录
+    // 枚举序，与 update_mod_data 深扫注入的 $managed_slot_id 同源）。组内含禁用/
+    // 收藏模组时展示序 ≠ 目录序——按键模拟光标 X 必须取 slot_id，否则游戏内
+    // `$managed_slot_id == $active_slot` 守卫永不命中（游戏内选择失效根因）。
+    let (resolved_mod_index, resolved_slot_id) = match mod_path {
         Some(p) if !p.is_empty() => scan_result
             .mods
             .iter()
             .find(|m| m.group_index == group_index && mod_path_matches(&m.full_path, p))
-            .map(|m| m.mod_index),
-        _ => None,
+            .map(|m| (Some(m.mod_index), Some(m.slot_id)))
+            .unwrap_or((None, None)),
+        _ => (None, None),
     };
     let effective_mod_index = resolved_mod_index.unwrap_or(mod_index);
     sel_dbg!(
@@ -234,6 +239,7 @@ pub fn switch_mod(
 
     let result = UpdateResult {
         selected_mod_index: Some(sel_idx_i32),
+        selected_slot_id: resolved_slot_id,
         ..Default::default()
     };
     log::debug!(
@@ -312,6 +318,50 @@ pub fn resolve_mod_index_by_path_from_cache(
         t0.elapsed().as_millis()
     );
     resolved
+}
+
+/// 按 `mod_path` 解析组内模组的「槽位身份」`slot_id`（**缓存快照**版，供选择快路径）
+///
+/// 槽位身份 = 组内目录枚举序 1-based（与 `update_mod_data` 深扫注入的
+/// `$managed_slot_id` / Dart `realIndex` 同源）。按键模拟光标 X 必须取此值：
+/// 展示序（`mod_order_cmp` 重排后）与目录序在组内含禁用/收藏模组时分叉，
+/// 用展示序会令游戏内 `$managed_slot_id == $active_slot` 守卫落空（选择失效根因）。
+///
+/// # 返回
+/// 命中返回 `slot_id`（>0）；`mod_path` 为空 / 缓存缺失 / 路径未命中 / 读锁忙
+/// 均返回 `None`，调用方回退展示序 `mod_index`（降级，行为不劣于修复前）。
+pub fn resolve_slot_id_by_path_from_cache(
+    game: TargetGame,
+    mods_path: &Path,
+    group_path: &Path,
+    mod_path: &str,
+) -> Option<u32> {
+    if mod_path.is_empty() {
+        return None;
+    }
+    // 非阻塞取读锁：与 [`resolve_mod_index_by_path_from_cache`] 同口径——
+    // watcher 增量合并（subtree_replace）长期持有写锁时快速放弃，不阻塞选择链路
+    let cache = match crate::core::mod_cache_core::MOD_CACHE.try_read() {
+        Some(c) => c,
+        None => {
+            log::warn!(
+                "[core::mod_manager] [resolve_slot_id_by_path_from_cache] cache read lock busy, skip slot resolution (mod_path={:?})",
+                mod_path
+            );
+            return None;
+        }
+    };
+    let scan = cache.get(game, mods_path)?;
+    let group = scan
+        .groups
+        .iter()
+        .find(|g| path_eq_ignore_case(&g.full_path, group_path))?;
+    group
+        .mods
+        .iter()
+        .find(|m| mod_path_matches(&m.full_path, mod_path))
+        .map(|m| m.slot_id)
+        .filter(|&s| s > 0)
 }
 
 /// 取消选中分组内模组（NormalGroup 专用）
@@ -608,7 +658,7 @@ mod tests_select_switch {
         create_mod_with_ini(&group1, "ModA", "[Section]\n");
 
         // 传入一个组内不存在的路径 → 路径解析未命中 → 回退到传入下标 1
-        let _result = switch_mod(
+        let result = switch_mod(
             TargetGame::GenshinImpact,
             dir.path(),
             &settings,
@@ -620,6 +670,61 @@ mod tests_select_switch {
 
         let content = fs::read_to_string(group1.join(constants::SELECTED_INDEX_FILE)).unwrap();
         assert_eq!(content.trim(), "1", "路径未命中时应回退到传入的 mod_index");
+        // 路径未命中 → 槽位身份同样未解析，调用方回退展示序
+        assert_eq!(result.selected_slot_id, None);
+    }
+
+    /// 测试（P0 最佳修复，2026-09-26）：switch_mod 按 mod_path 同时返回
+    /// 展示序下标与目录序槽位身份
+    ///
+    /// 构造「收藏前置」重排：ModA（启用、无收藏）、ModB（启用、收藏）→ 展示序
+    /// B 先 A 后。选取展示序 ≠ 目录序的模组作为目标，断言：
+    /// - `selected_mod_index` = 展示序（与磁盘 selectedindex 同值，UI 语义不变）；
+    /// - `selected_slot_id` = 扫描产物中的目录序槽位（与 `$managed_slot_id` 同源，
+    ///   按键模拟光标 X 取此值）。
+    #[test]
+    fn test_switch_mod_returns_slot_id_by_path() {
+        let dir = setup_test_dir();
+        create_d3dx_ini(dir.path());
+
+        let group1 = dir.path().join("_MANAGED_").join("group_1");
+        fs::create_dir_all(&group1).unwrap();
+        let mod_a = create_mod_with_ini(&group1, "ModA", "[Section]\n");
+        let mod_b = create_mod_with_ini(&group1, "ModB", "[Section]\n");
+        // ModB 收藏 → 展示序 B 在前（mod_index 更小），展示序与目录序分叉
+        fs::write(mod_b.join(constants::FAV_MARKER), "").unwrap();
+        let _ = mod_a;
+
+        // 先扫一次拿到后端产物（目录序 slot_id 与展示序 mod_index 同源可比）
+        let scan = crate::core::mod_scan_light::scan_mods_light(dir.path()).unwrap();
+        let (target_path, expected_index, expected_slot) = scan
+            .mods
+            .iter()
+            .filter(|m| m.group_index == 1)
+            .find(|m| m.slot_id != m.mod_index)
+            .map(|m| (m.full_path.to_string(), m.mod_index, m.slot_id))
+            .expect("收藏 + 多模组场景应存在展示序与目录序分叉的模组");
+
+        let result = switch_mod(
+            TargetGame::GenshinImpact,
+            dir.path(),
+            &AppSettings::default(),
+            1,
+            1, // 故意传入与真实下标不符的前端下标
+            Some(target_path.as_str()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.selected_mod_index,
+            Some(expected_index as i32),
+            "selected_mod_index 应为展示序（与磁盘 selectedindex 同值）"
+        );
+        assert_eq!(
+            result.selected_slot_id,
+            Some(expected_slot),
+            "selected_slot_id 应为目录序槽位身份（与 $managed_slot_id 同源）"
+        );
     }
 
     /// 测试：deselect_group_mods 写入 selectedindex=0 且不重命名禁用模组

@@ -51,6 +51,62 @@ fn test_light_scan_none_slot() {
     assert!(group.mods.iter().any(|m| m.name == "TestMod"));
 }
 
+/// 测试（P0 最佳修复，2026-09-26）：slot_id 钉住目录枚举序，mod_index 跟随展示序
+///
+/// 构造组内「收藏前置」重排：ModA（启用、无收藏）、ModB（启用、收藏）。
+/// 展示序（`mod_order_cmp`：收藏在前）→ B 先 A 后；目录序（read_dir 枚举）独立。
+/// 断言：
+/// - `mod_index`：B=1、A=2（展示序；None 恒 0）；
+/// - `slot_id`：等于各自在目录枚举序中的 1-based 位次（位次在测试内以同口径
+///   read_dir 独立求取，不依赖文件系统排序约定，全平台确定性）；
+/// - None 槽位 `slot_id == 0`。
+#[test]
+fn test_light_scan_slot_id_follows_directory_order() {
+    let dir = setup_test_dir();
+    create_d3dx_ini(dir.path());
+    let group_path = create_group_dir(dir.path(), "group_1");
+    create_mod_with_ini(&group_path, "ModA", "[Section]\n");
+    create_mod_with_ini(&group_path, "ModB", "[Section]\n");
+    // 收藏 ModB：mod_order_cmp 收藏前置 → 展示序 B 先于 A（与枚举序解耦）
+    fs::write(group_path.join("ModB").join(constants::FAV_MARKER), "").unwrap();
+
+    let result = scan_mods_light(dir.path()).unwrap();
+    let group = &result.groups[0];
+
+    let none = group.mods.iter().find(|m| m.name == "None").unwrap();
+    assert_eq!(none.slot_id, 0, "None 槽位 slot_id 恒为 0");
+    let mod_a = group.mods.iter().find(|m| m.name == "ModA").unwrap();
+    let mod_b = group.mods.iter().find(|m| m.name == "ModB").unwrap();
+
+    // 展示序：收藏前置 → B=1、A=2
+    assert_eq!(mod_b.mod_index, 1, "收藏模组展示位次应为 1");
+    assert_eq!(mod_a.mod_index, 2, "非收藏模组展示位次应为 2");
+
+    // 槽位身份 = 目录枚举序：与扫描器同口径 read_dir 求位次（同一目录内容在
+    // 两次调用间未变，枚举序一致），不信任何文件系统排序约定
+    let dir_names: Vec<String> = fs::read_dir(&group_path)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    let slot_of = |name: &str| -> u32 {
+        dir_names
+            .iter()
+            .position(|n| n == name)
+            .map(|p| p as u32 + 1)
+            .unwrap_or_else(|| panic!("目录枚举中应存在 {name}"))
+    };
+    assert_eq!(mod_a.slot_id, slot_of("ModA"), "ModA slot_id 应为目录枚举序");
+    assert_eq!(mod_b.slot_id, slot_of("ModB"), "ModB slot_id 应为目录枚举序");
+    assert_ne!(
+        dir_names.len(),
+        0,
+        "目录枚举应含两个模组目录"
+    );
+}
+
 /// 测试：轻量扫描 NormalGroup 不递归子目录
 #[test]
 fn test_light_scan_no_recursion_normal_group() {

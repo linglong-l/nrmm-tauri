@@ -50,6 +50,11 @@ pub struct UpdateResult {
     /// - MutexGroup：不使用 switch_mod 路径，始终 None
     #[serde(default)]
     pub selected_mod_index: Option<i32>,
+    /// 选择操作解析出的目标模组「槽位身份」（组内目录枚举序 1-based，与
+    /// `$managed_slot_id` / Dart `realIndex` 同源；按键模拟光标 X 与它同源）。
+    /// 解析失败（缓存缺失 / 路径未命中）为 None，调用方回退展示序 mod_index（降级）。
+    #[serde(default)]
+    pub selected_slot_id: Option<u32>,
     /// 是否检测到标准 XXMI/3DMigoto 环境（[Constants] + XXMI 注入标记 + [Inject] 段）
     #[serde(default)]
     pub is_standard_xxmi: bool,

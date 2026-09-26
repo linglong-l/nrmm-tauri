@@ -168,8 +168,10 @@ export interface ModData {
   modDisabled: boolean;
   /** 路径是否过长（Windows MAX_PATH限制） */
   pathTooLong: boolean;
-  /** 模组在分组中的索引 */
+  /** 模组在分组中的索引（展示序） */
   modIndex: number;
+  /** 槽位身份：组内目录枚举序 1-based（对齐 $managed_slot_id / Dart realIndex，与展示序刻意分离） */
+  slotId?: number;
   /** 是否属于互斥组 */
   isMutex: boolean;
   /** 是否禁用（兼容字段） */
@@ -502,6 +504,8 @@ export interface UpdateResult {
   needReloadManual: boolean;
   /** switch_mod成功时返回写入的选中索引（NormalGroup）；其他操作无此字段（undefined） */
   selectedModIndex?: number;
+  /** 选择操作解析出的槽位身份（目录序，按键模拟光标 X 同源）；解析失败为 undefined */
+  selectedSlotId?: number;
   /** 是否检测到标准 XXMI/3DMigoto 环境（仅 updateModData 结果中有效） */
   isStandardXxmi?: boolean;
   /** 主 INI（游戏根 d3dx.ini）处理状态：'Resolved'｜'MissingMainIni'（仅 updateModData 结果中有效；旧前端无该字段时按 Resolved 处理） */

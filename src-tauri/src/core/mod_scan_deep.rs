@@ -286,6 +286,9 @@ fn scan_group_directory_deep(
     for (idx, mod_data) in mods.iter_mut().enumerate() {
         mod_data.group_index = group_index;
         mod_data.mod_index = idx as u32 + 1; // 1-based，对齐原版 NRMM
+        // 槽位身份（BFS 发现序 = 组内目录枚举序，与轻扫 slot_id / Dart realIndex
+        // 同源）——$managed_slot_id 注入取此值。深扫无展示重排，故与 mod_index 同值。
+        mod_data.slot_id = idx as u32 + 1;
         mod_data.mod_path = mod_data.full_path.as_ref().to_string();
         mod_data.mod_name = mod_data.name.clone();
         mod_data.mod_disabled = mod_data.disabled;

@@ -1399,21 +1399,19 @@ export const useModsStore = defineStore('mods', () => {
       // 注意：模组选择不触发 markNeedUpdate，因为选择不涉及模组数据修改
       // 仅在启用/禁用模组时才需要提醒用户更新模组数据
 
-      // 成功：以后端写入磁盘的最终索引校正（优先返回值，否则回退到当前分组真实列表下标）
-      const retSelIdx: number =
-        result && typeof result.selectedModIndex === 'number' ? result.selectedModIndex : realModIdx
-      if (retSelIdx !== normalizedIdx) {
-        selectedModIndex.value = retSelIdx
-        if (gPathUsable) {
-          selectedModIndicesByGroup[gPath] = retSelIdx
-        }
-        if (!isMutex && found) {
-          found.activeModIndex = retSelIdx
-        }
-        group.mods = [...group.mods]
-        modTreeVersion.value++
-        triggerRef(groups)
-      }
+      // 成功：以后端写入 selectedindex 的返回值为准无条件重断言 UI（防索引一致时并发回退残留旧选中态）
+      const retSelIdx = result?.selectedModIndex ?? realModIdx
+      const confirmPath = (group.mods[retSelIdx]?.modPath) || modPath2
+      selectedModIndex.value = retSelIdx
+      if (gPathUsable) selectedModIndicesByGroup[gPath] = retSelIdx
+      if (!isMutex && found) found.activeModIndex = retSelIdx
+      setActiveRecursive(group, confirmPath)
+      setActiveFlat(confirmPath)
+      group.mods = [...group.mods]
+      modTreeVersion.value++
+      triggerRef(mods)
+      triggerRef(groups)
+      ElMessage.success('已选择模组')
 
       // [selection-latency] 校正完成 → 打端到端汇总（若渲染 flush 已先到）
       latT3 = performance.now()
