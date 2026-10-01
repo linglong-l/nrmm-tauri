@@ -53,7 +53,7 @@
     "active": true,
     "targets": ["deb", "rpm"],
     "resources": {
-      "binaries/7z/7z2602-linux-x64/7zz": "7z/7zz"
+      "binaries/7z/linux-x64/7zz": "7z/7zz"
     },
     "linux": {
       "deb": {},

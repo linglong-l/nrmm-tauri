@@ -60,9 +60,9 @@ rustup target list --installed | grep -q "^$TARGET_TRIPLE" || {
   rustup target add "$TARGET_TRIPLE"
 }
 
-# ---------- 2. 7z Linux sidecar 检查/下载（目录被 gitignore，新检出环境需自补） ----------
+# ---------- 2. 7z Linux sidecar 检查/下载（二进制已入库，仅异常缺失时自补） ----------
 SEVENZIP_TAR="7z2602-linux-x64.tar.xz"
-SEVENZIP_SRC="src-tauri/binaries/7z/7z2602-linux-x64"
+SEVENZIP_SRC="src-tauri/binaries/7z/linux-x64"
 if [ ! -f "$SEVENZIP_SRC/7zz" ]; then
   echo "[build-linux-gnu] 下载 7z Linux sidecar ($SEVENZIP_TAR)..."
   mkdir -p "$SEVENZIP_SRC"

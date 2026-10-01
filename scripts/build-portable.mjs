@@ -131,12 +131,12 @@ if (isWindows) {
 if (!cli.no7z) {
   console.log('[portable] 拷贝内置 7z 到 stage/7z/ ...');
   if (isWindows) {
-    const srcRoot = resolve(PROJECT_ROOT, 'src-tauri/binaries/7z/7z2602-Windows-x64');
+    const srcRoot = resolve(PROJECT_ROOT, 'src-tauri/binaries/7z/Windows-x64');
     for (const f of ['7za.exe', '7za.dll', '7zxa.dll']) {
       copyTo(join(srcRoot, f), join('7z', f));
     }
   } else {
-    const srcRoot = resolve(PROJECT_ROOT, 'src-tauri/binaries/7z/7z2602-linux-x64');
+    const srcRoot = resolve(PROJECT_ROOT, 'src-tauri/binaries/7z/linux-x64');
     copyTo(join(srcRoot, '7zz'), join('7z', '7zz'));
   }
 } else {

@@ -124,7 +124,7 @@ Write-Ok "五处版本号一致: $pkgVersion"
 
 # ---------- 3. 7z Windows sidecar 检查/下载 ----------
 Write-Step "[3/7] 7z Windows sidecar 检查"
-$sevenZipRoot = "src-tauri/binaries/7z/7z2602-Windows-x64"
+$sevenZipRoot = "src-tauri/binaries/7z/Windows-x64"
 $required = @(
     "7za.exe", "7za.dll", "7zxa.dll"
 )
@@ -154,7 +154,7 @@ else {
     Write-Ok "7z sidecar 已补齐"
 }
 
-# 注：tauri.windows.conf.json 的 resources 已直接指向 7z2602-Windows-x64/（无需再 staging 到 current/），
+# 注：tauri.windows.conf.json 的 resources 已直接指向 Windows-x64/（无需再 staging 到 current/），
 # 因此 7z 二进制就地位于 $sevenZipRoot，Tauri 构建时直接打包。
 
 # ---------- 4. npm 依赖检查 ----------

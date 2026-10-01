@@ -53,9 +53,9 @@
     "active": true,
     "targets": ["nsis"],
     "resources": {
-      "binaries/7z/7z2602-Windows-x64/7za.exe": "7z/7za.exe",
-      "binaries/7z/7z2602-Windows-x64/7za.dll": "7z/7za.dll",
-      "binaries/7z/7z2602-Windows-x64/7zxa.dll": "7z/7zxa.dll"
+      "binaries/7z/Windows-x64/7za.exe": "7z/7za.exe",
+      "binaries/7z/Windows-x64/7za.dll": "7z/7za.dll",
+      "binaries/7z/Windows-x64/7zxa.dll": "7z/7zxa.dll"
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper" },
