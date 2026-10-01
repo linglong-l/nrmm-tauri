@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::core::mod_update_pipeline::update_mod_data;
 use crate::models::enums::TargetGame;
@@ -97,8 +96,8 @@ fn test_restore_all_inis() {
     let backup_path = main_ini_path.with_extension(constants::BACKUP_EXTENSION);
     assert!(!backup_path.exists());
 
-    // 验证管理文件已清理
-    assert!(!managed.join("nrmm_include.ini").exists());
+    // 验证管理文件在还原后保留（对齐 NRMM restoreManagedMod：不动管理器文件）
+    assert!(managed.join("nrmm_include.ini").exists());
 }
 
 #[test]
@@ -231,10 +230,11 @@ hash = 0x2
 
     // 备份应被删除
     assert!(!backup.exists());
-    // 管理器生成文件应被清理
-    assert!(!managed.join("nrmm_include.ini").exists());
-    assert!(!managed.join("manager_group.ini").exists());
-    assert!(!managed.join("group_1.ini").exists());
+    // 管理器生成文件应保留（对齐 NRMM restoreManagedMod：还原不动管理器文件；
+    // group_N.ini 生成于组目录内，非 _MANAGED_ 根）
+    assert!(managed.join("nrmm_include.ini").exists());
+    assert!(managed.join("manager_group.ini").exists());
+    assert!(managed.join("group_1").join("group_1.ini").exists());
 }
 
 /// 就地清理式还原：对一份「已经过 update_mod_data」的 INI，验证 restore_managed_mod

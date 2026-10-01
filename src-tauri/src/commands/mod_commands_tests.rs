@@ -513,15 +513,20 @@ fn restore_after_update_test() {
     assert!(restored.restored >= 1, "至少应还原 1 个 INI");
     assert_eq!(restored.failed, 0, "还原不应有失败项");
 
-    // 3) 管理生成文件被清理
-    for f in [
-        "manager_group.ini",
-        "nrmm_include.ini",
-        "nrmm_keypress.txt",
-        "group_1.ini",
-    ] {
-        assert!(!managed.join(f).exists(), "[清理] 还原后仍存在: {}", f);
+    // 3) 管理生成文件在还原后保留（对齐 NRMM restoreManagedMod：仅还原模组 INI，
+    //    不清理管理器文件——2026-09-26 用户决策，废除移植端原有的还原全清理语义）
+    for f in ["manager_group.ini", "nrmm_include.ini", "nrmm_keypress.txt"] {
+        assert!(
+            managed.join(f).exists(),
+            "[对齐NRMM] 还原后管理文件缺失: {}",
+            f
+        );
     }
+    // group_N.ini 生成于组目录内（managed/group_1/group_1.ini），非 _MANAGED_ 根
+    assert!(
+        managed.join("group_1").join("group_1.ini").exists(),
+        "[对齐NRMM] 还原后管理文件缺失: group_1/group_1.ini"
+    );
     // 注入备份应全部被消费；例外 = 输入数据集自带的孤儿备份
     // （原 .ini 已被用户删除而备份残留，如 bakup (2).ini_managed_backup，
     //  Dart 基线同样保留 → 非本次还原产生，不得误报）
@@ -643,13 +648,20 @@ fn restore_after_update_test() {
             extra_files.push(rel.to_string_lossy().replace('\\', "/"));
         }
     }
-    // 白名单：update 生成、还原按既有语义不回收的文件
+    // 白名单：update 生成、还原按 NRMM 对齐语义（restoreManagedMod 不动管理器文件）
+    // 合法存续的管理器生成文件——输入数据集未必携带（清洗后输入仅含历史形态）：
+    // - 根/组级 selectedindex
+    // - 根级三件套：manager_group.ini / nrmm_include.ini / nrmm_keypress.txt
+    // - group_N.ini（任意层级；仅含启用模组的分组才生成）
     let extra_unexpected: Vec<&String> = extra_files
         .iter()
         .filter(|p| {
             let name = p.rsplit('/').next().unwrap_or("");
-            // 根/组级 selectedindex：update 显式生成，还原不清理（Dart 同语义）
-            !(name == "selectedindex")
+            !(name == "selectedindex"
+                || name == "manager_group.ini"
+                || name == "nrmm_include.ini"
+                || name == "nrmm_keypress.txt"
+                || (name.starts_with("group_") && name.ends_with(".ini")))
         })
         .collect();
     assert!(

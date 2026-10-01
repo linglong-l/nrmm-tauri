@@ -16,9 +16,14 @@ use crate::core::mod_results::RestoredCount;
 /// 恢复顺序：
 /// 1. 主 INI 文件（d3dx.ini, RatioShot.ini）
 /// 2. 递归恢复 _MANAGED_ 目录下所有模组的 INI
-/// 3. 清理 NRMM 生成的管理文件（nrmm_include.ini, manager_group.ini, nrmm_keypress.txt, group_*.ini）
 ///
 /// 恢复成功后删除备份文件。
+///
+/// # 对齐 NRMM（2026-09-26 用户决策）
+/// 还原**不清理** NRMM 生成的管理文件（nrmm_include.ini / manager_group.ini /
+/// nrmm_keypress.txt / group_*.ini / ModFolder.ini）——对齐 Dart
+/// `restoreManagedMod`：仅还原模组 INI 内容，管理器文件原样保留
+/// （此前移植端额外清理属本地设计决策，现按用户决策移除）。
 ///
 /// # 参数
 /// - `game_mods_path`: 游戏 Mods 目录
@@ -27,7 +32,7 @@ use crate::core::mod_results::RestoredCount;
 /// 恢复统计（成功数/失败数）
 pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
     // 还原安全窗口：随后 watcher 防抖触发的重扫对管理标记只读不建
-    // （还原后的目录通常会被删除/导出，专属配置文件会干扰其他管理器）
+    // （还原不回写管理标记，对齐 NRMM restoreManagedMod 不动管理文件）
     crate::core::mod_scan_marker::mark_restore_safe_window();
     let mut restored = 0u32;
     let mut failed = 0u32;
@@ -51,54 +56,10 @@ pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
 
     let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);
     if managed_folder.exists() {
+        // 对齐 NRMM restoreManagedMod：仅还原模组 INI（备份式无损回放），
+        // 不清理 nrmm_include.ini / nrmm_keypress.txt / manager_group.ini /
+        // group_*.ini / ModFolder.ini 等管理器生成文件
         restore_inis_recursive(&managed_folder, &mut restored, &mut failed)?;
-
-        // 清理 NRMM 生成的管理文件
-        let _ = fs::remove_file(managed_folder.join(constants::INCLUDE_FILENAME));
-        let _ = fs::remove_file(managed_folder.join(constants::KEYPRESS_FILENAME));
-        let _ = fs::remove_file(managed_folder.join("manager_group.ini"));
-
-        // 清理 group_*.ini 文件
-        if let Ok(entries) = fs::read_dir(&managed_folder) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if let Some(rest) = name.strip_prefix("group_") {
-                            if rest.ends_with(".ini") {
-                                let _ = fs::remove_file(&path);
-                            }
-                        }
-                    }
-                }
-                // 清理子目录下的 group_X.ini 和 ModFolder.ini
-                // 用 file_type().is_dir() 避免 junction 逃逸（R3）
-                if path.is_dir() {
-                    let is_real_dir = path
-                        .symlink_metadata()
-                        .map(|m| m.is_dir() && !m.file_type().is_symlink())
-                        .unwrap_or(false);
-                    if !is_real_dir {
-                        continue;
-                    }
-                    if let Ok(sub_entries) = fs::read_dir(&path) {
-                        for sub_entry in sub_entries.flatten() {
-                            let sub_path = sub_entry.path();
-                            if sub_path.is_file() {
-                                if let Some(name) = sub_path.file_name().and_then(|n| n.to_str()) {
-                                    if name.starts_with("group_") && name.ends_with(".ini") {
-                                        let _ = fs::remove_file(&sub_path);
-                                    }
-                                    if name == "ModFolder.ini" {
-                                        let _ = fs::remove_file(&sub_path);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     Ok(RestoredCount { restored, failed })
