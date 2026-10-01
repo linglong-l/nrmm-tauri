@@ -1,2 +1,2 @@
 [System]
-additional_foreground_window = No Reload Mod Manager Zenless_Zone_Zero
+check_foreground_window = 0
