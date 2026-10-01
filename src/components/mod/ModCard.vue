@@ -115,6 +115,16 @@
           <el-icon><FolderOpened /></el-icon>
           {{ t('Open in File Explorer') }}
         </div>
+        <!-- 外部代码编辑器（对齐 NRMM v3.2.0：仅展示后端探测到的编辑器） -->
+        <div
+          v-for="editor in externalEditors"
+          :key="editor.id"
+          class="menu-item"
+          @click="handleOpenInEditor(editor.id)"
+        >
+          <el-icon><Edit /></el-icon>
+          {{ editor.name }}
+        </div>
         <div class="menu-divider"></div>
         <div class="menu-item danger" @click="handleDelete">
           <el-icon><Delete /></el-icon>
@@ -259,6 +269,8 @@ const {
   handleToggleFavorite,
   handleOpenKeybind,
   handleOpenFolder,
+  handleOpenInEditor,
+  externalEditors,
 } = useModContextMenu(
   mod,
   computed(() => props.modIndex),

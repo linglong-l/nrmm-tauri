@@ -17,11 +17,12 @@
 import { ref, inject, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { ModData } from '@/types'
-import { toggleModDisabled, toggleFavorite, openModFolder, deselectGroupMod, isPathNotFoundError } from '@/utils/tauri'
+import { toggleModDisabled, toggleFavorite, openModFolder, deselectGroupMod, openInEditor, isPathNotFoundError } from '@/utils/tauri'
 import { recoverFromPathNotFound } from './usePathNotFoundRecovery'
 import { predictToggledPath } from '@/utils/modPath'
 import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
+import { useExternalEditors, ensureEditorsDetected } from './useExternalEditors'
 import { logger } from '@/utils/logger'
 import { placeContextMenu } from '@/utils/contextMenuPosition'
 
@@ -34,6 +35,8 @@ export function useModContextMenu(
   t: (key: string, fallback?: string) => string
 ) {
   const settingsStore = useSettingsStore()
+  /** 外部代码编辑器（模块级共享探测结果；右键菜单打开时懒触发探测） */
+  const { externalEditors } = useExternalEditors()
   /** 从 App.vue provide 注入的标签页切换函数，用于「按键切换」菜单跳转到 Keybinds 页 */
   const switchTab = inject<(key: 'keybinds' | 'mods' | 'settings') => void>('switchTab', () => {})
 
@@ -61,11 +64,13 @@ export function useModContextMenu(
     // 标记后续短暂时间内的左键为右键后残留点击，避免误选中
     // Teleport后误触概率已大幅降低，缩短时间窗到300ms
     ignoreNextClickUntil.value = performance.now() + 300
-    // 菜单估算尺寸（min-width:160px，按6项约184x240px 保守计算）
+    // 菜单估算尺寸（min-width:160px；6 基础项约 240px，含外部编辑器项最多 10 项约 420px）
     // 缩放校正：根元素 CSS zoom 会让 fixed 定位坐标空间与 clientX/clientY 失配
     // （zoom≠1 时菜单按倍率漂移），placeContextMenu 内部统一处理
-    contextMenuPosition.value = placeContextMenu(e, 200, 260)
+    contextMenuPosition.value = placeContextMenu(e, 200, 420)
     contextMenuVisible.value = true
+    // 外部编辑器懒探测（幂等；菜单先以现有结果渲染，探测完成后响应式补全）
+    void ensureEditorsDetected()
   }
 
   /** 关闭右键菜单 */
@@ -84,6 +89,20 @@ export function useModContextMenu(
     if (!mod.value || isNoneSlot.value) return
     closeContextMenu()
     emit('activate', modIndex.value)
+  }
+
+  /**
+   * 用外部代码编辑器打开模组目录（对齐 NRMM v3.2.0「Open with」编辑器项）
+   * 编辑器路径由后端按 id 重解析；fire-and-forget，失败仅提示不阻塞菜单
+   */
+  function handleOpenInEditor(editorId: string) {
+    const target = mod.value?.modPath
+    if (!target) return
+    closeContextMenu()
+    openInEditor(editorId, target).catch((e: unknown) => {
+      logger.error('ModContextMenu', 'open in editor failed', e)
+      ElMessage.error(t('Failed to open in editor'))
+    })
   }
 
   /**
@@ -206,6 +225,8 @@ export function useModContextMenu(
     handleToggleFavorite,
     handleOpenKeybind,
     handleOpenFolder,
+    handleOpenInEditor,
+    externalEditors,
     handleDeselectGroup,
   }
 }

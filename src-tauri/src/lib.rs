@@ -357,6 +357,8 @@ pub fn run() {
             commands::mod_query_commands::detect_hash_conflicts,
             commands::mod_selection_commands::select_mod,
             commands::mod_selection_commands::deselect_group_mod,
+            commands::editor_commands::detect_external_editors,
+            commands::editor_commands::open_in_editor,
             commands::mod_group_commands::add_group,
             commands::mod_group_commands::remove_group,
             commands::mod_group_commands::remove_mod,

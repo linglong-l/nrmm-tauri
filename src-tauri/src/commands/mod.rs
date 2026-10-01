@@ -14,6 +14,7 @@
 pub mod archive_commands;
 pub mod cache_commands;
 pub mod cloud_commands;
+pub mod editor_commands;
 pub mod keybind_commands;
 pub mod log_commands;
 pub mod mod_commands;

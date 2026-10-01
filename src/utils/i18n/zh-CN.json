@@ -147,6 +147,7 @@
   "Mod icon": "模组图标",
   "Group icon": "分组图标",
   "Open in File Explorer": "在文件资源管理器中打开",
+  "Failed to open in editor": "在编辑器中打开失败",
   "Contact for help": "联系帮助",
   "Search group by name or real folder name": "搜索分组（再次按空格键切换搜索模式）",
   "Search mod by name or real folder name": "搜索模组（再次按空格键切换搜索模式）",

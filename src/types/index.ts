@@ -480,6 +480,19 @@ export interface ScanResult {
 }
 
 /**
+ * 探测到的外部代码编辑器
+ * 对齐 NRMM v3.2.0 外部编辑器支持（右键「打开方式」）
+ */
+export interface ExternalEditorInfo {
+  /** 编辑器标识（vscode / zed / notepadpp / sublime） */
+  id: string;
+  /** 显示名（专有名词，各语言一致） */
+  name: string;
+  /** 可执行文件绝对路径 */
+  path: string;
+}
+
+/**
  * 重量级更新结果
  * 执行完整INI解析和修复后返回的统计信息
  */

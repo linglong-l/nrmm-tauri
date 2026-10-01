@@ -10,7 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta, ToggleModResult } from '../types'
+import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta, ToggleModResult, ExternalEditorInfo } from '../types'
 import { logger } from './logger'
 
 /**
@@ -200,6 +200,22 @@ export async function selectMod(
  */
 export async function deselectGroupMod(game: string, modsPath: string, groupIndex: number, groupPath?: string): Promise<UpdateResult> {
   return safeInvoke<UpdateResult>('deselect_group_mod', { game, modsPath, groupIndex, groupPath })
+}
+
+/**
+ * 探测系统已装的外部代码编辑器（VS Code / Zed / Notepad++ / Sublime）
+ * 后端：detect_external_editors（PATH which + ProgramFiles 回退，对齐 NRMM）
+ */
+export async function detectExternalEditors(): Promise<ExternalEditorInfo[]> {
+  return safeInvoke<ExternalEditorInfo[]>('detect_external_editors', {})
+}
+
+/**
+ * 以指定编辑器打开目标路径（编辑器路径由后端按 id 重解析）
+ * 后端：open_in_editor（detached 子进程，按编辑器特化参数）
+ */
+export async function openInEditor(editorId: string, targetPath: string): Promise<void> {
+  return safeInvoke<void>('open_in_editor', { editorId, targetPath })
 }
 
 /**
