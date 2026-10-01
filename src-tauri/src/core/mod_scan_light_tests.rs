@@ -98,13 +98,17 @@ fn test_light_scan_slot_id_follows_directory_order() {
             .map(|p| p as u32 + 1)
             .unwrap_or_else(|| panic!("目录枚举中应存在 {name}"))
     };
-    assert_eq!(mod_a.slot_id, slot_of("ModA"), "ModA slot_id 应为目录枚举序");
-    assert_eq!(mod_b.slot_id, slot_of("ModB"), "ModB slot_id 应为目录枚举序");
-    assert_ne!(
-        dir_names.len(),
-        0,
-        "目录枚举应含两个模组目录"
+    assert_eq!(
+        mod_a.slot_id,
+        slot_of("ModA"),
+        "ModA slot_id 应为目录枚举序"
     );
+    assert_eq!(
+        mod_b.slot_id,
+        slot_of("ModB"),
+        "ModB slot_id 应为目录枚举序"
+    );
+    assert_ne!(dir_names.len(), 0, "目录枚举应含两个模组目录");
 }
 
 /// 测试：轻量扫描 NormalGroup 不递归子目录

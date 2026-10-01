@@ -1,4 +1,3 @@
-
 use super::*;
 use tempfile::TempDir;
 
@@ -247,8 +246,9 @@ fn test_rename_mod_final_name_no_duplicate_prefix() {
     fs::write(mod_path.join("mod.ini"), "[ShaderOverride]").unwrap();
 
     // 危险场景：用户重命名 new_name 已带 DISABLED 前缀
-    let is_disabled =
-        crate::core::mod_scan_util::is_disabled_dir(&mod_path.file_name().unwrap().to_string_lossy());
+    let is_disabled = crate::core::mod_scan_util::is_disabled_dir(
+        &mod_path.file_name().unwrap().to_string_lossy(),
+    );
     let new_name = "DISABLEDNewName".to_string();
     let final_name = if is_disabled {
         format!(

@@ -562,8 +562,8 @@ mod tests {
         // 注入宽预算（20 次 × 50ms 递增 ≈ 10.5s 窗口）：并行整跑时后台补写线程
         // 可能被 CPU 饥饿延迟超过生产默认 720ms（历史 flake 现场：高负载整跑
         // 64s 时该测试偶发失败），宽预算使调度竞态实际不可能触发。
-        let img = decode_by_header_with_retry(&original, 20, 50)
-            .expect("残缺文件补齐后应经重试成功");
+        let img =
+            decode_by_header_with_retry(&original, 20, 50).expect("残缺文件补齐后应经重试成功");
         assert_eq!(
             (img.width(), img.height()),
             (64, 64),

@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use crate::core::constants;
 
-
 /// 路径比较（Windows 大小写不敏感，其他平台敏感）
 ///
 /// 用于 `enable_mutex_mod` 目标模组匹配，避免 Windows 下路径大小写/规范化

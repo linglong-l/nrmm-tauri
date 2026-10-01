@@ -21,11 +21,11 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "windows")]
-pub mod windows_key_sim;
-#[cfg(target_os = "windows")]
 pub mod windows_cursor_sim;
 #[cfg(target_os = "windows")]
 pub mod windows_foreground;
+#[cfg(target_os = "windows")]
+pub mod windows_key_sim;
 
 /// 平台信息结构体
 #[derive(Debug, Clone, serde::Serialize)]

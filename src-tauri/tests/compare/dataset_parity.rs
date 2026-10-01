@@ -29,11 +29,17 @@ fn manifest_dir() -> PathBuf {
 }
 
 fn baseline_dir() -> PathBuf {
-    manifest_dir().join("tests").join("datasets").join("NRMM-test")
+    manifest_dir()
+        .join("tests")
+        .join("datasets")
+        .join("NRMM-test")
 }
 
 fn input_dir() -> PathBuf {
-    manifest_dir().join("tests").join("datasets").join("NRMM-Rust-test")
+    manifest_dir()
+        .join("tests")
+        .join("datasets")
+        .join("NRMM-Rust-test")
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -160,11 +166,10 @@ fn test_dataset_parity_update_mod_data() {
         game_mods_path
     );
     let settings = AppSettings::default();
-    let result =
-        match update_mod_data(TargetGame::GenshinImpact, &game_mods_path, &settings) {
-            Ok(r) => r,
-            Err(e) => panic!("update_mod_data 失败: {:#}", e),
-        };
+    let result = match update_mod_data(TargetGame::GenshinImpact, &game_mods_path, &settings) {
+        Ok(r) => r,
+        Err(e) => panic!("update_mod_data 失败: {:#}", e),
+    };
 
     println!(
         "[parity] 结果: enabled={}, processed={}, errors={}, groups={}",

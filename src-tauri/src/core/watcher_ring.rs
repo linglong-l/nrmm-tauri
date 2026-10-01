@@ -124,8 +124,7 @@ pub(crate) fn backoff_quiet_period(base: Duration, consecutive_overflows: u32) -
         return base;
     }
     let step_ms = u64::from(std::cmp::min(consecutive_overflows.saturating_sub(1), 2) * 1000);
-    let quiet =
-        Duration::from_millis(constants::FILE_WATCHER_OVERFLOW_BACKOFF_BASE_MS + step_ms);
+    let quiet = Duration::from_millis(constants::FILE_WATCHER_OVERFLOW_BACKOFF_BASE_MS + step_ms);
     quiet.min(Duration::from_millis(
         constants::FILE_WATCHER_MAX_BACKOFF_MS,
     ))
