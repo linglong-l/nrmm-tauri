@@ -76,6 +76,10 @@ latest.json
 # CI / signing secrets（防止误提交公钥/私钥/密码）
 /Key/
 target/
+# 遗留双锁文件（M10）：根 Cargo.lock 是唯一权威锁文件（workspace 级），
+# src-tauri/Cargo.lock 为拆分前遗留，内容已与根锁分歧，造成依赖解析歧义。
+# 已跟踪副本由提交方执行 `git rm --cached src-tauri/Cargo.lock` 后本条生效。
+src-tauri/Cargo.lock
 AGENTS.md
 clippy_output.txt
 SESSION_CONTEXT.md

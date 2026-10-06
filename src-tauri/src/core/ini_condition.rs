@@ -73,6 +73,12 @@ static PAREN_OR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\(\s*\|\|\s*").unwra
 static AND_PAREN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*&&\s*\)").unwrap());
 static OR_PAREN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*\|\|\s*\)").unwrap());
 static EMPTY_PAREN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\(\s*\)").unwrap());
+// 连接符去重（M3：原先在函数体内联 Regex::new 每次调用重新编译，热路径浪费；
+// 迁移到 Lazy 静态，与上方清洗正则同一模式）
+static DOUBLE_AND_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"&&\s*&&").unwrap());
+static AND_OR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"&&\s*\|\|").unwrap());
+static DOUBLE_OR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\|\|\s*\|\|").unwrap());
+static OR_AND_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\|\|\s*&&").unwrap());
 
 pub(crate) fn sanitize_condition_expression(expression: &str) -> String {
     // 匹配 `$managed_slot_id == $\modmanageragl\group_<数字>\<token>`，
@@ -116,29 +122,13 @@ pub(crate) fn sanitize_condition_expression(expression: &str) -> String {
         expr = expr.replacen("||", "", 1).trim().to_string();
     }
     // "&& &&" -> "&&"
-    expr = Regex::new(r"&&\s*&&")
-        .unwrap()
-        .replace_all(&expr, "&&")
-        .trim()
-        .to_string();
+    expr = DOUBLE_AND_RE.replace_all(&expr, "&&").trim().to_string();
     // "&& ||" -> "||"
-    expr = Regex::new(r"&&\s*\|\|")
-        .unwrap()
-        .replace_all(&expr, "||")
-        .trim()
-        .to_string();
+    expr = AND_OR_RE.replace_all(&expr, "||").trim().to_string();
     // "|| ||" -> "||"
-    expr = Regex::new(r"\|\|\s*\|\|")
-        .unwrap()
-        .replace_all(&expr, "||")
-        .trim()
-        .to_string();
+    expr = DOUBLE_OR_RE.replace_all(&expr, "||").trim().to_string();
     // "|| &&" -> "&&"
-    expr = Regex::new(r"\|\|\s*&&")
-        .unwrap()
-        .replace_all(&expr, "&&")
-        .trim()
-        .to_string();
+    expr = OR_AND_RE.replace_all(&expr, "&&").trim().to_string();
 
     // 若管理器表达式整体被外层括号包裹，解包
     if is_wrapped_in_matching_parens(&expr) {

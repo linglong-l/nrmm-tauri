@@ -208,10 +208,16 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         ],
     )?;
 
-    let _tray = TrayIconBuilder::new()
-        .tooltip(tray_lang_str(&lang, "tooltip"))
-        // SAFETY: The default window icon is configured in tauri.conf.json and is always present at runtime.
-        .icon(app.default_window_icon().unwrap().clone())
+    // L2 修复：default_window_icon 在图标资源配置异常时返回 None，unwrap 会让
+    // 启动路径 panic（托盘图标缺失不构成致命错误）。降级为无图标托盘 + warn。
+    let mut tray_builder = TrayIconBuilder::new().tooltip(tray_lang_str(&lang, "tooltip"));
+    if let Some(icon) = app.default_window_icon() {
+        tray_builder = tray_builder.icon(icon.clone());
+    } else {
+        log::warn!("tray: default_window_icon unavailable, building tray without icon");
+    }
+
+    let _tray = tray_builder
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
