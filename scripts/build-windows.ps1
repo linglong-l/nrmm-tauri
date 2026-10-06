@@ -20,12 +20,12 @@ if ($IsWindows) {
 
 .DESCRIPTION
     执行流程：
-      1. 前置工具检查（node/cargo/npm）
+      1. 前置工具检查（node/cargo/pnpm）
       2. 版本一致性校验（package.json / src-tauri/Cargo.toml / tauri.conf.json /
          tauri.windows.conf.json / tauri.linux.conf.json，项目硬约束：五处版本号必须一致）
       3. 7z Windows sidecar 检查/下载（binaries 目录被 gitignore，新检出环境自补：
          7zr.exe 引导 + 7z2602-extra.7z 解压，布局与 tauri.windows.conf.json resources 映射一致）
-      4. npm 依赖检查（缺失时 npm ci）
+      4. pnpm 依赖检查（缺失时 pnpm install --frozen-lockfile）
       5. Tauri 构建（nsis，显式 --target 保证产物路径确定性；已移除 msi）
       6. portable zip（复用 build-portable.mjs，含主程序 + DLL + 内置 7z，命名为规范名）
       7. 收集产物到 dist-win/：安装包 / portable zip / latest.json（updater manifest）
@@ -79,7 +79,7 @@ function Write-Fail([string]$msg) { Write-Host "  [FAIL] $msg" -ForegroundColor 
 
 # ---------- 1. 前置工具检查 ----------
 Write-Step "[1/7] 前置工具检查"
-foreach ($tool in @("node", "npm", "cargo", "rustup")) {
+foreach ($tool in @("node", "pnpm", "cargo", "rustup")) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
         Write-Fail "$tool 不在 PATH"
     }
@@ -157,23 +157,23 @@ else {
 # 注：tauri.windows.conf.json 的 resources 已直接指向 Windows-x64/（无需再 staging 到 current/），
 # 因此 7z 二进制就地位于 $sevenZipRoot，Tauri 构建时直接打包。
 
-# ---------- 4. npm 依赖检查 ----------
-Write-Step "[4/7] npm 依赖检查"
+# ---------- 4. pnpm 依赖检查 ----------
+Write-Step "[4/7] pnpm 依赖检查"
 if (-not (Test-Path "node_modules")) {
-    Write-Host "  安装 npm 依赖（npm ci）..."
-    npm ci
-    if ($LASTEXITCODE -ne 0) { Write-Fail "npm ci 失败" }
+    Write-Host "  安装 pnpm 依赖（pnpm install --frozen-lockfile）..."
+    pnpm install --frozen-lockfile
+    if ($LASTEXITCODE -ne 0) { Write-Fail "pnpm install 失败" }
 }
 else {
     Write-Ok "node_modules 存在"
 }
 
 # ---------- 5. Tauri 构建（nsis + msi；显式 --target 保证 bundle 路径确定性） ----------
-# 注意：必须用 npx tauri 而非 `npm run tauri build -- --target X`——npm 会把脚本名后的
+# 注意：必须用 pnpm exec tauri 而非 `pnpm run tauri build -- --target X`——经包管理器 run
 # `--target` 当成本身配置吞掉（Unknown cli config --target），只把值当位置参数传给 tauri，
-# 导致 cargo 收到裸 triple 报 "unexpected argument"。npx 直传无此问题（2026-08-18 实测）。
+# 导致 cargo 收到裸 triple 报 "unexpected argument"。exec 直传无此问题（2026-08-18 实测 npx）。
 Write-Step "[5/7] Tauri 构建（targets: nsis + msi，tauri.windows.conf.json）"
-npx tauri build --target $TargetTriple
+pnpm exec tauri build --target $TargetTriple
 if ($LASTEXITCODE -ne 0) { Write-Fail "tauri build 失败（exit=$LASTEXITCODE）" }
 
 # ---------- 6. portable zip ----------

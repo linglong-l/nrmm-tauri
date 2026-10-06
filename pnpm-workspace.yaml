@@ -1,0 +1,30 @@
+# =============================================================================
+# pnpm 工作区设置（入库；pnpm 10+ 起设置项从本文件读取，不再读 package.json 的 pnpm 字段）
+#
+# 目的：让同一份 node_modules 在 Windows 与 Linux 双系统共用目录下都可用，
+# 避免 rolldown / esbuild / @tauri-apps/cli 的平台原生二进制被另一侧覆盖
+# （实测共用单系统依赖树时 Linux 跑 vitest 报 Cannot find module
+#  '@rolldown/binding-wasm32-wasi'）。
+# =============================================================================
+
+# 一次安装同时拉齐 Linux 与 Windows 的原生可选依赖
+supportedArchitectures:
+  os:
+    - current
+    - linux
+    - win32
+  cpu:
+    - current
+    - x64
+
+# 仅这些包允许执行安装期构建脚本（替代原先无 @lavamoat/allow-scripts 支撑、
+# 因此完全不生效的 package.json "allowScripts" 字段）
+onlyBuiltDependencies:
+  - esbuild
+  - vue-demi
+
+# 依赖版本强制覆盖。pnpm 12 不再读取 package.json 顶层 overrides，
+# 必须写在这里才会生效（实测迁移前 glob 被解析成 13.x，偏离 ~10.5.0）
+overrides:
+  glob: "~10.5.0"
+  nanoid: "~3.3.17"

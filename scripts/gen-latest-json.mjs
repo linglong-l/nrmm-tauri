@@ -85,7 +85,7 @@ const PRIMARY = `nrmm-tauri_${VERSION}_x64-Win.exe`;
 const artifactPath = join(DIST, PRIMARY);
 if (!existsSync(artifactPath)) {
   console.error(`[latest] ERROR: 找不到 Windows 安装包: ${artifactPath}`);
-  console.error('  请先构建并收集产物到 dist-win/（npm run build:windows）');
+  console.error('  请先构建并收集产物到 dist-win/（pnpm run build:windows）');
   process.exit(1);
 }
 
@@ -102,8 +102,8 @@ function ensureSig(artifact) {
   if (env.TAURI_SIGNING_PRIVATE_KEY && env.TAURI_SIGNING_PRIVATE_KEY_PATH) {
     delete env.TAURI_SIGNING_PRIVATE_KEY_PATH;
   }
-  // 通过系统 shell 调用 npx（Windows 仅有 npx.cmd，无 npx.exe，需 shell 解析）
-  const r = spawnSync(`npx --no-install tauri signer sign "${artifact}"`, {
+  // 通过系统 shell 调用 pnpm（Windows 仅有 pnpm.cmd，无 pnpm.exe，需 shell 解析）
+  const r = spawnSync(`pnpm --yes --no-install exec tauri signer sign "${artifact}"`, {
     cwd: ROOT,
     env,
     stdio: 'inherit',

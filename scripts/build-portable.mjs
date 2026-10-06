@@ -83,8 +83,8 @@ console.log(`[portable] Output:  ${OUT_DIR}`);
 
 if (!existsSync(RELEASE_DIR)) {
   console.error(`[portable] ERROR: Release 目录不存在: ${RELEASE_DIR}`);
-  // 注意：不得写 `npm run tauri build -- --target X`——npm 会把 `--target` 当本身配置吞掉。
-  console.error(`  请先运行: npx tauri build --target ${TARGET}`);
+  // 注意：经包管理器 run 转发参数易被吞掉，统一用 `pnpm exec tauri` 直传。
+  console.error(`  请先运行: pnpm exec tauri build --target ${TARGET}`);
   process.exit(1);
 }
 mkdirSync(OUT_DIR, { recursive: true });

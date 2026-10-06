@@ -20,11 +20,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # corepack 先启用：setup-node 的 cache: 'pnpm' 需要能执行 `pnpm store path`；
+      # pnpm 具体版本由 package.json 的 packageManager 字段钉死。
+      - name: Enable pnpm via corepack
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          node-version: '22.23'
+          cache: 'pnpm'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -34,10 +39,9 @@ jobs:
       - name: Install Rust dependencies (Windows)
         run: |
           rustup target add x86_64-pc-windows-msvc
-          npm install -g @tauri-apps/cli@2
 
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Build Tauri app (Windows) with log capture
         id: build_win
@@ -48,7 +52,7 @@ jobs:
           $target = "x86_64-pc-windows-msvc"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $logFile = "dist\build-win.log"
-          & npx tauri build --target $target 2>&1 | Tee-Object -FilePath $logFile
+          & pnpm exec tauri build --target $target 2>&1 | Tee-Object -FilePath $logFile
           $exitCode = $LASTEXITCODE
           "TAURI_EXIT=$exitCode" | Out-File -FilePath "dist\build-env.env" -Encoding utf8
           Write-Host "[Tauri build (Windows)] exit code = $exitCode"
@@ -95,11 +99,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # corepack 先启用：setup-node 的 cache: 'pnpm' 需要能执行 `pnpm store path`；
+      # pnpm 具体版本由 package.json 的 packageManager 字段钉死。
+      - name: Enable pnpm via corepack
+        run: corepack enable
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          node-version: '22.23'
+          cache: 'pnpm'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -114,10 +123,9 @@ jobs:
             patchelf libssl-dev libgtk-3-dev libjavascriptcoregtk-4.1-dev \
             librust-webkit2gtk-sys-dev rpm fakeroot libfuse2 binutils
           rustup target add x86_64-unknown-linux-gnu
-          npm install -g @tauri-apps/cli@2
 
-      - name: Install npm dependencies
-        run: npm ci
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Build Tauri app (Linux) with log capture
         id: build_linux
@@ -126,7 +134,7 @@ jobs:
           TARGET_TRIPLE=x86_64-unknown-linux-gnu
           mkdir -p dist
           BUILD_LOG=dist/build-linux.log
-          (npm run tauri build -- --target $TARGET_TRIPLE) 2>&1 | tee "$BUILD_LOG"
+          (pnpm run tauri build -- --target $TARGET_TRIPLE) 2>&1 | tee "$BUILD_LOG"
           TAURI_EXIT=${PIPESTATUS[0]}
           set -e
           echo "TAURI_EXIT=$TAURI_EXIT" >> dist/build-env.env

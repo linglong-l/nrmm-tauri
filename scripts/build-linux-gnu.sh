@@ -78,19 +78,18 @@ echo "[build-linux-gnu] 7z sidecar ready: $SEVENZIP_SRC/7zz (x86_64, 动态 7zz)
 
 # ---------- 3. 前端依赖 ----------
 if [ ! -d node_modules ]; then
-  echo "[build-linux-gnu] 安装 npm 依赖..."
-  npm ci
+  echo "[build-linux-gnu] 安装 pnpm 依赖..."
+  pnpm install --frozen-lockfile
 fi
 
 # ---------- 4. Tauri 构建（deb/rpm，原生 gcc 工具链） ----------
-# 注意：不得用 `npm run tauri build -- --target X`——npm 会把 `--target` 当本身配置吞掉。
-# 统一用 npx tauri 直传。
+# 注意：经包管理器 run 转发参数易被吞掉，统一用 `pnpm exec tauri` 直传。
 #
 # 已取消 AppImage 支持：Tauri 强依赖 WebKit/glibc 等无法静态链接的庞大 C/C++ 库，
 # AppImage 的「单文件便携」优势在此不成立，且打包器需从 GitHub 拉取 runtime（国内网络易失败）。
 # 改用 deb/rpm + 自带 .7z 的 portable tar.gz（见步骤 5）覆盖安装与便携需求。
 echo "[build-linux-gnu] 开始 tauri build（bundler: deb/rpm）..."
-npx tauri build --target "$TARGET_TRIPLE" --bundles deb,rpm
+pnpm exec tauri build --target "$TARGET_TRIPLE" --bundles deb,rpm
 
 # ---------- 5. portable tar.gz（免安装包一律内置 7z CLI，保证完整归档格式支持） ----------
 # 注：不再产出 --no-7z 单程序版；该形态仅由使用者自行抉择时手动调用，异常自行承担。

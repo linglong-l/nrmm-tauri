@@ -1,0 +1,97 @@
+# CI 门禁（H4 修复，2026-10-04）：此前仅 release.yml（tag 即发版、只建不测），
+# 依赖漏洞（RUSTSEC）与回归无机器检查。本文件为 push/PR 提供测试与静态检查门禁。
+#
+# 范围说明：
+# - cargo test --lib 仅编译/运行 src 内单元测试；tests/ 下依赖本地数据集的重夹具
+#   （dataset_parity / deep_compare_test，编译 28-33min）完全不参与，保持本地
+#   per-test 逐项 parity 纪律不受 CI 时长拖累。
+# - clippy -D warnings 为硬门禁：新增警告一律拦截。
+name: nrmm-tauri-ci
+
+on:
+  push:
+    branches:
+      - dev
+      - build
+      - master
+  pull_request:
+    branches:
+      - dev
+      - build
+      - master
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-check:
+    name: Rust fmt + clippy + test(lib) + deny
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libssl-dev libgtk-3-dev libjavascriptcoregtk-4.1-dev \
+            librust-webkit2gtk-sys-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo deny check (licenses / advisories / sources)
+        run: cargo deny check
+
+      - name: cargo test --lib (单元测试；重夹具集成测试不参与)
+        run: cargo test --lib
+
+  frontend-check:
+    name: Frontend vitest + vue-tsc
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # corepack 先启用，pnpm 才可被 setup-node 的 cache: 'pnpm' 探测到存储路径；
+      # pnpm 版本由 package.json 的 packageManager 字段钉死，避免隐式漂移。
+      - name: Enable pnpm via corepack
+        run: corepack enable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: vitest run
+        run: pnpm test
+
+      - name: vue-tsc --noEmit
+        run: pnpm run vue:check
