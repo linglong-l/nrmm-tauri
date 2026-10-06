@@ -110,3 +110,63 @@ fn smart_extract_keeps_multiple_top_entries_unflattened() {
         other => panic!("预期成功，得到 {:?}", other),
     }
 }
+
+// --- H1 修复回归：目标冲突不删除既有内容，重算唯一名落位 ---
+
+#[test]
+fn move_temp_to_target_destination_exists_keeps_target_intact() {
+    // 目标已存在 → 返回 DestinationExists，且目标内容与源内容均原样保留
+    // （旧实现的防御性 remove_dir_all 会吞掉目标目录，属并发导入数据丢失路径）
+    let tmp = TempDir::new().unwrap();
+    let src = tmp.path().join("src_mod");
+    let dst = tmp.path().join("dst_mod");
+    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(&dst).unwrap();
+    fs::write(src.join("new.txt"), b"new").unwrap();
+    fs::write(dst.join("existing.txt"), b"precious").unwrap();
+
+    let outcome = move_temp_to_target(&src, &dst).unwrap();
+    assert_eq!(outcome, MoveOutcome::DestinationExists);
+    // 目标内容原样保留
+    assert_eq!(fs::read(dst.join("existing.txt")).unwrap(), b"precious");
+    assert!(!dst.join("new.txt").exists(), "目标不应被写入");
+    // 源未被移动或删除
+    assert!(src.join("new.txt").exists(), "源目录应保留待重试");
+}
+
+#[test]
+fn finalize_extraction_conflict_falls_back_to_unique_name() {
+    // 目标分组目录已占用同名模组目录 → 新模组应落位 `{name} (1)`，
+    // 且被占用目录的内容完好无损（H1：重试重算唯一名，绝不删除既有模组）
+    let tmp = TempDir::new().unwrap();
+    let managed = tmp.path().join("Mods").join("_MANAGED_").join("group_1");
+    fs::create_dir_all(&managed).unwrap();
+
+    // 预占同名目录（带标记文件，用于事后验证内容未被破坏）
+    let occupied = managed.join("SrcMod");
+    fs::create_dir_all(&occupied).unwrap();
+    fs::write(occupied.join("user_data.txt"), b"do-not-delete").unwrap();
+
+    let src = make_wrapped_archive_src(tmp.path());
+    let archive = tmp.path().join("SrcMod.7z");
+    export_internal(&src, &archive, "7z").unwrap();
+
+    let tmp_parent = extract_tmp_dir(&managed);
+    let temp_dir = extract_7z_internal(&archive, &tmp_parent, None).unwrap();
+    let result = finalize_extraction(&archive, &managed, &temp_dir).unwrap();
+    match result {
+        ExtractResult::Success {
+            mod_path, mod_name, ..
+        } => {
+            assert_eq!(mod_name, "SrcMod (1)", "应重算唯一名落位");
+            assert_eq!(mod_path, managed.join("SrcMod (1)"));
+            assert_flattened(&mod_path);
+        }
+        other => panic!("预期成功，得到 {:?}", other),
+    }
+    // 被占用目录内容完好
+    assert_eq!(
+        fs::read(occupied.join("user_data.txt")).unwrap(),
+        b"do-not-delete"
+    );
+}

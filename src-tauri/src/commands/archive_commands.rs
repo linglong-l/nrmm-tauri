@@ -6,7 +6,7 @@
 
 use crate::core::archive_detect::{is_supported_archive, ExtractResult, ImportItemRequest};
 use crate::core::archive_export::export_mod;
-use crate::core::archive_import::{import_item, import_mod, import_mod_auto};
+use crate::core::archive_import::{import_item, import_mod_auto};
 use crate::core::resolution::{compute_limits, ResolutionLimits};
 use crate::core::watcher_core::FileWatcher;
 use crate::core::watcher_ring::WatcherGuard;
@@ -28,8 +28,16 @@ pub fn is_supported_archive_cmd(path: String) -> bool {
 /// 前端调用 `importMod` 触发。
 /// 使用 `spawn_blocking` 在后台线程解压，避免阻塞 async 运行时。
 ///
+/// # 锁语义（H1 修复）
+/// 委托 [`import_item`]（文件型源路径走 `extract_archive` 路径，行为等价），
+/// 使 `import_mod_cmd` 与 `import_item_cmd` / `import_mod_auto_cmd` 三个导入
+/// 入口共享同一套 AdvisoryLock + OperationGuard 保护：原先本入口无锁，
+/// 并发导入与 `import_item` 竞争时可能在 `unique_mod_dir_name` 的
+/// check-then-act 窗口算出相同唯一名，后完成者的移动兜底会覆盖前者产物。
+///
 /// # Errors
 /// - 解压失败（格式不支持、7z 未找到、密码错误等）
+/// - 跨进程建议锁获取失败（另一 NRMM 实例正在操作该游戏目录）
 #[tauri::command]
 pub async fn import_mod_cmd(
     archive_path: String,
@@ -43,7 +51,7 @@ pub async fn import_mod_cmd(
         .to_string_lossy()
         .to_string();
     tauri::async_runtime::spawn_blocking(move || -> Result<ExtractResult, String> {
-        import_mod(
+        import_item(
             Path::new(&archive_path),
             Path::new(&group_dir),
             password.as_deref(),

@@ -15,71 +15,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// 判断两个路径是否在同一磁盘（卷）上
-///
-/// 用于决定目录导入策略：同盘使用 `move_dir`（快速重命名），跨盘使用 `copy` + `trash::delete`。
-///
-/// Windows：比较路径的 `Prefix` 组件（盘符/卷GUID/UNC 路径），忽略大小写
-/// 非 Windows：保守返回 `false`，调用方将使用 copy + trash 策略
-///
-/// # 参数
-/// - `a`: 第一个路径
-/// - `b`: 第二个路径
-///
-/// # 返回
-/// `true` 表示在同一磁盘上
-pub fn paths_on_same_disk(a: &Path, b: &Path) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use std::path::Prefix;
-        fn get_prefix(path: &Path) -> Option<String> {
-            let comp = path.components().next()?;
-            if let std::path::Component::Prefix(prefix) = comp {
-                let kind = prefix.kind();
-                match kind {
-                    Prefix::Disk(disk) => {
-                        return Some(format!("disk_{}", (disk as char).to_ascii_lowercase()));
-                    }
-                    Prefix::VerbatimDisk(disk) => {
-                        return Some(format!("vdisk_{}", (disk as char).to_ascii_lowercase()));
-                    }
-                    Prefix::UNC(server, share) => {
-                        let s: String = server
-                            .encode_wide()
-                            .chain(share.encode_wide())
-                            .map(|c| (c as u32).to_string())
-                            .collect();
-                        return Some(format!("unc_{}", s.to_ascii_lowercase()));
-                    }
-                    Prefix::VerbatimUNC(server, share) => {
-                        let s: String = server
-                            .encode_wide()
-                            .chain(share.encode_wide())
-                            .map(|c| (c as u32).to_string())
-                            .collect();
-                        return Some(format!("vunc_{}", s.to_ascii_lowercase()));
-                    }
-                    Prefix::Verbatim(_) | Prefix::DeviceNS(_) => return None,
-                }
-            }
-            None
-        }
-        let pa = get_prefix(a);
-        let pb = get_prefix(b);
-        pa.is_some() && pa == pb
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (a, b);
-        false
-    }
-}
-
 /// 使用 7z CLI 解压压缩包到临时目录
 ///
 /// 提取 `extract_archive` 中 7z CLI 调用逻辑为独立函数，供三级回退链复用。
 /// 仅负责调用 7z 命令并返回临时目录路径，不执行后续的扁平化、统计、移动等操作。
+///
+/// # 安全（已知限制，H3）
+/// 密码经命令行参数 `-p<密码>` 传递：Linux 下任意本地用户可经 `/proc/<pid>/cmdline`
+/// 读到（Windows 仅同账户/管理员可借进程工具查看，风险较低）。7z CLI 无 stdin 密码
+/// 协议，无法根治；Linux + RAR 场景已在 [`extract_archive`] 中优先改走内置解压器
+///（支持密码）规避，其余带密码格式仍走 CLI，属已披露的残余风险。
 ///
 /// # 参数
 /// - `seven_zip_path`: 7z 可执行文件路径（系统 PATH 中的命令名或内置二进制完整路径）
@@ -293,6 +238,27 @@ fn extract_zip_internal(archive_path: &Path, tmp_parent: &Path) -> Result<PathBu
     Ok(temp_dir)
 }
 
+/// 校验 RAR 条目名是否安全（M7：与 [`safe_join_entry`] 同一 Normal-only 规则）
+///
+/// RAR 解压走 `unrar` crate 的 `extract_with_base`，库内部 join 是否净化 `..`
+/// 不可见（C 库行为），故解压前对每个 header 条目名做显式预校验：
+/// 反斜杠统一按分隔符归一（RAR 条目名普遍使用反斜杠），仅允许
+/// `Normal`/`CurDir` 组件，拒绝 `..`、绝对路径前缀与 Windows 盘符。
+/// 防御性预扫描成本极低；即便 C 库自身已净化，保留校验亦无害。
+fn is_safe_entry_name(name: &std::ffi::OsStr) -> bool {
+    let s = name.to_string_lossy();
+    if s.is_empty() {
+        return false;
+    }
+    let normalized = s.replace('\\', "/");
+    Path::new(&normalized).components().all(|c| {
+        matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    })
+}
+
 /// 使用 `unrar` crate 自实现解压 RAR 压缩包到临时目录
 ///
 /// 三级回退链的第三级（RAR 格式）：基于 UnRAR C 库的 RAR 解压，不依赖外部 CLI。
@@ -337,6 +303,14 @@ fn extract_rar_internal(
         .read_header()
         .context("extract_rar_internal: failed to read RAR header")?
     {
+        // M7：解压前对条目名做路径穿越预校验，拒绝可疑条目（与 7z/zip 防护对齐）
+        let entry_name: &std::path::Path = &header.entry().filename;
+        if !is_safe_entry_name(entry_name.as_os_str()) {
+            return Err(anyhow!(
+                "extract_rar_internal: unsafe RAR entry name rejected (traversal/absolute/prefix): {}",
+                entry_name.to_string_lossy()
+            ));
+        }
         archive = if header.entry().is_file() {
             header
                 .extract_with_base(&temp_dir)
@@ -413,48 +387,61 @@ pub fn extract_archive(
 
     let mut last_error: Option<String> = None;
 
+    // --- H3：带密码 RAR 在非 Windows 平台绕开 7z CLI ---
+    // 7z CLI 的密码经命令行参数 `-p<密码>` 传递，Linux 下任意本地用户可经
+    // `/proc/<pid>/cmdline` 读取（Windows 仅同账户/管理员可借进程工具查看，风险较低）。
+    // 内置 unrar 解压器原生支持密码，此类压缩包直接跳过 CLI 两级走第三级；
+    // 无密码 RAR 与其它格式不受影响，保持三级回退链原语义。
+    let cli_password_leak_risk = cfg!(not(target_os = "windows"))
+        && password.is_some()
+        && matches!(archive_type, ArchiveType::Rar);
+
     // --- 第一级：系统 7z CLI ---
-    if let Some(sys_7z) = get_system_7z_path() {
-        match extract_with_7z_cli(&sys_7z, archive_path, &tmp_parent, password) {
-            Ok(temp_dir) => {
-                log::info!(
-                    "extract_archive: system 7z succeeded for {:?}",
-                    archive_path
-                );
-                return finalize_extraction(archive_path, target_dir, &temp_dir);
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("PASSWORD_REQUIRED") {
-                    return Ok(ExtractResult::PasswordRequired {
-                        archive_path: archive_path.to_path_buf(),
-                    });
+    if !cli_password_leak_risk {
+        if let Some(sys_7z) = get_system_7z_path() {
+            match extract_with_7z_cli(&sys_7z, archive_path, &tmp_parent, password) {
+                Ok(temp_dir) => {
+                    log::info!(
+                        "extract_archive: system 7z succeeded for {:?}",
+                        archive_path
+                    );
+                    return finalize_extraction(archive_path, target_dir, &temp_dir);
                 }
-                log::warn!("extract_archive: system 7z failed: {}", msg);
-                last_error = Some(format!("system 7z: {}", msg));
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("PASSWORD_REQUIRED") {
+                        return Ok(ExtractResult::PasswordRequired {
+                            archive_path: archive_path.to_path_buf(),
+                        });
+                    }
+                    log::warn!("extract_archive: system 7z failed: {}", msg);
+                    last_error = Some(format!("system 7z: {}", msg));
+                }
             }
         }
     }
 
     // --- 第二级：内置打包 7z CLI ---
-    if let Some(bundled_7z) = get_bundled_7z_path() {
-        match extract_with_7z_cli(&bundled_7z, archive_path, &tmp_parent, password) {
-            Ok(temp_dir) => {
-                log::info!(
-                    "extract_archive: bundled 7z succeeded for {:?}",
-                    archive_path
-                );
-                return finalize_extraction(archive_path, target_dir, &temp_dir);
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("PASSWORD_REQUIRED") {
-                    return Ok(ExtractResult::PasswordRequired {
-                        archive_path: archive_path.to_path_buf(),
-                    });
+    if !cli_password_leak_risk {
+        if let Some(bundled_7z) = get_bundled_7z_path() {
+            match extract_with_7z_cli(&bundled_7z, archive_path, &tmp_parent, password) {
+                Ok(temp_dir) => {
+                    log::info!(
+                        "extract_archive: bundled 7z succeeded for {:?}",
+                        archive_path
+                    );
+                    return finalize_extraction(archive_path, target_dir, &temp_dir);
                 }
-                log::warn!("extract_archive: bundled 7z failed: {}", msg);
-                last_error = Some(format!("bundled 7z: {}", msg));
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("PASSWORD_REQUIRED") {
+                        return Ok(ExtractResult::PasswordRequired {
+                            archive_path: archive_path.to_path_buf(),
+                        });
+                    }
+                    log::warn!("extract_archive: bundled 7z failed: {}", msg);
+                    last_error = Some(format!("bundled 7z: {}", msg));
+                }
             }
         }
     }
@@ -538,19 +525,24 @@ fn unique_mod_dir_name(parent: &Path, base: &str) -> String {
     }
 }
 
-/// 将解压临时目录整体移动到最终模组目录：同盘优先 `rename`（原子、高效），
-/// 失败回退 `copy_dir_deep` + 删除源。目标由调用方保证不冲突（unique_mod_dir_name）。
-fn move_temp_to_target(src: &Path, dst: &Path) -> Result<()> {
+/// 将解压临时目录整体移动到最终模组目录：优先尝试 `rename`（同盘原子、高效），
+/// 跨盘（EXDEV）等失败回退 `copy_dir_deep` + 删除源（M4：原先 Windows-only 的
+/// 同盘预判定使 Linux 恒走复制，改为 try-rename-first 跨平台统一）。
+///
+/// 目标已存在时**不做任何删除**（H1 修复）：并发导入可能恰好占用
+/// `unique_mod_dir_name` 算出的同名路径，旧实现的防御性 `remove_dir_all` 会吞掉
+/// 对方刚完成的模组目录。冲突以 [`MoveOutcome::DestinationExists`] 上报，
+/// 由调用方重算唯一名后重试。
+fn move_temp_to_target(src: &Path, dst: &Path) -> Result<MoveOutcome> {
     if dst.exists() {
-        // 防御性兜底：unique_mod_dir_name 已保证不冲突，此处仅清理残留
-        if dst.is_dir() {
-            fs::remove_dir_all(dst)?;
-        } else {
-            fs::remove_file(dst)?;
-        }
+        return Ok(MoveOutcome::DestinationExists);
     }
-    if paths_on_same_disk(src, dst) && fs::rename(src, dst).is_ok() {
-        return Ok(());
+    if fs::rename(src, dst).is_ok() {
+        return Ok(MoveOutcome::Moved);
+    }
+    // rename 失败回退复制前复查：并发方可能恰在首次检查后创建了目标
+    if dst.exists() {
+        return Ok(MoveOutcome::DestinationExists);
     }
     if src.is_dir() {
         copy_dir_deep(src, dst)?;
@@ -559,7 +551,17 @@ fn move_temp_to_target(src: &Path, dst: &Path) -> Result<()> {
         fs::copy(src, dst)?;
         let _ = fs::remove_file(src);
     }
-    Ok(())
+    Ok(MoveOutcome::Moved)
+}
+
+/// [`move_temp_to_target`] 的结果（H1 修复：目标冲突不再是可吞错误，而是
+/// 供调用方重算唯一名重试的显式信号）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MoveOutcome {
+    /// 移动完成
+    Moved,
+    /// 目标已被并发占用，未做任何写入或删除
+    DestinationExists,
 }
 
 /// 清理解压临时区：仅当 `.tmp` 目录为空时删除，避免误删并发解压的其它临时目录。
@@ -630,11 +632,32 @@ fn finalize_extraction(
     }
 
     // 重名处理：目标分组目录下已存在同名模组时，重命名为 `{modname} (N)`
-    let final_name = unique_mod_dir_name(target_dir, &mod_name);
-    let target_mod_path = target_dir.join(&final_name);
-
-    // 同盘原子移动到最终位置（解压完成后才移动，避免中断污染分组目录）
-    move_temp_to_target(&final_dir, &target_mod_path)?;
+    //
+    // H1 修复：`move_temp_to_target` 目标冲突时返回 `DestinationExists`（不删除
+    // 任何已有内容），此处重算唯一名后重试。并发方可能恰在 `unique_mod_dir_name`
+    // 的 check-then-act 窗口内占用我们算出的名字；由于「目标存在」是该返回值的
+    // 唯一来源，重算必然得到递增的新名字，循环有界（上限为防御性保护）。
+    let mut final_name = unique_mod_dir_name(target_dir, &mod_name);
+    let mut target_mod_path = target_dir.join(&final_name);
+    const MAX_MOVE_ATTEMPTS: u32 = 64;
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        match move_temp_to_target(&final_dir, &target_mod_path)? {
+            MoveOutcome::Moved => break,
+            MoveOutcome::DestinationExists => {
+                let next = unique_mod_dir_name(target_dir, &mod_name);
+                if next == final_name || attempts >= MAX_MOVE_ATTEMPTS {
+                    return Err(anyhow!(
+                        "finalize_extraction: destination `{}` kept appearing occupied by a concurrent import; refusing to overwrite or delete it",
+                        target_mod_path.display()
+                    ));
+                }
+                final_name = next;
+                target_mod_path = target_dir.join(&final_name);
+            }
+        }
+    }
 
     // 清理：temp_dir 已被 rename 移走；尝试删除空的 `.tmp` 父目录
     cleanup_extract_tmp(temp_dir.parent());

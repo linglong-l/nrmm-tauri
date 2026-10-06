@@ -8,7 +8,7 @@
 //! 导出见 [`crate::core::archive_export`]。
 
 use crate::core::archive_detect::ExtractResult;
-use crate::core::archive_extract::{extract_archive, mods_root_of, paths_on_same_disk};
+use crate::core::archive_extract::{extract_archive, mods_root_of};
 use crate::core::operation_registry::OperationGuard;
 use crate::core::resolution::compute_limits;
 use crate::core::watcher_ring::WatcherGuard;
@@ -84,7 +84,9 @@ pub fn unwrap_single_folder_nesting(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 将条目移动到目标：同盘优先 `rename`，跨盘回退 `copy` + 删除源。
+/// 将条目移动到目标：优先 `rename`（同盘原子、高效），跨盘（EXDEV）等失败
+/// 回退 `copy` + 删除源（M4：try-rename-first 跨平台统一，替代已删除的
+/// `paths_on_same_disk` 非 Windows 恒 false 预判定）。
 /// 目标由调用方保证不冲突（`unique_path`），此处仅做防御性清理。
 fn move_entry_up(src: &Path, dst: &Path) -> Result<()> {
     if dst.exists() {
@@ -94,7 +96,7 @@ fn move_entry_up(src: &Path, dst: &Path) -> Result<()> {
             fs::remove_file(dst)?;
         }
     }
-    if paths_on_same_disk(src, dst) && fs::rename(src, dst).is_ok() {
+    if fs::rename(src, dst).is_ok() {
         return Ok(());
     }
     // 跨盘回退：复制后删除源
@@ -387,9 +389,9 @@ fn copy_one(src: &Path, dst: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // 普通文件：同盘优先 rename，否则 copy
+    // 普通文件：优先 rename（M4：try-rename-first，跨盘失败再 copy）
     let _ = fs::remove_file(dst);
-    if paths_on_same_disk(src, dst) && fs::rename(src, dst).is_ok() {
+    if fs::rename(src, dst).is_ok() {
         return Ok(());
     }
     fs::copy(src, dst).map(|_| ())?;
