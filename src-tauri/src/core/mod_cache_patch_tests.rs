@@ -207,6 +207,11 @@ fn subtree_replace_matches_light_scan_semantics() {
 ///
 /// 回归场景：原实现按 group_path 字典序 key 去重，大小写路径差异被当作不同分组追加，
 /// 产生重复分组。修复后按路径等价（大小写不敏感）比较原位替换。
+///
+/// 依赖 Windows 的路径大小写不敏感语义（大写形态经 canonicalize 归回同一真实路径），
+/// 故仅在 Windows 运行；类 Unix 宿主的通用不变量见
+/// `subtree_replace_no_duplicate_group_on_identical_path`。
+#[cfg(windows)]
 #[test]
 fn subtree_replace_no_duplicate_group_on_case_diff() {
     use crate::core::mod_scan_partial::scan_partial_path;
@@ -234,6 +239,37 @@ fn subtree_replace_no_duplicate_group_on_case_diff() {
     assert_eq!(
         updated.groups[0].group_path,
         updated.groups[0].group_path.to_uppercase()
+    );
+}
+
+/// 测试（宿主通用不变量）：subtree_replace 以**同一** group_path 回填时原位替换，
+/// 既不追加重复分组，也不改写既有 group_path 形态。
+///
+/// 类 Unix 宿主路径大小写敏感，Windows 的大小写等价去重在此不适用，故用同一路径
+/// 校验「重复回填不放大分组」这一跨平台都必须成立的语义。
+#[cfg(not(windows))]
+#[test]
+fn subtree_replace_no_duplicate_group_on_identical_path() {
+    use crate::core::mod_scan_partial::scan_partial_path;
+    let dir = TempDir::new().unwrap();
+    let mods_path = dir.path().to_path_buf();
+    let g2 = dir.path().join("_MANAGED_").join("group_2");
+    fs::create_dir_all(g2.join("ModB")).unwrap();
+    fs::write(g2.join("ModB").join("mod.ini"), "[Section]\nx=1\n").unwrap();
+
+    let mut cache = ModCache::new();
+    let full = crate::core::mod_scan_light::scan_mods_light(&mods_path).unwrap();
+    cache.set(TargetGame::GenshinImpact, &mods_path, full);
+
+    let partial = scan_partial_path(&mods_path, &g2).unwrap();
+    let original_path = partial.groups[0].group_path.clone();
+    cache.subtree_replace(TargetGame::GenshinImpact, &mods_path, partial);
+
+    let updated = cache.get(TargetGame::GenshinImpact, &mods_path).unwrap();
+    assert_eq!(updated.groups.len(), 1, "同一路径回填不应产生重复分组");
+    assert_eq!(
+        updated.groups[0].group_path, original_path,
+        "回填不应改写既有 group_path 形态"
     );
 }
 

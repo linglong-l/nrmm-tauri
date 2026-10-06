@@ -26,6 +26,7 @@ const LOCK_STALE_TIMEOUT: Duration = Duration::from_secs(6 * 3600);
 /// Windows `GetExitCodeProcess` 在进程仍运行时返回的退出码（STILL_ACTIVE = 259）。
 /// 原始 `windows::Win32::Foundation::STILL_ACTIVE` 为 `NTSTATUS` 类型，此处按 `u32` 字面量定义
 /// 以便与 `GetExitCodeProcess` 写入的 `u32` 退出码直接比较。
+#[cfg(windows)]
 const PROCESS_STILL_ACTIVE: u32 = 259;
 
 /// 进程级建议锁。

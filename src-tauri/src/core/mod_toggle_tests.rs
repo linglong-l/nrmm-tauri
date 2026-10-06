@@ -207,6 +207,10 @@ fn test_toggle_mod_disable_idempotent_no_extra_prefix() {
 ///
 /// Windows 下路径大小写不敏感，用大小写差异的 mod_path 调用时目标应被识别并启用，
 /// 而非被误判为"兄弟"禁用（缺陷 B 回归测试）。
+///
+/// 断言依赖 Windows 文件系统语义，故仅在 Windows 运行；类 Unix 宿主的对应行为见
+/// `test_enable_mutex_mod_case_sensitive_target_rejected`。
+#[cfg(windows)]
 #[test]
 fn test_enable_mutex_mod_case_insensitive_target_match() {
     let dir = TempDir::new().unwrap();

@@ -1,6 +1,8 @@
 use super::*;
 
 use std::fs;
+// 仅 Windows 语义用例（find_group_node_tolerates_verbatim_and_case_diff）使用
+#[cfg(windows)]
 use std::path::PathBuf;
 use tempfile::TempDir;
 

@@ -247,13 +247,14 @@ fn test_update_mod_data_namespace_dedup() {
     let ns_a = ns_of(&a).unwrap();
     let ns_b = ns_of(&b).unwrap();
 
-    // 去重后应为 {Shared, Shared_1}（顺序不定）
-    let mut pair = [ns_a, ns_b];
+    // 去重后应为 {Shared, Shared_1}；哪个模组保留原名取决于扫描序，
+    // 故只断言集合，不把工作树/宿主相关的文件↔名称对应写进断言。
+    let mut pair = [ns_a.clone(), ns_b.clone()];
     pair.sort();
     assert_eq!(pair, ["Shared", "Shared_1"]);
 
-    // 每个模组内部的 namespace 引用应与自身声明一致（被 expand_ini_variables 展开为 $\ns\ 形式）
-    for (content, ns) in [(&a, &pair[0]), (&b, &pair[1])] {
+    // 每个模组内部的 namespace 引用应与**自身**声明一致（被 expand_ini_variables 展开为 $\ns\ 形式）
+    for (content, ns) in [(&a, &ns_a), (&b, &ns_b)] {
         let own_ref = format!("$\\{}\\", ns);
         let other_ns = if ns == "Shared" { "Shared_1" } else { "Shared" };
         let other_ref = format!("$\\{}\\", other_ns);

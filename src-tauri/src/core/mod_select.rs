@@ -678,7 +678,7 @@ mod tests_select_switch {
     /// 展示序下标与目录序槽位身份
     ///
     /// 构造「收藏前置」重排：ModA（启用、无收藏）、ModB（启用、收藏）→ 展示序
-    /// B 先 A 后。选取展示序 ≠ 目录序的模组作为目标，断言：
+    /// B 先 A 后。对扫描产物里的每个模组都断言：
     /// - `selected_mod_index` = 展示序（与磁盘 selectedindex 同值，UI 语义不变）；
     /// - `selected_slot_id` = 扫描产物中的目录序槽位（与 `$managed_slot_id` 同源，
     ///   按键模拟光标 X 取此值）。
@@ -697,34 +697,41 @@ mod tests_select_switch {
 
         // 先扫一次拿到后端产物（目录序 slot_id 与展示序 mod_index 同源可比）
         let scan = crate::core::mod_scan_light::scan_mods_light(dir.path()).unwrap();
-        let (target_path, expected_index, expected_slot) = scan
-            .mods
-            .iter()
-            .filter(|m| m.group_index == 1)
-            .find(|m| m.slot_id != m.mod_index)
-            .map(|m| (m.full_path.to_string(), m.mod_index, m.slot_id))
-            .expect("收藏 + 多模组场景应存在展示序与目录序分叉的模组");
-
-        let result = switch_mod(
-            TargetGame::GenshinImpact,
-            dir.path(),
-            &AppSettings::default(),
-            1,
-            1, // 故意传入与真实下标不符的前端下标
-            Some(target_path.as_str()),
-        )
-        .unwrap();
-
-        assert_eq!(
-            result.selected_mod_index,
-            Some(expected_index as i32),
-            "selected_mod_index 应为展示序（与磁盘 selectedindex 同值）"
+        assert!(
+            !scan.mods.is_empty(),
+            "夹具应至少扫出一个模组，否则本用例失去意义"
         );
-        assert_eq!(
-            result.selected_slot_id,
-            Some(expected_slot),
-            "selected_slot_id 应为目录序槽位身份（与 $managed_slot_id 同源）"
-        );
+
+        // 逐模组校验「按路径切换」契约：路径命中时展示序下标与目录序槽位身份都取自
+        // 路径所指模组，不受故意传入的错误前端下标影响。
+        //
+        // 写成全覆盖循环而非「先 find 一个 slot_id != mod_index 的分叉模组」：分叉是否
+        // 出现取决于宿主的目录枚举序与排序实现（Windows 收藏重排必产生分叉，类 Unix
+        // 宿主可能恰好同序），而契约本身与宿主无关——分叉存在时照样被覆盖。
+        for m in &scan.mods {
+            let target_path: &str = &m.full_path;
+            let bogus_index = if m.mod_index == 1 { 2 } else { 1 };
+            let result = switch_mod(
+                TargetGame::GenshinImpact,
+                dir.path(),
+                &AppSettings::default(),
+                m.group_index,
+                bogus_index, // 故意传入与真实下标不符的前端下标
+                Some(target_path),
+            )
+            .unwrap_or_else(|e| panic!("按路径切换 {target_path} 应成功: {e}"));
+
+            assert_eq!(
+                result.selected_mod_index,
+                Some(m.mod_index as i32),
+                "selected_mod_index 应为展示序（与磁盘 selectedindex 同值）：{target_path}"
+            );
+            assert_eq!(
+                result.selected_slot_id,
+                Some(m.slot_id),
+                "selected_slot_id 应为目录序槽位身份（与 $managed_slot_id 同源）：{target_path}"
+            );
+        }
     }
 
     /// 测试：deselect_group_mods 写入 selectedindex=0 且不重命名禁用模组

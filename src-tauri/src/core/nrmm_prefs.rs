@@ -26,9 +26,11 @@ use std::path::PathBuf;
 const NRMM_REL_PATH: [&str; 4] = ["AppData", "Roaming", "com.aglg", "No Reload Mod Manager"];
 
 /// shared_preferences.json 文件名（Windows 插件默认）
+#[cfg(target_os = "windows")]
 const NRMM_PREFS_FILE: &str = "shared_preferences.json";
 
 /// shared_preferences 默认 key 前缀（Windows 插件 `_defaultPrefix`）
+#[cfg(target_os = "windows")]
 const SP_PREFIX: &str = "flutter.";
 
 /// 将本项目游戏枚举映射为 NRMM「需要更新模组数据」标记的 key 后缀。
