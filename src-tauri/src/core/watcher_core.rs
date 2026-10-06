@@ -98,8 +98,9 @@ impl FileWatcher {
     /// 1. **停止旧监控**：调用 `stop_watching()` 释放已有资源，避免重复监控
     /// 2. **确保目录存在**：拼接 `_MANAGED_` 路径，不存在则创建
     /// 3. **创建唤醒信号通道 + 事件环形缓冲**：notify 回调轻量过滤后将变更文件
-    ///    的父目录聚合进 `EventRingBuffer`（容量 [`RING_CAPACITY`]，目录级去重），
-    ///    并 send 空信号唤醒防抖线程
+    ///    的父目录聚合进 `EventRingBuffer`（容量 [`RING_CAPACITY`]，目录级去重）；
+    ///    rename 类事件例外——保留事件原始路径入队（H2：目录 rename 双端身份
+    ///    不得在管线入口丢失），并 send 空信号唤醒防抖线程
     /// 4. **初始化 notify watcher**：使用 `recommended_watcher` 递归监控整个目录
     /// 5. **启动防抖线程**：队列空时无限期阻塞（空闲零轮询）；非空时 50ms 超时检测
     ///    事件平息静默期到期（FILE_WATCHER_DEBOUNCE_MS，溢出退避时延长）→ drain 环形队列 → 增量/分层处理
@@ -161,15 +162,31 @@ impl FileWatcher {
                     ) {
                         return;
                     }
+                    // H2 修复：rename 类事件保留事件原始路径入队（不 parent 化）。
+                    //
+                    // 根因：目录级 rename（启用/禁用 = `group_1/x` ↔ `group_1/DISABLED_x`）
+                    // 的双端路径在回调层被 parent 化成组级 `group_1`，模组身份在管线
+                    // 入口即丢失——下游 consolidate 的「同父模组级目录群不归并」（Step 1.5）
+                    // 与 snap 的 NotFound 保留分支永远收不到模组级路径，rename 批次
+                    // 退化为组级整扫（6542 模组实测 2×1.1s 全扫 + delta 风暴抖动）。
+                    //
+                    // rename 事件量级为人工操作（远小于风暴），保留原路径不产生聚合退化；
+                    // 文件形态（重命名 ini 等）由 consolidate Step 1 的延迟 `is_file()`
+                    // 判定 parent 化，目录双端（旧端已消失 → `is_file()==false`）保留
+                    // 模组级身份走删除 patch 链路。其余事件维持父目录聚合去重。
+                    let rename_event = matches!(
+                        event.kind,
+                        EventKind::Modify(notify::event::ModifyKind::Name(_))
+                    );
                     let mut pushed = false;
                     for p in event.paths {
                         // 临时/备份/隐藏文件 + selectedindex（命令内联维护）不触发缓存对账
                         if is_ignored_watcher_path(&p, &backup_suffix, &manager_backup_suffix) {
                             continue;
                         }
-                        if let Some(parent) = p.parent() {
+                        if let Some(enqueue) = watcher_enqueue_path(&p, rename_event) {
                             if let Ok(mut ring) = ring_cb.lock() {
-                                ring.push(parent.to_path_buf());
+                                ring.push(enqueue);
                             }
                             pushed = true;
                         }
@@ -423,6 +440,24 @@ impl FileWatcher {
     }
 }
 
+/// 事件路径入队判定（H2 修复）：rename 类事件保留**原始路径**（目录双端身份
+/// 不得在管线入口丢失，交由 consolidate 的延迟 `is_file()` 判定规范化形态）；
+/// 其余事件 parent 化（目录级聚合去重，风暴期不放大队列）。
+///
+/// # 参数
+/// - `p`: 已通过 `is_ignored_watcher_path` 过滤的事件路径
+/// - `rename_event`: 事件 kind 是否为 `Modify(ModifyKind::Name(_))`
+///
+/// # 返回
+/// 应入队 `EventRingBuffer` 的路径；`None` 表示无父目录且非 rename（跳过）
+fn watcher_enqueue_path(p: &Path, rename_event: bool) -> Option<PathBuf> {
+    if rename_event {
+        Some(p.to_path_buf())
+    } else {
+        p.parent().map(|pp| pp.to_path_buf())
+    }
+}
+
 /// 事件路径是否应被监控管线忽略（不触发增量/全量缓存对账）。
 ///
 /// 除临时（.tmp）/ 备份（NRMM 注入备份 + INI 启动备份）/ 隐藏文件外，
@@ -446,36 +481,78 @@ fn is_ignored_watcher_path(p: &Path, backup_suffix: &str, manager_backup_suffix:
 
 #[cfg(test)]
 mod tests {
-    use super::is_ignored_watcher_path;
-    use std::path::Path;
+    use super::{is_ignored_watcher_path, watcher_enqueue_path};
+    use std::path::PathBuf;
 
     const BACKUP: &str = ".ini_managed_backup";
     const MANAGER_BACKUP: &str = ".ini_manager_backup";
 
+    /// 按宿主分隔符还原 Windows 风格路径夹具。
+    ///
+    /// 夹具按真实运行环境（游戏目录在 Windows）以 `\` 书写；在类 Unix 宿主上不
+    /// 转换则整串被 `Path` 视为**单个路径组件**，`file_name()`/`parent()` 语义随之
+    /// 失真，断言就不再检验它想检验的行为。
+    fn host_path(win: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(win)
+        } else {
+            PathBuf::from(win.replace('\\', "/"))
+        }
+    }
+
     #[test]
     fn selectedindex_file_is_ignored() {
         // select/deselect 命令内联维护该文件，watcher 不得因它触发扫描/合并（选择高延迟根因）
-        let selected = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\selectedindex");
-        assert!(is_ignored_watcher_path(selected, BACKUP, MANAGER_BACKUP));
+        let selected = host_path(r"D:\Games\Mods\_MANAGED_\group_1\selectedindex");
+        assert!(is_ignored_watcher_path(&selected, BACKUP, MANAGER_BACKUP));
     }
 
     #[test]
     fn normal_ini_and_dirs_still_trigger() {
-        let ini = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\some.ini");
-        assert!(!is_ignored_watcher_path(ini, BACKUP, MANAGER_BACKUP));
-        let dir = Path::new(r"D:\Games\Mods\_MANAGED_\group_2");
-        assert!(!is_ignored_watcher_path(dir, BACKUP, MANAGER_BACKUP));
+        let ini = host_path(r"D:\Games\Mods\_MANAGED_\group_1\some.ini");
+        assert!(!is_ignored_watcher_path(&ini, BACKUP, MANAGER_BACKUP));
+        let dir = host_path(r"D:\Games\Mods\_MANAGED_\group_2");
+        assert!(!is_ignored_watcher_path(&dir, BACKUP, MANAGER_BACKUP));
     }
 
     #[test]
     fn tmp_backup_hidden_still_ignored() {
-        let tmp = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\x.tmp");
-        assert!(is_ignored_watcher_path(tmp, BACKUP, MANAGER_BACKUP));
-        let backup = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\a.mod.ini.ini_managed_backup");
-        assert!(is_ignored_watcher_path(backup, BACKUP, MANAGER_BACKUP));
-        let mbackup = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\a.ini.ini_manager_backup");
-        assert!(is_ignored_watcher_path(mbackup, BACKUP, MANAGER_BACKUP));
-        let hidden = Path::new(r"D:\Games\Mods\_MANAGED_\group_1\.hidden");
-        assert!(is_ignored_watcher_path(hidden, BACKUP, MANAGER_BACKUP));
+        let tmp = host_path(r"D:\Games\Mods\_MANAGED_\group_1\x.tmp");
+        assert!(is_ignored_watcher_path(&tmp, BACKUP, MANAGER_BACKUP));
+        let backup = host_path(r"D:\Games\Mods\_MANAGED_\group_1\a.mod.ini.ini_managed_backup");
+        assert!(is_ignored_watcher_path(&backup, BACKUP, MANAGER_BACKUP));
+        let mbackup = host_path(r"D:\Games\Mods\_MANAGED_\group_1\a.ini.ini_manager_backup");
+        assert!(is_ignored_watcher_path(&mbackup, BACKUP, MANAGER_BACKUP));
+        let hidden = host_path(r"D:\Games\Mods\_MANAGED_\group_1\.hidden");
+        assert!(is_ignored_watcher_path(&hidden, BACKUP, MANAGER_BACKUP));
+    }
+
+    /// H2 修复回归：rename 事件保留原始路径（不 parent 化）——目录 rename 双端
+    /// 身份（含已消失的旧端）必须原样进入 ring，交由 consolidate 保留模组级身份。
+    #[test]
+    fn rename_event_paths_keep_original_identity() {
+        // 目录 rename 旧端（已消失）：原路径入队，而非父目录
+        let old_end = host_path(r"D:\Games\Mods\_MANAGED_\group_1\x");
+        assert_eq!(watcher_enqueue_path(&old_end, true), Some(old_end));
+        // 目录 rename 新端（存在）：同样原路径入队
+        let new_end = host_path(r"D:\Games\Mods\_MANAGED_\group_1\DISABLED_x");
+        assert_eq!(watcher_enqueue_path(&new_end, true), Some(new_end));
+    }
+
+    /// 非 rename 事件维持父目录聚合去重（风暴期不放大队列）。
+    #[test]
+    fn non_rename_events_still_parent_normalized() {
+        // 文件内容变更：parent 化
+        let file_ev = host_path(r"D:\Games\Mods\_MANAGED_\group_1\ModA\mod.ini");
+        assert_eq!(
+            watcher_enqueue_path(&file_ev, false),
+            Some(host_path(r"D:\Games\Mods\_MANAGED_\group_1\ModA"))
+        );
+        // 目录自身变更（Create/Remove）：parent 化（组级，语义与 H2 前一致）
+        let dir_ev = host_path(r"D:\Games\Mods\_MANAGED_\group_1\NewMod");
+        assert_eq!(
+            watcher_enqueue_path(&dir_ev, false),
+            Some(host_path(r"D:\Games\Mods\_MANAGED_\group_1"))
+        );
     }
 }

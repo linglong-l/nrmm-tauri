@@ -115,16 +115,15 @@ impl IncrementalUpdater {
 
     /// 执行路径收敛，将 `pending_paths` 中所有路径合并为最少重扫入口列表。
     ///
-    /// # 算法（4 步）
+    /// # 算法（H2 后为分区收敛）
     ///
     /// 1. **规范化**：所有路径取 parent（文件取其所在目录），调用 `normalize_path` 规范化，
     ///    排序去重得到 `dirs` 列表。
-    /// 2. **最长公共前缀**：对 `dirs` 调用 `longest_common_prefix` 计算所有目录的公共祖先路径。
-    /// 3. **向上收敛**：对公共前缀调用 `snap_to_group_or_mod_boundary`，
-    ///    将其向上提升到最近的 `group_xx` 目录或存在 `.ini` 文件的 mod 目录边界。
-    /// 4. **发散分支处理**：若收敛结果仍是 `managed_root`（所有变更过于发散），
-    ///    则对每个 `dir` 独立执行 `snap_to_group_or_mod_boundary` 后去重返回列表；
-    ///    否则返回单一收敛入口。
+    /// 2. **分区**：模组级路径（相对 `_MANAGED_` 深度 ≥ 2 且末段非 `group_xx`）与
+    ///    其余路径分开——模组级逐个 `snap_to_group_or_mod_boundary` 保留身份
+    ///    （rename 双端 / 消失端不得参与归并，见 Step 1.5 注释）；其余路径维持
+    ///    最长公共前缀 + 向上收敛的原流程。两组结果合并去重返回。
+    /// 3. **原 LCP 流程**（仅当无模组级路径）：公共前缀 → snap → 发散分支逐个 snap。
     ///
     /// # 参数
     /// - `managed_root`: `_MANAGED_` 目录的绝对路径，作为向上收敛的上限边界。
@@ -167,7 +166,8 @@ impl IncrementalUpdater {
             return Vec::new();
         }
 
-        // P1 修复（Step 1.5）：同父模组级目录群不做 LCP 归并，逐个 snap 后返回。
+        // P1 修复（Step 1.5，H2 增强为分区收敛）：模组级路径逐个 snap 保留身份，
+        // 不参与 LCP 归并；其余路径（组级等）维持原 LCP 流程，两组结果合并去重。
         //
         // 启用/禁用重命名产生「同一组内两个模组目录」的事件（`group_1/x` +
         // `group_1/DISABLED_x`，或单模组删除仅旧端一个），LCP 会收敛到组级根
@@ -177,19 +177,41 @@ impl IncrementalUpdater {
         // patch；同组多模组由路由层 `patch_mod_batch_and_build_deltas` 按顶层
         // 组归并成一次 delta，无批次放大。
         //
-        // 深层文件变更（`group_1/ModA/textures` + `group_1/ModA/models`）parent
-        // 不同不命中，维持既有 LCP 收敛；`group_xx`/selectedindex 事件深度 1
-        // 不命中，维持组级语义。
+        // H2 增强（分区替代同父全有判定）：原「全部 dirs 同父且模组级」的判定在
+        // 混合批次下失效——rename 对伴随 marker/组级事件（parent=组级）时 LCP
+        // 仍会吞掉 rename 双端身份。分区后模组级路径（含 rename 双端）无论批次
+        // 混入何种形态都逐个 snap 保留身份；组级等其余路径合并 LCP 收敛，语义
+        // 与原发散分支一致。深层文件变更（`group_1/ModA/textures` +
+        // `group_1/ModA/models`）属模组级分区，snap 各自向上归并到同一父模组，
+        // BTreeSet 去重后单入口（与既有 LCP 收敛结果一致）；`group_xx`/
+        // selectedindex 事件深度 1 非 mod 级，维持组级语义。
         let managed_norm = normalize_path(managed_root);
-        let head_parent = parent_segments(&dirs[0]);
-        let same_parent_mod_level = head_parent.is_some()
-            && dirs
-                .iter()
-                .all(|d| parent_segments(d) == head_parent && is_mod_level_depth(d, &managed_norm));
-        if same_parent_mod_level {
+        let mut mod_level_dirs: Vec<&PathBuf> = Vec::new();
+        let mut rest_dirs: Vec<&PathBuf> = Vec::new();
+        for d in &dirs {
+            if is_mod_level_depth(d, &managed_norm) {
+                mod_level_dirs.push(d);
+            } else {
+                rest_dirs.push(d);
+            }
+        }
+        if !mod_level_dirs.is_empty() {
             let mut set = BTreeSet::new();
-            for d in &dirs {
+            for d in &mod_level_dirs {
                 set.insert(snap_to_group_or_mod_boundary(d, managed_root));
+            }
+            if !rest_dirs.is_empty() {
+                let rest_owned: Vec<PathBuf> = rest_dirs.into_iter().cloned().collect();
+                let common = longest_common_prefix(&rest_owned);
+                let snapped = snap_to_group_or_mod_boundary(&common, managed_root);
+                if snapped == managed_norm {
+                    // 发散：逐个 snap 去重（原 Step 4 语义）
+                    for d in &rest_owned {
+                        set.insert(snap_to_group_or_mod_boundary(d, managed_root));
+                    }
+                } else {
+                    set.insert(snapped);
+                }
             }
             return set.into_iter().collect();
         }
@@ -364,8 +386,15 @@ fn snap_to_group_or_mod_boundary(path: &Path, managed_root: &Path) -> PathBuf {
                 // 旧端不存在时 `scan_partial_path` 全量退化（6542 模组实测
                 // 2×1.1s 全扫 + 220 delta）。保留后路由层 `is_mod_level_root` +
                 // `exists()==false` 走删除 patch（file_watcher 增量批次已备好该分支）。
+                //
+                // H2 精化：仅「相对深度恰为 2」（组直属模组目录，rename 旧端的标准
+                // 形态）的消失路径保留自身；更深层级的消失（模组内文件/子目录）向上
+                // 归并到所属模组/组——模组定位仅存在于 depth==2 节点，保留深层身份
+                // 只会产出注定未命中的删除 patch 再降级组级（白绕一圈）。
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    if is_mod_level_depth(&cur, &norm_managed) {
+                    if is_mod_level_depth(&cur, &norm_managed)
+                        && relative_mod_depth(&cur, &norm_managed) == 2
+                    {
                         return cur;
                     }
                     None
@@ -409,13 +438,23 @@ fn path_segments_lower(p: &Path) -> Vec<String> {
         .collect()
 }
 
-/// 路径的父目录段序列（去末段）；根路径（无父）返回 `None`。
-fn parent_segments(p: &Path) -> Option<Vec<String>> {
-    let segs = path_segments_lower(p);
-    if segs.len() < 2 {
-        return None;
+/// 路径相对 `_MANAGED_` 的深度（段数差；不在其子树内返回 0）。
+///
+/// H2 精化用：区分「组直属模组目录消失」（深度恰为 2，rename 旧端，保留身份）
+/// 与「模组内文件/子目录消失」（深度 > 2，向上归并到所属模组）。
+fn relative_mod_depth(p: &Path, managed_norm: &Path) -> usize {
+    let p_segs = path_segments_lower(p);
+    let m_segs = path_segments_lower(managed_norm);
+    if p_segs.len() > m_segs.len()
+        && p_segs[..m_segs.len()]
+            .iter()
+            .zip(&m_segs)
+            .all(|(a, b)| a == b)
+    {
+        p_segs.len() - m_segs.len()
+    } else {
+        0
     }
-    Some(segs[..segs.len() - 1].to_vec())
 }
 
 /// 模组级深度判定（P1 修复私有 helper）：相对 `_MANAGED_` 深度 ≥ 2 且末段非
@@ -583,5 +622,73 @@ mod tests {
             "收敛到模组目录: {:?}",
             result
         );
+    }
+
+    /// H2 修复回归（分区收敛）：混合批次——rename 双端（旧端已消失）+ 组级
+    /// 路径（marker 写入 parent 化产物）同批到达时，分区策略保证 rename 双端
+    /// 身份不被 LCP 吞掉（原「全同父才豁免」判定在混合批次下失效）。
+    #[test]
+    fn consolidate_partition_keeps_rename_identity_with_group_level_events() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        let mod_x = managed.join("group_1").join("x");
+        std::fs::create_dir_all(&mod_x).unwrap();
+        std::fs::write(mod_x.join("mod.ini"), "[Section]\nx=1\n").unwrap();
+        // 旧端 DISABLED_x 不创建（rename 已完成，事件晚于磁盘）
+
+        let mut u = IncrementalUpdater::new(300);
+        u.collect(mod_x.clone()); // rename 新端（Both 的 to）
+        u.collect(managed.join("group_1").join("DISABLED_x")); // rename 旧端（Both 的 from）
+        u.collect(managed.join("group_1")); // 组级事件（marker 写入 parent 化）
+        let result = u.consolidate(&managed);
+
+        assert_eq!(result.len(), 3, "组级 + 模组级双端应全部保留: {:?}", result);
+        let lower: Vec<String> = result
+            .iter()
+            .map(|p| p.to_string_lossy().to_ascii_lowercase())
+            .collect();
+        assert!(
+            lower.iter().any(|s| s.ends_with("disabled_x")),
+            "旧端 DISABLED_x 身份应在混合批次保留: {:?}",
+            lower
+        );
+        assert!(
+            lower
+                .iter()
+                .any(|s| s.ends_with("\\x") || s.ends_with("/x")),
+            "新端 x 应保留模组级: {:?}",
+            lower
+        );
+        assert!(
+            lower.iter().any(|s| s.ends_with("group_1")),
+            "组级事件维持组级收敛: {:?}",
+            lower
+        );
+    }
+
+    /// H2 修复回归（跨组深层发散语义保持）：无组级路径的纯模组级批次，分区
+    /// 收敛结果与原 LCP 发散分支等价（逐个 snap 去重）。
+    #[test]
+    fn consolidate_pure_mod_level_multi_group_snaps_individually() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let managed = dir.path().join("_MANAGED_");
+        for g in ["group_1", "group_2"] {
+            let m = managed.join(g).join("ModA");
+            std::fs::create_dir_all(&m).unwrap();
+            std::fs::write(m.join("mod.ini"), "[Section]\nx=1\n").unwrap();
+        }
+
+        let mut u = IncrementalUpdater::new(300);
+        u.collect(managed.join("group_1/ModA"));
+        u.collect(managed.join("group_2/ModA"));
+        let result = u.consolidate(&managed);
+
+        assert_eq!(result.len(), 2, "跨组模组应各自保留: {:?}", result);
+        let lower: Vec<String> = result
+            .iter()
+            .map(|p| p.to_string_lossy().to_ascii_lowercase())
+            .collect();
+        assert!(lower.iter().any(|s| s.contains("group_1")), "{:?}", lower);
+        assert!(lower.iter().any(|s| s.contains("group_2")), "{:?}", lower);
     }
 }
