@@ -155,6 +155,8 @@ pub fn run() {
     config::settings_store::set_on_settings_applied(|settings| {
         crate::core::file_logger::apply_log_timezone(&settings.log_timezone);
         let registered = ipc::mods_root_registry::sync_from(settings.game_mods_path.values());
+        // 锚点可能已变 → 规范键记忆表整体失效，避免沿用旧目录的规范化结果
+        crate::core::mod_cache_core::clear_canonical_key_memo();
         if registered == 0 && !settings.game_mods_path.is_empty() {
             log::warn!(
                 "[BOOT] 配置了 {} 个游戏 Mods 根，但均无法解析为目录，路径类命令将被拒绝",

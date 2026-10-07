@@ -297,11 +297,18 @@ impl ModCache {
     ///
     /// 此方法不会返回错误。
     pub(crate) fn make_key(game: TargetGame, mods_path: &Path) -> CacheKey {
+        let raw = mods_path.to_string_lossy();
+        if let Some(hit) = KEY_MEMO.read().get(raw.as_ref()) {
+            return (game, hit.clone());
+        }
         let normalized = mods_path
             .canonicalize()
             .unwrap_or_else(|_| mods_path.to_path_buf())
             .to_string_lossy()
             .to_string();
+        KEY_MEMO
+            .write()
+            .insert(raw.into_owned(), normalized.clone());
         (game, normalized)
     }
 
@@ -349,6 +356,24 @@ impl Default for ModCache {
 ///
 /// 使用 `once_cell::sync::Lazy` 实现首次访问时自动初始化为空缓存，
 /// 以 `parking_lot::RwLock` 包装支持并发读和独占写。
+/// Mods 根路径的「原始字符串 → 规范化字符串」记忆表
+///
+/// `make_key` 被 `get` / `set` / `is_valid` / `subtree_replace` 高频调用，而原实现
+/// 每次都在 `MOD_CACHE` 读写锁**内**做一次 `canonicalize` 系统调用：既拖长临界区，
+/// 也让主线程上的同步命令在 watcher 持锁期间更易整体冻结。Mods 根集合极小
+/// （每游戏一个）且只在锚点变更时变化，故记忆化后同一字符串只解析一次。
+///
+/// 失效点见 [`clear_canonical_key_memo`]：锚点变更（`set_game_mods_path`、设置保存/
+/// 导入触发的 `mods_root_registry::sync_from`）时整体清空。
+/// 残余风险如实记录：若 Mods 目录被**外部**进程改名而锚点未变，旧键至多导致缓存
+/// 不命中→重扫；读写两侧共用同一键，不会读到错数据。
+static KEY_MEMO: Lazy<RwLock<HashMap<String, String>>> = Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// 清空规范化键记忆表（锚点变更时由组合根调用）
+pub fn clear_canonical_key_memo() {
+    KEY_MEMO.write().clear();
+}
+
 pub static MOD_CACHE: Lazy<RwLock<ModCache>> = Lazy::new(|| RwLock::new(ModCache::new()));
 
 #[cfg(test)]
