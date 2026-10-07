@@ -28,6 +28,7 @@ pub mod config;
 pub mod core;
 pub mod debug;
 pub mod hotkey;
+pub mod ipc;
 pub mod models;
 pub mod platform;
 pub mod resources;
@@ -147,8 +148,19 @@ pub fn run() {
 
     // 组合根注入「设置已应用」副作用：config 层不得反向依赖 core 日志层（F1），
     // 因此 logTimezone → 日志时区的同步由此处接出（须在 init_settings 之前注册）
+    //
+    // 同步刷新 Mods 根登记表（IPC 路径校验的锚点）：init_settings 加载完成与每次
+    // save_settings 写盘完成各触发一次，覆盖 game_mods_path 的全部生效路径。
+    // 不可解析/非目录的条目被剔除并告警，表为空时 ManagedPath 一律拒绝（fail-closed）。
     config::settings_store::set_on_settings_applied(|settings| {
         crate::core::file_logger::apply_log_timezone(&settings.log_timezone);
+        let registered = ipc::mods_root_registry::sync_from(settings.game_mods_path.values());
+        if registered == 0 && !settings.game_mods_path.is_empty() {
+            log::warn!(
+                "[BOOT] 配置了 {} 个游戏 Mods 根，但均无法解析为目录，路径类命令将被拒绝",
+                settings.game_mods_path.len()
+            );
+        }
     });
 
     // 自定义格式（file_logger::init_logger）：env_logger 默认格式时间戳恒为 UTC，

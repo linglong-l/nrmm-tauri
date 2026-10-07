@@ -138,3 +138,69 @@
 - 工具层函数返回通用错误类型（`anyhow::Error` 或 `Option`/`Result`）
 - 业务层函数在调用工具层时添加领域上下文（使用 `.with_context()`）
 - 命令层将内部错误转换为用户友好的字符串消息
+
+## IPC 边界类型（路径校验前移到反序列化）
+
+### 动机
+
+`#[tauri::command]` 的路径入参此前一律是 `String`，边界校验靠每个命令**自己记得**调用
+`settings_store::validate_managed_path`——实测 85 个命令只有 10 处调用。漏掉的每一处都是
+任意文件读/写/改名/执行面（例如 `save_mod_keybinds` 可覆写任意文本文件的任意行）。
+更糟的是校验锚点本身可被前端改写：`save_settings` 接受完整 `AppSettings`，其中就包含
+被用作锚点的 `game_mods_path`。
+
+### 机制
+
+Tauri v2 为任何实现 `serde::Deserialize` 的类型自动提供 `tauri::CommandArg`
+（`tauri/src/ipc/command.rs`），因此命令入参在**进入函数体之前**完成解析。把不变量写进
+`Deserialize`，「忘记校验」在类型层面即不可能。
+
+选 `Deserialize` 而不是手写 `CommandArg`：后者会失去 blanket 实现，导致嵌在 DTO 里的
+路径字段（`KeybindFile.file_path`、`ImportItemRequest.items`）拿不到同等保护——而那正是
+任意文件覆写的实际入口。
+
+### 类型分层（`src/ipc/typed_paths.rs`）
+
+| 类型 | 语义 | 保证的不变量 |
+| :--- | :--- | :--- |
+| `ManagedPath` | 会被写/改名/删除/执行的**目标** | 绝对、无 `..`、实际存在、canonical 形态落在已登记 Mods 根内 |
+| `SourcePath` | **只读来源**（拖入的压缩包、导入的目录） | 绝对、无 `..`、实际存在；不要求落在根内（否则拖拽导入直接失效） |
+
+纯展示字段继续用 `String`（由静态门禁按「是否参与 IO」放行），不为其再造包装。
+两者都 `Deref<Target = Path>` 到规范化形态，既有 `&Path` 形参的调用点无需改写；需要原
+字符串时用 `.requested()`（日志、按原名推导 `DISABLED_` 目标）。
+
+### 锚点：`src/ipc/mods_root_registry.rs`
+
+- 全局集合，只由 `register()` / `unregister()` / `sync_from()` 三条后端通道改变；
+  命令入参只读该表。
+- `sync_from()` 会剔除无法规范化或不是目录的条目并告警——宁可拒绝命令，也不把指向未知
+  位置的路径当可信锚点。
+- **fail-closed**：表为空时 `is_within_any_root()` 恒 `false`，所有 `ManagedPath`
+  解析失败并返回 `[ROOT_NOT_REGISTERED]`（与 `E_OUT_OF_MANAGED_ROOT` 区分，避免误导排障）。
+- 比较两侧均为 `canonicalize` 产物，故符号链接/junction 指向根外时其真实形态不匹配任何根，
+  被自然拦下（有用例钉住）。
+- 本模块只依赖 `std`/`serde`/`anyhow`，不引用 `core`/`commands`/`window`/`tray`/
+  `hotkey`/`updater`，以便纳入分层冻结表。
+
+### 错误契约
+
+解析错误串统一带 `[CODE]` 前缀（`src/ipc/ipc_errors.rs`），沿用仓库既有约定，使前端
+`safeInvoke` 与按前缀分支的逻辑（如 `[PATH_NOT_FOUND]` 不置位 `loadError`）不因类型化而失效。
+
+### 当前进度与新增命令的规矩
+
+- Phase 0（已完成）：类型、锚点表、错误码与 15 项用例落地；**命令签名尚未迁移**，
+  现有 `validate_managed_path` 调用点保持原样，行为零变化。
+- 迁移进行中：写/执行类命令优先（改名、删除、启停、还原、导出目标、按键 DTO），
+  随后读/执行类（打开目录、缩略图、外部编辑器）。
+- 迁移期内新增命令的规矩：路径入参**必须**用 `ManagedPath`/`SourcePath`，禁止再用
+  `String` 收路径；计划以 `tests/arch/arch_gate.rs` 的静态门禁冻结该规矩
+  （F6：命令签名不得出现名为 `*_path`/`*paths`/`mod_dir` 的 `String`；
+  F7：`commands/` 内禁止直接调用 `validate_managed_path`，防止半迁移状态固化）。
+
+### 已知残留（本方案不覆盖）
+
+`enable_mutex_mod` 的兄弟改名循环在**单个函数内**逐个 `fs::rename(..)?`，中途失败会留下
+半禁用状态；类型化边界只保证「目标在根内且存在」，不保证批量操作的原子性，需在同批的
+预检 + 回滚改造里收口。
