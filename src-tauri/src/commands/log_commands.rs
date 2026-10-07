@@ -14,6 +14,30 @@
 
 use log::Level;
 
+/// `module` 字段最大长度（超出截断并标记）
+const MODULE_MAX_LEN: usize = 64;
+/// `msg` 字段最大长度（超出截断并标记）
+const MSG_MAX_LEN: usize = 2000;
+
+/// 清洗来自 WebView 的日志字段：剥除换行/回车/制表/NUL 等控制字符，超长截断。
+///
+/// 保留可见字符与原意（不做转义还原），因为日志只做人读与检索。
+fn sanitize_log_field(raw: &str, max_chars: usize) -> String {
+    let mut out = String::with_capacity(raw.len().min(max_chars));
+    for ch in raw.chars() {
+        if ch.is_control() {
+            out.push(' ');
+            continue;
+        }
+        out.push(ch);
+        if out.chars().count() >= max_chars {
+            out.push_str("…[truncated]");
+            break;
+        }
+    }
+    out
+}
+
 /// 将前端日志消息按级别写入后端日志系统（fire-and-forget，恒成功）。
 ///
 /// # 参数
@@ -27,7 +51,14 @@ use log::Level;
 pub fn frontend_log(level: String, module: String, msg: String) {
     let target = level.parse::<Level>().unwrap_or(Level::Debug);
     // 统一前缀 [FE]，与后端日志在同一文件中对齐；秒级定位前后端时序
-    let line = format!("[FE][{}] {}", module, msg);
+    //
+    // module/msg 全部来自 WebView（不可信输入）：原样落盘会让一条含换行的消息
+    // 伪造出多行日志（log forging），掩盖时序或植入假条目。故剥除控制字符并截断。
+    let line = format!(
+        "[FE][{}] {}",
+        sanitize_log_field(&module, MODULE_MAX_LEN),
+        sanitize_log_field(&msg, MSG_MAX_LEN)
+    );
     match target {
         Level::Error => log::error!("{}", line),
         Level::Warn => log::warn!("{}", line),

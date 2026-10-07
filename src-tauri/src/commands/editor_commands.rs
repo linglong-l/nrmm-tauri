@@ -15,6 +15,7 @@
 //! 编辑器路径由后端按 id 重新解析（不信任前端回传路径）；`.cmd`/`.bat` shim
 //! 经 `cmd /C` 中转并以 `CREATE_NO_WINDOW` 启动，避免闪烁控制台。
 
+use crate::ipc::typed_paths::ManagedPath;
 use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
@@ -122,24 +123,24 @@ pub fn detect_external_editors() -> Vec<ExternalEditorInfo> {
 /// # Errors
 /// 目标不存在 / 编辑器未探测到 / 未知编辑器 id / 进程启动失败时返回 `Err`。
 #[tauri::command]
-pub fn open_in_editor(editor_id: String, target_path: String) -> Result<(), String> {
-    if !Path::new(&target_path).exists() {
-        return Err(format!("target path not found: {target_path}"));
-    }
+pub fn open_in_editor(editor_id: String, target_path: ManagedPath) -> Result<(), String> {
+    // 存在性与 Mods 根归属由 ManagedPath 保证；传给编辑器的仍是前端原形态
+    // （canonical 在 Windows 上带 \\?\ verbatim 前缀，多数编辑器处理不佳）
+    let target_for_editor = target_path.requested().to_string();
     let editor = detect_external_editors()
         .into_iter()
         .find(|e| e.id == editor_id)
         .ok_or_else(|| format!("editor not detected: {editor_id}"))?;
-    spawn_editor(&editor.path, &editor_id, &target_path)
+    spawn_editor(&editor.path, &editor_id, &target_for_editor)
 }
 
-/// 按编辑器特化参数启动子进程（父进程不等待；`.cmd`/`.bat` shim 经 `cmd /C` 中转）。
+/// 按编辑器特化参数启动子进程（父进程不等待；`.cmd`/`.bat` shim 由 std 按 cmd 语义转义）。
 fn spawn_editor(editor_path: &str, editor_id: &str, target_path: &str) -> Result<(), String> {
     let mut command = build_command(editor_path, editor_id, target_path)?;
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW：shim 经 cmd /C 中转时不闪控制台窗口（GUI 编辑器无感知）
+        // CREATE_NO_WINDOW：shim 启动时不闪控制台窗口（GUI 编辑器无感知）
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
@@ -151,15 +152,13 @@ fn spawn_editor(editor_path: &str, editor_id: &str, target_path: &str) -> Result
 
 /// 组装各编辑器的启动命令（参数对齐 NRMM `external_editors.dart`）。
 fn build_command(editor_path: &str, editor_id: &str, target_path: &str) -> Result<Command, String> {
-    let lower = editor_path.to_lowercase();
-    let is_shim = lower.ends_with(".cmd") || lower.ends_with(".bat");
-    let mut command = if is_shim {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(editor_path);
-        c
-    } else {
-        Command::new(editor_path)
-    };
+    // 直接以脚本作为可执行文件交给 std：Windows 下 std 识别 .cmd/.bat 后会改用
+    // `cmd.exe /d /e:ON /v:OFF /c "…"` 并按 **cmd.exe 语义**转义参数
+    // （sys/args/windows.rs::make_bat_command_line）。
+    // 原先手工 `Command::new("cmd").arg("/C").arg(script)` 反而绕开这套转义：此时
+    // 可执行文件是 `cmd`，std 走普通引用规则，含 `&` 且不含空格的路径不会被加引号，
+    // cmd 会把它当命令分隔符继续解析（模组目录名可含 `&`，来自解压产物）。
+    let mut command = Command::new(editor_path);
     match editor_id {
         "vscode" => {
             // 对齐 Dart：移除 ELECTRON_RUN_AS_NODE，避免 VS Code 以 Node 模式启动

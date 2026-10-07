@@ -5,8 +5,8 @@
 //! 本命令返回原图缩放后的缓存文件路径，前端 `<img>` 改加载缩略图。
 
 use crate::core::thumbnail;
+use crate::ipc::typed_paths::ManagedPath;
 use anyhow::Result;
-use std::path::PathBuf;
 
 /// 获取模组预览图缩略图的本地缓存路径（不存在则生成）。
 ///
@@ -25,13 +25,16 @@ use std::path::PathBuf;
 /// 缩略图缓存文件绝对路径（JPEG）；前端需再经 `convertFileSrc` 转换为可加载 URL。
 /// 原图不存在/解码失败返回 Err（前端应回退原图或占位符）。
 #[tauri::command]
-pub async fn get_thumbnail(original_path: String, size: Option<String>) -> Result<String, String> {
+pub async fn get_thumbnail(
+    original_path: ManagedPath,
+    size: Option<String>,
+) -> Result<String, String> {
     // 默认卡片档（向后兼容无参调用）；"avatar" 显式走头像档
     let thumb_size = match size.as_deref() {
         Some("avatar") => thumbnail::ThumbSize::Avatar,
         _ => thumbnail::ThumbSize::Card,
     };
-    let original = PathBuf::from(original_path);
+    let original = original_path.into_canonical();
     tauri::async_runtime::spawn_blocking(move || {
         thumbnail::get_or_create_thumbnail(&original, thumb_size, None)
             .map(|p| p.to_string_lossy().to_string())
