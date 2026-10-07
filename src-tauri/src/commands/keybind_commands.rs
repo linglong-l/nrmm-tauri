@@ -12,6 +12,7 @@
 
 use crate::core::ini_model::IniFile;
 use crate::core::key_combo;
+use crate::ipc::typed_paths::ManagedPath;
 use crate::models::{KeybindEntry, KeybindFile, KeybindSection, SaveKeybindResult};
 use crate::platform::get_key_simulator;
 use crate::utils::atomic_write;
@@ -288,14 +289,10 @@ fn apply_keybind_edits(lines: &mut [String], sections: &[KeybindSection]) {
 /// 递归收集 mod 目录下所有 INI，解析每个文件的 `[KeyXXX]` 段，
 /// 返回带行号的结构（供前端渲染与后续写回定位）。
 #[tauri::command]
-pub async fn read_mod_keybinds(mod_path: String) -> Result<Vec<KeybindFile>, String> {
+pub async fn read_mod_keybinds(mod_path: ManagedPath) -> Result<Vec<KeybindFile>, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<Vec<KeybindFile>, String> {
-        let root = PathBuf::from(&mod_path);
-        if !root.is_dir() {
-            return Err(format!(
-                "[PATH_NOT_FOUND] mod directory does not exist: {mod_path}"
-            ));
-        }
+        // 存在性与 Mods 根归属已由 ManagedPath 在反序列化期保证
+        let root = mod_path.canonical().to_path_buf();
 
         let ini_files = collect_ini_files(&root);
         let mut result: Vec<KeybindFile> = Vec::new();
@@ -327,31 +324,78 @@ pub async fn read_mod_keybinds(mod_path: String) -> Result<Vec<KeybindFile>, Str
     .map_err(|e| e.to_string())?
 }
 
+/// 保存按键段的入参（仅 IPC 方向使用；出参仍是 [`KeybindFile`]，其 `file_path`
+/// 由后端从磁盘构造，形态稳定，不经前端之手）
+///
+/// # 为什么单独建一个类型
+/// `file_path` 用 [`ManagedPath`]：反序列化阶段即保证「绝对、存在、落在已登记 Mods
+/// 根内」。原实现直接 `PathBuf::from(&file.file_path)` 后 `atomic_write`，前端可传
+/// **任意**路径覆写任意文本文件的任意行（配合值里的换行即多行注入）。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeybindFileEdit {
+    /// 待写回的 INI 文件（已校验路径）
+    pub file_path: ManagedPath,
+    /// 该文件的按键段编辑内容
+    pub sections: Vec<KeybindSection>,
+}
+
+/// 值或段名中是否含会破坏 INI 行结构的控制字符。
+///
+/// `\n`/`\r` 会把一行拆成多行，等价于向 3Dmigoto 的 INI 注入额外键或额外段；
+/// `\0` 截断底层 C 字符串。三者一律拒绝，不做静默剥离（剥离会让用户以为保存成功）。
+fn has_line_breaking_chars(s: &str) -> bool {
+    s.contains(['\r', '\n', '\0'])
+}
+
 /// 保存编辑后的按键段（对齐 NRMM `saveKeys`）
 ///
 /// 对每个文件：重新读取原始行 → 按传入行号原位改写 → 原子写回。
 /// 返回是否检测到重复段名（大小写不敏感 + namespace 后缀）。
+///
+/// # Errors
+/// - 目标文件不属于本次操作的模组目录 → `[OUT_OF_MOD_DIR]`
+/// - 段名或按键值含 `\r` / `\n` / `\0` → `[INVALID_KEYBIND_VALUE]`
+/// - 读/写 INI 失败 → 带文件路径的错误消息
 #[tauri::command]
 pub async fn save_mod_keybinds(
-    mod_path: String,
-    files: Vec<KeybindFile>,
+    mod_path: ManagedPath,
+    files: Vec<KeybindFileEdit>,
 ) -> Result<SaveKeybindResult, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<SaveKeybindResult, String> {
-        let root = PathBuf::from(&mod_path);
-        if !root.is_dir() {
-            return Err(format!(
-                "[PATH_NOT_FOUND] mod directory does not exist: {mod_path}"
-            ));
-        }
+        let root = mod_path.canonical().to_path_buf();
 
         let mut duplicate_sections = false;
         // 已见段签名：`{section_lowercase}{namespace_lowercase}`（对齐 NRMM lowerCasedSections）
         let mut seen_sections: HashSet<String> = HashSet::new();
 
         for file in &files {
-            let path = PathBuf::from(&file.file_path);
+            let path = file.file_path.canonical();
+            // 根内之外还要再收一层：按键编辑只允许写回该模组目录之下的 INI
+            if !path.starts_with(&root) {
+                return Err(format!(
+                    "[OUT_OF_MOD_DIR] {path:?} is not inside mod directory {root:?}"
+                ));
+            }
+            for section in &file.sections {
+                if has_line_breaking_chars(&section.section) {
+                    return Err(format!(
+                        "[INVALID_KEYBIND_VALUE] section name contains line-breaking chars: {:?}",
+                        section.section
+                    ));
+                }
+                for key in &section.keys {
+                    if has_line_breaking_chars(&key.value) {
+                        return Err(format!(
+                            "[INVALID_KEYBIND_VALUE] key value contains line-breaking chars: {:?}",
+                            key.value
+                        ));
+                    }
+                }
+            }
+
             // Windows 长路径支持：读/写统一走 \\?\ 扩展路径
-            let ext = ext_path(&path);
+            let ext = ext_path(path);
             let raw = IniFile::force_read_as_utf8(&ext)
                 .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
             let mut raw_lines: Vec<String> = raw.split('\n').map(|s| s.to_string()).collect();
@@ -363,7 +407,7 @@ pub async fn save_mod_keybinds(
                 .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
 
             // 重复段名检测（用写入后的行重新计算 namespace）
-            let namespace = get_namespace_lowercase(&raw_lines, &file.file_path);
+            let namespace = get_namespace_lowercase(&raw_lines, file.file_path.requested());
             for section in &file.sections {
                 let sig = format!("{}{}", section.section.to_lowercase(), namespace);
                 if !seen_sections.insert(sig) {
@@ -623,5 +667,54 @@ mod tests {
             .expect("KeyToggleMods parsed");
         assert!(toggle.keys[0].is_main_key);
         assert_eq!(toggle.keys[0].value, "no_modifiers F6");
+    }
+    /// 严重项回归：按键保存的 `file_path` 在**反序列化阶段**就必须落在已登记 Mods 根内。
+    ///
+    /// 原实现 `PathBuf::from(&file.file_path)` 后直接 `atomic_write`，前端可传任意
+    /// 路径覆写任意文本文件的任意行；本用例把闭合点钉在类型上。
+    #[test]
+    fn keybind_file_edit_rejects_path_outside_registered_root() {
+        use crate::ipc::mods_root_registry::{register, sync_from, test_guard};
+        let _g = test_guard();
+        let root = tempfile::tempdir().unwrap();
+        register(root.path()).unwrap();
+
+        let inside = root.path().join("Mods").join("group_1").join("ModA");
+        std::fs::create_dir_all(&inside).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        // 必须真实存在：parse 先 canonicalize 再判归属，不存在的路径会得到
+        // [PATH_NOT_FOUND]，那是另一种正确拒绝，但本用例要钉的是「根外且存在」
+        let outside_ini = outside.path().join("settings.json");
+        std::fs::write(&outside_ini, b"[x]\n").unwrap();
+
+        let json_in = serde_json::json!({
+            "filePath": inside.to_string_lossy(),
+            "sections": [],
+        });
+        serde_json::from_value::<KeybindFileEdit>(json_in).expect("根内 INI 应通过校验");
+
+        let json_out = serde_json::json!({
+            "filePath": outside_ini.to_string_lossy(),
+            "sections": [],
+        });
+        let err = serde_json::from_value::<KeybindFileEdit>(json_out)
+            .expect_err("根外路径必须被拒绝")
+            .to_string();
+        assert!(
+            err.contains("[OUT_OF_MANAGED_ROOT]"),
+            "错误串应带根越界前缀，实际：{err}"
+        );
+
+        sync_from(Vec::<String>::new());
+    }
+
+    /// 值/段名里的换行与 NUL 会破坏 INI 行结构（等价注入额外键或额外段）
+    #[test]
+    fn line_breaking_chars_are_detected() {
+        assert!(has_line_breaking_chars("no_modifiers 5\nkey = F10"));
+        assert!(has_line_breaking_chars("Top\r"));
+        assert!(has_line_breaking_chars("Top\0"));
+        assert!(!has_line_breaking_chars("no_modifiers 5"));
+        assert!(!has_line_breaking_chars("Top"));
     }
 }

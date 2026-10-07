@@ -28,6 +28,7 @@
 //! > [`mod_commands_tests`](mod_commands_tests)）。共享辅助已迁至
 //! > [`mod_commands_util`](mod_commands_util)。
 
+use crate::ipc::typed_paths::ManagedPath;
 use crate::models::mod_data::GroupDelta;
 
 /// 选择模组命令的参数结构体
@@ -41,7 +42,7 @@ pub struct SelectModArgs {
     /// 目标游戏标识（如 "wuwa"、"genshin"）
     pub game: String,
     /// 模组根目录路径
-    pub mods_path: String,
+    pub mods_path: ManagedPath,
     /// 分组索引
     pub group_index: u32,
     /// 模组索引
@@ -49,9 +50,9 @@ pub struct SelectModArgs {
     /// 是否为互斥组
     pub is_mutex: bool,
     /// 分组路径
-    pub group_path: String,
+    pub group_path: ManagedPath,
     /// 模组路径
-    pub mod_path: String,
+    pub mod_path: ManagedPath,
     /// 屏幕光标 X 坐标（可选，像素值）
     pub cursor_x: Option<i32>,
     /// 屏幕光标 Y 坐标（可选，像素值）

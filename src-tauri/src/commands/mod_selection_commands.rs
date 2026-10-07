@@ -13,6 +13,7 @@ use crate::commands::mod_commands_util::{
 use crate::config::settings_store;
 use crate::core::constants;
 use crate::core::mod_cache_core;
+use crate::ipc::typed_paths::ManagedPath;
 use crate::models::enums::TargetGame;
 use crate::sel_dbg;
 use std::path::{Path, PathBuf};
@@ -60,6 +61,12 @@ pub async fn select_mod(
         cursor_x,
         cursor_y,
     } = args;
+    // 路径归属与存在性已由 ManagedPath 在反序列化期保证；此处统一换成 core 既有
+    // 形参所接受的形态（规范化字符串 / PathBuf），下游调用点因此无需改动。
+    // 注意：Windows 下 canonical() 带 \\?\ 前缀，与缓存内普通形态的比较一律走
+    // normalize_path_key（它会剥离该前缀与大小写差异），故匹配行为不变。
+    let group_path = group_path.canonical().to_string_lossy().into_owned();
+    let mod_path = mod_path.canonical().to_string_lossy().into_owned();
     // mod_index 归一化（与 switch_mod 的 safe_mod_index 语义保持一致）：
     // 扫描器约定 None 空槽位占据 mod_index=0，真实模组从 1 开始（$managed_slot_id 亦为 1-based）。
     // 若前端因任何路径误传 0（如收藏模式显示列表下标错位），统一转为 1，
@@ -102,7 +109,7 @@ pub async fn select_mod(
     );
     let _start = std::time::Instant::now();
     let game_enum = parse_game(&game)?;
-    let mods_path = PathBuf::from(mods_path);
+    let mods_path = mods_path.into_canonical();
 
     sel_dbg!(
         "mod_commands",
@@ -434,18 +441,18 @@ pub async fn select_mod(
 #[tauri::command]
 pub async fn deselect_group_mod(
     game: String,
-    mods_path: String,
+    mods_path: ManagedPath,
     group_index: u32,
-    group_path: Option<String>,
+    group_path: Option<ManagedPath>,
 ) -> Result<crate::core::mod_results::UpdateResult, String> {
     // P2：「_MANAGED_ 写操作全局锁」覆盖不全的补齐。取消选择同样写 selectedindex
     // 标记文件，此前游离于锁外，可与 select_mod / update_mod_data 并发交错。
     let _update_guard = UPDATE_LOCK.lock().await;
     let game = parse_game(&game)?;
-    let mods_path = PathBuf::from(mods_path);
+    let mods_path = mods_path.into_canonical();
     let managed_path = mods_path.join(constants::MANAGED_FOLDER);
 
-    let group_path_buf = group_path.map(PathBuf::from);
+    let group_path_buf = group_path.map(|p| p.into_canonical());
     if let Some(gp) = group_path_buf.filter(|gp| is_direct_writable_group(gp, &managed_path)) {
         sel_dbg!(
             "mod_commands",

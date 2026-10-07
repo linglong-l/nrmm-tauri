@@ -13,10 +13,11 @@ use crate::commands::mod_commands_util::{
 use crate::config::settings_store;
 use crate::core::constants;
 use crate::core::mod_cache_core;
+use crate::ipc::typed_paths::ManagedPath;
 use crate::models::enums::TargetGame;
 use crate::models::mod_data::{BatchGroupDelta, GroupDelta};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// 错误前缀标识：路径不存在，前端捕获后需执行清除缓存+重读模组
 const ERR_PREFIX_PATH_NOT_FOUND: &str = "[PATH_NOT_FOUND]";
@@ -29,7 +30,7 @@ const ERR_PREFIX_PATH_NOT_FOUND: &str = "[PATH_NOT_FOUND]";
 /// `group_delta`（前端 patch 后告知用户发生异常）。
 #[tauri::command]
 pub async fn toggle_mod_disabled(
-    mod_path: String,
+    mod_path: ManagedPath,
     enable: bool,
     is_mutex: bool,
 ) -> Result<ToggleModResult, String> {
@@ -38,9 +39,11 @@ pub async fn toggle_mod_disabled(
     // 竞态的核心缺口——统一在此入口串行化。
     let _update_guard = UPDATE_LOCK.lock().await;
     // 组目录原用于降级路径的组级重扫；P1 起降级不再同步重扫（见下），故不再需要
-    let (mods_root, _old_group_dir) = resolve_managed_context(Path::new(&mod_path))
-        .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
-    let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
+    let path = mod_path.into_canonical();
+    // 归属校验由 ManagedPath 反序列化完成；此处只需定位 mods_root 上下文（降级/缓存 patch 用）
+    let (mods_root, _old_group_dir) = resolve_managed_context(&path).ok_or_else(|| {
+        format!("[NOT_IN_MANAGED_GROUP] Path is not inside a managed group: {path:?}")
+    })?;
     let game = settings_store::get_settings().target_game;
 
     let result =
@@ -93,8 +96,8 @@ pub async fn toggle_mod_disabled(
 /// - 缓存由 fav 文件的 watcher 事件增量修正（事件收敛到 mod 目录 →
 ///   `scan_partial_path` 整组局部重扫，`subtree_replace` 幂等合并）。
 #[tauri::command]
-pub async fn toggle_favorite(mod_path: String) -> Result<bool, String> {
-    let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
+pub async fn toggle_favorite(mod_path: ManagedPath) -> Result<bool, String> {
+    let path = mod_path.into_canonical();
 
     let is_fav = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
         let fav_path = path.join(constants::FAV_MARKER);
@@ -114,12 +117,19 @@ pub async fn toggle_favorite(mod_path: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub fn is_favorite(mod_path: String) -> bool {
-    PathBuf::from(mod_path).join(constants::FAV_MARKER).exists()
+    // 仍返回布尔（不改变前端契约），但先用 ManagedPath 收口径：
+    // 越出已登记 Mods 根 / 不存在 / 相对路径一律 false，
+    // 使本命令不再充当「本机任意路径是否存在」的探测 oracle
+    ManagedPath::parse(mod_path)
+        .map(|p| p.canonical().join(constants::FAV_MARKER).exists())
+        .unwrap_or(false)
 }
 
 #[tauri::command]
-pub fn open_mod_folder(mod_path: String) -> Result<(), String> {
-    let path = PathBuf::from(&mod_path);
+pub fn open_mod_folder(mod_path: ManagedPath) -> Result<(), String> {
+    // 原实现零校验地把前端字符串交给 ShellExecute（opener），指向可执行文件时等价于
+    // 双击运行；ManagedPath 保证存在且落在已登记 Mods 根内
+    let path = mod_path.into_canonical();
     if !path.exists() {
         // 路径不存在 → 清除后端模组缓存，返回带标识的错误通知前端刷新数据
         let mut cache = mod_cache_core::MOD_CACHE.write();
@@ -135,8 +145,8 @@ pub fn open_mod_folder(mod_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn open_group_folder(group_path: String) -> Result<(), String> {
-    let path = PathBuf::from(&group_path);
+pub fn open_group_folder(group_path: ManagedPath) -> Result<(), String> {
+    let path = group_path.into_canonical();
     if !path.exists() {
         // 路径不存在 → 清除后端模组缓存，返回带标识的错误通知前端刷新数据
         let mut cache = mod_cache_core::MOD_CACHE.write();
@@ -154,10 +164,10 @@ pub fn open_group_folder(group_path: String) -> Result<(), String> {
 /// 恢复所有INI文件备份
 #[tauri::command]
 pub async fn restore_all_inis(
-    mods_path: String,
+    mods_path: ManagedPath,
 ) -> Result<crate::core::mod_results::RestoredCount, String> {
     let _busy = crate::window::lifecycle::BusyOpGuard::new();
-    let path = PathBuf::from(&mods_path);
+    let path = mods_path.into_canonical();
 
     let result = tauri::async_runtime::spawn_blocking(
         move || -> Result<crate::core::mod_results::RestoredCount, String> {
@@ -190,16 +200,10 @@ pub async fn restore_all_inis(
 /// - 路径不存在（带 `[PATH_NOT_FOUND]` 前缀，供前端识别）
 #[tauri::command]
 pub async fn restore_managed_folder(
-    path: String,
+    path: ManagedPath,
 ) -> Result<crate::core::mod_results::RestoreManagedResult, String> {
-    let path_buf = settings_store::validate_managed_path(&path).map_err(|e| e.to_string())?;
-    if !path_buf.exists() {
-        log::warn!("Restore managed folder: path not found: {:?}", path_buf);
-        return Err(format!(
-            "{}{}",
-            ERR_PREFIX_PATH_NOT_FOUND, "Path does not exist"
-        ));
-    }
+    // ManagedPath 已保证存在且落在已登记 Mods 根内，原 exists() 分支不可达
+    let path_buf = path.into_canonical();
 
     let result = tauri::async_runtime::spawn_blocking(
         move || -> crate::core::mod_results::RestoreManagedResult {
@@ -223,11 +227,11 @@ pub async fn restore_managed_folder(
 #[tauri::command]
 pub async fn save_customizations(
     game: String,
-    mods_path: String,
+    mods_path: ManagedPath,
 ) -> Result<crate::core::mod_results::SaveCustomizationsResult, String> {
     let _busy = crate::window::lifecycle::BusyOpGuard::new();
     let game = parse_game(&game)?;
-    let path = PathBuf::from(&mods_path);
+    let path = mods_path.into_canonical();
 
     let result = tauri::async_runtime::spawn_blocking(
         move || -> Result<crate::core::mod_results::SaveCustomizationsResult, String> {
@@ -243,12 +247,17 @@ pub async fn save_customizations(
 /// 批量切换模组启用/禁用状态
 #[tauri::command]
 pub async fn batch_toggle_mods(
-    mod_paths: Vec<String>,
+    mod_paths: Vec<ManagedPath>,
     enable: bool,
     is_mutex: bool,
 ) -> Result<u32, String> {
     // P2：批量启停会重命名 _MANAGED_ 下多个模组目录，须与选择、更新串行。
     let _update_guard = UPDATE_LOCK.lock().await;
+    // 逐元素校验：任一越界即整体拒绝，core 层仍收字符串（其签名不在本批变更范围）
+    let mod_paths: Vec<String> = mod_paths
+        .iter()
+        .map(|p| p.canonical().to_string_lossy().into_owned())
+        .collect();
     let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
         crate::core::mod_toggle::batch_toggle_mods(&mod_paths, enable, is_mutex)
             .map_err(|e| e.to_string())
@@ -270,10 +279,12 @@ pub async fn batch_toggle_mods(
 /// 不触发任何扫描/重载，返回路径对列表供前端本地 patch。
 /// 异常（rename 失败 / 缓存条目未命中）→ 降级增量扫描，`degraded=true` + 完整分组增量。
 #[tauri::command]
-pub async fn disable_all_mods_in_group(group_path: String) -> Result<BatchGroupDelta, String> {
-    let (mods_root, group_dir) = resolve_managed_context(Path::new(&group_path))
-        .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
-    let path = PathBuf::from(group_path);
+pub async fn disable_all_mods_in_group(group_path: ManagedPath) -> Result<BatchGroupDelta, String> {
+    // 整组启停会重命名组内全部一级模组，此前该入口无任何路径校验
+    let path = group_path.into_canonical();
+    let (mods_root, group_dir) = resolve_managed_context(&path).ok_or_else(|| {
+        format!("[NOT_IN_MANAGED_GROUP] Path is not inside a managed group: {path:?}")
+    })?;
     let game = settings_store::get_settings().target_game;
 
     batch_toggle_group_impl(game, mods_root, group_dir, path, true).await
@@ -284,10 +295,12 @@ pub async fn disable_all_mods_in_group(group_path: String) -> Result<BatchGroupD
 /// 零扫描（对齐 NRMM）：目录重命名后对缓存逐条 `patch_mod_entry` 就地更新。
 /// 异常 → 降级增量扫描，`degraded=true` + 完整分组增量。
 #[tauri::command]
-pub async fn enable_all_mods_in_group(group_path: String) -> Result<BatchGroupDelta, String> {
-    let (mods_root, group_dir) = resolve_managed_context(Path::new(&group_path))
-        .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
-    let path = PathBuf::from(group_path);
+pub async fn enable_all_mods_in_group(group_path: ManagedPath) -> Result<BatchGroupDelta, String> {
+    // 整组启停会重命名组内全部一级模组，此前该入口无任何路径校验
+    let path = group_path.into_canonical();
+    let (mods_root, group_dir) = resolve_managed_context(&path).ok_or_else(|| {
+        format!("[NOT_IN_MANAGED_GROUP] Path is not inside a managed group: {path:?}")
+    })?;
     let game = settings_store::get_settings().target_game;
 
     batch_toggle_group_impl(game, mods_root, group_dir, path, false).await

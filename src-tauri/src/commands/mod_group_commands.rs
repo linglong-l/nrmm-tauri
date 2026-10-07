@@ -12,6 +12,7 @@ use crate::commands::mod_commands_util::{
 use crate::config::settings_store;
 use crate::core::constants;
 use crate::core::resolution;
+use crate::ipc::typed_paths::ManagedPath;
 use crate::models::mod_data::GroupDelta;
 use crate::sel_dbg;
 use std::fs;
@@ -21,11 +22,11 @@ use std::path::{Path, PathBuf};
 #[tauri::command]
 pub async fn add_group(
     game: String,
-    mods_path: String,
+    mods_path: ManagedPath,
     group_name: Option<String>,
 ) -> Result<crate::core::mod_results::UpdateResult, String> {
     let game = parse_game(&game)?;
-    let mods_path = PathBuf::from(mods_path);
+    let mods_path = mods_path.into_canonical();
 
     let result = tauri::async_runtime::spawn_blocking(
         move || -> Result<crate::core::mod_results::UpdateResult, String> {
@@ -109,13 +110,15 @@ pub async fn add_group(
 /// 裁剪缓存，返回 `new_group = None` 的 [`GroupDelta`]（前端按 oldGroupPath
 /// 剔除该组及其模组条目），不再触发全量失效与全量刷新。
 #[tauri::command]
-pub async fn remove_group(group_path: String) -> Result<GroupDelta, String> {
+pub async fn remove_group(group_path: ManagedPath) -> Result<GroupDelta, String> {
     // P2：删除分组会移走 _MANAGED_ 下整棵子树，须与选择、更新串行
     // （否则「删除分组后立刻选择」会出现组已消失但选择仍乐观成功的静默失败）。
     let _update_guard = UPDATE_LOCK.lock().await;
-    let (mods_root, group_dir) = resolve_managed_context(Path::new(&group_path))
-        .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
-    let path = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
+    let path = group_path.into_canonical();
+    // 归属由 ManagedPath 反序列化保证；此处只定位缓存/降级所需的上下文
+    let (mods_root, group_dir) = resolve_managed_context(&path).ok_or_else(|| {
+        format!("[NOT_IN_MANAGED_GROUP] Path is not inside a managed group: {path:?}")
+    })?;
     let game = settings_store::get_settings().target_game;
 
     let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
@@ -145,14 +148,16 @@ pub async fn remove_group(group_path: String) -> Result<GroupDelta, String> {
 ///    `degraded=true` 返回完整组增量（前端 patch 后告知用户发生异常）
 #[tauri::command]
 pub async fn remove_mod(
-    mod_path: String,
+    mod_path: ManagedPath,
 ) -> Result<crate::core::mod_results::RemoveModResult, String> {
     // P2：移除模组会把目录移入 DISABLED_MANAGED_REMOVED 并改写组内 INI，
     // 与 select_mod / update_mod_data 同属 _MANAGED_ 写路径，须统一串行化。
     let _update_guard = UPDATE_LOCK.lock().await;
-    let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
-        .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
-    let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
+    let path = mod_path.into_canonical();
+    // 归属由 ManagedPath 反序列化保证；此处只定位缓存/降级所需的上下文
+    let (mods_root, old_group_dir) = resolve_managed_context(&path).ok_or_else(|| {
+        format!("[NOT_IN_MANAGED_GROUP] Path is not inside a managed group: {path:?}")
+    })?;
     let game = settings_store::get_settings().target_game;
 
     let result = tauri::async_runtime::spawn_blocking(
@@ -197,12 +202,14 @@ pub async fn remove_mod(
 /// 返回 [`GroupDelta`]（新模组路径可从 delta.new_group 内获取），不再触发
 /// 全量失效与全量刷新。
 #[tauri::command]
-pub async fn rename_mod(mod_path: String, new_name: String) -> Result<GroupDelta, String> {
+pub async fn rename_mod(mod_path: ManagedPath, new_name: String) -> Result<GroupDelta, String> {
     // P2：重命名会写 modname 标记文件 / 重命名 _MANAGED_ 下目录，须与选择、更新串行。
     let _update_guard = UPDATE_LOCK.lock().await;
-    let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&mod_path))
-        .ok_or_else(|| format!("Path is not inside a managed group: {}", mod_path))?;
-    let path = settings_store::validate_managed_path(&mod_path).map_err(|e| e.to_string())?;
+    let path = mod_path.into_canonical();
+    // 归属由 ManagedPath 反序列化保证；此处只定位缓存/降级所需的上下文
+    let (mods_root, old_group_dir) = resolve_managed_context(&path).ok_or_else(|| {
+        format!("[NOT_IN_MANAGED_GROUP] Path is not inside a managed group: {path:?}")
+    })?;
     settings_store::validate_filename(&new_name).map_err(|e| e.to_string())?;
     let game = settings_store::get_settings().target_game;
 
@@ -277,15 +284,17 @@ pub async fn rename_mod(mod_path: String, new_name: String) -> Result<GroupDelta
 /// 重命名时 oldGroupPath 与 newGroup.groupPath 不同，前端按旧键定位替换）。
 #[tauri::command]
 pub async fn rename_group(
-    group_path: String,
+    group_path: ManagedPath,
     new_name: String,
     is_group_xx: bool,
 ) -> Result<GroupDelta, String> {
     // P2：写 groupname 标记文件 / 重命名 _MANAGED_ 下分组目录，须与选择、更新串行。
     let _update_guard = UPDATE_LOCK.lock().await;
-    let (mods_root, old_group_dir) = resolve_managed_context(Path::new(&group_path))
-        .ok_or_else(|| format!("Path is not inside a managed group: {}", group_path))?;
-    let path = settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
+    let path = group_path.into_canonical();
+    // 归属由 ManagedPath 反序列化保证；此处只定位缓存/降级所需的上下文
+    let (mods_root, old_group_dir) = resolve_managed_context(&path).ok_or_else(|| {
+        format!("[NOT_IN_MANAGED_GROUP] Path is not inside a managed group: {path:?}")
+    })?;
     settings_store::validate_filename(&new_name).map_err(|e| e.to_string())?;
     let game = settings_store::get_settings().target_game;
 
@@ -508,11 +517,14 @@ pub fn validate_subfolder_name(
 /// - Ok(()): 创建成功
 /// - Err: 错误信息（用户友好描述）
 #[tauri::command]
-pub fn create_subfolder(parent_path: String, folder_name: String) -> Result<(), String> {
-    let parent = PathBuf::from(&parent_path);
+pub fn create_subfolder(parent_path: ManagedPath, folder_name: String) -> Result<(), String> {
+    let parent = parent_path.canonical().to_path_buf();
 
     // 二次校验
-    let (sanitized, valid, err_msg) = validate_subfolder_name(parent_path, folder_name)?;
+    let (sanitized, valid, err_msg) = validate_subfolder_name(
+        parent_path.canonical().to_string_lossy().into_owned(),
+        folder_name,
+    )?;
     if !valid {
         return Err(err_msg);
     }
@@ -547,13 +559,14 @@ pub fn create_subfolder(parent_path: String, folder_name: String) -> Result<(), 
 /// 命令级增量（R1）：分组目录（含其全部子树）已移出扫描范围，无需磁盘重扫，
 /// 直接 `subtree_remove` 裁剪缓存，返回 `new_group = None` 的 [`GroupDelta`]。
 #[tauri::command]
-pub async fn remove_group_ex(group_path: String, is_group_xx: bool) -> Result<GroupDelta, String> {
+pub async fn remove_group_ex(
+    group_path: ManagedPath,
+    is_group_xx: bool,
+) -> Result<GroupDelta, String> {
     // P2：与 remove_group 同理，移动 _MANAGED_ 下分组子树，须统一串行化
     let _update_guard = UPDATE_LOCK.lock().await;
-    // 路径边界校验（R1）：确认 group_path canonicalize 后位于任一已配置 mods_root 内
-    let _validated =
-        settings_store::validate_managed_path(&group_path).map_err(|e| e.to_string())?;
-    let path = PathBuf::from(group_path);
+    // 归属校验由 ManagedPath 反序列化完成（原 R1 手写调用已移除）
+    let path = group_path.into_canonical();
     // 命令级增量（R1）：定位受影响顶层分组（磁盘目录将被移出，直接裁剪缓存子树）
     let (mods_root, group_dir) = resolve_managed_context(&path)
         .ok_or_else(|| format!("Path is not inside a managed group: {}", path.display()))?;

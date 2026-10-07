@@ -131,24 +131,27 @@ impl fmt::Display for ManagedPath {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for ManagedPath {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(deserializer)?;
-        let canonical = match resolve_existing(&raw) {
-            Ok(c) => c,
-            Err((code, msg)) => return Err(reject::<D::Error>(code, msg)),
-        };
+impl ManagedPath {
+    /// 校验并构造。命令入参的 `Deserialize` 与测试/内部调用共用这一条路径。
+    ///
+    /// # Errors
+    /// - 空串 `[EMPTY_PATH]`、相对路径 `[PATH_NOT_ABSOLUTE]`、含 `..` `[PATH_PARENT_TRAVERSAL]`
+    /// - 无法规范化（不存在/无权限）`[PATH_NOT_FOUND]`
+    /// - 尚无任何登记根 `[ROOT_NOT_REGISTERED]`
+    /// - 规范化后落在所有根之外 `[OUT_OF_MANAGED_ROOT]`
+    pub fn parse(raw: String) -> Result<Self, (&'static str, String)> {
+        let canonical = resolve_existing(&raw)?;
         // 顺序要紧：先判「有没有锚点」，再判「是否越界」，否则未配置游戏时
         // 报出来的会是误导性的 OUT_OF_MANAGED_ROOT
         if !mods_root_registry::has_any_root() {
-            return Err(reject::<D::Error>(
+            return Err((
                 E_ROOT_NOT_REGISTERED,
                 format!("no mods_root registered while resolving {raw}"),
             ));
         }
         if !mods_root_registry::is_within_any_root(&canonical) {
             let roots = mods_root_registry::roots();
-            return Err(reject::<D::Error>(
+            return Err((
                 E_OUT_OF_MANAGED_ROOT,
                 format!("{raw} → {canonical:?} is outside registered roots {roots:?}"),
             ));
@@ -157,6 +160,13 @@ impl<'de> serde::Deserialize<'de> for ManagedPath {
             requested: raw,
             canonical,
         })
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ManagedPath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(raw).map_err(|(code, msg)| reject::<D::Error>(code, msg))
     }
 }
 
@@ -221,17 +231,24 @@ impl fmt::Display for SourcePath {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for SourcePath {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = String::deserialize(deserializer)?;
-        let canonical = match resolve_existing(&raw) {
-            Ok(c) => c,
-            Err((code, msg)) => return Err(reject::<D::Error>(code, msg)),
-        };
+impl SourcePath {
+    /// 校验并构造（只读来源：绝对、无 `..`、存在，但不要求落在 Mods 根内）。
+    ///
+    /// # Errors
+    /// 同 [`ManagedPath::parse`] 的词法与存在性错误码，但不产生根相关错误码
+    pub fn parse(raw: String) -> Result<Self, (&'static str, String)> {
+        let canonical = resolve_existing(&raw)?;
         Ok(Self {
             requested: raw,
             canonical,
         })
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SourcePath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse(raw).map_err(|(code, msg)| reject::<D::Error>(code, msg))
     }
 }
 
