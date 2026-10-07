@@ -7,6 +7,7 @@
 
 use crate::commands::mod_commands_util::{parse_game, SCAN_LOCK, UPDATE_LOCK};
 use crate::config::settings_store;
+use crate::ipc::typed_paths::ManagedPath;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -146,10 +147,14 @@ pub async fn refresh_mods(
 }
 
 /// 重量级更新模组数据（仅用户按钮触发）
+///
+/// `mods_path` 用 [`ManagedPath`]：本命令是后端最重的写路径——重写 `_MANAGED_` 下全部
+/// 分组 INI，并经 `parent()` 推导游戏根去读写 `d3dx.ini`。锚点即由本参数决定，
+/// 因此绝不能再接受任意字符串。
 #[tauri::command]
 pub async fn update_mod_data(
     game: String,
-    mods_path: String,
+    mods_path: ManagedPath,
 ) -> Result<crate::core::mod_results::UpdateResult, String> {
     let _busy = crate::window::lifecycle::BusyOpGuard::new();
     log::debug!(
@@ -158,7 +163,7 @@ pub async fn update_mod_data(
         mods_path
     );
     let game = parse_game(&game)?;
-    let mods_path = PathBuf::from(mods_path);
+    let mods_path = mods_path.into_canonical();
     let settings = settings_store::get_settings();
 
     log::info!("[update_mod_data] Running heavy update...");
