@@ -226,32 +226,8 @@ pub async fn export_mod_cmd(mod_dir: ManagedPath, archive_path: String) -> Resul
 /// # Errors
 /// 相对路径、含 `..`、父目录不存在时返回带前缀的错误串
 fn validate_export_target(raw: &str) -> Result<PathBuf, String> {
-    let p = Path::new(raw);
-    if raw.trim().is_empty() {
-        return Err(format!("[{}]", "EMPTY_PATH"));
-    }
-    if !p.is_absolute() {
-        return Err(format!(
-            "[PATH_NOT_ABSOLUTE] export target must be absolute: {raw}"
-        ));
-    }
-    if p.components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err(format!(
-            "[PATH_PARENT_TRAVERSAL] export target must not contain `..`: {raw}"
-        ));
-    }
-    let parent = p
-        .parent()
-        .ok_or_else(|| format!("[PATH_NOT_FOUND] export target has no parent dir: {raw}"))?;
-    if !parent.is_dir() {
-        return Err(format!(
-            "[PATH_NOT_FOUND] export target parent directory does not exist: {:?}",
-            parent
-        ));
-    }
-    Ok(p.to_path_buf())
+    crate::ipc::typed_paths::validate_write_target(raw)
+        .map_err(|(code, msg)| format!("{code} {msg}"))
 }
 
 #[cfg(test)]

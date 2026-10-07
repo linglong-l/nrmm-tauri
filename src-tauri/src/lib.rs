@@ -357,6 +357,7 @@ pub fn run() {
             commands::log_commands::frontend_log,
             commands::settings_commands::get_settings,
             commands::settings_commands::save_settings,
+            commands::settings_commands::set_game_mods_path,
             commands::settings_commands::reset_settings,
             commands::settings_commands::export_settings,
             commands::settings_commands::import_settings,

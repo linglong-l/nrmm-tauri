@@ -11,7 +11,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getSettings, saveSettings, reregisterHotkeys } from '../utils/tauri'
+import { getSettings, saveSettings, setGameModsPath, reregisterHotkeys } from '../utils/tauri'
 import { logger } from '../utils/logger'
 import type { AppSettings, PlatformInfo, TargetGame } from '../types'
 
@@ -146,15 +146,22 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /**
-   * 更新当前游戏的模组路径
+   * 更新当前游戏的模组路径（经后端专用命令登记）
+   *
+   * 不再走「改本地字段 + 整份 save」：后端会把 gameModsPath 从通用保存中剥离，
+   * 只有 `set_game_mods_path` 能改写这个校验锚点（目录存在性/类型校验 + 锚点登记）。
    * @param path 模组文件夹绝对路径
+   * @returns 是否登记成功；失败时错误已写日志，由调用方负责提示用户
    */
-  function setCurrentModsPath(path: string) {
-    if (!settings.value.gameModsPath) {
-      settings.value.gameModsPath = {} as Record<TargetGame, string>
+  async function setCurrentModsPath(path: string): Promise<boolean> {
+    try {
+      // 用后端返回值整体替换本地设置：它才是权威状态（含规范化后的路径）
+      settings.value = await setGameModsPath(currentGame.value, path)
+      return true
+    } catch (e) {
+      logger.error('SettingsStore', `Failed to register mods path for ${currentGame.value}`, e)
+      return false
     }
-    settings.value.gameModsPath[currentGame.value] = path
-    save()
   }
 
   /**

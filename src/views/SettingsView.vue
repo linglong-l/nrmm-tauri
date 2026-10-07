@@ -377,7 +377,7 @@ async function handleBrowse() {
       // 但这里明确提示用户，然后还是让store保存以便用户看到提示
       logger.warn('SettingsView', 'Selected path is not a Mods directory:', selected)
     }
-    settingsStore.setCurrentModsPath(selected)
+    if (!(await settingsStore.setCurrentModsPath(selected))) ElMessage.error(t('Failed to set mods folder'))
   } catch (e: unknown) {
     ElMessage.error(t('Failed to open folder dialog'))
     logger.error('SettingsView', 'Browse failed', e)

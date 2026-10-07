@@ -312,6 +312,7 @@
   "Tab: Q-E / LB-RB": "Вкладка: Q-E / LB-RB",
   "Search: Space": "Поиск: Space",
   "Failed to open folder dialog": "Не удалось открыть диалог выбора папки",
+  "Failed to set mods folder": "Не удалось задать папку модов",
   "Please select a game first.": "Сначала выберите игру.",
   "Update Mod Data completed successfully!": "Обновление данных модов завершено успешно!",
   "Unknown error occurred.": "Произошла неизвестная ошибка.",

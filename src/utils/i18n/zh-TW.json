@@ -313,6 +313,7 @@
   "Tab: Q-E / LB-RB": "切換標籤：Q-E / LB-RB",
   "Search: Space": "搜尋：空格鍵",
   "Failed to open folder dialog": "開啟資料夾對話框失敗",
+  "Failed to set mods folder": "設定模组資料夾失敗",
   "Please select a game first.": "請先選擇一個遊戲。",
   "Update Mod Data completed successfully!": "更新模組資料成功！",
   "Unknown error occurred.": "發生未知錯誤。",

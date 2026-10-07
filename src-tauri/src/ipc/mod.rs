@@ -15,3 +15,4 @@
 pub mod ipc_errors;
 pub mod mods_root_registry;
 pub mod typed_paths;
+pub mod typed_settings;

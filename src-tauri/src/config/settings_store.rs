@@ -229,7 +229,21 @@ pub fn export_settings(path: &Path) -> Result<()> {
 /// 导入成功后自动保存到配置文件并更新内存缓存
 pub fn import_settings(path: &Path) -> Result<AppSettings> {
     let content = fs::read_to_string(path)?;
-    let settings: AppSettings = serde_json::from_str(&content)?;
+    let incoming: AppSettings = serde_json::from_str(&content)?;
+    // 锚点不随导入生效：设置文件可被同用户的其他进程改写，若让其中的 game_mods_path
+    // 直接生效，导入动作本身就成为「重定向路径校验锚点」的通道。用户需重新挑选 Mods 根。
+    let current = get_settings();
+    if incoming.game_mods_path != current.game_mods_path {
+        log::warn!(
+            "[AUDIT] import_settings 忽略文件中的 Mods 根（提交 {} 项，保留现有 {} 项），请重新选择游戏模组目录",
+            incoming.game_mods_path.len(),
+            current.game_mods_path.len()
+        );
+    }
+    let settings = AppSettings {
+        game_mods_path: current.game_mods_path,
+        ..incoming
+    };
     save_settings(&settings)?;
     Ok(settings)
 }

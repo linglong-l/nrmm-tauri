@@ -99,6 +99,19 @@ export async function saveSettings(settings: Partial<AppSettings>): Promise<void
 }
 
 /**
+ * 设置指定游戏的 Mods 根目录（改写后端路径校验锚点的唯一入口）
+ * 后端命令：set_game_mods_path
+ * 通用 `saveSettings` 已改写不了 gameModsPath（后端归一为服务端现值，锚点不得由
+ * 被校验对象自己改写），故选定文件夹必须走本命令：后端校验目录并登记锚点。
+ * @param game 目标游戏标识
+ * @param path 模组文件夹绝对路径
+ * @returns 后端更新后的完整设置（含新锚点，用于刷新本地状态）
+ */
+export async function setGameModsPath(game: TargetGame, path: string): Promise<AppSettings> {
+  return safeInvoke('set_game_mods_path', { game, path })
+}
+
+/**
  * 重置应用设置为默认值
  * 后端命令：reset_settings
  */

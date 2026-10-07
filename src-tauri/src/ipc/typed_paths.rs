@@ -252,6 +252,36 @@ impl<'de> serde::Deserialize<'de> for SourcePath {
     }
 }
 
+/// 校验「写出目标」路径：绝对、无 `..`、父目录必须已存在。
+///
+/// 用于导出/另存类操作（导出压缩包、导出设置文件）：目标位置有意**不受 Mods 根约束**
+/// （用户可存到任意位置），因此不能用 [`ManagedPath`]；但父目录必须存在，否则调用方
+/// 可用一个深层不存在的路径让底层逻辑去创建未知层级。目标文件本身此时尚不存在，
+/// 故也不走 [`SourcePath`]（它要求已存在）。
+///
+/// # Errors
+/// 空串、相对路径、含 `..`、无父目录、父目录不存在
+pub fn validate_write_target(raw: &str) -> Result<PathBuf, (&'static str, String)> {
+    check_lexical(raw)?;
+    let p = Path::new(raw);
+    let parent = p
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .ok_or_else(|| {
+            (
+                E_PATH_NOT_FOUND,
+                format!("write target has no parent directory: {raw}"),
+            )
+        })?;
+    if !parent.is_dir() {
+        return Err((
+            E_PATH_NOT_FOUND,
+            format!("write target parent directory does not exist: {parent:?}"),
+        ));
+    }
+    Ok(p.to_path_buf())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
