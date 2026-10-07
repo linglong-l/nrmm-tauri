@@ -691,11 +691,12 @@ pub fn save_customizations(
     game_mods_path: &Path,
     game: TargetGame,
 ) -> Result<SaveCustomizationsResult> {
-    let main_ini_name = game.d3dx_ini_name();
-    // d3dx.ini 和 d3dx_user.ini 位于游戏根目录（Mods 的父目录），不在 Mods/ 内
-    let game_root = game_mods_path.parent().unwrap_or(game_mods_path);
-    let main_ini_path = game_root.join(main_ini_name);
-    let user_ini_path = game_root.join("d3dx_user.ini");
+    // d3dx.ini 与 d3dx_user.ini 位于游戏根（Mods 的父目录），不在 Mods/ 内。
+    // 推导失败（无父目录 / 父目录不存在）直接报错：原实现的 `unwrap_or(game_mods_path)`
+    // 兜底会把「游戏根」退化成 Mods 目录本身，于是主 INI 被写进模组树且毫无提示。
+    let game_root = crate::core::mod_path_utils::GameRoot::from_mods_root(game_mods_path)?;
+    let main_ini_path = game_root.main_ini(game.d3dx_ini_name());
+    let user_ini_path = game_root.user_ini();
 
     if !main_ini_path.exists() {
         return Ok(SaveCustomizationsResult {

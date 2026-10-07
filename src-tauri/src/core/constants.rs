@@ -14,6 +14,11 @@ use regex::Regex;
 /// NRMM 管理的模组根目录名，所有模组都存放在此目录下
 pub const MANAGED_FOLDER: &str = "_MANAGED_";
 
+/// 用户自定义主 INI（位于游戏根，与 d3dx.ini 同级；3Dmigoto 存在即自动加载）
+///
+/// NRMM 不覆盖用户在此文件中的自定义段，故与按游戏命名的主 INI（`d3dx.ini`）分开登记。
+pub const D3DX_USER_INI: &str = "d3dx_user.ini";
+
 /// NRMM 移除模组/分组的回收目录名（位于 Mods 根目录，与 _MANAGED_ 同级）
 /// 对齐 NRMM 原版常量 `managedRemovedFolderName = "DISABLED_MANAGED_REMOVED"`
 pub const MANAGED_REMOVED_FOLDER: &str = "DISABLED_MANAGED_REMOVED";

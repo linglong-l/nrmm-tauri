@@ -199,8 +199,26 @@ Tauri v2 为任何实现 `serde::Deserialize` 的类型自动提供 `tauri::Comm
   （F6：命令签名不得出现名为 `*_path`/`*paths`/`mod_dir` 的 `String`；
   F7：`commands/` 内禁止直接调用 `validate_managed_path`，防止半迁移状态固化）。
 
-### 已知残留（本方案不覆盖）
+### 游戏根：唯一越过 Mods 锚点的写路径（`core::mod_path_utils::GameRoot`）
 
-`enable_mutex_mod` 的兄弟改名循环在**单个函数内**逐个 `fs::rename(..)?`，中途失败会留下
-半禁用状态；类型化边界只保证「目标在根内且存在」，不保证批量操作的原子性，需在同批的
-预检 + 回滚改造里收口。
+`d3dx.ini` / `d3dx_user.ini` 位于 **Mods 的父目录**，即路径校验锚点之外。此前四处各自
+写一遍 `parent().unwrap_or(...)`，其中三处是写路径：一旦 Mods 根无父目录（盘根），
+兜底会把「游戏根」退化成 Mods 目录本身，主 INI 就被写进模组树且毫无提示。
+
+现收敛为一个由**服务端推导**的类型：`GameRoot::from_mods_root()` 要求父目录存在且是目录，
+否则 `Err`（`[NO_GAME_ROOT]` / `[GAME_ROOT_NOT_FOUND]`）。它不是 IPC 入参，任何命令都
+无法由前端指定它，锚点本身仍只能经 `set_game_mods_path` 登记。`Deref<Target = Path>`
+使既有 `game_root.join(..)` 调用点无需改写。
+
+采用口径按语义分档：
+
+| 位置 | 语义 | 推导失败时 |
+| :--- | :--- | :--- |
+| `mod_update_pipeline::update_mod_data` | 写主 INI 与 include 基准 | 传播 `Err`（宁可失败也不写错位置） |
+| `mod_ini_admin::save_customizations` | 写 `d3dx_user.ini` | 传播 `Err` |
+| `mod_restore::restore_all_inis` | 尽力还原主 INI | 跳过该步 + `warn`，模组级还原照常 |
+
+已知残留（有意未在本批处理）：`mod_ini_admin.rs` 里 `d3d11.dll` 能力探测仍用
+`managed_path.parent().and_then(parent).unwrap_or(managed_path)`，失败时静默退回默认按键
+模板。它是**读探测**而非越界写入，危害等级低，但同样该收进 `GameRoot`；改造需要
+`dll_capability` 先暴露「默认模板」入口，避免在此处硬编码模板名。

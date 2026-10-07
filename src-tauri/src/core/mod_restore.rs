@@ -37,21 +37,24 @@ pub fn restore_all_inis(game_mods_path: &Path) -> Result<RestoredCount> {
     let mut restored = 0u32;
     let mut failed = 0u32;
 
-    // d3dx.ini 位于游戏根（Mods 父目录），不在 Mods/ 内
-    let game_root = game_mods_path.parent().unwrap_or(game_mods_path);
-    let ini_path = game_root.join("d3dx.ini");
-    let backup_path = ini_path.with_extension(constants::BACKUP_EXTENSION);
-    if backup_path.exists() {
-        match fs::copy(&backup_path, &ini_path) {
-            Ok(_) => {
-                restored += 1;
-                fs::remove_file(&backup_path).ok();
-            }
-            Err(e) => {
-                log::error!("Failed to restore main INI {}: {}", ini_path.display(), e);
-                failed += 1;
+    // d3dx.ini 位于游戏根（Mods 父目录），不在 Mods/ 内。
+    // 主 INI 还原是尽力而为的一小步：游戏根无法确立时跳过并告警，模组级还原照常进行；
+    // 原实现用 `unwrap_or(game_mods_path)` 兜底，会跑到 Mods 里找主 INI 回路（静默错位置）。
+    match crate::core::mod_path_utils::GameRoot::from_mods_root(game_mods_path) {
+        Ok(game_root) => {
+            let ini_path = game_root.main_ini("d3dx.ini");
+            let backup_path = ini_path.with_extension(constants::BACKUP_EXTENSION);
+            if backup_path.exists() {
+                if let Err(e) = fs::copy(&backup_path, &ini_path) {
+                    log::error!("Failed to restore main INI {}: {}", ini_path.display(), e);
+                    failed += 1;
+                } else {
+                    restored += 1;
+                    fs::remove_file(&backup_path).ok();
+                }
             }
         }
+        Err(e) => log::warn!("跳过主 INI 还原：{e}"),
     }
 
     let managed_folder = game_mods_path.join(constants::MANAGED_FOLDER);

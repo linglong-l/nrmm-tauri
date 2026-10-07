@@ -111,7 +111,7 @@ pub fn update_mod_data(
 
     // 游戏根目录（d3dx.ini 所在位置）。
     // 所有 include 路径必须相对于此基准计算，因为 3Dmigoto 将 include 路径相对于 d3dx.ini 目录解析。
-    let game_root = game_mods_path.parent().unwrap_or(game_mods_path);
+    let game_root = crate::core::mod_path_utils::GameRoot::from_mods_root(game_mods_path)?;
 
     // 阶段计时：migrate/prepare（目录迁移 + 创建 + 模板 INI 准备）
     let t_migrate_prepare = std::time::Instant::now();
