@@ -11,8 +11,32 @@ allow = [
     "Unicode-3.0",
 ]
 
-# 明确禁止会“传染”你的开源项目的强 Copyleft 协议
-deny = ["GPL-3.0", "AGPL-3.0", "GPL-2.0"]
+# 按 crate 精确放行，不进全局 allow：以后别的 crate 撞上同名协议仍会报错，
+# 好让新增依赖的许可证变化第一时间被看见（2026-10-09 首次跑通审计暴露的 5 条）
+exceptions = [
+    # 公有领域 dedication，无义务
+    { allow = ["CC0-1.0"], crate = "notify" },
+    # 同上，且备选 MIT-0（无署名要求的 MIT）
+    { allow = ["CC0-1.0", "MIT-0"], crate = "ppmd-rust" },
+    # Apache-2.0 加 LLVM 例外，宽松；例外条款只放开「编译器插件输出」方向
+    { allow = ["Apache-2.0 WITH LLVM-exception"], crate = "target-lexicon" },
+    # 根证书清单，CDLA 管的是数据/文档而非代码，宽松共享
+    { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
+    # libbzip2 自带声明，非标准 SPDX 标识；实为 BSD-风格三条款
+    { allow = ["bzip2-1.0.6"], crate = "libbz2-rs-sys" },
+]
 
-# 遇到没有声明许可证的依赖，直接拦截（防止法律风险）
-unlicensed = "deny"
+# 迁移于 2026-10-09：本机与 CI（taiki-e/install-action 装 latest）都是 cargo-deny 0.20.x，
+# 而 0.16 起本节移除了 `deny` 与 `unlicensed` 两键——留着它们会让整份配置校验失败，
+# CI 的 `cargo deny check` 因此从未产出任何审计结果。语义在新版本里由默认规则承接：
+#   - 强 Copyleft（GPL-2.0/GPL-3.0/AGPL-3.0）：allow 是白名单，不在表内即判错，无需重复登记。
+#     往 allow 里加协议前先确认不会顺带放行传染性的那几个。
+#   - 无许可证可判定的 crate：默认即报错；确需放行时为其补 [licenses.clarify] 条目，
+#     并核对 LICENSE 文件哈希，而不是放宽白名单。
+
+[advisories]
+# RUSTSEC-2024-0370：proc-macro-error 1.0.4 已停止维护，官方无安全升级可用。它只在构建期
+# 被旧宏生态拉入编译，不进运行时产物，故按风险接受处理。拉它的那一环换代后删掉本条重跑审计。
+ignore = [
+    { id = "RUSTSEC-2024-0370", reason = "构建期宏依赖，不进运行时产物；官方无安全升级" },
+]
