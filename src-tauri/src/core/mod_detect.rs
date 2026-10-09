@@ -154,8 +154,8 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
     // 深度扫描仅处理 group_xx 目录，会遗漏 MutexGroup（非group目录）下的模组。
     // 需求要求非group目录参与 hash 冲突检测，故改用轻量扫描以包含两类分组。
     let scan_result = crate::core::mod_scan_light::scan_mods_light(game_mods_path)?;
-    // 三元组：(mod_name, mod_path, ini_path)
-    // 记录 INI 文件路径以支持前端悬浮提示和点击展开详情
+    // 三元组：(mod_name, mod_path, ini_path)——记录 INI 路径供前端悬浮/展开详情。
+    // 冲突按模组判定（unique_mod_count），不按分组排除。
     let mut hash_to_mods: HashMap<String, Vec<(String, String, PathBuf)>> = HashMap::new();
     let mut scanned_mods = 0u32;
     let mut scanned_hashes = 0u32;
@@ -171,8 +171,9 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
         let group_disabled = parent_disabled || group.group_disabled;
         let is_normal = group.group_type == GroupType::NormalGroup;
         for mod_data in &group.mods {
-            // NormalGroup 仅扫描 is_active 模组；MutexGroup 扫描所有启用模组
-            // 两者均需检查 group_disabled，避免被禁用分组下的模组参与检测
+            // NormalGroup：仅扫描已选择（is_active）模组——非激活备用模组不运行，其 hash 不参与冲突。
+            // MutexGroup：扫描所有启用模组——不管是否属于同一分组，hash 按模组获取。
+            // 两者均检查 group_disabled，排除被禁用分组下的整棵子树。
             let should_scan = if is_normal {
                 mod_data.is_active
                     && !mod_data.disabled
@@ -223,7 +224,8 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
         );
     }
 
-    // 筛选冲突：同一 hash 被 ≥2 个不同模组使用
+    // 筛选冲突：同一 hash 被 ≥2 个不同模组使用（按模组判定，不按分组排除——
+    // "不管是否属于同一分组，hash 按模组获取"）。非冲突 hash 经 filter_map 过滤，不返回前端（降低 IPC）。
     let mut conflicts: Vec<HashConflict> = hash_to_mods
         .into_iter()
         .filter_map(|(hash, mods)| {
@@ -237,7 +239,7 @@ pub fn detect_hash_conflicts(game_mods_path: &Path) -> Result<HashConflictResult
                     unique_entries.push((name, path, ini));
                 }
             }
-            // 仅当涉及 ≥2 个不同模组时才算冲突
+            // 冲突判定：同一 hash 被 ≥2 个不同模组使用（按模组，不按分组）
             let unique_mod_count = unique_entries
                 .iter()
                 .map(|(n, _, _)| n.as_str())

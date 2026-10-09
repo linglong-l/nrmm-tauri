@@ -71,21 +71,32 @@ pub async fn add_group(
             let group_path = managed_folder.join(&dir_name);
             fs::create_dir(&group_path).map_err(|e| e.to_string())?;
 
+            // 对齐 NRMM _createGroupIni / create_group_ini：ini 文件名 = group_{N}.ini
+            //（与目录名一致），内容用 TEMPLATE_GROUP 替换 {group_x}/{x}，末尾去换行（对齐 Dart）。
             let template_str = String::from_utf8_lossy(crate::resources::TEMPLATE_GROUP);
             let ini_content = template_str
                 .replace("{group_x}", &dir_name)
                 .replace("{x}", &group_num.to_string());
-            let ini_path = group_path.join("ModFolder.ini");
+            let ini_content = ini_content.trim_end_matches(['\r', '\n']);
+            let ini_path = group_path.join(format!("group_{}.ini", group_num));
             crate::utils::atomic_write(&ini_path, ini_content.as_bytes())
                 .map_err(|e| e.to_string())?;
 
-            if let Some(custom_name) = group_name {
+            // 创建分组级 selectedindex（对齐 create_group_ini：默认 "0" = 未选中任何模组）
+            let selectedindex_path = group_path.join(constants::SELECTED_INDEX_FILE);
+            if !selectedindex_path.exists() {
+                crate::utils::atomic_write(&selectedindex_path, b"0").map_err(|e| e.to_string())?;
+            }
+
+            // 自定义显示名写入 groupname 标记文件（对齐 rename_group:371 + read_groupname_marker）：
+            // 目录名恒为 group_N（is_group_xx_dir 判定 NormalGroup 的依据，不可改），
+            // 自定义名由扫描器从 groupname 文件读取为 group.name 显示。
+            if let Some(custom_name) = group_name.as_deref() {
                 let trimmed = custom_name.trim();
                 if !trimmed.is_empty() && trimmed != dir_name {
-                    let new_group_path = managed_folder.join(trimmed);
-                    if !new_group_path.exists() {
-                        fs::rename(&group_path, &new_group_path).map_err(|e| e.to_string())?;
-                    }
+                    let groupname_path = group_path.join("groupname");
+                    crate::utils::atomic_write(&groupname_path, trimmed.as_bytes())
+                        .map_err(|e| e.to_string())?;
                 }
             }
 
@@ -102,6 +113,56 @@ pub async fn add_group(
 
     let _ = game;
     Ok(result)
+}
+
+/// 添加互斥分组（MutexGroup）：在 `_MANAGED_` 下创建用户命名的非 `group_xx` 目录。
+///
+/// 与 [`add_group`]（创建 `group_N` 普通分组）互补：mutex 分组为命名目录，
+/// 内含子分组/模组（扫描器按 `is_group_xx_dir` 区分类型）。不写 `ModFolder.ini`
+/// （mutex 分组为容器节点，非叶子模组；与 `create_subfolder` 创建子分组一致）。
+///
+/// # Errors
+/// - 分组名为空
+/// - `_MANAGED_` 目录创建失败
+/// - 目标目录已存在 / 权限不足
+#[tauri::command]
+pub async fn add_mutex_group(
+    game: String,
+    mods_path: ManagedPath,
+    group_name: String,
+) -> Result<(), String> {
+    let game = parse_game(&game)?;
+    let mods_path = mods_path.into_canonical();
+    let trimmed = group_name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("分组名不能为空".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let managed_folder = mods_path.join(constants::MANAGED_FOLDER);
+        if !managed_folder.exists() {
+            fs::create_dir_all(&managed_folder).map_err(|e| e.to_string())?;
+        }
+        let target = managed_folder.join(&trimmed);
+        fs::create_dir(&target).map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => "该名称的文件夹已存在，请换一个名称".to_string(),
+            std::io::ErrorKind::PermissionDenied => {
+                "没有权限在此位置创建文件夹，请检查权限设置".to_string()
+            }
+            _ => e.to_string(),
+        })?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    {
+        let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
+        cache.invalidate_all();
+    }
+
+    let _ = game;
+    Ok(())
 }
 
 /// 删除分组（移至回收站）

@@ -10,7 +10,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta, ToggleModResult, ExternalEditorInfo } from '../types'
+import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta, ToggleModResult, ExternalEditorInfo, PlatformInfo } from '../types'
 import { logger } from './logger'
 
 /**
@@ -234,12 +234,23 @@ export async function openInEditor(editorId: string, targetPath: string): Promis
 /**
  * 添加新分组
  * 后端命令：add_group
- * @param modsPath 模组文件夹路径
  * @param game 目标游戏类型
+ * @param modsPath 模组文件夹路径
  * @param groupName 分组名称（可选，默认自动生成）
  */
-export async function addGroup(modsPath: string, game: string, groupName?: string): Promise<UpdateResult> {
-  return safeInvoke<UpdateResult>('add_group', { modsPath, game, groupName })
+export async function addGroup(game: string, modsPath: string, groupName?: string): Promise<UpdateResult> {
+  return safeInvoke<UpdateResult>('add_group', { game, modsPath, groupName })
+}
+
+/**
+ * 添加互斥分组（MutexGroup，顶层命名目录）
+ * 后端命令：add_mutex_group
+ * @param game 目标游戏类型
+ * @param modsPath 模组文件夹路径
+ * @param groupName 分组名称（必填，作为目录名）
+ */
+export async function addMutexGroup(game: string, modsPath: string, groupName: string): Promise<void> {
+  return safeInvoke<void>('add_mutex_group', { game, modsPath, groupName })
 }
 
 /**
@@ -726,10 +737,10 @@ export async function compareVersions(current: string, latest: string): Promise<
  * 后端命令：get_platform_info
  *
  * 返回OS类型、按键模拟支持、前台检测支持等
- * @returns JSON序列化的PlatformInfo字符串
+ * @returns PlatformInfo 结构体（后端 serde 序列化为对象，Tauri 自动反序列化）
  */
-export async function getPlatformInfo(): Promise<string> {
-  return safeInvoke<string>('get_platform_info')
+export async function getPlatformInfo(): Promise<PlatformInfo> {
+  return safeInvoke<PlatformInfo>('get_platform_info')
 }
 
 /**

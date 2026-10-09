@@ -493,7 +493,7 @@ onUnmounted(() => {
 
 /* 悬停：轻微放大 + 白色边框提示当前位置 */
 .mod-card:hover:not(.no-scale):not(.is-empty) {
-  transform: scale(1.03);
+  transform: scale(1.05);
 }
 .mod-card:hover:not(.no-scale):not(.is-empty) .card-image {
   border-color: #ffffff;
@@ -681,7 +681,7 @@ onUnmounted(() => {
 
 .card-name {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.75);
+  color: rgba(255, 255, 255, 0.8);
   text-align: center;
   width: 100%;
   margin-top: 6px;
@@ -692,7 +692,11 @@ onUnmounted(() => {
 }
 
 .mod-card.is-selected .card-name {
-  color: #fff;
+  color: #ffffff;
+}
+
+.mod-card:hover:not(.no-scale):not(.is-empty) .card-name {
+  color: #ffffff;
 }
 
 .empty-name {

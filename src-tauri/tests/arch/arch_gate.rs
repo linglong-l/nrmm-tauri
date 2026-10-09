@@ -217,10 +217,11 @@ fn f2_tauri_command_ownership() {
         "F2 命令归属违规（新增命令一律落 commands/）:\n{}",
         offenders.join("\n")
     );
-    // 基线锚点：当前 85 个命令（2026-10-06 新增 set_game_mods_path：改写 Mods 根锚点的唯一入口；
+    // 基线锚点：当前 86 个命令（2026-10-09 新增 add_mutex_group：创建顶层互斥分组；
+    // 2026-10-06 新增 set_game_mods_path：改写 Mods 根锚点的唯一入口；
     // 新增/删除命令时同步更新此值，防止静默漂移）
     assert_eq!(
-        total, 85,
+        total, 86,
         "命令总数基线漂移（当前 {}），确认后更新锚点",
         total
     );

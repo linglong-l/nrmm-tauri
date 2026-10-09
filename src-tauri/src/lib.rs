@@ -390,6 +390,7 @@ pub fn run() {
             commands::mod_mod_commands::batch_toggle_mods,
             commands::mod_group_commands::validate_subfolder_name,
             commands::mod_group_commands::create_subfolder,
+            commands::mod_group_commands::add_mutex_group,
             commands::mod_mod_commands::disable_all_mods_in_group,
             commands::mod_mod_commands::enable_all_mods_in_group,
             commands::mod_group_commands::remove_group_ex,

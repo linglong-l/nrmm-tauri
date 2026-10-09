@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "decorations": true,
+        "decorations": false,
         "transparent": true,
         "shadow": false,
         "center": true,

@@ -5,13 +5,53 @@
 //! ## 路径序列化约定
 //! 写入本模块结构的 `PathBuf` 均在遍历阶段（`mod_scanner` / `fs_walk`）通过
 //! `to_str().is_none()` 校验并跳过非法 UTF-8 条目，字段必然为合法路径。
-//! 因此 IPC 序列化直接依赖 serde 对 `PathBuf` 的默认实现（合法路径即输出
-//! 标准 UTF-8 String），无需自定义 lossy 或跳过逻辑。
+//! Windows 下 `canonicalize` 产生 `\\?\` verbatim 前缀，IPC 序列化时经
+//! [`strip_verbatim`] / `path_ser` 统一去除，前端显示用户可读路径；前端回传
+//! 路径经 `ManagedPath::into_canonical` 重新规范化，内部逻辑不受影响。
 
 use super::enums::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// 去除 Windows `canonicalize` 产生的 `\\?\`（或 `\\?\UNC\`）verbatim 前缀，
+/// 返回用户可读路径；非 Windows 原样返回。供 IPC 序列化与设置存储共用。
+pub fn strip_verbatim(s: &str) -> String {
+    #[cfg(windows)]
+    {
+        if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{rest}")
+        } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+            rest.to_string()
+        } else {
+            s.to_string()
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        s.to_string()
+    }
+}
+
+/// 路径字段的 IPC 序列化辅助：序列化时统一去除 verbatim 前缀。
+mod path_ser {
+    use serde::ser::{SerializeSeq, Serializer};
+    use std::path::Path;
+
+    pub fn str_path<S: Serializer>(s: &str, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(&super::strip_verbatim(s))
+    }
+    pub fn pathbuf<S: Serializer>(p: &Path, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(&super::strip_verbatim(&p.to_string_lossy()))
+    }
+    pub fn vec_str<S: Serializer>(v: &[String], ser: S) -> Result<S::Ok, S::Error> {
+        let mut seq = ser.serialize_seq(Some(v.len()))?;
+        for s in v {
+            seq.serialize_element(&super::strip_verbatim(s))?;
+        }
+        seq.end()
+    }
+}
 
 /// 按键绑定数据
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -152,6 +192,7 @@ pub struct ModIniData {
 #[serde(rename_all = "camelCase")]
 pub struct ModData {
     /// 模组相对路径
+    #[serde(serialize_with = "path_ser::str_path")]
     pub mod_path: String,
     /// 模组名称（原始目录名）
     pub mod_name: String,
@@ -314,6 +355,7 @@ impl Default for ModData {
 #[serde(rename_all = "camelCase")]
 pub struct ModGroupData {
     /// 分组路径
+    #[serde(serialize_with = "path_ser::str_path")]
     pub group_path: String,
     /// 分组名称（原始目录名）
     pub group_name: String,
@@ -321,7 +363,7 @@ pub struct ModGroupData {
     #[serde(default)]
     pub name: String,
     /// 完整路径
-    #[serde(default)]
+    #[serde(default, serialize_with = "path_ser::pathbuf")]
     pub full_path: PathBuf,
     /// 分组 ID
     pub group_id: u32,
@@ -443,9 +485,10 @@ pub struct HashConflictEntry {
     /// 模组名称
     pub mod_name: String,
     /// 模组目录路径（绝对路径）
+    #[serde(serialize_with = "path_ser::str_path")]
     pub mod_path: String,
     /// 包含该 hash 的 INI 文件绝对路径列表（同一模组可能多个 INI 共用同一 hash）
-    #[serde(default)]
+    #[serde(default, serialize_with = "path_ser::vec_str")]
     pub ini_vec: Vec<String>,
 }
 
@@ -493,6 +536,7 @@ pub struct LibInMod {
     /// 模组名称
     pub mod_name: String,
     /// 模组路径
+    #[serde(serialize_with = "path_ser::str_path")]
     pub mod_path: String,
     /// 检测到的库名称列表（如 "ORFix"、"TexFx"）
     pub lib_names: Vec<String>,
@@ -525,11 +569,13 @@ pub struct NonExistentLib {
 #[serde(rename_all = "camelCase")]
 pub struct GroupDelta {
     /// 旧分组路径（前端树定位键；分组自身重命名时与 newGroup.groupPath 不同）
+    #[serde(serialize_with = "path_ser::str_path")]
     pub old_group_path: String,
     /// 新分组节点（含 mods/children/统计，后端局部重扫产物、已按既定规则排序）；
     /// None 表示分组已整体移除（remove_group 等场景）
     pub new_group: Option<ModGroupData>,
     /// 该分组旧的扁平 modPath 列表（前端从扁平 mods 列表剔除这些条目后 splice 新条目）
+    #[serde(serialize_with = "path_ser::vec_str")]
     pub old_mod_paths: Vec<String>,
 }
 

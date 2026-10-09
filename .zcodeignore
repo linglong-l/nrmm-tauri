@@ -1,0 +1,143 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+*~
+
+# TRAE IDE
+.trae/
+
+# Work Buddy
+.workbuddy/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Rust debug symbols
+*.pdb
+
+# Python Venv
+.venv/
+
+# Python cache
+__pycache__/
+.mypy_cache/
+
+# Tauri WiX toolchain (Windows installer)
+src-tauri/WixTools/
+
+# TypeScript
+*.tsbuildinfo
+# NOTE: auto-imports.d.ts 与 components.d.ts 由 unplugin-auto-import 生成，
+# 但 vue-tsc 在 vite 生成它们之前就运行，故必须纳入版本控制，否则全新 clone 构建必失败。
+# auto-imports.d.ts
+# components.d.ts
+
+# Tauri build artifacts / local release outputs
+dist-win/
+dist-linux/
+latest.json
+
+# Temporary files
+*.tmp
+*.temp
+
+/docs/*
+/GitProjects/
+# CI / signing secrets（防止误提交公钥/私钥/密码）
+/Key/
+target/
+AGENTS.md
+clippy_output.txt
+SESSION_CONTEXT.md
+/tmp/
+/docs/
+/.workbuddy/memory/
+.gstack/
+deliverables/
+/nrmm_recover_tmp/
+.Inventory/
+
+# AI / Agent 辅助文件（本地会话与工具产物，一律不入库）
+# 注：已跟踪的 AGENTS.md / CLAUDE.md / overview.md 需 `git rm --cached` 才能真正忽略。
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.cursor/
+.codebuddy/
+.continue/
+.aider*
+.copilot/
+.github/copilot-instructions.md
+.windsurf/
+.kilocode/
+.roo/
+.gemini/
+.clinerules/
+overview.md
+# 测试目录：源码子目录入库，数据集/运行时产物忽略
+src-tauri/tests/datasets/
+src-tauri/tests/runtime/
+src-tauri/tests/.tmp_deep_compare_out/
+src-tauri/tests/*.py
+!src-tauri/tests/compare/
+/*.py
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

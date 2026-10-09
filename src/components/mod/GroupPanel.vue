@@ -22,7 +22,7 @@
         type="button"
         class="add-group-btn"
         :title="t('mods.addGroup')"
-        @click="handleAddGroup"
+        @click="handleAddGroupWithDialog"
       >
         <el-icon :size="18"><Plus /></el-icon>
       </button>
@@ -88,7 +88,7 @@ import type { Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Edit, Delete, FolderOpened, FolderAdd, VideoPause, VideoPlay, Fold } from '@element-plus/icons-vue'
 import type { ModData, ModGroupData } from '@/types'
-import { addGroup, renameGroup, removeGroupEx, openGroupFolder, validateSubfolderName, createSubfolder, isPathNotFoundError, disableAllModsInGroup, enableAllModsInGroup } from '@/utils/tauri'
+import { addGroup, addMutexGroup, renameGroup, removeGroupEx, openGroupFolder, validateSubfolderName, createSubfolder, isPathNotFoundError, disableAllModsInGroup, enableAllModsInGroup } from '@/utils/tauri'
 import { recoverFromPathNotFound } from '@/composables/usePathNotFoundRecovery'
 import { predictToggledPath } from '@/utils/modPath'
 import { placeContextMenu } from '@/utils/contextMenuPosition'
@@ -313,9 +313,11 @@ async function handleAddGroup() {
   closeContextMenu()
   if (!guardDuringUpdate()) return
   if (contextGroup.value && isMutexGroup(contextGroup.value)) {
-    await handleAddSubGroupAutoNamed()
+    // 右键 mutex「添加分组」= 在父级目录新建同级 mutex（与右键分组共用父级目录）
+    await handleAddMutexSibling()
     return
   }
+  // 右键 group_xx / 空白 → 顶层 group_xx
   await handleAddGroupXx()
 }
 
@@ -354,90 +356,103 @@ async function handleAddGroupXx() {
 }
 
 /**
- * 在互斥组下创建子分组（默认名自动生成，如 未命名_int1）
- * 流程：收集已有名称 → 生成不冲突的默认名 → 输入框实时校验 → 后端二次校验 → 二次确认 → 创建目录
+ * 独立「添加分组」按钮：弹框选择 Group / Mutex 类型（均置顶于 _MANAGED_）。
+ * - Group：调用 addGroup（自动 group_N 编号，名称可选）。
+ * - Mutex：调用 createSubfolder(_MANAGED_, name) 新建顶层互斥分组（非 group_xx 目录）。
  */
-async function handleAddSubGroupAutoNamed() {
+async function handleAddGroupWithDialog() {
   if (!guardDuringUpdate()) return
-  if (!contextGroup.value || !isMutexGroup(contextGroup.value)) return
-  // 从当前非group分组的一级子目录中收集已有名称，生成默认 未命名_int{自增}
-  const parentPath = contextGroup.value.groupPath
-  const parentName = contextGroup.value.name || contextGroup.value.groupName
-  // 收集该分组直接子分组名（children）以便去重
-  const existingNames = new Set<string>()
-  for (const child of (contextGroup.value.children || [])) {
-    existingNames.add(child.name || child.groupName || '')
+  if (!settingsStore.currentModsPath) {
+    ElMessage.warning(t('Please select a group first'))
+    return
   }
-  // 也遍历 mods 防止模组目录同名冲突
-  for (const mod of (contextGroup.value.mods || [])) {
-    existingNames.add(mod.name || '')
-  }
-  let defaultName = ''
-  let i = 1
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const candidate = `未命名_int${i}`
-    if (!existingNames.has(candidate)) {
-      defaultName = candidate
-      break
+  // Step 1：选类型（confirm=Group, cancel=Mutex, close=放弃）
+  let type: 'group' | 'mutex'
+  try {
+    await ElMessageBox.confirm(t('mods.addGroup'), t('mods.addGroup'), {
+      confirmButtonText: 'Group',
+      cancelButtonText: 'Mutex',
+      distinguishCancelAndClose: true,
+      type: 'info',
+    })
+    type = 'group'
+  } catch (action: unknown) {
+    if (action === 'cancel') {
+      type = 'mutex'
+    } else {
+      return
     }
-    i++
   }
-
-  const illegalCharsRegex = /[\\/:*?"<>|\x00-\x1F]/g
+  // Step 2：输入名称（Mutex 必填；Group 可空走自动编号）
+  let name: string | undefined
   try {
     const { value } = await ElMessageBox.prompt(
-      t('mods.subfolderName'),
-      t('mods.addSubfolder'),
+      t('Group Name'),
+      t('mods.addGroup') + (type === 'group' ? ' (Group)' : ' (Mutex)'),
       {
         confirmButtonText: t('common.confirm'),
         cancelButtonText: t('common.cancel'),
-        inputPlaceholder: t('mods.subfolderName'),
-        inputValue: defaultName,
-        showClose: true,
         inputValidator: (val) => {
-          if (!val || !val.trim()) {
-            return t('Group name cannot be empty')
-          }
-          const trimmed = val.trim()
-          if (trimmed === '.' || trimmed === '..') {
-            return '文件夹名称不能为 "." 或 ".."'
-          }
-          const matches = trimmed.match(illegalCharsRegex)
-          if (matches) {
-            const uniqueChars = [...new Set(matches)].join(' ')
-            return `目录名包含非法字符: ${uniqueChars}`
-          }
-          if (trimmed.endsWith('.') || trimmed.endsWith(' ')) {
-            return '文件夹名称末尾不能是点或空格'
+          if (type === 'mutex') {
+            return (val && val.trim().length > 0) || '分组名不能为空'
           }
           return true
-        }
+        },
       }
     )
-    const trimmed = value?.trim()
-    if (!trimmed) return
-    const [sanitizedName, isValid, errorMsg] = await validateSubfolderName(parentPath, trimmed)
+    name = value?.trim() || undefined
+  } catch {
+    return
+  }
+  // Step 3：创建
+  try {
+    if (type === 'group') {
+      await addGroup(settingsStore.currentGame, settingsStore.currentModsPath, name)
+    } else {
+      await addMutexGroup(settingsStore.currentGame, settingsStore.currentModsPath, name!)
+    }
+    await modsStore.refresh()
+    ElMessage.success(t('Group added successfully'))
+  } catch (e: unknown) {
+    ElMessage.error(t('Failed to add group') + ': ' + (e instanceof Error ? e.message : String(e)))
+  }
+}
+
+/**
+ * 右键 mutex「添加分组」：在右键分组的父级目录下新建同级 mutex。
+ * 与「添加子分组」（handleAddSubGroup，子级）互补——同级共用父目录，子级以右键分组为父。
+ */
+async function handleAddMutexSibling() {
+  if (!guardDuringUpdate()) return
+  if (!contextGroup.value) return
+  const parentGroup = contextGroup.value
+  // 右键分组同级 → 父级目录 = 右键分组路径去掉末段
+  const parentPath = parentGroup.groupPath.replace(/[\\/][^\\/]*$/, '')
+  const parentDisplayName = parentGroup.name || parentGroup.groupName
+  closeContextMenu()
+
+  try {
+    const { value } = await ElMessageBox.prompt(
+      t('Group Name'),
+      t('mods.addGroup') + ' → ' + parentDisplayName,
+      {
+        confirmButtonText: t('common.confirm'),
+        cancelButtonText: t('common.cancel'),
+        inputValidator: (val) => (val && val.trim().length > 0) || '分组名不能为空',
+      }
+    )
+    const name = value.trim()
+    const [sanitizedName, isValid, errorMsg] = await validateSubfolderName(parentPath, name)
     if (!isValid) {
       ElMessage.error(errorMsg)
       return
     }
-    await ElMessageBox.confirm(
-      `确定在「${parentName}」下创建子分组「${sanitizedName}」吗？`,
-      t('mods.addSubfolder'),
-      {
-        confirmButtonText: t('common.confirm'),
-        cancelButtonText: t('common.cancel'),
-        type: 'info',
-        customClass: 'app-confirm-box'
-      }
-    )
     await createSubfolder(parentPath, sanitizedName)
     await modsStore.refresh()
-    ElMessage.success(`已在「${parentName}」下创建子分组「${sanitizedName}」`)
+    ElMessage.success(t('Group added successfully'))
   } catch (e: unknown) {
     if (e !== 'cancel' && e !== 'close') {
-      ElMessage.error('创建子分组失败: ' + (e instanceof Error ? e.message : String(e)))
+      ElMessage.error(t('Failed to add group') + ': ' + (e instanceof Error ? e.message : String(e)))
     }
   }
 }

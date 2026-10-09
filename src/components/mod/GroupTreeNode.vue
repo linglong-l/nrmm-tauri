@@ -254,14 +254,9 @@ function handleClick(e: MouseEvent) {
     return
   }
 
-  // 无直接模组（仅子分组或空）：仅展开/收起，不触发选择
-  if (!props.group.mods || props.group.mods.length === 0) {
-    toggleExpand()
-    return
-  }
-
-  // 有直接模组：先触发展开+分组选择
-  if (!expanded.value) {
+  // 选中分组（含空分组/容器分组）——空 Mutex 分组也需可选以便右键/删除；
+  // 有子分组时同时展开（与既有"有直接模组"行为一致），展开/收起亦可经箭头按钮单独操作
+  if (hasChildren.value && !expanded.value) {
     toggleExpand()
   }
   emit('select', props.group)
@@ -391,11 +386,11 @@ function onContextMenu(e: MouseEvent) {
 }
 
 .group-item:not(.active) .group-avatar.avatar-mutex {
-  border-color: #7f7f7f;
+  border-color: #979797;
 }
 
 .group-item:not(.active) .group-avatar.avatar-mutex.avatar-disabled {
-  border-color: #a22c24;
+  border-color: #c73126;
 }
 
 .group-item.has-children .group-avatar {
@@ -423,7 +418,7 @@ function onContextMenu(e: MouseEvent) {
 
 .group-name {
   font-size: 9px;
-  color: rgba(255, 255, 255, 0.5);
+  color: rgba(243, 242, 242, 1);
   text-align: center;
   width: 100%;
   overflow: hidden;

@@ -16,8 +16,8 @@ use crate::core::mod_scan_marker::{
     read_groupname_marker, read_or_create_marker_file, restore_safe_active,
 };
 use crate::core::mod_scan_util::{
-    compute_disk_signature, dir_has_ini_file, find_icon_path, is_disabled_dir, is_group_xx_dir,
-    metadata_mtime_nanos, sort_mods_light, DISABLED_PREFIX_RE,
+    compute_disk_signature, create_empty_slot_mod, dir_has_ini_file, find_icon_path,
+    is_disabled_dir, is_group_xx_dir, metadata_mtime_nanos, sort_mods_light, DISABLED_PREFIX_RE,
 };
 use crate::models::enums::GroupType;
 use crate::models::mod_data::{ModData, ModGroupData};
@@ -296,6 +296,11 @@ pub(crate) fn scan_mutex_group_dfs(
 
     // 对每个分组内的 mods 排序
     for group in &mut groups {
+        // 空 mutex 分组注入 None 空槽位（对齐 scan_normal_group_light:395）：
+        // 即使无模组也提供空槽位，供前端网格渲染可交互占位卡（双击添加模组）。
+        if group.mods.is_empty() {
+            group.mods.push(Arc::new(create_empty_slot_mod(0)));
+        }
         sort_mods_light(&mut group.mods);
         // 重新分配 mod_index（make_mut：构建期各 Arc 唯一持有，原地改零拷贝）
         for (idx, m) in group.mods.iter_mut().enumerate() {
@@ -343,6 +348,8 @@ pub(crate) fn scan_mutex_group_dfs(
     }
     let mut all_mods: Vec<Arc<ModData>> = Vec::with_capacity(256);
     collect_mods(&groups[0], &mut all_mods);
+    // 对齐 scan_mods_light:240——扁平列表不含 None 空槽位（仅组内 mods 保留以供网格渲染）
+    all_mods.retain(|m| m.name != "None");
 
     Ok((Some(groups.remove(0)), all_mods))
 }

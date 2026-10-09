@@ -36,7 +36,7 @@ export async function initPlatform() {
   _initPromise = (async () => {
     try {
       const raw = await getPlatformInfo()
-      platformInfo.value = raw as unknown as PlatformInfo
+      platformInfo.value = raw
       initialized.value = true
     } catch (e) {
       logger.error('Platform', 'Failed to get platform info, defaulting to Windows', e)

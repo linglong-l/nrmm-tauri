@@ -71,8 +71,10 @@ pub async fn set_game_mods_path(game: String, path: String) -> Result<AppSetting
     crate::ipc::mods_root_registry::register(&canon).map_err(|e| e.to_string())?;
 
     let updated = settings_store::update_settings(|s| {
-        s.game_mods_path
-            .insert(game_enum, canon.to_string_lossy().into_owned());
+        s.game_mods_path.insert(
+            game_enum,
+            crate::models::strip_verbatim(&canon.to_string_lossy()),
+        );
     })
     .map_err(|e| e.to_string())?;
 
