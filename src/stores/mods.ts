@@ -511,25 +511,6 @@ export const useModsStore = defineStore('mods', () => {
   }
 
   /**
-   * 过滤后的模组列表（用于搜索和收藏过滤）
-   * 注意：此过滤仅作用于扁平mods列表，不影响分组视图
-   */
-  const filteredMods = computed(() => {
-    let result = mods.value
-    if (searchQuery.value) {
-      const q = searchQuery.value.toLowerCase()
-      result = result.filter((m) => {
-        const name = (m.modName || '').toLowerCase()
-        return name.includes(q)
-      })
-    }
-    if (showFavoritesOnly.value) {
-      result = result.filter((m) => m.isFavorite)
-    }
-    return result
-  })
-
-  /**
    * 选中分组
    * @param group 要选中的分组对象
    */
@@ -671,6 +652,7 @@ export const useModsStore = defineStore('mods', () => {
       if (epoch !== loadEpoch) return
       groups.value = result.groups || []
       mods.value = result.mods || []
+      loadError.value = null
       // 非法 UTF-8 路径提示：刷新同样上报（文件变化后可能新出现非法条目）
       invalidUtf8Notice.value = applyInvalidUtf8Notice(result.invalidUtf8Count ?? 0, result.invalidUtf8Entries)
 
@@ -702,6 +684,9 @@ export const useModsStore = defineStore('mods', () => {
       // 过期请求的异常静默（新请求已接管）；当前请求的异常记录日志
       if (epoch === loadEpoch) {
         logger.error('ModsStore', 'Failed to refresh mods', e)
+        // C18：与 loadMods 同口径（refresh 由 watcher/导入触发，静默失败无感知；PATH_NOT_FOUND 走既有恢复流程）
+        const msg = e instanceof Error ? e.message : String(e)
+        loadError.value = msg.includes('[PATH_NOT_FOUND]') ? null : msg
       }
     } finally {
       // 仅当前请求可复位 loading（同 loadMods 的竞态防护）
@@ -1594,14 +1579,6 @@ export const useModsStore = defineStore('mods', () => {
   }
 
   /**
-   * 选中模组（写入INI，处理互斥组逻辑）
-   * @deprecated 请使用 activateModByIndex 代替（双击启用）或 highlightMod（单击高亮）
-   */
-  async function selectModByIndex(modIdx: number) {
-    await activateModByIndex(modIdx)
-  }
-
-  /**
    * 清空所有模组数据
    * 用于切换游戏或页面卸载时重置状态
    *
@@ -1770,7 +1747,6 @@ export const useModsStore = defineStore('mods', () => {
     currentGroup,
     currentGroupMods,
     selectedMod,
-    filteredMods,
     keybindTargetMod,
     selectGroup,
     loadMods,
@@ -1783,7 +1759,6 @@ export const useModsStore = defineStore('mods', () => {
     toggleModLocal,
     batchToggleModLocal,
     removeModLocal,
-    selectModByIndex,
     highlightMod,
     activateModByIndex,
     deselectOrDisableNoneSlot,

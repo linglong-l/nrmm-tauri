@@ -47,6 +47,7 @@ import { useModsStore } from '@/stores/mods'
 import { useSettingsStore } from '@/stores/settings'
 import { importItems, isFileWatcherRunning, currentWatchedPath } from '@/utils/tauri'
 import { logger } from '@/utils/logger'
+import { isWatcherOnModsPath } from '@/utils/modPath'
 import { listen } from '@tauri-apps/api/event'
 import type { ImportItemResult } from '@/utils/tauri'
 import type { ManagedPartialUpdatePayload } from '@/types'
@@ -196,9 +197,7 @@ onMounted(async () => {
       await modsStore.startWatching()
     } else {
       const watchedPath = await currentWatchedPath()
-      const expectedManaged = `${settingsStore.currentModsPath.replace(/[\\/]$/, '')}\\${'_MANAGED_'}`.replace(/\//g, '\\')
-      const actualNormalized = watchedPath?.replace(/\//g, '\\') ?? ''
-      if (!actualNormalized.endsWith(expectedManaged.slice(-12))) {
+      if (!isWatcherOnModsPath(watchedPath, settingsStore.currentModsPath)) {
         await modsStore.startWatching()
       }
     }

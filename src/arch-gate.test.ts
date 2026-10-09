@@ -27,7 +27,7 @@ const rel = (p: string) => relative(srcRoot, p).replaceAll('\\', '/')
 describe('前端架构健身函数', () => {
   it('F4: 文件行数棘轮（新文件 ≤800；存量豁免只减不增）', () => {
     const LEGACY_CAPS: Record<string, number> = {
-      'stores/mods.ts': 1823,
+      'stores/mods.ts': 1796,
       'views/SettingsView.vue': 1509,
       'components/mod/GroupPanel.vue': 961,
       'utils/tauri.ts': 902,

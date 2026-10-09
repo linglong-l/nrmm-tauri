@@ -40,6 +40,7 @@ import { logger } from '@/utils/logger'
 import { DEV_MODE } from '@/utils/env'
 import { switchTargetGame, checkModCacheValid, isFileWatcherRunning, currentWatchedPath, wasWindowRecreated } from '@/utils/tauri'
 import { startPendingNoticeObserver } from '@/utils/pendingNotice'
+import { isWatcherOnModsPath } from '@/utils/modPath'
 import { clearThumbnailUrlCache } from '@/composables/useThumbnailUrl'
 import type { TargetGame, OverlayController } from '@/types'
 import { IpcEvent } from '@/events'
@@ -472,12 +473,8 @@ onMounted(async () => {
         if (cacheValid) {
             if (!watcherRunning) {
               await modsStore.startWatching()
-            } else {
-              const expectedManaged = `${s.currentModsPath.replace(/[\\/]$/, '')}\\${'_MANAGED_'}`.replace(/\//g, '\\')
-              const actualNormalized = watchedPath?.replace(/\//g, '\\') ?? ''
-              if (!actualNormalized.endsWith(expectedManaged.slice(-12))) {
-                await modsStore.startWatching()
-              }
+            } else if (!isWatcherOnModsPath(watchedPath, s.currentModsPath)) {
+              await modsStore.startWatching()
             }
             // 数据已被 120s 清空（window-hidden-clear-data）但后端缓存仍有效：
             // 直接重载模组数据恢复 UI，避免留下空界面

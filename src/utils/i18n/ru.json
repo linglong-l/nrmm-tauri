@@ -291,6 +291,7 @@
   "Failed to remove group": "Не удалось удалить группу",
   "Favorite": "Избранное",
   "Unfavorite": "Убрать из избранного",
+  "Failed to toggle favorite": "Не удалось изменить статус избранного",
   "Pin to top": "Закрепить наверху",
   "Unpin from top": "Открепить сверху",
   "Hotkeys": "Горячие клавиши",

@@ -9,7 +9,7 @@
  * - 路径无分隔符 / 反斜杠分隔符
  */
 import { describe, it, expect } from 'vitest'
-import { predictToggledPath, stripDisabledPrefix, isDisabledDir } from './modPath'
+import { predictToggledPath, stripDisabledPrefix, isDisabledDir, isWatcherOnModsPath, isPathUnderDir } from './modPath'
 
 describe('isDisabledDir / stripDisabledPrefix（后端口径镜像）', () => {
   it('识别 DISABLED 前缀（含分隔符与大小写混合）', () => {
@@ -71,5 +71,52 @@ describe('predictToggledPath（幂等 + 前缀增删）', () => {
     const original = p('ModA')
     const disabled = predictToggledPath(original, true)
     expect(predictToggledPath(disabled, false)).toBe(original)
+  })
+})
+
+/** 反斜杠常量：测试内以拼接构造 Windows 路径，避免源码散布转义 */
+const BS = String.fromCharCode(92)
+/** 把 `/` 风格路径转为 Windows 反斜杠风格 */
+const win = (path: string): string => path.split('/').join(BS)
+
+describe('isWatcherOnModsPath（监控路径归属判定）', () => {
+  const mods = win('D:/Games/GG/Mod')
+  const managed = win('D:/Games/GG/Mod/_MANAGED_')
+
+  it('监控已挂在目标 _MANAGED_ 上 → true', () => {
+    expect(isWatcherOnModsPath(managed, mods)).toBe(true)
+  })
+
+  it('分隔符形态与尾部多余分隔符不影响判定', () => {
+    expect(isWatcherOnModsPath('D:/Games/GG/Mod/_MANAGED_', mods)).toBe(true)
+    expect(isWatcherOnModsPath(managed, mods + BS)).toBe(true)
+  })
+
+  it('监控挂在别处 → false', () => {
+    // 旧实现只截尾若干字符比较，会把另一个同样以 Mod 结尾的根误判为已就位
+    expect(isWatcherOnModsPath(win('C:/Other/Mod/_MANAGED_'), mods)).toBe(false)
+    expect(isWatcherOnModsPath(win('D:/Games/GG/Mod/_MANAGED_/group_1'), mods)).toBe(false)
+    expect(isWatcherOnModsPath(win('D:/Games/GG/DISABLEDMod/_MANAGED_'), mods)).toBe(false)
+  })
+
+  it('未运行 / 空路径 → false', () => {
+    expect(isWatcherOnModsPath(null, mods)).toBe(false)
+    expect(isWatcherOnModsPath(undefined, mods)).toBe(false)
+    expect(isWatcherOnModsPath(managed, '')).toBe(false)
+  })
+})
+
+describe('isPathUnderDir（路径段边界归属）', () => {
+  it('段名互为前缀时不误判', () => {
+    expect(isPathUnderDir('/m/group_1/ModA', '/m/group_1')).toBe(true)
+    expect(isPathUnderDir('/m/group_11/ModA', '/m/group_1')).toBe(false)
+    expect(isPathUnderDir('/m/group_1_x/ModA', '/m/group_1')).toBe(false)
+  })
+
+  it('相等路径不算「之下」，分隔符混用仍可比', () => {
+    expect(isPathUnderDir('/m/group_1', '/m/group_1')).toBe(false)
+    expect(isPathUnderDir(win('/m/group_1/ModA'), '/m/group_1')).toBe(true)
+    expect(isPathUnderDir('/m/group_1/ModA', win('/m/group_1'))).toBe(true)
+    expect(isPathUnderDir(win('/m/group_11/ModA'), win('/m/group_1'))).toBe(false)
   })
 })

@@ -292,6 +292,7 @@
   "Failed to remove group": "移除群組失敗",
   "Favorite": "收藏",
   "Unfavorite": "取消收藏",
+  "Failed to toggle favorite": "切換收藏狀態失敗",
   "Pin to top": "置頂",
   "Unpin from top": "取消置頂",
   "Hotkeys": "快捷鍵",

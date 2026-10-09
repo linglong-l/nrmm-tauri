@@ -158,6 +158,7 @@ import { useI18n } from 'vue-i18n'
 import { Lock, Warning, Picture, Switch, Star, Edit, Delete, FolderOpened, Plus, Setting, Check } from '@element-plus/icons-vue'
 import type { ModData } from '@/types'
 import { renameMod } from '@/utils/tauri'
+import { isPathUnderDir } from '@/utils/modPath'
 import { useThumbnailUrl } from '@/composables/useThumbnailUrl'
 import { useModsStore } from '@/stores/mods'
 import { useImageLazyLoad } from '@/composables/useImageLazyLoad'
@@ -288,8 +289,8 @@ const isSelected = computed(() => {
   if (isNoneSlot.value || !mod.value) return false
   const currentGroup = modsStore.currentGroup
   if (!currentGroup) return false
-  // 检查模组是否属于当前选中分组（通过modPath前缀匹配）
-  const modBelongsToCurrentGroup = mod.value.modPath.startsWith(currentGroup.groupPath)
+  // 检查模组是否属于当前选中分组（按完整路径段边界判定，避免 group_1 误匹配 group_11）
+  const modBelongsToCurrentGroup = isPathUnderDir(mod.value.modPath, currentGroup.groupPath)
   return modBelongsToCurrentGroup &&
          modsStore.selectedModIndex === props.modIndex &&
          !modsStore.showFavoritesOnly

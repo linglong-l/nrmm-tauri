@@ -164,9 +164,10 @@ export function useModContextMenu(
         modsStore.toggleFavoriteLocal(modPath, isFav)
       }
     } catch (e: unknown) {
-      // 失败：回翻收藏态
+      // 失败：回翻收藏态并向用户显式反馈（仅写日志则表现为「点了没反应」）
       modsStore.toggleFavoriteLocal(modPath, wasFav)
-      logger.error('ModCard', 'Failed to toggle favorite', e)
+      logger.error('ModContextMenu', 'Failed to toggle favorite', e)
+      ElMessage.error(t('Failed to toggle favorite') + ': ' + (e instanceof Error ? e.message : String(e)))
     }
   }
 

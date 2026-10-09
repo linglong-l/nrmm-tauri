@@ -311,6 +311,7 @@
   "Failed to remove group": "移除分组失败",
   "Favorite": "收藏",
   "Unfavorite": "取消收藏",
+  "Failed to toggle favorite": "切换收藏状态失败",
   "Pin to top": "置顶",
   "Unpin from top": "取消置顶",
   "Hotkeys": "快捷键",

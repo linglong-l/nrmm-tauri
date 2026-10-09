@@ -61,3 +61,41 @@ export function predictToggledPath(path: string, targetDisabled: boolean): strin
   if (stripped === name || stripped === '') return path
   return join(stripped)
 }
+
+/** 后端常量 `constants::MANAGED_FOLDER` */
+const MANAGED_FOLDER = '_MANAGED_'
+
+/** 统一分隔符为 `\` 并剥离尾部多余分隔符（两侧同口径，Linux 下亦自洽） */
+function normalizePathShape(path: string): string {
+  return path.replace(/[\\/]$/, '').replace(/\//g, '\\')
+}
+
+/**
+ * 判断文件监控当前挂载路径是否已指向 `modsPath` 下的 `_MANAGED_`。
+ *
+ * 口径来源：后端 `watcher_core.rs` 以 `Path::from(modsPath).join(MANAGED_FOLDER)` 记录
+ * `watched_path`，其中 `modsPath` 即前端原样传入的设置值（不经 canonicalize），
+ * 故归一化后可直接全等比较——不必再靠截尾若干字符来容忍前缀差异。
+ *
+ * @param watchedPath `currentWatchedPath()` 返回值（未运行时为 null）
+ * @param modsPath 当前设置的 Mods 根路径
+ */
+export function isWatcherOnModsPath(
+  watchedPath: string | null | undefined,
+  modsPath: string,
+): boolean {
+  if (!watchedPath || !modsPath) return false
+  return normalizePathShape(watchedPath) === `${normalizePathShape(modsPath)}\\${MANAGED_FOLDER}`
+}
+
+/**
+ * 判断路径是否位于某目录之下（仅在完整路径段边界处成立）。
+ *
+ * 直接 `startsWith(dir)` 会在段名互为前缀时误判（`group_1` 会匹配 `group_11/ModA`），
+ * 故先补齐分隔符边界再比较；两侧分隔符形态混用时统一为 `\`。
+ */
+export function isPathUnderDir(path: string, dir: string): boolean {
+  const normalizedDir = dir.replace(/\//g, '\\')
+  const bounded = normalizedDir.endsWith('\\') ? normalizedDir : `${normalizedDir}\\`
+  return path.replace(/\//g, '\\').startsWith(bounded)
+}

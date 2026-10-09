@@ -36,7 +36,7 @@
         <!-- 大按钮卡片区：重量级操作按钮 -->
         <div class="big-btn-cards">
           <!-- 更新模组数据按钮：执行完整INI扫描和修复（重量级操作） -->
-            <el-button class="big-main-btn" @click="handleUpdateModData" :loading="updatingModData">
+            <el-button class="big-main-btn" @click="handleUpdateModData" :loading="modsStore.isUpdatingModData">
               {{ t('settings.updateModData') }}
             </el-button>
             <p class="big-btn-desc">{{ t('Press this after you add/remove/edit/fix mods (usually when add/edit/remove mods directly via File Explorer)') }}</p>
@@ -264,7 +264,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { useSettingsStore } from '@/stores/settings'
 import { useModsStore } from '@/stores/mods'
 import { usePlatform } from '@/stores/platform'
-import { selectFolder, checkForUpdates, getAppVersion, updateModData, restoreManagedFolder } from '@/utils/tauri'
+import { selectFolder, checkForUpdates, getAppVersion, restoreManagedFolder } from '@/utils/tauri'
 import type { RestoreManagedResult, OverlayController } from '@/types'
 import { logger } from '@/utils/logger'
 import { useDragScroll } from '@/composables/useDragScroll'
@@ -328,8 +328,6 @@ function updateTargetProcess(val: string) {
   settingsStore.setCurrentTargetProcess(val)
 }
 
-/** 更新模组数据加载状态 */
-const updatingModData = ref(false)
 /** 检查更新加载状态 */
 const checkingUpdates = ref(false)
 /** 应用版本号 */
@@ -404,7 +402,7 @@ async function handleUpdateModData() {
     updateOverlay?.show('loading')
     const start = Date.now()
     try {
-      const result = await modsStore.updateModData() ?? (await updateModData(settingsStore.currentGame, settingsStore.currentModsPath))
+      const result = await modsStore.updateModData()
       updateOverlay?.show('completed', { result, durationMs: Date.now() - start })
     } catch (e: unknown) {
       const msg = typeof e === 'string' ? e : (e instanceof Error ? e.message : String(e))
@@ -645,7 +643,7 @@ async function handleCheckUpdates() {
   try {
     const result = await checkForUpdates()
     if (result) {
-      ElMessage.info(t('Updater.newVersionAvailable', { version: result }))
+      ElMessage.info(t('Updater.newVersionAvailable', { version: result.version }))
     } else {
       ElMessage.info(t('Updater.upToDate'))
     }

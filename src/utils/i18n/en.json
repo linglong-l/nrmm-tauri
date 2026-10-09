@@ -311,6 +311,7 @@
   "Failed to remove group": "Failed to remove group",
   "Favorite": "Favorite",
   "Unfavorite": "Unfavorite",
+  "Failed to toggle favorite": "Failed to toggle favorite",
   "Pin to top": "Pin to top",
   "Unpin from top": "Unpin from top",
   "Hotkeys": "Hotkeys",
