@@ -439,7 +439,13 @@ pub async fn simulate_keys(combo: String, game: Option<String>) -> Result<(), St
         if let Some(game_str) = game {
             if let Ok(game_enum) = crate::hotkey::parse_game(&game_str) {
                 if let Some(first_pn) = game_enum.process_names().first() {
-                    let _ = sim.set_target_process(first_pn);
+                    if let Err(e) = sim.set_target_process(first_pn) {
+                        log::warn!(
+                            "[simulate_keys] set_target_process({}) failed: {}",
+                            first_pn,
+                            e
+                        );
+                    }
                 }
             }
         }

@@ -376,7 +376,10 @@ fn execute_action(app_handle: &AppHandle, action: HotkeyAction) {
     if only_in_game {
         let process_names = game.process_names();
         if let Some(first_pn) = process_names.first() {
-            let _ = simulator.set_target_process(first_pn);
+            // 定向失败不阻断模拟，但必须留痕，否则「热键按了没反应」在此静默发生
+            if let Err(e) = simulator.set_target_process(first_pn) {
+                log::warn!("[hotkey] set_target_process({}) failed: {}", first_pn, e);
+            }
         }
     }
     match action {
