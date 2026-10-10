@@ -15,6 +15,8 @@
 #   - 故意不同步 src-tauri/Cargo.lock：仓库内该文件是 nrmm-rust 0.3.0 遗留的过期锁，
 #     唯一有效的是仓库根目录 Cargo.lock，拷过去会污染 Linux 构建。
 #   - 排除 target/（构建产物，跨平台不可复用）与 gen/（build.rs 会重新生成）。
+#   - 会同步 .cargo/：平台差异化 rustflags 定义在 .cargo/config.toml，缺了它 Linux 构建
+#     会静默丢掉 --as-needed / relro / now 链接加固（cargo 按当前目录向上查找该文件）。
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -43,6 +45,14 @@ if command -v rsync >/dev/null 2>&1; then
     rsync -a "$SRC/Cargo.toml" "$DST/Cargo.toml"
     rsync -a "$SRC/Cargo.lock" "$DST/Cargo.lock"
 
+    # .cargo/ 必须一起拷：平台差异化 rustflags（--as-needed / relro / now）定义在
+    # .cargo/config.toml，cargo 从当前目录向上找该文件。漏掉它不会报错，只会让 Linux
+    # 构建树静默丢掉这几条链接加固，产物与真实构建口径不一致。
+    if [ -d "$SRC/.cargo" ]; then
+        echo "==> rsync: .cargo/（平台 rustflags）"
+        rsync -a --delete "$SRC/.cargo/" "$DST/.cargo/"
+    fi
+
     echo "==> rsync: 前端构建输入（src/ package.json vite.config.ts 等）"
     for f in src package.json package-lock.json vite.config.ts vitest.config.ts tsconfig.json tsconfig.node.json index.html; do
         [ -e "$SRC/$f" ] || continue
@@ -62,6 +72,10 @@ else
     done
     cp -u "$SRC/Cargo.toml" "$DST/Cargo.toml"
     cp -u "$SRC/Cargo.lock" "$DST/Cargo.lock"
+    if [ -d "$SRC/.cargo" ]; then
+        mkdir -p "$DST/.cargo"
+        cp -u "$SRC/.cargo/"* "$DST/.cargo/"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -83,8 +97,10 @@ check "core/fs_walk.rs 已同步" \
     "test -f \"$DST/src-tauri/src/core/fs_walk.rs\""
 check "core/mod.rs 含 'pub mod fs_walk;'" \
     "grep -q 'pub mod fs_walk;' \"$DST/src-tauri/src/core/mod.rs\""
-check "mod_scanner.rs ScanResult 含 invalid_utf8_count 字段" \
-    "grep -q 'pub invalid_utf8_count: usize' \"$DST/src-tauri/src/core/mod_scanner.rs\""
+check "扫描域含 invalid_utf8_count 字段（不锁定文件名，拆分后不再失效）" \
+    "grep -rq 'pub invalid_utf8_count' \"$DST/src-tauri/src/core/\""
+check ".cargo/config.toml 已同步（Linux 侧链接加固依赖它）" \
+    "test -f \"$DST/.cargo/config.toml\""
 check "models/mod_data.rs 已同步到最新版本" \
     "cmp -s \"$SRC/src-tauri/src/models/mod_data.rs\" \"$DST/src-tauri/src/models/mod_data.rs\""
 check "src-tauri/Cargo.lock 未被污染（不随同步拷贝）" \
