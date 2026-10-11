@@ -763,13 +763,13 @@ onBeforeUnmount(() => {
 /*
  * 设置页面所有按钮兜底：
  * - 胶囊形状
- * - 背景色 #848484
+ * - 背景透明（描边胶囊），hover 才填充灰
  * - opacity 0.4（hover 0.6 / active 0.75）
  * 四个自定义按钮类（normal-btn/big-main-btn/browse-folder-btn）
  * 已在上文各自覆盖，这里补齐 .el-button 默认样式的兜底，避免遗漏按钮。
  */
 .settings-view :deep(.el-button) {
-  background: #848484 !important;
+  background: transparent !important;
   border-color: #848484 !important;
   color: var(--text-primary, #fff) !important;
   opacity: 0.84;
@@ -821,7 +821,7 @@ onBeforeUnmount(() => {
 }
 
 .process-input :deep(.el-input__wrapper) {
-  background: rgba(255, 255, 255, 0.04);
+  background: #1a1a1a;
   border: 1px solid rgba(255, 255, 255, 0.18);
   box-shadow: none !important;
   border-radius: 6px;
@@ -859,7 +859,7 @@ onBeforeUnmount(() => {
 }
 
 .path-input :deep(.el-input__wrapper) {
-  background: rgba(255, 255, 255, 0.04);
+  background: #1a1a1a;
   border: 1px solid rgba(255, 255, 255, 0.15);
   box-shadow: none !important;
   border-radius: 6px;
@@ -882,7 +882,7 @@ onBeforeUnmount(() => {
 /* Mods路径非法时的错误态样式 */
 .path-input.is-error :deep(.el-input__wrapper) {
   border-color: #f56c6c !important;
-  background: rgba(245, 108, 108, 0.06);
+  background: #271f1f;
 }
 
 .path-input.is-error :deep(.el-input__inner) {
@@ -913,7 +913,7 @@ onBeforeUnmount(() => {
   font-size: 14px;
   font-weight: 600;
   padding: 0 22px;
-  background: #848484 !important;
+  background: transparent !important;
   border: 2px solid #848484 !important;
   color: var(--text-primary) !important;
   /* 胶囊：44px / 2 */
@@ -929,7 +929,7 @@ onBeforeUnmount(() => {
 }
 
 .big-main-btn:hover {
-  transform: scale(1.02);
+  transform: scale(1.05);
   background: #ffffff;
   border-color: #ffffff !important;
 }
@@ -1036,13 +1036,13 @@ onBeforeUnmount(() => {
 
 .field-select {
   min-width: 180px;
-  background: transparent !important;
+  background: #1a1a1a !important;
   color: #ffffff;
   /* 变量层统一覆盖ElementPlus默认圆角，确保多层嵌套节点都为胶囊 */
-  --el-bg-color: rgba(255, 255, 255, 0.8);
-  --el-fill-color-blank: transparent;
-  --el-select-bg-color: transparent;
-  --el-input-bg-color: transparent;
+  --el-bg-color: #1a1a1a;
+  --el-fill-color-blank: #1a1a1a;
+  --el-select-bg-color: #1a1a1a;
+  --el-input-bg-color: #1a1a1a;
   --el-border-radius: 20px;
   --el-border-radius-base: 20px;
   --el-input-border-radius: 20px;
@@ -1095,9 +1095,9 @@ onBeforeUnmount(() => {
 
 .field-select :deep(.el-select) {
   color: #ffffff;
-  background: transparent !important;
-  --el-bg-color: transparent;
-  --el-fill-color-blank: transparent;
+  background: #1a1a1a !important;
+  --el-bg-color: #1a1a1a;
+  --el-fill-color-blank: #1a1a1a;
   --el-border-radius: 20px;
   --el-border-radius-base: 20px;
   --el-input-border-radius: 20px;
@@ -1114,7 +1114,7 @@ onBeforeUnmount(() => {
  */
 .field-select :deep(.el-select__wrapper) {
   border-radius: 20px !important;
-  background: transparent !important;
+  background: #1a1a1a !important;
   box-shadow: none !important;
   overflow: visible;
   /* 可见的淡灰边框，和 input__wrapper 边框保持一致的颜色与厚度 */
@@ -1126,12 +1126,12 @@ onBeforeUnmount(() => {
 }
 .field-select :deep(.el-select__wrapper:hover) {
   border-color: #9a9a9a !important;
-  background: rgba(255, 255, 255, 0.06) !important;
+  background: #242424 !important;
 }
 .field-select :deep(.el-select__wrapper.is-focused),
 .field-select :deep(.el-select__wrapper.is-focus) {
   border-color: var(--accent-primary, #4a9eff) !important;
-  background: rgba(255, 255, 255, 0.04) !important;
+  background: #202020 !important;
   box-shadow: 0 0 0 1px rgba(74, 158, 255, 0.2) inset;
 }
 
@@ -1145,11 +1145,11 @@ onBeforeUnmount(() => {
  * 胶囊下拉框：
  * - 4px 灰色(#848484)边框
  * - 高度40px，border-radius=20px（pill胶囊形）
- * - 保持透明背景，仅悬停/获取焦点时给极弱底色
+ * - 不透明深色底(#1a1a1a)，悬停/聚焦时提亮，避免下拉与正文重叠发虚
  */
 .field-select :deep(.el-input__wrapper) {
-  background-color: transparent !important;
-  background: transparent !important;
+  background-color: #1a1a1a !important;
+  background: #1a1a1a !important;
   border: 4px solid #848484 !important;
   box-shadow: none !important;
   border-radius: 20px !important;
@@ -1163,13 +1163,13 @@ onBeforeUnmount(() => {
 
 .field-select :deep(.el-input__wrapper:hover) {
   border-color: #9a9a9a !important;
-  background: rgba(255, 255, 255, 0.06) !important;
+  background: #242424 !important;
   border-radius: 20px !important;
 }
 
 .field-select :deep(.el-input__wrapper.is-focus) {
   border-color: var(--accent-primary, #4a9eff) !important;
-  background: rgba(255, 255, 255, 0.04) !important;
+  background: #202020 !important;
   border-radius: 20px !important;
   box-shadow: 0 0 0 1px rgba(74, 158, 255, 0.2) inset;
 }
@@ -1200,10 +1200,10 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
 }
 
-/* Mods目录浏览按钮：胶囊 + 灰色#848484背景 + 0.4透明度（文件夹图标） */
+/* Mods目录浏览按钮：胶囊 + 透明背景 + 0.4透明度，hover 填充灰（文件夹图标） */
 .browse-folder-btn {
-  background: #848484 !important;
-  background-color: #848484 !important;
+  background: transparent !important;
+  background-color: transparent !important;
   border: 2px solid #848484 !important;
   color: var(--text-primary) !important;
   opacity: 0.4;
@@ -1225,11 +1225,11 @@ onBeforeUnmount(() => {
   font-size: 18px;
 }
 
-/* 还原区按钮：胶囊 + 灰色#848484背景 + 0.4透明度（大面积虚线边框风格保持，但背景改为纯色灰） */
+/* 还原区按钮：胶囊 + 透明背景 + 虚线描边（大面积虚线风格保持，hover 才填充灰） */
 .restore-zone-btn {
   width: 100%;
   padding: 24px 20px;
-  background-color: #848484 !important;
+  background-color: transparent !important;
   border: 2px dashed;
   /* 胶囊 */
   border-radius: 999px;
@@ -1294,8 +1294,8 @@ onBeforeUnmount(() => {
 }
 
 .normal-btn {
-  background: #848484 !important;
-  background-color: #848484 !important;
+  background: transparent !important;
+  background-color: transparent !important;
   border: 2px solid #848484 !important;
   /* 胶囊 */
   border-radius: 999px !important;
@@ -1396,11 +1396,11 @@ onBeforeUnmount(() => {
 :deep(.el-slider__button) {
   border-color: var(--accent-primary, #4a9eff);
   background: #121212;
-  box-shadow: 0 0 0 2px var(--accent-primary, #4a9eff), 0 2px 6px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 0 0 2px var(--accent-primary, #4a9eff), 0 2px 6px rgba(0, 0, 0, 0);
 }
 
 :deep(.el-slider__stop) {
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.2);
 }
 
 /* 响应式：窄屏 进程/路径上下排列 */
@@ -1424,7 +1424,8 @@ onBeforeUnmount(() => {
 .settings-select-dropdown.el-popper,
 .settings-select-dropdown.el-popper.is-light {
   border: 1px solid #848484 !important;
-  background: transparent;
+  /* 弹层被 teleport 到 body，透明底会让下方正文透进选项文字 → 必须不透明 */
+  background: #1a1a1a;
   --el-popper-border-color: #848484;
   --el-popper-border-radius: 8px;
   /* 覆盖 EP 内部浅色填充变量，防止首选项/末次悬停回落为白色背景 */
