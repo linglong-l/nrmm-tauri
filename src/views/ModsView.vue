@@ -1,5 +1,6 @@
 <template>
   <div
+    ref="dropZoneRef"
     class="mods-view"
     @dragover.prevent="handleDragOver"
     @dragleave.prevent="handleDragLeave"
@@ -49,6 +50,7 @@ import { importItems, isFileWatcherRunning, currentWatchedPath } from '@/utils/t
 import { logger } from '@/utils/logger'
 import { isWatcherOnModsPath } from '@/utils/modPath'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import type { ImportItemResult } from '@/utils/tauri'
 import type { ManagedPartialUpdatePayload } from '@/types'
 import { IpcEvent } from '@/events'
@@ -62,6 +64,10 @@ const settingsStore = useSettingsStore()
  * 用于控制拖拽覆盖提示层的显示/隐藏
  */
 const isDragging = ref(false)
+/** 模组页拖放区根元素引用，原生拖放事件用它做落点命中测试 */
+const dropZoneRef = ref<HTMLElement | null>(null)
+/** 原生拖放事件（onDragDropEvent）的取消监听函数，组件卸载时调用 */
+let unlistenDragDrop: (() => void) | null = null
 /**
  * 托管文件夹变化事件（managed-folder-changed）的取消监听函数
  * 组件卸载时调用以移除 Tauri 事件监听，防止内存泄漏
@@ -108,27 +114,24 @@ function handleDragLeave(e: DragEvent) {
 }
 
 /**
- * 拖放事件处理：导入模组文件/目录
+ * 导入拖放落地的模组文件/目录（原生通道与 HTML5 兜底通道共用）
  *
  * 完整流程：
- * 1. 获取拖拽文件列表，提取每个文件的路径（优先使用 file.path，回退 webkitRelativePath）
+ * 1. 校验落地路径列表非空（真实绝对路径由原生拖放事件给出）
  * 2. 校验：必须已选择游戏路径（currentModsPath）且已选中分组（groupPath），否则 ElMessage 警告
  * 3. 显示加载中提示（ElMessage 持久化 info 提示）
  * 4. 调用后端 importItems（import_item_cmd 命令）批量导入，支持 zip/rar/7z 压缩包和已解压目录混合导入
  * 5. 导入完成后检查结果：有失败项则显示错误提示，全部成功则显示成功提示
  * 6. 关闭加载提示，调用 modsStore.refresh() 刷新模组列表
  *
- * @param e DragEvent 拖拽事件对象，通过 e.dataTransfer.files 获取拖拽文件列表
+ * @param paths 落地项的绝对路径列表（压缩包或已解压目录）
  */
-async function handleDrop(e: DragEvent) {
-  isDragging.value = false
+async function importDroppedPaths(paths: string[]) {
   // 更新模组数据期间禁止导入/拖放：update 正在批量改写 _MANAGED_，导入写入会产生中间态竞态
   if (modsStore.isUpdatingModData) {
-    ElMessage.warning(t('更新模组数据中，请稍后再试'))
+    ElMessage.warning(t('Updating mod data, please wait'))
     return
   }
-  const files = e.dataTransfer?.files
-  if (!files || files.length === 0) return
 
   if (!settingsStore.currentModsPath) {
     ElMessage.warning(t('Please select a game first.'))
@@ -138,19 +141,6 @@ async function handleDrop(e: DragEvent) {
   const group = modsStore.currentGroup
   if (!group || !group.groupPath) {
     ElMessage.warning(t('Please select a group first'))
-    return
-  }
-
-  const paths: string[] = []
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i]
-    const f = file as File & { path?: string }
-    const p = f.path || f.webkitRelativePath
-    if (p) paths.push(p)
-  }
-
-  if (paths.length === 0) {
-    ElMessage.warning(t('No valid paths found'))
     return
   }
 
@@ -186,7 +176,83 @@ async function handleDrop(e: DragEvent) {
   await modsStore.refresh()
 }
 
+/**
+ * HTML5 拖放通道（仅浏览器预览等非 Tauri 环境可达）
+ *
+ * Tauri 运行时下 wry 会 SetAllowExternalDrop(false) 拦截系统文件拖放（见
+ * SettingsView.setupTauriDragDrop 的同款坑注释），此处的 dragover/drop 不会触发，
+ * 且 dataTransfer 里的 file.path 只在 Electron 系存在，本来也拿不到绝对路径。
+ */
+async function handleDrop(e: DragEvent) {
+  isDragging.value = false
+  const files = e.dataTransfer?.files
+  if (!files || files.length === 0) return
+
+  const paths: string[] = []
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i] as File & { path?: string }
+    const p = f.path || f.webkitRelativePath
+    if (p) paths.push(p)
+  }
+
+  if (paths.length === 0) {
+    ElMessage.warning(t('No valid paths found'))
+    return
+  }
+
+  await importDroppedPaths(paths)
+}
+
+/**
+ * 落点是否落在模组页拖放区内
+ *
+ * payload.position 为窗口内物理像素，getBoundingClientRect 返回 CSS 逻辑像素，
+ * 高 DPI（dpr>1）下须先除以 devicePixelRatio，否则区域下半部分会越界无法命中。
+ */
+function isInsideDropZone(x: number, y: number): boolean {
+  const el = dropZoneRef.value
+  if (!el) return false
+  const rect = el.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  const cx = x / dpr
+  const cy = y / dpr
+  return cx >= rect.left && cx <= rect.right && cy >= rect.top && cy <= rect.bottom
+}
+
+/**
+ * 注册 Tauri 原生拖放事件监听 —— 拖拽导入在 Tauri 下唯一可用通道
+ *
+ * enter/over 驱动覆盖层显隐，drop 取 payload.paths（真实绝对路径）走 importDroppedPaths。
+ * 非 Tauri 环境注册失败即跳过，由 HTML5 handleDrop 兜底。
+ */
+async function setupTauriDragDrop() {
+  try {
+    unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload
+      if (payload.type === 'enter' || payload.type === 'over') {
+        isDragging.value = isInsideDropZone(payload.position.x, payload.position.y)
+        return
+      }
+      if (payload.type === 'leave') {
+        isDragging.value = false
+        return
+      }
+      if (payload.type === 'drop') {
+        isDragging.value = false
+        if (isInsideDropZone(payload.position.x, payload.position.y) && payload.paths.length > 0) {
+          void importDroppedPaths(payload.paths)
+        }
+      }
+    })
+  } catch (e) {
+    logger.warn('ModsView', 'Tauri onDragDropEvent unavailable, fallback to HTML5 drag events', e)
+  }
+}
+
 onMounted(async () => {
+  // 拖拽导入：Tauri 下系统文件拖放只能由原生通道收到，挂载即注册
+  await setupTauriDragDrop()
+
   // Phase 4 策略：条件化加载
   // 1. 检查文件监控运行状态，未运行则启动，已运行但路径不对则切换
   // 2. 检查 modsStore.hasData()：缓存不为空则跳过 loadMods（避免重复加载），
@@ -280,6 +346,7 @@ onUnmounted(async () => {
   unlistenManagedFolderChanged?.()
   unlistenManagedPartialUpdate?.()
   unlistenHotkeyRefresh?.()
+  unlistenDragDrop?.()
   // 清理防抖定时器，避免组件卸载后残留定时器触发已销毁的 store
   if (refreshTimer) {
     clearTimeout(refreshTimer)
