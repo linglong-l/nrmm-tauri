@@ -646,9 +646,11 @@ async function handleRemoveGroup() {
     )
     if (groupPath) {
       const delta = await removeGroupEx(groupPath, isGx)
-      // 命令级增量：分组移除后原地 patch（树剔除 + 扁平剔除 + 选中回退，零全量 refresh）
+      // 命令级增量：先瞬时剔除（树+扁平+选中回退），界面不留已删分组
       modsStore.applyGroupDelta(delta)
       ElMessage.success(t('Group removed successfully'))
+      // 增量后仍须显式全量重载：remove_group_ex 会移动被删子树之外的目录（子分组上移 Mods 根、空壳进 DISABLED_MANAGED_REMOVED），delta 覆盖不到，而 watcher 回声已被 lastLocalPatchAt 抑制
+      await modsStore.refresh()
     }
   } catch (e: unknown) {
     if (e !== 'cancel' && e !== 'close') {
