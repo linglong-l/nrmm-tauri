@@ -267,7 +267,9 @@ npm run build:linux
 
 ### 多语言支持
 
-- ✅ 简体中文、繁体中文、English、Русский、Bahasa Indonesia
+- ✅ 界面（WebView 内全部文案）：简体中文、繁体中文、English、Русский、Bahasa Indonesia
+- ⚠ 系统托盘菜单目前仅中文/英文：托盘文案在 Rust 侧另有一张 `TRAY_ZH`/`TRAY_EN` 表，
+  其它语言会回落英文（尚未并入界面语言包）
 
 ### 数据与归档
 
