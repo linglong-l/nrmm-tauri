@@ -132,32 +132,8 @@ pub fn is_ini_backup_whitelisted(file_name: &str) -> bool {
 /// NRMM 在 INI 中添加的禁用标记注释
 pub const DISABLED_BY_NRMM: &str = "DISABLED_BY_NRMM";
 
-/// "无模组" 空槽位的索引值（始终为 -1）
-pub const NOMOD_INDEX: i32 = -1;
-
 /// 普通分组目录前缀：group_1, group_2, ... 等
 pub const MOD_GROUP_FILE_PREFIX: &str = "group_";
-
-/// 模组管理器槽位变量前缀（注入到 d3dx.ini 中）
-pub const SLOT_VAR_PREFIX: &str = "$modmanageragl";
-
-/// 当前选中槽位 ID 变量名（注入到 d3dx.ini）
-pub const MANAGED_SLOT_ID_VAR: &str = "$managed_slot_id";
-
-/// 当前激活分组 ID 变量名
-pub const ACTIVE_GROUP_VAR: &str = "$active_group_id";
-
-/// 当前激活槽位变量名
-pub const ACTIVE_SLOT_VAR: &str = "$active_slot";
-
-/// 分组 ID 变量名
-pub const GROUP_ID_VAR: &str = "$group_id";
-
-/// 禁用 CRC32 修复标记文件名
-pub const DISABLE_CRC_FIX_FILE: &str = "DisableCRC32Fix.ini";
-
-/// INI 文件扩展名
-pub const INI_EXTENSION: &str = ".ini";
 
 /// Windows 平台 7-Zip 可执行文件名
 #[cfg(target_os = "windows")]
@@ -165,10 +141,6 @@ pub const SEVEN_Z_EXECUTABLE: &str = "7z.exe";
 
 /// Linux 平台 7-Zip 可执行文件名
 #[cfg(target_os = "linux")]
-pub const SEVEN_Z_EXECUTABLE: &str = "7zz";
-
-/// macOS 平台 7-Zip 可执行文件名
-#[cfg(target_os = "macos")]
 pub const SEVEN_Z_EXECUTABLE: &str = "7zz";
 
 /// Windows 平台内置 7-Zip 相对路径（相对于 exe 目录）
@@ -186,13 +158,6 @@ pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7za.exe";
 /// 解析逻辑见 `archive_detect::get_bundled_7z_path`。
 #[cfg(target_os = "linux")]
 pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7zz";
-
-/// macOS 平台内置 7-Zip 相对路径（相对于 exe 目录 / `../Resources`）
-#[cfg(target_os = "macos")]
-pub const SEVEN_Z_BUILTIN_PATH: &str = "7z/7zz";
-
-/// 临时解压目录名（在系统临时目录下）
-pub const TEMP_EXTRACT_DIR: &str = "nrmm_extract";
 
 /// 支持的图标文件扩展名列表
 pub const ICON_EXTENSIONS: &[&str] = &[".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"];
@@ -228,30 +193,6 @@ pub const CONDITIONAL_SECTION_PREFIXES: &[&str] = &[
     "CommandList",
 ];
 
-/// 3Dmigoto 覆盖资源键名列表（用于检测可能的崩溃行）
-/// vb/vib/ib: 顶点/索引缓冲区
-/// ps-t/vs-t/cs-t: 纹理采样器（像素/顶点/计算着色器）
-/// ps-/vs-/cs-: 着色器资源
-/// o0-o7: 渲染目标
-/// u0-u7: 无序访问视图
-pub const OVERRIDE_KEYS: &[&str] = &[
-    "vb0", "vb1", "ib", "ps-t0", "ps-t1", "ps-t2", "ps-t3", "ps-t4", "ps-t5", "ps-t6", "ps-t7",
-    "vs-t0", "vs-t1", "vs-t2", "vs-t3", "vs-t4", "vs-t5", "vs-t6", "vs-t7", "ps-", "vs-", "cs-",
-    "o0", "o1", "o2", "o3", "o4", "o5", "o6", "o7", "u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7",
-];
-
-/// 可能导致游戏崩溃的行模式（这些行会被自动注释掉）
-pub const CRASH_LINE_PATTERNS: &[&str] = &[
-    "drawindexed",
-    "drawindexed = auto",
-    "draw = ",
-    "ib = ",
-    "vb0 = ",
-];
-
-/// Windows 最大路径长度限制（用于路径过长检测）
-pub const MAX_PATH: usize = 260;
-
 /// 文件监控事件平息静默期（毫秒）：距最后一次事件 200ms 即处理批次（trailing 静默）。
 ///
 /// 取值动机（2026-09-20 由 1000 下调）：交互式单次操作（右键菜单启停模组）的文件事件
@@ -272,9 +213,6 @@ pub const FILE_WATCHER_OVERFLOW_BACKOFF_BASE_MS: u64 = 1000;
 
 /// 文件监控溢出退避上限（毫秒）：连续溢出批次的静默期逐轮 +1s，封顶此值（R2）
 pub const FILE_WATCHER_MAX_BACKOFF_MS: u64 = 3000;
-
-/// 前台窗口轮询间隔（毫秒）：检测游戏是否在前台
-pub const FOREGROUND_POLL_INTERVAL_MS: u64 = 1000;
 
 // ==========================================================================
 // NRMM 对齐：INI 安全过滤
