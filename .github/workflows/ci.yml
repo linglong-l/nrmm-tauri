@@ -69,6 +69,12 @@ jobs:
       - name: cargo test --lib (单元测试；重夹具集成测试不参与)
         run: cargo test --lib
 
+      # 架构门禁 F1/F2/F4/F5/F6 住在 src-tauri/tests/arch/ 下：clippy --all-targets
+      # 只编译它、从不执行断言，故必须单独跑一次，否则这些门禁只在本地有效。
+      # 该目标不编译 dataset 夹具，且两条夹具测试已 #[ignore]，不会因缺夹具而红。
+      - name: cargo test --test arch_gate (架构门禁)
+        run: cargo test --test arch_gate
+
   frontend-check:
     name: Frontend vitest + vue-tsc
     runs-on: ubuntu-latest
