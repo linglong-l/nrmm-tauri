@@ -42,18 +42,6 @@
             <p class="big-btn-desc">{{ t('Press this after you add/remove/edit/fix mods (usually when add/edit/remove mods directly via File Explorer)') }}</p>
           <br>
 
-            <el-button class="big-main-btn" @click="handleSaveCustomizations">
-              {{ t('settings.saveModCustomizations') }}
-            </el-button>
-            <p class="big-btn-desc">{{ t('settings.saveCustomizationsDesc') }}</p>
-          <br>
-
-            <el-button class="big-main-btn" @click="handleToggleModsEnabled">
-              {{ t('settings.enableDisableMods') }}
-            </el-button>
-            <p class="big-btn-desc">{{ t('settings.enableDisableModsDesc') }}</p>
-          <br>
-
             <el-button class="big-main-btn" @click="handleDetectHashConflicts">
               {{ t('settings.detectHashConflicts') }}
             </el-button>
@@ -81,13 +69,6 @@
         </div>
 
         <br>
-        <!-- 分组文件夹图标设置 -->
-          <h4 class="section-heading">{{ t('settings.groupFolderIcon') }}</h4>
-          <div class="block-row center">
-            <el-button class="normal-btn" @click="handleGenerateFolderIcon">
-              {{ t('settings.generateFolderIcon') }}
-            </el-button>
-          </div>
 
         <!-- 界面缩放滑块 -->
         <div class="section-block">
@@ -216,20 +197,8 @@
           </el-button>
         </div>
 
-        <!-- 底部链接：支持、联系、教程 -->
+        <!-- 底部：版本号（支持/联系/教程三个链接曾是只弹假提示的占位，已随 F-3 决定摘除） -->
         <div class="bottom-links">
-          <button type="button" class="link-item" @click="onSupportClick" :aria-label="t('settings.supportDeveloper')">
-            {{ t('settings.supportDeveloper') }}
-          </button>
-          <span class="link-separator">·</span>
-          <button type="button" class="link-item" @click="onContactClick" :aria-label="t('settings.contactHelp')">
-            {{ t('settings.contactHelp') }}
-          </button>
-          <span class="link-separator">·</span>
-          <button type="button" class="link-item" @click="onTutorialClick" :aria-label="t('settings.tutorial')">
-            {{ t('settings.tutorial') }}
-          </button>
-          <span class="link-separator">·</span>
           <span class="link-separator">v{{ appVersion }}</span>
         </div>
       </div>
@@ -403,28 +372,10 @@ async function handleUpdateModData() {
   }
 }
 
-/** 保存模组自定义（占位功能） */
-function handleSaveCustomizations() {
-  logger.info('SettingsView', 'Save mod customizations (placeholder)')
-  ElMessage.info(t('Feature not implemented (placeholder)'))
-}
-
-/** 切换模组启用/禁用状态 */
-function handleToggleModsEnabled() {
-  logger.info('SettingsView', 'Toggle mods enabled (placeholder)')
-  ElMessage.info(t('Feature not implemented (placeholder)'))
-}
-
 /** 触发 Hash 冲突检测遮罩 */
 function handleDetectHashConflicts() {
   logger.info('SettingsView', 'Detect hash conflicts clicked')
   hashConflictOverlay?.show()
-}
-
-/** 生成文件夹图标（占位功能） */
-function handleGenerateFolderIcon() {
-  logger.info('SettingsView', 'Generate folder icon')
-  ElMessage.info(t('Feature not implemented (placeholder)'))
 }
 
 /** 还原区是否正在拖拽文件（用于高亮反馈） */
@@ -663,24 +614,6 @@ async function handleExit() {
   } catch (e: unknown) {
     logger.error('SettingsView', 'Exit failed', e)
   }
-}
-
-/** 支持开发者链接（占位） */
-function onSupportClick() {
-  logger.info('SettingsView', 'Support developer clicked (placeholder)')
-  ElMessage.info(t('Feature not implemented (placeholder)'))
-}
-
-/** 联系帮助链接（占位） */
-function onContactClick() {
-  logger.info('SettingsView', 'Contact help clicked (placeholder)')
-  ElMessage.info(t('Feature not implemented (placeholder)'))
-}
-
-/** 教程链接（占位） */
-function onTutorialClick() {
-  logger.info('SettingsView', 'Tutorial clicked (placeholder)')
-  ElMessage.info(t('Feature not implemented (placeholder)'))
 }
 
 onMounted(async () => {
