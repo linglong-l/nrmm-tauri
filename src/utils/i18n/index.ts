@@ -27,9 +27,6 @@ import ru from './ru.json'
 /** 印尼语翻译 */
 import id from './id.json'
 
-/** 支持的语言代码类型 */
-export type Locale = 'en' | 'zh-CN' | 'zh-TW' | 'ru' | 'id'
-
 /**
  * i18n实例配置
  *

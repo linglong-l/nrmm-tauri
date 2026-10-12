@@ -3,29 +3,19 @@
  * 定义应用中使用的所有数据结构、枚举类型和接口
  */
 
-/** 支持的目标游戏类型 */
+/**
+ * 支持的目标游戏类型
+ *
+ * ⚠ 字面量形态与线上不完全一致：这里写的是 Rust `Debug` 形态（`GenshinImpact`），
+ * 而后端 serde 以 `rename_all = "camelCase"` 序列化（应用日志实测 `detected game: genshinImpact`）。
+ * 因此**运行期取到的值可能是 camel 形态**，任何"按游戏名精确匹配字符串"的查表/比较
+ * 都必须先做大小写归一（见 `stores/settings.ts` 的 `FALLBACK_PROCESS_DEFAULTS`），
+ * 否则会静默失配。彻底统一形态属契约变更，需连同后端枚举与既有 settings.json 一起评估。
+ */
 export type TargetGame = 'GenshinImpact' | 'HonkaiStarRail' | 'Wuwa' | 'ZZZ' | 'HonkaiImpact3rd' | 'ArknightsEndfield';
 
 /** 模组分组类型：普通分组（group_xx 一级互斥槽位）、自定义并行组、互斥组（可嵌套） */
 export type GroupType = 'normalGroup' | 'exclusiveSlot' | 'customParallel' | 'mutexGroup';
-
-/** 模组路径状态：正常、空、无权限、未设置 */
-export type ModsPathStatus = 'normal' | 'empty' | 'noAccess' | 'notSet';
-
-/** 布局模式：网格、轮播、自动 */
-export type LayoutMode = 'grid' | 'carousel' | 'automatic';
-
-/** 排序方式：默认、字母顺序、最近模组、反向字母 */
-export type SortingType = 'default' | 'alphabetical' | 'recentMod' | 'reverseAlphabetical';
-
-/** 光标类型：普通、精确 */
-export type CursorType = 'normal' | 'precision';
-
-/** 通知级别：信息、警告、错误、成功 */
-export type NotificationLevel = 'info' | 'warning' | 'error' | 'success';
-
-/** 按键配置预设 */
-export type KeybindProfile = 'GI' | 'HSR' | 'Wuwa' | 'ZZZ' | 'Hi3';
 
 /**
  * 按键绑定数据
@@ -233,44 +223,6 @@ export interface HotkeyKeyboard {
   mod1: string;
   /** 第二修饰键 */
   mod2: string;
-  /** 下一个按键 */
-  keyNext: string;
-  /** 上一个按键 */
-  keyPrev: string;
-  /** 隐藏窗口按键 */
-  keyHide: string;
-  /** 选择按键 */
-  keySelect: string;
-  /** 取消按键 */
-  keyCancel: string;
-  /** 向上滚动按键 */
-  keyScrollup: string;
-  /** 向下滚动按键 */
-  keyScrolldown: string;
-}
-
-/**
- * 手柄热键配置
- */
-export interface HotkeyGamepad {
-  /** 方向键上 */
-  dpadUp: boolean;
-  /** 方向键下 */
-  dpadDown: boolean;
-  /** 方向键左 */
-  dpadLeft: boolean;
-  /** 方向键右 */
-  dpadRight: boolean;
-  /** 下一个按钮 */
-  buttonNext: string;
-  /** 上一个按钮 */
-  buttonPrev: string;
-  /** 隐藏按钮 */
-  buttonHide: string;
-  /** 选择按钮 */
-  buttonSelect: string;
-  /** 取消按钮 */
-  buttonCancel: string;
 }
 
 /**
@@ -281,20 +233,14 @@ export interface AppSettings {
   targetGame: TargetGame;
   /** 键盘热键配置 */
   hotkey: HotkeyKeyboard;
-  /** 手柄热键配置 */
-  gamepadHotkey: HotkeyGamepad;
   /** 窗口切换快捷键（键盘） */
   windowHotkey: string;
   /** 窗口切换快捷键（手柄） */
   gamepadHotkeyToggle: string;
-  /** 搜索快捷键 */
-  searchHotkey: string;
   /** 各游戏的模组路径映射 */
   gameModsPath: Record<TargetGame, string>;
   /** 各游戏的目标进程名映射 */
   targetProcessPerGame: Record<TargetGame, string>;
-  /** 各游戏的按键配置预设 */
-  gameProfile: Record<string, KeybindProfile>;
   /** 界面缩放比例 (0.6-2.0) */
   interfaceScale: number;
   /** 背景透明度 (0-1) */
@@ -303,64 +249,24 @@ export interface AppSettings {
   windowTransparent: boolean;
   /** 是否启用动态背景 */
   dynamicBackground: boolean;
-  /** 模组分组布局模式 */
-  modGroupingMode: LayoutMode;
-  /** 模组排序方式 */
-  modsSortingType: SortingType;
-  /** 是否反向排序 */
-  reverseSort: boolean;
-  /** 光标类型 */
-  cursorType: CursorType;
   /** 界面语言 */
   language: string;
   /** 是否深色模式 */
   darkMode: boolean;
-  /** 是否自动生成分组文件夹图标 */
-  autoFolderIcon: boolean;
-  /** 是否自动设置优先级索引 */
-  autoPriorityIndex: boolean;
-  /** 启动时是否检查更新 */
-  checkUpdateOnStart: boolean;
-  /** 热键激活时是否自动置顶窗口 */
-  autoTopWindow: boolean;
-  /** 窗口是否全屏 */
-  isWindowFullscreen: boolean;
-  /** 是否在屏幕上显示按键提示 */
-  showKeypressOnScreen: boolean;
   /** 选择时是否模拟按键 */
   simulateKeyOnSelection: boolean;
   /** 是否在启动时打开控制台窗口查看日志（默认 false，重启后生效） */
   showConsoleOnStart: boolean;
   /** 日志时间戳时区：system=系统本地（默认）/ UTC / 固定偏移（如 UTC+8、+08:00）；仅配置文件生效，无 UI 项 */
   logTimezone: string;
-  /** 是否使用精确热键模式 */
-  usePreciseHotkey: boolean;
-  /** 是否交换取消按键绑定 */
-  swapCancelKeybind: boolean;
   /** 热键时是否始终显示菜单 */
   alwaysShowMenuOnHotkey: boolean;
   /** 热键是否仅在3DMigoto运行时生效 */
   hotkeyOnlyInMigoto: boolean;
-  /** 文件夹图标黑名单列表 */
-  folderIconBlacklist: string[];
-  /** 禁用的键盘输入列表 */
-  disabledKbInputs: string[];
-  /** 禁用的手柄输入列表 */
-  disabledGamepadInputs: string[];
   /** 各游戏上次选中的模组索引 */
   selectedModIndex: Record<string, number>;
-  /** 各游戏上次选中的分组索引 */
-  selectedGroupIndex: Record<string, number>;
-  /** 是否启用键盘热键 */
-  enabledKb: boolean;
-  /** 是否启用手柄热键 */
-  enabledGamepad: boolean;
-  /** 是否显示有错误的模组 */
-  showErroredMods: boolean;
   /** 是否仅显示收藏模组 */
   showFavoritesOnly: boolean;
-  /** 是否检查命名空间冲突 */
-  checkNamespaceConflict: boolean;
 }
 
 /**
@@ -378,75 +284,6 @@ export interface PlatformInfo {
   keypressError: string | null;
   /** 前台窗口检测是否受支持 */
   foregroundDetectionSupported: boolean;
-}
-
-/**
- * 平台依赖状态
- * 描述Linux/macOS下外部依赖工具的可用性
- */
-export interface PlatformDepsStatus {
-  /** xdotool是否可用（Linux X11按键模拟） */
-  xdotoolAvailable: boolean;
-  /** ydotool是否可用（Linux Wayland按键模拟） */
-  ydotoolAvailable: boolean;
-  /** libxtst是否可用（X11测试扩展） */
-  libxtstAvailable: boolean;
-  /** macOS辅助功能权限是否已授予 */
-  hasAccessibilityPermission: boolean;
-}
-
-/**
- * 云端链接项
- */
-export interface CloudLink {
-  /** 链接名称 */
-  name: string;
-  /** 链接URL */
-  url: string;
-  /** 链接图标（可选） */
-  icon?: string;
-}
-
-/**
- * 云端消息
- */
-export interface CloudMessage {
-  /** 消息标题 */
-  title: string;
-  /** 消息内容 */
-  content: string;
-  /** 消息级别 */
-  level: 'info' | 'warning' | 'error' | 'success';
-  /** 消息日期（可选） */
-  date?: string;
-}
-
-/**
- * 云端同步数据
- * 包含从云端拉取的链接、消息和自动图标配置
- */
-export interface CloudData {
-  /** 外部链接列表 */
-  links: CloudLink[];
-  /** 公告消息列表 */
-  messages: CloudMessage[];
-  /** 自动图标映射：模组名 -> 图标URL */
-  autoIcons: Record<string, string>;
-  /** 已知库映射：库名 -> 所属模组名列表 */
-  knownLibraries: Record<string, string[]>;
-}
-
-/**
- * Tauri命令调用通用结果
- * @template T 返回数据类型
- */
-export interface InvokeResult<T> {
-  /** 调用是否成功 */
-  success: boolean;
-  /** 返回数据（成功时） */
-  data?: T;
-  /** 错误信息（失败时） */
-  error?: string;
 }
 
 /**
@@ -591,8 +428,8 @@ export interface ToggleModResult {
  * （仅 managed-folder-changed → 前端全量 refresh 兜底）。
  */
 export interface ManagedPartialUpdatePayload {
-  /** 当前游戏（后端 TargetGame 的 Debug 字符串形态） */
-  game: string;
+  /** 当前游戏：后端 `TargetGame` 的 Debug 序列化形态，与本类型字面量集合一一对应 */
+  game: TargetGame;
   /** 受影响分组的增量列表（多 root 批次可能含多个组；空列表 = 失效批次，走兜底） */
   deltas: GroupDelta[];
 }
@@ -618,26 +455,6 @@ export interface RemoveModResult {
   groupDelta: GroupDelta;
   /** 是否降级为增量扫描（缓存剔除未命中；true 时消费 groupDelta 并告知用户异常） */
   degraded?: boolean;
-}
-
-/**
- * Save Customizations操作结果
- */
-export interface SaveCustomizationsResult {
-  /** 是否成功 */
-  success: boolean;
-  /** 结果消息 */
-  message: string;
-}
-
-/**
- * INI恢复操作统计结果
- */
-export interface RestoredCount {
-  /** 成功恢复的文件数 */
-  restored: number;
-  /** 恢复失败的文件数 */
-  failed: number;
 }
 
 /**

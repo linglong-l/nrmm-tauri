@@ -79,11 +79,6 @@ let unlistenManagedFolderChanged: (() => void) | null = null
  */
 let unlistenManagedPartialUpdate: (() => void) | null = null
 /**
- * 全局热键刷新事件（hotkey-refresh）的取消监听函数
- * 组件卸载时调用以移除 Tauri 事件监听，防止内存泄漏
- */
-let unlistenHotkeyRefresh: (() => void) | null = null
-/**
  * managed-folder-changed 事件防抖定时器句柄
  *
  * 文件系统可能在短时间内连续触发多次变更事件（例如批量导入、
@@ -328,15 +323,6 @@ onMounted(async () => {
   } catch (e) {
     logger.info('ModsView', 'managed-partial-update listener failed (dev mode)')
   }
-
-  try {
-    unlistenHotkeyRefresh = await listen(IpcEvent.HotkeyRefresh, () => {
-      logger.debug('ModsView', 'Hotkey refresh triggered')
-      modsStore.refresh()
-    })
-  } catch (e) {
-    logger.info('ModsView', 'Hotkey refresh listener failed (dev mode)')
-  }
 })
 
 onUnmounted(async () => {
@@ -345,7 +331,6 @@ onUnmounted(async () => {
   // 这样在切换 Tab 时文件监控仍保持运行，数据缓存有效，切回时无需重新加载
   unlistenManagedFolderChanged?.()
   unlistenManagedPartialUpdate?.()
-  unlistenHotkeyRefresh?.()
   unlistenDragDrop?.()
   // 清理防抖定时器，避免组件卸载后残留定时器触发已销毁的 store
   if (refreshTimer) {

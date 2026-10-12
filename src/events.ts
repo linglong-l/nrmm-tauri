@@ -15,8 +15,6 @@ export const IpcEvent = {
   WindowHiddenClearData: 'window-hidden-clear-data',
   /** 显示主窗口并切换到检测到的游戏 */
   WindowShowWithGame: 'window-show-with-game',
-  /** 热键触发模组列表刷新 */
-  HotkeyRefresh: 'hotkey-refresh',
   /** _MANAGED_ 目录发生变化（全量刷新兜底） */
   ManagedFolderChanged: 'managed-folder-changed',
   /** _MANAGED_ 目录增量更新（GroupDelta 批次） */
@@ -24,5 +22,3 @@ export const IpcEvent = {
   /** 游戏外快捷键：显示游戏选择菜单（当前无前端监听，登记备用） */
   ShowGameSelect: 'show-game-select',
 } as const
-
-export type IpcEventName = (typeof IpcEvent)[keyof typeof IpcEvent]

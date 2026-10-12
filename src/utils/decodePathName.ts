@@ -31,7 +31,7 @@ function base64ToBytes(b64: string): Uint8Array | null {
  * @param nameBytes 后端 `SkippedEntry.nameBytes`（`u16le:`/`raw:` 前缀 + base64）
  * @returns 可展示的文件名（无法识别时为占位符）
  */
-export function decodeInvalidUtf8Name(nameBytes: string): string {
+function decodeInvalidUtf8Name(nameBytes: string): string {
   const sep = nameBytes.indexOf(':')
   if (sep <= 0) return `<不可识别>`
   const prefix = nameBytes.slice(0, sep)

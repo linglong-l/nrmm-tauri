@@ -3,8 +3,8 @@
  *
  * 设计目的：
  * - 提供统一的 dev/prod 判断入口，避免在业务代码中散落 import.meta.env 调用
- * - 在 npm run dev 时 DEV_MODE=true、PROD_MODE=false
- * - 在 npm run build 时 DEV_MODE=false、PROD_MODE=true（rollup tree-shaking 自动移除 dev 分支）
+ * - 在 npm run dev 时 Vite 注入 DEV=true，本模块的 DEV_MODE 即为 true
+ * - 在 npm run build 时 Vite 注入 DEV=false（rollup tree-shaking 自动移除 `if (DEV_MODE)` 分支）
  * - 等同于 C/C++ 的 #ifdef 条件编译，零运行时开销，prod 包不含 dev 代码
  *
  * 使用方式：
@@ -26,16 +26,3 @@
  * - false：生产构建（npm run build），dev 代码被 tree-shaking 移除
  */
 export const DEV_MODE: boolean = import.meta.env.DEV
-
-/**
- * 是否为生产模式（npm run build）
- * - true：生产环境，仅输出 WARN+ERROR 日志，不加载 dev 工具
- * - false：开发环境
- */
-export const PROD_MODE: boolean = import.meta.env.PROD
-
-/**
- * 当前构建模式（'development' | 'production'）
- * 一般不需要直接使用，优先使用 DEV_MODE/PROD_MODE
- */
-export const MODE: string = import.meta.env.MODE

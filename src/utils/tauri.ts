@@ -10,14 +10,14 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
-import type { ScanResult, UpdateResult, SaveCustomizationsResult, RestoredCount, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta, ToggleModResult, ExternalEditorInfo, PlatformInfo } from '../types'
+import type { ScanResult, UpdateResult, RemoveModResult, HashConflictResult, RestoreManagedResult, AppSettings, TargetGame, KeybindFile, SaveKeybindResult, GroupDelta, BatchGroupDelta, ToggleModResult, ExternalEditorInfo, PlatformInfo } from '../types'
 import { logger } from './logger'
 
 /**
  * 后端返回的路径不存在错误前缀标识
  * 捕获到带此前缀的错误时需执行：清除模组缓存 → 模组重读取
  */
-export const ERR_PREFIX_PATH_NOT_FOUND = '[PATH_NOT_FOUND]'
+const ERR_PREFIX_PATH_NOT_FOUND = '[PATH_NOT_FOUND]'
 
 /**
  * 检测错误是否为后端返回的「路径不存在」类型错误（纯谓词，零副作用）
@@ -112,14 +112,6 @@ export async function setGameModsPath(game: TargetGame, path: string): Promise<A
 }
 
 /**
- * 重置应用设置为默认值
- * 后端命令：reset_settings
- */
-export async function resetSettings(): Promise<void> {
-  return safeInvoke('reset_settings')
-}
-
-/**
  * 加载模组列表（轻量扫描）
  * 后端命令：get_mods
  *
@@ -128,7 +120,7 @@ export async function resetSettings(): Promise<void> {
  * @param modsPath 模组文件夹路径
  * @returns 扫描结果（分组列表+模组列表）
  */
-export async function getMods(game: string, modsPath: string): Promise<ScanResult> {
+export async function getMods(game: TargetGame, modsPath: string): Promise<ScanResult> {
   return safeInvoke<ScanResult>('get_mods', { game, modsPath })
 }
 
@@ -141,7 +133,7 @@ export async function getMods(game: string, modsPath: string): Promise<ScanResul
  * @param modsPath 模组文件夹路径
  * @returns 扫描结果
  */
-export async function refreshMods(game: string, modsPath: string): Promise<ScanResult> {
+export async function refreshMods(game: TargetGame, modsPath: string): Promise<ScanResult> {
   return safeInvoke<ScanResult>('refresh_mods', { game, modsPath })
 }
 
@@ -175,7 +167,7 @@ export async function getThumbnail(originalPath: string, size?: 'card' | 'avatar
  * @param modPath 模组文件夹路径
  */
 export async function selectMod(
-  game: string,
+  game: TargetGame,
   modsPath: string,
   groupIndex: number,
   modIndex: number,
@@ -211,7 +203,7 @@ export async function selectMod(
  * @param groupIndex 分组索引
  * @param groupPath 分组目录绝对路径（可选；提供且有效时后端 O(1) 直写 selectedindex=0）
  */
-export async function deselectGroupMod(game: string, modsPath: string, groupIndex: number, groupPath?: string): Promise<UpdateResult> {
+export async function deselectGroupMod(game: TargetGame, modsPath: string, groupIndex: number, groupPath?: string): Promise<UpdateResult> {
   return safeInvoke<UpdateResult>('deselect_group_mod', { game, modsPath, groupIndex, groupPath })
 }
 
@@ -238,7 +230,7 @@ export async function openInEditor(editorId: string, targetPath: string): Promis
  * @param modsPath 模组文件夹路径
  * @param groupName 分组名称（可选，默认自动生成）
  */
-export async function addGroup(game: string, modsPath: string, groupName?: string): Promise<UpdateResult> {
+export async function addGroup(game: TargetGame, modsPath: string, groupName?: string): Promise<UpdateResult> {
   return safeInvoke<UpdateResult>('add_group', { game, modsPath, groupName })
 }
 
@@ -249,18 +241,8 @@ export async function addGroup(game: string, modsPath: string, groupName?: strin
  * @param modsPath 模组文件夹路径
  * @param groupName 分组名称（必填，作为目录名）
  */
-export async function addMutexGroup(game: string, modsPath: string, groupName: string): Promise<void> {
+export async function addMutexGroup(game: TargetGame, modsPath: string, groupName: string): Promise<void> {
   return safeInvoke<void>('add_mutex_group', { game, modsPath, groupName })
-}
-
-/**
- * 删除分组
- * 后端命令：remove_group
- * @param groupPath 分组文件夹路径
- * @returns 受影响分组的增量（R1：前端原地 patch）
- */
-export async function removeGroup(groupPath: string): Promise<GroupDelta> {
-  return safeInvoke<GroupDelta>('remove_group', { groupPath })
 }
 
 /**
@@ -325,16 +307,6 @@ export async function toggleFavorite(modPath: string): Promise<boolean> {
 }
 
 /**
- * 检查模组是否已收藏
- * 后端命令：is_favorite
- * @param modPath 模组文件夹路径
- * @returns 是否已收藏
- */
-export async function isFavorite(modPath: string): Promise<boolean> {
-  return safeInvoke<boolean>('is_favorite', { modPath })
-}
-
-/**
  * 在文件管理器中打开模组文件夹
  * 后端命令：open_mod_folder
  * @param modPath 模组文件夹路径
@@ -353,16 +325,6 @@ export async function openGroupFolder(groupPath: string): Promise<void> {
 }
 
 /**
- * 恢复所有INI文件到原始状态
- * 后端命令：restore_all_inis
- * @param modsPath 模组文件夹路径
- * @returns 恢复统计结果
- */
-export async function restoreAllInis(modsPath: string): Promise<RestoredCount> {
-  return safeInvoke<RestoredCount>('restore_all_inis', { modsPath })
-}
-
-/**
  * 还原模组 INI 到管理前状态（还原区功能）
  * 后端命令：restore_managed_folder
  * @param path 要还原的模组文件夹路径
@@ -373,112 +335,14 @@ export async function restoreManagedFolder(path: string): Promise<RestoreManaged
 }
 
 /**
- * Save Mod Customizations：保存用户自定义INI设置到d3dx_user.ini
- * 后端命令：save_customizations
- * @param game 目标游戏类型
- * @param modsPath 模组文件夹路径
- * @returns 保存结果
- */
-export async function saveCustomizations(game: string, modsPath: string): Promise<SaveCustomizationsResult> {
-  return safeInvoke<SaveCustomizationsResult>('save_customizations', { game, modsPath })
-}
-
-/**
- * 批量切换模组启用/禁用状态
- * 后端命令：batch_toggle_mods
- * @param modPaths 模组路径列表
- * @param enable true=启用, false=禁用
- * @param isMutex 是否为互斥组成员
- * @returns 成功处理的模组数量
- */
-export async function batchToggleMods(modPaths: string[], enable: boolean, isMutex: boolean): Promise<number> {
-  return safeInvoke<number>('batch_toggle_mods', { modPaths, enable, isMutex })
-}
-
-/**
- * 检查模组路径状态
- * 后端命令：check_mods_path_status
- * @param game 目标游戏类型
- * @param modsPath 模组文件夹路径
- * @returns 路径状态：normal/empty/noAccess/notSet
- */
-export async function checkModsPathStatus(game: string, modsPath: string): Promise<string> {
-  return safeInvoke<string>('check_mods_path_status', { game, modsPath })
-}
-
-/**
- * 检查按键模拟支持状态
- * 后端命令：check_keypress_support
- *
- * Linux检查xdotool/ydotool可用性
- * macOS检查辅助功能权限
- */
-export async function checkKeypressSupport(): Promise<void> {
-  return safeInvoke('check_keypress_support')
-}
-
-/**
- * 检查游戏窗口是否在前台
- * 后端命令：is_game_foreground
- * @param game 目标游戏类型
- * @returns 是否在前台
- */
-export async function isGameForeground(game: string): Promise<boolean> {
-  return safeInvoke<boolean>('is_game_foreground', { game })
-}
-
-/**
- * 获取当前光标位置
- * 后端命令：get_cursor_position
- * @returns [x, y] 坐标元组
- */
-export async function getCursorPosition(): Promise<[number, number]> {
-  return safeInvoke<[number, number]>('get_cursor_position')
-}
-
-/**
- * 模拟按键选择分组
- * 后端命令：simulate_select_group
- */
-export async function simulateSelectGroup(): Promise<void> {
-  return safeInvoke('simulate_select_group')
-}
-
-/**
- * 模拟按键选择模组
- * 后端命令：simulate_select_mod
- */
-export async function simulateSelectMod(): Promise<void> {
-  return safeInvoke('simulate_select_mod')
-}
-
-/**
  * 模拟 F10 按键（3Dmigoto 重载快捷键）
  * 与 NRMM 的 simulateKeyF10() 对齐
  * @param game 目标游戏类型，传入时尝试定向发送到游戏窗口
  */
-export async function simulateF10(game?: string): Promise<void> {
+export async function simulateF10(game?: TargetGame): Promise<void> {
   const params: Record<string, unknown> = {}
   if (game) params.game = game
   await safeInvoke('simulate_f10', params)
-}
-
-/**
- * 显示窗口
- * 后端命令：show_window
- * @param windowName 窗口名称（默认为'main'）
- */
-export async function showWindow(windowName: string): Promise<void> {
-  return safeInvoke('show_window', { windowName })
-}
-
-/**
- * 隐藏窗口
- * 后端命令：hide_window
- * @param windowName 窗口名称
- */
-export async function hideWindow(windowName: string): Promise<void> {
-  return safeInvoke('hide_window', { windowName })
 }
 
 /**
@@ -520,14 +384,6 @@ export async function reregisterHotkeys(windowHotkey?: string): Promise<void> {
 }
 
 /**
- * 注销所有全局热键
- * 后端命令：unregister_hotkeys
- */
-export async function unregisterHotkeys(): Promise<void> {
-  return safeInvoke('unregister_hotkeys')
-}
-
-/**
  * 上报前端是否有模态框处于待处理状态
  * 后端命令：set_frontend_pending_info
  *
@@ -549,17 +405,6 @@ export async function setFrontendPendingInfo(pending: boolean): Promise<void> {
  */
 export async function wasWindowRecreated(): Promise<boolean> {
   return safeInvoke<boolean>('was_window_recreated')
-}
-
-/**
- * 启动文件监听器
- * 后端命令：start_file_watcher
- *
- * 监听Mods目录变化，自动刷新模组列表
- * @param modsPath 要监听的模组路径
- */
-export async function startFileWatcher(modsPath: string): Promise<void> {
-  return safeInvoke('start_file_watcher', { modsPath })
 }
 
 /**
@@ -591,7 +436,7 @@ export async function switchFileWatcher(modsPath: string): Promise<void> {
  * @param modsPath 模组文件夹路径
  * @returns 更新结果统计
  */
-export async function updateModData(game: string, modsPath: string): Promise<UpdateResult> {
+export async function updateModData(game: TargetGame, modsPath: string): Promise<UpdateResult> {
   return safeInvoke<UpdateResult>('update_mod_data', { game, modsPath })
 }
 
@@ -606,11 +451,11 @@ export async function updateModData(game: string, modsPath: string): Promise<Upd
  *
  * 仅 Windows 生效，Linux 上为无操作；失败返回 null（不阻断主流程）。
  *
- * @param game 目标游戏标识（如 'GenshinImpact'、'Wuwa'）
+ * @param game 目标游戏（`TargetGame`；后端 `parse_game` 大小写不敏感，Debug 与 camel 形态都收）
  * @param needed 是否需要更新模组数据
  * @returns Promise<boolean> 同步成功（或非 Windows 无操作）时返回 true，失败返回 false
  */
-export async function syncNrmmUpdateFlag(game: string, needed: boolean): Promise<boolean> {
+export async function syncNrmmUpdateFlag(game: TargetGame, needed: boolean): Promise<boolean> {
   try {
     await safeInvoke<void>('sync_nrmm_update_flag', { game, needed })
     return true
@@ -633,34 +478,6 @@ export async function syncNrmmUpdateFlag(game: string, needed: boolean): Promise
  */
 export async function detectHashConflicts(modsPath: string): Promise<HashConflictResult> {
   return safeInvoke<HashConflictResult>('detect_hash_conflicts', { modsPath })
-}
-
-/**
- * 检查压缩包格式是否支持
- * 后端命令：is_supported_archive_cmd
- *
- * 支持格式：zip/rar/7z
- * @param path 压缩包路径
- * @returns 是否支持
- */
-export async function isSupportedArchive(path: string): Promise<boolean> {
-  return safeInvoke<boolean>('is_supported_archive_cmd', { path })
-}
-
-/**
- * 自动导入模组压缩包
- * 后端命令：import_mod_auto_cmd
- *
- * 自动解压并安装到当前选中分组
- *
- * 注意：该方法为遗留 API，当前批量导入统一使用 importItems()（import_item_cmd），
- * 此处仅保留返回 void 的向后兼容签名。
- * @param archivePath 压缩包路径
- * @param modsPath 模组根路径
- * @param password 压缩包密码（可选）
- */
-export async function importModAuto(archivePath: string, modsPath: string, password?: string): Promise<void> {
-  return safeInvoke('import_mod_auto_cmd', { archivePath, modsPath, password })
 }
 
 /**
@@ -719,17 +536,6 @@ export async function checkForUpdates(): Promise<UpdateInfo | null> {
  */
 export async function getAppVersion(): Promise<string> {
   return safeInvoke<string>('get_app_version')
-}
-
-/**
- * 比较版本号
- * 后端命令：compare_versions
- * @param current 当前版本
- * @param latest 最新版本
- * @returns latest是否大于current
- */
-export async function compareVersions(current: string, latest: string): Promise<boolean> {
-  return safeInvoke<boolean>('compare_versions', { current, latest })
 }
 
 /**
@@ -795,24 +601,13 @@ export async function createSubfolder(parentPath: string, folderName: string): P
 }
 
 /**
- * 获取当前前台窗口的进程名
- * 后端命令：get_foreground_process_name
- *
- * 用于窗口热键显示时自动检测前台游戏
- * @returns 进程名字符串（如 "StarRail.exe"）
- */
-export async function getForegroundProcessName(): Promise<string> {
-  return safeInvoke<string>('get_foreground_process_name')
-}
-
-/**
  * 检查模组缓存是否有效（未被文件监控标记失效且条目存在）
  * 后端命令：check_mod_cache_valid
  * @param game 目标游戏类型
  * @param modsPath 模组文件夹路径
  * @returns 缓存是否有效
  */
-export async function checkModCacheValid(game: string, modsPath: string): Promise<boolean> {
+export async function checkModCacheValid(game: TargetGame, modsPath: string): Promise<boolean> {
   return safeInvoke<boolean>('check_mod_cache_valid', { game, modsPath })
 }
 
@@ -907,6 +702,6 @@ export async function saveModKeybinds(
  * @param combo 组合键字符串（ini 中的原始值，或单个按键 token）
  * @param game 当前目标游戏（可选，对齐 simulate_f10 的定向发送语义）
  */
-export async function simulateKeys(combo: string, game?: string): Promise<void> {
+export async function simulateKeys(combo: string, game?: TargetGame): Promise<void> {
   return safeInvoke('simulate_keys', { combo, game })
 }

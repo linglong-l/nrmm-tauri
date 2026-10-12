@@ -1,9 +1,9 @@
 import { ref, onBeforeUnmount } from 'vue'
 
 /** 加载动画省略号循环上限（0..6 个点） */
-export const MAX_LOADING_DOTS = 6
+const MAX_LOADING_DOTS = 6
 /** 省略号切换间隔（ms） */
-export const DOTS_INTERVAL_MS = 300
+const DOTS_INTERVAL_MS = 300
 
 /**
  * 加载省略号动画状态机
