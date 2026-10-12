@@ -43,12 +43,9 @@ pub fn init_console() {
         use std::fs::OpenOptions;
         use windows::Win32::System::Console::{AllocConsole, AttachConsole, ATTACH_PARENT_PROCESS};
 
-        // dev 强制启用终端输出：debug 构建自建/附加控制台，日志全程可见，便于排查前后端异常；
-        // release 默认随 settings（showConsoleOnStart）开关——默认关闭终端显示，但 CONOUT$
-        // 输出流机制保留（用户开启开关或从终端启动时日志仍可见，便于现场调试）。
-        #[cfg(debug_assertions)]
-        let show_console: bool = true;
-        #[cfg(not(debug_assertions))]
+        // 控制台归属由用户开关（settings.showConsoleOnStart）决定，dev 与 release 同口径：
+        // 启用 → AllocConsole 自建控制台并把日志输出到它；未启用 → 仅尝试附加父控制台
+        // （从终端启动时日志仍可见，双击启动则静默无控制台）。
         let show_console: bool = read_show_console_flag();
 
         // 控制台归属决策：自建或附加，两类失败均属预期场景，静默忽略
@@ -105,9 +102,8 @@ pub fn init_console() {
 /// # 注意
 /// 任何 IO 失败均保守返回 false，绝不 panic。
 ///
-/// dev（debug_assertions）构建强制启用终端输出（见 [`init_console`]），
-/// 不读取该标志；仅 release 构建读取。
-#[cfg(all(target_os = "windows", not(debug_assertions)))]
+/// dev 与 release 同口径读取该标志（此前 debug 构建恒强制启用，已按用户需求移除）。
+#[cfg(target_os = "windows")]
 fn read_show_console_flag() -> bool {
     match std::fs::read_to_string(crate::config::app_paths::settings_path()) {
         Ok(content) => parse_show_console_flag(&content),
@@ -126,7 +122,7 @@ fn read_show_console_flag() -> bool {
 /// # 返回
 /// 字段存在且为布尔 true 时返回 true；
 /// 字段为 false / 缺失 / 值非布尔 / JSON 非法 / 空串一律返回 false
-#[cfg(any(all(target_os = "windows", not(debug_assertions)), test))]
+#[cfg(any(target_os = "windows", test))]
 fn parse_show_console_flag(content: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(content)
         .ok()

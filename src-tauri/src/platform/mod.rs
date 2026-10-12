@@ -3,7 +3,7 @@
 //! 提供跨平台的前台窗口检测和按键模拟功能：
 //! - windows: Windows 平台实现（使用 Win32 API）
 //! - linux: Linux 平台实现（使用 X11/Wayland）
-//! - macos: macOS 平台实现（受限支持）
+//! - macos: 不支持（本软件明确不发布 macOS，相关实现与依赖已移除）
 //!
 //! # Trait 抽象
 //! - `KeySimulator`: 按键模拟 trait（选择分组/模组）
@@ -16,10 +16,9 @@ use anyhow::Result;
 
 /// 控制台管理（跨平台：Windows 下负责 GUI 子系统的控制台附加/自建，其他平台空实现）
 pub mod console;
+pub mod gamepad;
 #[cfg(target_os = "linux")]
 pub mod linux;
-#[cfg(target_os = "macos")]
-pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows_cursor_sim;
 #[cfg(target_os = "windows")]
@@ -136,9 +135,9 @@ pub fn get_key_simulator() -> Box<dyn KeySimulator> {
     {
         Box::new(linux::LinuxKeySimulator::new())
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
-        Box::new(macos::MacOSKeySimulator)
+        compile_error!("nrmm-tauri 仅支持 Windows 与 Linux；macOS 明确不支持，无按键模拟器实现")
     }
 }
 
@@ -152,9 +151,9 @@ pub fn get_foreground_detector() -> Box<dyn ForegroundDetector> {
     {
         Box::new(linux::LinuxForegroundDetector::new())
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
-        Box::new(macos::MacOSForegroundDetector)
+        compile_error!("nrmm-tauri 仅支持 Windows 与 Linux；macOS 明确不支持，无前台检测实现")
     }
 }
 
@@ -175,16 +174,8 @@ pub fn get_platform_info() -> PlatformInfo {
     {
         linux::get_linux_platform_info()
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
-        PlatformInfo {
-            os: "macos".to_string(),
-            session_type: None,
-            keypress_supported: false,
-            keypress_error: Some(
-                "macOS keypress simulation requires assistive access permission".to_string(),
-            ),
-            foreground_detection_supported: false,
-        }
+        compile_error!("nrmm-tauri 仅支持 Windows 与 Linux；macOS 明确不支持")
     }
 }
