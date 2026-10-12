@@ -3,7 +3,7 @@
 // __dirname 运行时有效（vite-node 注入）。后续若引入 @types/node 可移除本行并恢复类型检查。
 /**
  * 前端架构健身函数：F4 行数棘轮、F3 utils 依赖方向、F5 事件名常量化、
- * F6 i18n key 登记、F7 五语言包键集一致。
+ * F6 i18n key 登记、F7 五语言包键集一致、F8 词条必须有可达出口。
  *
  * 设计文档：docs/superpowers/specs/2026-09-18-arch-fitness-and-monolith-split-design.md
  */
@@ -27,10 +27,8 @@ const rel = (p: string) => relative(srcRoot, p).replaceAll('\\', '/')
 describe('前端架构健身函数', () => {
   it('F4: 文件行数棘轮（新文件 ≤800；存量豁免只减不增）', () => {
     const LEGACY_CAPS: Record<string, number> = {
-      'stores/mods.ts': 1796,
-      'views/SettingsView.vue': 1509,
-      'components/mod/GroupPanel.vue': 961,
-      'utils/tauri.ts': 902,
+      'stores/mods.ts': 1683,
+      'views/SettingsView.vue': 1506,
     }
     const MAX = 800
     const files = collectFiles(srcRoot, ['.ts', '.vue']).filter((p) => !p.endsWith('.test.ts'))
@@ -69,8 +67,8 @@ describe('前端架构健身函数', () => {
 
   it('F6: 字面量 t() key 必须在 en.json 有定义（缺 key 会回显原文，等于漏登记翻译）', () => {
     const en = JSON.parse(readFileSync(join(srcRoot, 'utils/i18n/en.json'), 'utf8'))
-    // 词条表两种风格并存："Updater.title"/"Loading..." 这类含点的扁平键须先整串命中，
-    // 未命中再按点走嵌套（"mods.title"），否则会误报一堆存在的键。
+    // 词条表两种风格并存：含点的扁平键（整串就是一个键）须先整串命中，
+    // 未命中再按点走嵌套查找，否则会误报一堆存在的键。
     const resolves = (key: string) => {
       if (en[key] !== undefined) return true
       const walked = key
@@ -111,5 +109,47 @@ describe('前端架构健身函数', () => {
     const all = new Set(locales.flatMap((l) => [...sets[l]]))
     const offenders = locales.flatMap((l) => [...all].filter((k) => !sets[l].has(k)).map((k) => `[${l}] ${k}`))
     expect(offenders, offenders.join('\n')).toHaveLength(0)
+  })
+
+  it('F8: 语言包每个键都必须有可达出口（无人引用的词条等于漏做功能）', () => {
+    // 口径：只有**非测试**的 .ts/.vue 里的引用才算用户可见出口——测试断言里的键不代表功能存在。
+    // 注释行不算出口：否则门禁文档里提一句键名，就能让一条死词条永远清不掉。
+    // WHITELIST 只收「已决定实现、但尚未接线」的簇，且每条必须写理由；空表是最强口径。
+    const WHITELIST: string[] = []
+
+    const en = JSON.parse(readFileSync(join(srcRoot, 'utils/i18n/en.json'), 'utf8'))
+    const leaves: string[] = []
+    const flatLeaves = (obj: unknown, pre = '') => {
+      for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+        const key = pre ? `${pre}.${k}` : k
+        if (v && typeof v === 'object' && !Array.isArray(v)) flatLeaves(v, key)
+        else leaves.push(key)
+      }
+    }
+    flatLeaves(en)
+
+    const COMMENT_LINE = /^\s*(\/\/|\/\*|\*|<!--)/
+    // 与 F6 同一套调用形态，另加「裸字符串字面量」通道，兜住先取 const label = 'k' 再传参的写法
+    const callRe = /\b(?:\$t|t|i18n\.t|global\.t|locale\.t)\(\s*(['"])((?:[^'"\n\\]|\\.)*)\1\s*[,)]/g
+    const reachable = new Set<string>()
+    const files = collectFiles(srcRoot, ['.ts', '.vue']).filter((p) => !p.endsWith('.test.ts'))
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8')
+        .split('\n')
+        .filter((l) => !COMMENT_LINE.test(l))
+        .join('\n')
+      let m: RegExpExecArray | null
+      while ((m = callRe.exec(text)) !== null) reachable.add(m[2].replace(/\\(['"])/g, '$1'))
+      for (const key of leaves) {
+        if (!reachable.has(key) && (text.includes(`'${key}'`) || text.includes(`"${key}"`))) reachable.add(key)
+      }
+    }
+
+    const offenders = leaves.filter((k) => !reachable.has(k) && !WHITELIST.includes(k))
+    expect(
+      offenders,
+      `F8 无出口词条（${offenders.length} 条，会随语言包一直背着）:\n${offenders.join('\n')}\n` +
+        `确属「已决定实现但尚未接线」的，请带理由加进 WHITELIST`
+    ).toHaveLength(0)
   })
 })
