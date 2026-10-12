@@ -15,14 +15,22 @@ import { getSettings, saveSettings, setGameModsPath, reregisterHotkeys } from '.
 import { logger } from '../utils/logger'
 import type { AppSettings, PlatformInfo, TargetGame } from '../types'
 
-/** 各游戏默认进程名（fallback，优先使用后端fill_defaults返回的值） */
-const FALLBACK_PROCESS_DEFAULTS: Record<TargetGame, string> = {
-  GenshinImpact: 'GenshinImpact.exe',
-  HonkaiStarRail: 'StarRail.exe',
-  Wuwa: 'Client-Win64-Shipping.exe',
-  ZZZ: 'ZenlessZoneZero.exe',
-  HonkaiImpact3rd: 'BH3.exe',
-  ArknightsEndfield: 'Endfield.exe',
+/**
+ * 各游戏默认进程名（兜底；优先用后端 `fill_defaults` 下发的 `targetProcessPerGame`）
+ *
+ * 键一律**小写**：`TargetGame` 的字面量写成 Rust `Debug` 形态（`GenshinImpact`），
+ * 而后端 serde 以 `rename_all = "camelCase"` 上线（实测应用日志 `detected game: genshinImpact`），
+ * 前端两种形态混用会让"按形态精确匹配"的兜底表**永不命中**——本仓库就踩过：
+ * 设置加载后 `currentGame` 变成 camel 形态，兜底查表恒返回空串，前台游戏检测随之退化。
+ * 小写归一后两种形态必然同键，也不必依赖 serde 对 `ZZZ`/`HonkaiImpact3rd` 这类变体的具体拼写。
+ */
+const FALLBACK_PROCESS_DEFAULTS: Record<Lowercase<TargetGame>, string> = {
+  genshinimpact: 'GenshinImpact.exe',
+  honkaistarrail: 'StarRail.exe',
+  wuwa: 'Client-Win64-Shipping.exe',
+  zzz: 'ZenlessZoneZero.exe',
+  honkaiimpact3rd: 'BH3.exe',
+  arknightsendfield: 'Endfield.exe',
 }
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -69,7 +77,7 @@ export const useSettingsStore = defineStore('settings', () => {
     if (procMap && procMap[currentGame.value]) {
       return procMap[currentGame.value]
     }
-    return FALLBACK_PROCESS_DEFAULTS[currentGame.value] || ''
+    return FALLBACK_PROCESS_DEFAULTS[currentGame.value.toLowerCase() as Lowercase<TargetGame>] || ''
   })
 
   /**

@@ -19,7 +19,7 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import i18n from './utils/i18n'
 import { logger } from './utils/logger'
-import { isBrowserRefreshKey, isLightRescanKey, isFullRescanKey } from './utils/refreshGuard'
+import { isLightRescanKey, isFullRescanKey } from './utils/refreshGuard'
 
 console.log(`[FE-BOOT] T+${(performance.now() - HTML_BOOT_START).toFixed(0).padStart(6)}ms - 所有import完成`)
 
@@ -79,9 +79,9 @@ document.addEventListener('selectstart', (e) => {
  * 浏览器刷新键拦截 + 应用内重扫快捷键（WebView F5/页面重载内存优化，2026-09-06 扩展）
  * - F5 / Ctrl+R 在 WebView 聚焦时触发整页 reload：旧文档堆+位图惰性回收叠加新文档
  *   全量重建（实测峰值 1000MB+）。拦截之。
- * - Ctrl+R（窗口内，非输入框）→ 数据层轻量重扫（loadMods：后端缓存有效则零扫描，
+ * - F5 与 Ctrl+R（窗口内，非输入框）→ 数据层轻量重扫（loadMods：后端缓存有效则零扫描，
  *   失效则轻量扫描）；Ctrl+Shift+R → 数据层全量重扫（refresh：强制后端全量轻扫并
- *   覆盖缓存与前端数据）。均不重载页面。
+ *   覆盖缓存与前端数据）。三者均不重载页面。
  * - 输入框中不拦截（保留表单操作习惯）。
  */
 document.addEventListener(
@@ -90,11 +90,11 @@ document.addEventListener(
     const target = e.target as HTMLElement | null
     const tag = target?.tagName?.toLowerCase()
     if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return
-    // Ctrl+R / Ctrl+Shift+R：拦截整页 reload，改走数据层重扫（窗口内绑定）
+    // F5 / Ctrl+R / Ctrl+Shift+R：拦截整页 reload，改走数据层重扫（窗口内绑定）
     if (isLightRescanKey(e) || isFullRescanKey(e)) {
       e.preventDefault()
       const isFull = isFullRescanKey(e)
-      logger.info('App', isFull ? 'Ctrl+Shift+R 全量重扫（refresh）' : 'Ctrl+R 轻量重扫（loadMods）')
+      logger.info('App', isFull ? 'Ctrl+Shift+R 全量重扫（refresh）' : 'F5 / Ctrl+R 轻量重扫（loadMods）')
       // 延迟执行：待当前事件循环释放后取 store（pinia 已挂载）
       void import('./stores/mods').then(({ useModsStore }) => {
         const modsStore = useModsStore()
@@ -103,9 +103,7 @@ document.addEventListener(
         }
         return modsStore.loadMods()
       })
-      return
     }
-    if (isBrowserRefreshKey(e)) e.preventDefault() // F5 拦截（防整页 reload）
   },
   { capture: true },
 )

@@ -171,7 +171,7 @@ let windowRecreated = false
  * 5. 如果当前在模组页：直接重启监听并加载新游戏模组（nextTick 确保 DOM 更新后执行）
  * 6. 如果不在模组页：仅切换 activeTab 到模组页，ModsView.onMounted 会自动按缓存判断加载
  *
- * @param game 目标游戏（如 'GI' / 'HSR' / 'ZZZ' / 'WW'）
+ * @param game 目标游戏（后端 serde 的 camelCase 形态，如 'genshinImpact'）
  * @param markPending 是否标记 gameSwitchPending（true 时 window-shown 会跳过重复加载）
  */
 async function applyDetectedGameSwitch(game: TargetGame, markPending = true): Promise<void> {
