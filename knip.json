@@ -1,0 +1,9 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignore": [
+    "scripts/gen-latest-json.mjs",
+    "scripts/gitee-release.mjs"
+  ],
+  "ignoreBinaries": ["pwsh"],
+  "ignoreExportsUsedInFile": true
+}

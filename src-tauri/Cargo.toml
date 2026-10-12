@@ -80,6 +80,7 @@ mimalloc = { version = "0.1", default-features = false }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Input_XboxController",
   "Win32_UI_WindowsAndMessaging",
   "Win32_System_Threading",
   "Win32_System_ProcessStatus",
@@ -93,24 +94,14 @@ windows = { version = "0.62", features = [
   "Win32_System_Environment",
 ] }
 
-[target.'cfg(linux)'.dependencies]
-x11-dl = { version = "2", optional = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = { version = "0.25", optional = true }
-core-foundation = { version = "0.10", optional = true }
-
 [dev-dependencies]
 tempfile = "3"
 
 # cargo machete 忽略列表：
-# - tauri-build      ：build.rs 中 `tauri_build::build()` 使用（build-dependency）
-# - x11-dl           ：Linux 平台 target（当前 Windows 下 machete 静态检测不到引用）
-# - core-graphics / core-foundation：macOS 平台 target（同上）
-# 以上均为「隐式/平台条件」依赖，实际需要，故在此忽略而非删除。
+# - tauri-build：build.rs 中 `tauri_build::build()` 使用（build-dependency，machete 不追 build.rs）
 # release 性能配置位于工作区根 Cargo.toml（非 root package 的 profile 会被 Cargo 忽略）。
 [package.metadata.cargo-machete]
-ignored = ["tauri-build", "x11-dl", "core-graphics", "core-foundation"]
+ignored = ["tauri-build"]
 
 [[test]]
 name = "arch_gate"

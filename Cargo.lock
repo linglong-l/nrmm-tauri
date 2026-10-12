@@ -2853,8 +2853,6 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
- "core-foundation 0.10.1",
- "core-graphics",
  "dirs 6.0.0",
  "encoding_rs",
  "env_logger",
@@ -2888,7 +2886,6 @@ dependencies = [
  "uuid",
  "walkdir",
  "windows",
- "x11-dl",
  "zip 8.6.0",
 ]
 

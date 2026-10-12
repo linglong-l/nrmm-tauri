@@ -95,3 +95,12 @@ jobs:
 
       - name: vue-tsc --noEmit
         run: pnpm run vue:check
+
+      # 遗弃面门禁：未用文件/导出/类型/依赖。豁免口径在仓库根 knip.json
+      # （两个发布脚本被 .ps1 与 .workflow/ 调用，knip 看不见这两类调用方）。
+      - name: knip（未用文件/导出/类型/依赖）
+        run: pnpm exec knip
+
+      # 仅 high 及以上：低危噪声多且常无修复版本。新公告会让这一步变红，属预期行为。
+      - name: pnpm audit --audit-level=high
+        run: pnpm audit --audit-level=high
