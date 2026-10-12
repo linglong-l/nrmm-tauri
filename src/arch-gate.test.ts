@@ -3,7 +3,7 @@
 // __dirname 运行时有效（vite-node 注入）。后续若引入 @types/node 可移除本行并恢复类型检查。
 /**
  * 前端架构健身函数：F4 行数棘轮、F3 utils 依赖方向、F5 事件名常量化、
- * F6 i18n key 登记、F7 五语言包键集一致、F8 词条必须有可达出口。
+ * F6 i18n key 登记、F7 五语言包键树一致（含空命名空间）、F8 词条必须有可达出口。
  *
  * 设计文档：docs/superpowers/specs/2026-09-18-arch-fitness-and-monolith-split-design.md
  */
@@ -92,19 +92,23 @@ describe('前端架构健身函数', () => {
     expect(offenders, offenders.join('\n')).toHaveLength(0)
   })
 
-  it('F7: 五个语言包键集必须完全一致（缺键静默回退英文，多键则永无出口）', () => {
+  it('F7: 五个语言包键树必须完全一致（含空命名空间，不止叶子键）', () => {
     const locales = ['en', 'zh-CN', 'zh-TW', 'id', 'ru']
-    const flatOf = (obj: unknown, pre = '', out: string[] = []): string[] => {
+    // 结构签名 = 所有对象节点路径 ∪ 所有叶子路径。旧口径只比叶子集合，
+    // 看不见 `"app": {}` 这类空命名空间的有无差异（本仓库实测：en/zh-CN 有、其余三包没有）。
+    const structureOf = (obj: unknown, pre = '', out: string[] = []): string[] => {
       for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
         const key = pre ? `${pre}.${k}` : k
-        if (v && typeof v === 'object' && !Array.isArray(v)) flatOf(v, key, out)
-        else out.push(key)
+        if (v && typeof v === 'object' && !Array.isArray(v)) {
+          out.push(key + '/')
+          if (Object.keys(v).length) structureOf(v, key, out)
+        } else out.push(key)
       }
       return out
     }
     const sets: Record<string, Set<string>> = {}
     for (const l of locales) {
-      sets[l] = new Set(flatOf(JSON.parse(readFileSync(join(srcRoot, `utils/i18n/${l}.json`), 'utf8'))))
+      sets[l] = new Set(structureOf(JSON.parse(readFileSync(join(srcRoot, `utils/i18n/${l}.json`), 'utf8'))))
     }
     const all = new Set(locales.flatMap((l) => [...sets[l]]))
     const offenders = locales.flatMap((l) => [...all].filter((k) => !sets[l].has(k)).map((k) => `[${l}] ${k}`))
