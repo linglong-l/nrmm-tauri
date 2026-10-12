@@ -42,7 +42,6 @@
             <p class="big-btn-desc">{{ t('Press this after you add/remove/edit/fix mods (usually when add/edit/remove mods directly via File Explorer)') }}</p>
           <br>
 
-
             <el-button class="big-main-btn" @click="handleSaveCustomizations">
               {{ t('settings.saveModCustomizations') }}
             </el-button>
@@ -89,11 +88,6 @@
               {{ t('settings.generateFolderIcon') }}
             </el-button>
           </div>
-          <div class="block-row">
-            <span class="row-label">{{ t('settings.autoGenerateIcon') }}</span>
-            <el-switch v-model="settingsStore.settings.autoFolderIcon" active-color="#4a9eff" inactive-color="#555" @change="onSettingChange" />
-          </div>
-
 
         <!-- 界面缩放滑块 -->
         <div class="section-block">
@@ -177,10 +171,6 @@
 
         <!-- 开关设置区 -->
         <div class="section-block">
-          <div class="block-row">
-            <span class="row-label">{{ t('settings.autoPinWindow') }}</span>
-            <el-switch v-model="settingsStore.settings.autoTopWindow" active-color="#4a9eff" inactive-color="#555" @change="onSettingChange" />
-          </div>
           <div class="block-row">
             <span class="row-label">{{ t('settings.showTrayMenu') }}</span>
             <el-switch v-model="settingsStore.settings.alwaysShowMenuOnHotkey" active-color="#4a9eff" inactive-color="#555" @change="onSettingChange" />
@@ -416,13 +406,13 @@ async function handleUpdateModData() {
 /** 保存模组自定义（占位功能） */
 function handleSaveCustomizations() {
   logger.info('SettingsView', 'Save mod customizations (placeholder)')
-  ElMessage.info(t('Task completed!'))
+  ElMessage.info(t('Feature not implemented (placeholder)'))
 }
 
 /** 切换模组启用/禁用状态 */
 function handleToggleModsEnabled() {
   logger.info('SettingsView', 'Toggle mods enabled (placeholder)')
-  ElMessage.info(t('Task completed!'))
+  ElMessage.info(t('Feature not implemented (placeholder)'))
 }
 
 /** 触发 Hash 冲突检测遮罩 */
@@ -434,7 +424,7 @@ function handleDetectHashConflicts() {
 /** 生成文件夹图标（占位功能） */
 function handleGenerateFolderIcon() {
   logger.info('SettingsView', 'Generate folder icon')
-  ElMessage.info(t('Task completed!'))
+  ElMessage.info(t('Feature not implemented (placeholder)'))
 }
 
 /** 还原区是否正在拖拽文件（用于高亮反馈） */
@@ -678,19 +668,19 @@ async function handleExit() {
 /** 支持开发者链接（占位） */
 function onSupportClick() {
   logger.info('SettingsView', 'Support developer clicked (placeholder)')
-  ElMessage.info(t('Task completed!'))
+  ElMessage.info(t('Feature not implemented (placeholder)'))
 }
 
 /** 联系帮助链接（占位） */
 function onContactClick() {
   logger.info('SettingsView', 'Contact help clicked (placeholder)')
-  ElMessage.info(t('Task completed!'))
+  ElMessage.info(t('Feature not implemented (placeholder)'))
 }
 
 /** 教程链接（占位） */
 function onTutorialClick() {
   logger.info('SettingsView', 'Tutorial clicked (placeholder)')
-  ElMessage.info(t('Task completed!'))
+  ElMessage.info(t('Feature not implemented (placeholder)'))
 }
 
 onMounted(async () => {

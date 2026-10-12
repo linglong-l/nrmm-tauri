@@ -46,40 +46,6 @@ pub enum ModsPathStatus {
     NotSet,
 }
 
-/// UI 布局模式
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum LayoutMode {
-    /// 网格布局
-    Grid,
-    /// 轮播布局
-    Carousel,
-    /// 自动选择
-    Automatic,
-}
-
-/// 排序方式
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum SortingType {
-    /// 默认排序
-    Default,
-    /// 字母顺序
-    Alphabetical,
-    /// 最近使用
-    RecentMod,
-    /// 反向字母顺序
-    ReverseAlphabetical,
-}
-
-/// 光标类型
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum CursorType {
-    Normal,
-    Precision,
-}
-
 /// 通知级别
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -88,17 +54,6 @@ pub enum NotificationLevel {
     Warning,
     Error,
     Success,
-}
-
-/// 按键配置方案
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[serde(rename_all = "camelCase")]
-pub enum KeybindProfile {
-    GI,
-    HSR,
-    Wuwa,
-    ZZZ,
-    Hi3,
 }
 
 impl TargetGame {

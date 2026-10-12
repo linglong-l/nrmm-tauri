@@ -15,7 +15,7 @@
 >
 > 仓库已相应设置 `package.json engines >=22.22.2`、`Cargo.toml rust-version = "1.93"`，CI 使用 Node 22 与 stable 工具链。详见[环境要求](#环境要求)。
 
-* 游戏内按键模拟（NRMM 交互协议）目前仅在 Windows 完整支持；macOS 为占位实现尚未启用。
+* 游戏内按键模拟（NRMM 交互协议）目前仅在 Windows 完整支持；Linux 走 xdotool/ydotool/wtype/wlrctl；macOS 明确不支持，相关实现与依赖已移除。
 
 ## 平台支持
 
@@ -24,7 +24,7 @@
 | Windows 11 | ✅ 已测试 | 完全支持 |
 | Linux | ✅ 已测试 | 通过条件编译支持，使用 xdg-open 打开文件管理器 |
 | Windows 10 | ⚠️ 未测试 | 可能兼容，但未进行测试 |
-| macOS | ❌ 不支持 | 仅占位实现，按键模拟/前台检测未实现 |
+| macOS | ❌ 不支持 | 明确不支持；平台实现与专属依赖已移除，不产出 macOS 构建 |
 
 ## 支持的游戏
 
@@ -58,7 +58,7 @@
 | Tauri | ~2.11.5 | 桌面应用框架（tray-icon / rustls-tls / protocol-asset） |
 | tokio | ^1 | 异步运行时 |
 | rayon | 1.12 | 数据并行（扫描/解析多核加速） |
-| notify | 8.2 | 文件系统监听（300ms 防抖） |
+| notify | 8.2 | 文件系统监听（200ms 防抖） |
 | serde / serde_json | ^1 | 序列化 |
 | anyhow | 1 | 错误处理 |
 | zip / sevenz-rust / unrar / infer | 8.6 / 0.6 / 0.5 / 0.16 | 压缩包解压与类型推断 |
@@ -77,7 +77,7 @@
 - **core/ini_backup** / **ini_backup_scheduler**：INI 备份执行体与调度（白名单 + 幂等）
 - **core/file_lock** + **operation_registry**：OS 级 advisory lock 与后台操作注册表（跨进程互斥、退出保护）
 - **core/exit_log**：程序退出原因记录（正常/取消/信号/强杀）
-- **core/file_watcher**：文件系统监听（notify + 300ms 防抖）
+- **core/file_watcher**：文件系统监听（notify + 200ms 防抖）
 - **core/resolution** / **core/dll_capability**：分辨率解析与 DLL 能力检测
 - **core/thumbnail**：模组预览图缩略图生成（WebView 内存优化）
 - **commands**：Tauri IPC 命令注册与处理（`mod_commands` / `settings_commands` / `thumbnail_commands`）
@@ -259,11 +259,10 @@ npm run build:linux
 
 ### 系统集成
 
-- ✅ 全局热键切换窗口（支持键盘与手柄）
+- ✅ 全局热键切换窗口（键盘全平台；手柄组合仅 Windows 轮询 XInput，Linux 侧为占位待实现）
 - ✅ 系统托盘菜单
 - ✅ 目标进程检测（仅在指定游戏运行时响应热键）
-- ✅ 文件系统监听（300ms 防抖）
-- ✅ 设置导入/导出/重置
+- ✅ 文件系统监听（200ms 防抖）
 - ✅ 在文件管理器中打开模组目录（支持 Windows 和 Linux）
 
 ### 多语言支持
