@@ -1098,7 +1098,7 @@ export const useModsStore = defineStore('mods', () => {
     const latTryEmitSummary = () => {
       if (latSummaryDone || latRenderFlush === null || latT3 === 0) return
       latSummaryDone = true
-      logger.info('ModsStore', '[selection-latency] end-to-end timing', {
+      logger.debug('ModsStore', '[selection-latency] end-to-end timing', {
         t0Ms: Math.round(latT0),
         totalMs: Math.round(latT3 - latT0),
         uiOptimisticMs: Math.round(latT1 - latT0),
