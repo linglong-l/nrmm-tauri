@@ -16,7 +16,7 @@ fn make_mod_dir(root: &Path) -> PathBuf {
     mod_dir
 }
 
-// ---------------- export_internal（第三级回退，确定性） ----------------
+// ---------------- export_internal（自维护压缩口径，确定性） ----------------
 
 #[test]
 fn export_internal_zip_compression_rejected() {
@@ -58,18 +58,4 @@ fn export_internal_unsupported_format_errors() {
 
     let res = export_internal(&mod_dir, &rar_path, "rar");
     assert!(res.is_err());
-}
-
-// ---------------- export_mod（端到端契约，不依赖具体层级） ----------------
-
-#[test]
-fn export_mod_produces_non_empty_archive() {
-    let tmp = TempDir::new().unwrap();
-    let mod_dir = make_mod_dir(tmp.path());
-    let out = tmp.path().join("Exported.zip");
-
-    export_mod(&mod_dir, &out).unwrap();
-
-    let meta = fs::metadata(&out).unwrap();
-    assert!(meta.len() > 0, "导出归档不应为空");
 }

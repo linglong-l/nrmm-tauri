@@ -621,7 +621,7 @@ fn finalize_extraction(
     //
     // ⚠️ 必须在「移动到最终位置之前」于 `.tmp` 暂存目录上执行：`.tmp` 隐藏目录被文件监视器
     // 过滤（file_watcher 回调中的 `.tmp` 排除规则），不会触发轻量扫描写入 `modname` 等标记文件；
-    // 若改在移动到分组目录之后执行，监视器会在 300ms 防抖窗口内写入 `modname`，使顶层「相关条目」
+    // 若改在移动到分组目录之后执行，监视器会在 200ms 防抖窗口内写入 `modname`，使顶层「相关条目」
     // 不再是单一目录，导致展平判定失败、智能解压退化为常规解压并额外消耗 CPU（B 修复）。
     if let Err(e) = unwrap_single_folder_nesting(&final_dir) {
         log::warn!(

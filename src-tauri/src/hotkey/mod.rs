@@ -1,10 +1,12 @@
 //! 全局快捷键管理模块
 //!
 //! 负责注册和处理全局快捷键：
-//! - Ctrl+Alt+1~0: 选择分组 1~10
-//! - Ctrl+1~0: 选择模组 1~10
-//! - F5: 刷新模组列表
+//! - Ctrl+Alt+1~0: 触发「选择分组」按键（10 个数字键等价，编号无语义）
+//! - Ctrl+1~0: 触发「选择模组」按键（10 个数字键等价，编号无语义）
 //! - 用户配置的窗口切换热键（默认 Alt+D）
+//!
+//! 注：F5 已解除绑定（不再注册全局 F5，也不再 emit `hotkey-refresh`）。
+//! 应用内数据重扫走 Ctrl+R（轻量）/ Ctrl+Shift+R（全量），见前端 `utils/refreshGuard.ts`。
 //!
 //! # 功能特性
 //! - 支持仅在游戏前台时响应热键
@@ -37,7 +39,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 pub struct HotkeyManager {
     /// Tauri 应用句柄，用于访问 `global_shortcut()` 插件注册/注销快捷键
     app_handle: AppHandle,
-    /// 已注册的快捷键字符串列表（如 `["Ctrl+Alt+1", "Ctrl+1", "F5"]`）
+    /// 已注册的快捷键字符串列表（如 `["Ctrl+Alt+1", "Ctrl+1", "Alt+D"]`）
     /// 使用 `Mutex<Vec<String>>` 保证并发安全，多个线程可同时读取
     registered_hotkeys: Mutex<Vec<String>>,
     /// 用户配置的窗口切换热键字符串（如 `Some("Alt+D")`），`None` 表示未配置
@@ -61,10 +63,9 @@ impl HotkeyManager {
     ///
     /// # 步骤
     /// 1. 先调用 `unregister_all` 注销所有已注册的快捷键（清空列表）
-    /// 2. 注册 `Ctrl+Alt+1~0`：选择分组 1-10（0 表示第 10 组）
-    /// 3. 注册 `Ctrl+1~0`：选择模组 1-10（0 表示第 10 个）
-    /// 4. 注册 `F5`：刷新模组列表
-    /// 5. 注册用户配置的 `window_hotkey`（如 `Alt+D`）
+    /// 2. 注册 `Ctrl+Alt+1~0`：触发选择分组按键（编号无语义，10 键等价）
+    /// 3. 注册 `Ctrl+1~0`：触发选择模组按键（编号无语义，10 键等价）
+    /// 4. 注册用户配置的 `window_hotkey`（如 `Alt+D`）
     ///
     /// # Errors
     /// - 快捷键注册失败时返回错误（底层 `global_shortcut().register()` 失败）
@@ -94,8 +95,6 @@ impl HotkeyManager {
             self.register_hotkey(gsm, &accel);
         }
 
-        self.register_hotkey(gsm, "F5");
-
         // 注册用户配置的窗口切换热键
         let settings = settings_store::get_settings();
         if !settings.window_hotkey.is_empty() {
@@ -123,7 +122,7 @@ impl HotkeyManager {
     ///
     /// # 参数
     /// - `gsm`: 全局快捷键插件实例
-    /// - `accel`: 快捷键字符串（如 `"Ctrl+Alt+1"`、`"F5"`）
+    /// - `accel`: 快捷键字符串（如 `"Ctrl+Alt+1"`、`"Alt+D"`）
     fn register_hotkey(
         &self,
         gsm: &tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>,
@@ -169,7 +168,8 @@ impl HotkeyManager {
 ///
 /// 由 `tauri-plugin-global-shortcut` 的事件回调调用。
 /// 处理逻辑：
-/// 1. 先尝试匹配硬编码快捷键（`shortcut_to_action`）：Ctrl+Alt+N、Ctrl+N、F5
+/// 1. 先尝试匹配硬编码快捷键（`shortcut_to_action`）：Ctrl+Alt+1~0 → `SelectGroup`、
+///    Ctrl+1~0 → `SelectMod`（F5 已解除绑定，不在此列）
 /// 2. 未匹配到硬编码快捷键时，检查是否为用户配置的窗口切换热键
 /// 3. 匹配窗口热键则调用 `handle_window_hotkey`
 ///
@@ -212,7 +212,7 @@ pub fn handle_hotkey(app_handle: &AppHandle, shortcut: &Shortcut, _event: &Short
 ///
 /// # Panics
 /// 不会 panic，所有可能失败的操作（获取窗口、弹出菜单等）均使用 `log::error` 记录
-fn handle_window_hotkey(app_handle: &AppHandle) {
+pub(crate) fn handle_window_hotkey(app_handle: &AppHandle) {
     let is_visible = app_handle
         .get_webview_window("main")
         .and_then(|w| w.is_visible().ok())
@@ -282,23 +282,20 @@ fn shortcuts_equal(a: &Shortcut, b: &Shortcut) -> bool {
 /// 由 `shortcut_to_action` 将原始快捷键映射为具体动作。
 #[derive(Debug, Clone)]
 enum HotkeyAction {
-    /// 选择分组（参数为分组编号 1-10）
-    SelectGroup(u32),
-    /// 选择模组（参数为模组索引 0-9，对应 Ctrl+1~0）
-    SelectMod(u32),
-    /// 刷新模组列表（对应 F5）
-    Refresh,
+    /// 触发「选择分组」按键（Ctrl+Alt+任意数字键；编号不区分目标分组）
+    SelectGroup,
+    /// 触发「选择模组」按键（Ctrl+任意数字键；编号不区分目标模组）
+    SelectMod,
 }
 
 /// 将快捷键转换为对应的动作
 ///
 /// 匹配规则（按优先级顺序）：
-/// 1. 单独 F5（无修饰键）→ `Refresh`
-/// 2. Ctrl+Alt+1~0 → `SelectGroup(1~10)`
-/// 3. Ctrl+1~0 → `SelectMod(0~9)`
+/// 1. Ctrl+Alt+1~0 → `SelectGroup`
+/// 2. Ctrl+1~0 → `SelectMod`
 ///
-/// 注意：Ctrl+1 对应 `SelectMod(0)`，Ctrl+0 对应 `SelectMod(9)`。
-/// 这与 3Dmigoto 的索引约定一致（0-based）。
+/// 数字键只作触发用，10 个键完全等价：按键模拟不携带分组/模组编号，
+/// 曾按 `SelectGroup(1~10)` 传递索引但下游忽略，属误导性设计，已移除。
 fn shortcut_to_action(shortcut: &Shortcut) -> Option<HotkeyAction> {
     let mods = shortcut.mods;
     let key = shortcut.key;
@@ -308,53 +305,42 @@ fn shortcut_to_action(shortcut: &Shortcut) -> Option<HotkeyAction> {
     let has_shift = mods.contains(Modifiers::SHIFT);
     let has_super = mods.contains(Modifiers::SUPER);
 
-    if !has_ctrl && !has_alt && !has_shift && !has_super && key == Code::F5 {
-        return Some(HotkeyAction::Refresh);
+    if has_ctrl && has_alt && !has_shift && !has_super && is_digit_key(key) {
+        return Some(HotkeyAction::SelectGroup);
     }
 
-    if has_ctrl && has_alt && !has_shift && !has_super {
-        match key {
-            Code::Digit1 => return Some(HotkeyAction::SelectGroup(1)),
-            Code::Digit2 => return Some(HotkeyAction::SelectGroup(2)),
-            Code::Digit3 => return Some(HotkeyAction::SelectGroup(3)),
-            Code::Digit4 => return Some(HotkeyAction::SelectGroup(4)),
-            Code::Digit5 => return Some(HotkeyAction::SelectGroup(5)),
-            Code::Digit6 => return Some(HotkeyAction::SelectGroup(6)),
-            Code::Digit7 => return Some(HotkeyAction::SelectGroup(7)),
-            Code::Digit8 => return Some(HotkeyAction::SelectGroup(8)),
-            Code::Digit9 => return Some(HotkeyAction::SelectGroup(9)),
-            Code::Digit0 => return Some(HotkeyAction::SelectGroup(10)),
-            _ => {}
-        }
-    }
-
-    if has_ctrl && !has_alt && !has_shift && !has_super {
-        match key {
-            Code::Digit1 => return Some(HotkeyAction::SelectMod(0)),
-            Code::Digit2 => return Some(HotkeyAction::SelectMod(1)),
-            Code::Digit3 => return Some(HotkeyAction::SelectMod(2)),
-            Code::Digit4 => return Some(HotkeyAction::SelectMod(3)),
-            Code::Digit5 => return Some(HotkeyAction::SelectMod(4)),
-            Code::Digit6 => return Some(HotkeyAction::SelectMod(5)),
-            Code::Digit7 => return Some(HotkeyAction::SelectMod(6)),
-            Code::Digit8 => return Some(HotkeyAction::SelectMod(7)),
-            Code::Digit9 => return Some(HotkeyAction::SelectMod(8)),
-            Code::Digit0 => return Some(HotkeyAction::SelectMod(9)),
-            _ => {}
-        }
+    if has_ctrl && !has_alt && !has_shift && !has_super && is_digit_key(key) {
+        return Some(HotkeyAction::SelectMod);
     }
 
     None
+}
+
+/// 是否为数字键 1~0（选组/选模组触发键，编号无语义）
+fn is_digit_key(key: Code) -> bool {
+    matches!(
+        key,
+        Code::Digit1
+            | Code::Digit2
+            | Code::Digit3
+            | Code::Digit4
+            | Code::Digit5
+            | Code::Digit6
+            | Code::Digit7
+            | Code::Digit8
+            | Code::Digit9
+            | Code::Digit0
+    )
 }
 
 /// 执行快捷键动作
 ///
 /// 根据用户设置判断是否仅在游戏前台时响应。
 /// - `hotkey_only_in_migoto = true` 且游戏不在前台 → 如果 `always_show_menu_on_hotkey = true` 则弹出游戏选择菜单，否则忽略
-/// - 游戏在前台或无限制 → 执行相应的按键模拟或事件发射
+/// - 游戏在前台或无限制 → 执行相应的按键模拟
 ///
 /// # Emits
-/// - `hotkey-refresh`（Payload: `()`）：F5 刷新快捷键触发时 emit
+/// 无（本函数只发按键模拟；F5→`hotkey-refresh` 链路已按需求解除）
 fn execute_action(app_handle: &AppHandle, action: HotkeyAction) {
     log::debug!("[hotkey] [execute_action] action={:?}", action);
     let detector = platform::get_foreground_detector();
@@ -383,21 +369,17 @@ fn execute_action(app_handle: &AppHandle, action: HotkeyAction) {
         }
     }
     match action {
-        HotkeyAction::SelectGroup(_gid) => {
+        HotkeyAction::SelectGroup => {
             log::debug!("Hotkey triggered: SelectGroup");
             if let Err(e) = simulator.simulate_select_group() {
                 log::error!("Failed to simulate select group: {}", e);
             }
         }
-        HotkeyAction::SelectMod(_midx) => {
+        HotkeyAction::SelectMod => {
             log::debug!("Hotkey triggered: SelectMod");
             if let Err(e) = simulator.simulate_select_mod() {
                 log::error!("Failed to simulate select mod: {}", e);
             }
-        }
-        HotkeyAction::Refresh => {
-            log::debug!("Hotkey triggered: Refresh");
-            let _ = app_handle.emit(crate::core::events::HOTKEY_REFRESH, ());
         }
     }
 }
@@ -495,91 +477,6 @@ pub fn reregister_hotkeys(
         }
     }
     hotkey_mgr.register_all().map_err(|e| e.to_string())
-}
-
-/// 注销所有快捷键（Tauri 命令）
-///
-/// 前端调用 `unregisterHotkeys` 触发。
-/// 用于应用退出前或切换配置时清理资源。
-#[tauri::command]
-pub fn unregister_hotkeys(hotkey_mgr: State<'_, Arc<HotkeyManager>>) -> Result<(), String> {
-    hotkey_mgr.unregister_all();
-    Ok(())
-}
-
-/// 模拟选择分组按键（Tauri 命令）
-///
-/// 前端调用 `simulateSelectGroup` 触发。
-/// 用于 3Dmigoto 内置菜单的按键模拟。
-///
-/// # Errors
-/// - 按键模拟失败（平台相关，如权限不足）
-#[tauri::command]
-pub fn simulate_select_group() -> Result<(), String> {
-    let mut simulator = platform::get_key_simulator();
-    simulator.simulate_select_group().map_err(|e| e.to_string())
-}
-
-/// 模拟选择模组按键（Tauri 命令）
-///
-/// 前端调用 `simulateSelectMod` 触发。
-/// 用于 3Dmigoto 内置菜单的按键模拟。
-///
-/// # Errors
-/// - 按键模拟失败（平台相关，如权限不足）
-#[tauri::command]
-pub fn simulate_select_mod() -> Result<(), String> {
-    let mut simulator = platform::get_key_simulator();
-    simulator.simulate_select_mod().map_err(|e| e.to_string())
-}
-
-/// 检查按键模拟支持情况（Tauri 命令）
-///
-/// 前端调用 `checkKeypressSupport` 触发。
-/// 检查当前平台是否支持按键模拟（如 macOS 需要辅助功能权限）。
-///
-/// # Errors
-/// - 平台不支持按键模拟时返回错误
-#[tauri::command]
-pub fn check_keypress_support() -> Result<(), String> {
-    let simulator = platform::get_key_simulator();
-    simulator.check_support()
-}
-
-/// 检查指定游戏是否在前台（Tauri 命令）
-///
-/// 前端调用 `isGameForeground` 触发。
-/// 先通过 `parse_game` 解析游戏字符串，再用前台检测器判断。
-///
-/// # 参数
-/// - `game`: 游戏字符串（如 `"GenshinImpact"`, `"StarRail"`）
-///
-/// # 返回
-/// `true` 表示该游戏窗口当前在前台
-#[tauri::command]
-pub fn is_game_foreground(game: String) -> bool {
-    let game_enum = match parse_game(&game) {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    let detector = platform::get_foreground_detector();
-    detector.is_game_foreground(game_enum)
-}
-
-/// 获取光标位置（Tauri 命令）
-///
-/// 前端调用 `getCursorPosition` 触发。
-/// 用于定位 `popup_menu` 弹出位置。
-///
-/// # 返回
-/// `(x, y)` 屏幕坐标（左上角为原点）
-///
-/// # Errors
-/// - 获取光标位置失败（平台相关）
-#[tauri::command]
-pub fn get_cursor_position() -> Result<(i32, i32), String> {
-    let detector = platform::get_foreground_detector();
-    detector.get_cursor_position().map_err(|e| e.to_string())
 }
 
 /// 解析游戏字符串为 `TargetGame` 枚举

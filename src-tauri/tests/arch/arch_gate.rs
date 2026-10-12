@@ -1,9 +1,10 @@
-//! 架构健身函数（F1/F2/F4/F5）：以集成测试形态冻结分层纪律。
+//! 架构健身函数（F1/F2/F4/F5/F6）：以集成测试形态冻结分层纪律。
 //!
 //! - F1 依赖方向：core/platform/models/config/utils 不得引用上层模块（全文内联路径扫描）
 //! - F2 命令归属：`#[tauri::command]` 仅允许出现在 commands/ 与壳模块（存量豁免表随 Phase 6 清零）
 //! - F4 行数棘轮：新文件 ≤800 行；存量巨石以登记值为上限（只减不增，拆分后下调）
 //! - F5 事件契约：emit 调用禁止裸字符串；Rust/前端事件登记集合严格相等
+//! - F6 版本契约：Tauri 插件的 Rust crate 与 JS 包 minor 必须一致（含 `@tauri-apps/api`/`cli` ↔ `tauri`）
 //!
 //! 设计文档：docs/superpowers/specs/2026-09-18-arch-fitness-and-monolith-split-design.md
 
@@ -217,11 +218,14 @@ fn f2_tauri_command_ownership() {
         "F2 命令归属违规（新增命令一律落 commands/）:\n{}",
         offenders.join("\n")
     );
-    // 基线锚点：当前 86 个命令（2026-10-09 新增 add_mutex_group：创建顶层互斥分组；
+    // 基线锚点：当前 52 个命令（2026-10-11 清理批次 3 删除 A2 的 14 条「只注册、前端无任何调用者」
+    // 命令（window 5 / archive 3 / settings 2 / cloud 2 / watcher 2）与注册行，66 → 52；
+    // 2026-10-11 清理批次 2 删除 20 条「前端无调用者」的命令体与注册行，86 → 66；
+    // 2026-10-09 新增 add_mutex_group：创建顶层互斥分组；
     // 2026-10-06 新增 set_game_mods_path：改写 Mods 根锚点的唯一入口；
     // 新增/删除命令时同步更新此值，防止静默漂移）
     assert_eq!(
-        total, 86,
+        total, 52,
         "命令总数基线漂移（当前 {}），确认后更新锚点",
         total
     );
@@ -337,4 +341,138 @@ fn f5_event_registry_matches_frontend() {
     for c in &rs_values {
         assert!(ts_values.contains(c), "Rust 登记但前端未登记: {}", c);
     }
+}
+
+/// F6：Tauri 插件的 Rust crate 与 JS 包必须同 major.minor（patch 可不同）。
+///
+/// 两侧 minor 不一致时**编译期完全静默**，只在 `tauri dev` 启动或首次 invoke 才炸
+/// （权限/IPC schema 对不上），报错信息还指向别处，排查成本极高，故在此钉死。
+#[test]
+fn f6_tauri_plugin_rust_js_minor_aligned() {
+    use std::collections::HashMap;
+
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // 权威锁是仓库根 Cargo.lock（src-tauri/Cargo.lock 是历史遗留死文件，不参与解析）
+    let cargo_lock = read(&manifest.join("../Cargo.lock"));
+    let pnpm_lock_path = manifest.join("../pnpm-lock.yaml");
+    // 前端锁不保证存在：WSL/Linux 副本构建树由 scripts/sync-src-to-wsl.sh 生成，只送 Rust 侧输入，
+    // 没有 pnpm-lock.yaml。这条门禁的归属是"两侧版本对齐"，缺 JS 锁时无从比对 ⇒ 响亮跳过，
+    // 但绝不静默：日志里必须看得见，否则它会悄悄失去覆盖率。
+    if !pnpm_lock_path.exists() {
+        eprintln!(
+            "[SKIP] F6 插件版本对齐：缺少 {:?}（副本构建树未同步前端锁），本构型不覆盖此门禁",
+            pnpm_lock_path
+        );
+        return;
+    }
+    let pnpm_lock = read(&pnpm_lock_path);
+
+    // Cargo.lock：[[package]] 段内 name 与 version 相邻成对
+    let mut rust: HashMap<String, String> = HashMap::new();
+    let mut pending_name: Option<String> = None;
+    for line in cargo_lock.lines() {
+        let t = line.trim();
+        if let Some(n) = t
+            .strip_prefix("name = \"")
+            .and_then(|s| s.strip_suffix('"'))
+        {
+            pending_name = Some(n.to_string());
+        } else if let Some(v) = t
+            .strip_prefix("version = \"")
+            .and_then(|s| s.strip_suffix('"'))
+        {
+            if let Some(n) = pending_name.take() {
+                rust.entry(n).or_insert_with(|| v.to_string());
+            }
+        }
+    }
+
+    // pnpm-lock.yaml 是**多文档 YAML 流**：pnpm 12 把 `packageManagerDependencies`
+    // （corepack 拉的 @pnpm/exe.* 平台二进制）单独写成第一份文档，项目真实依赖在第二份
+    // （两者以单独一行的 `---` 分隔）。所以不能"遇到第一个 packages: 就停"——那会停在
+    // 第一份文档里、一个 @tauri-apps 包都收不到。按文档边界重置状态，只在 importers 段内收集。
+    let mut js: Vec<(String, String)> = Vec::new();
+    let mut pending_pkg: Option<String> = None;
+    let mut in_importers = false;
+    for line in pnpm_lock.lines() {
+        if line == "---" {
+            in_importers = false;
+            pending_pkg = None;
+            continue;
+        }
+        if line.starts_with("importers:") {
+            in_importers = true;
+            continue;
+        }
+        if !in_importers {
+            continue;
+        }
+        if line.starts_with("packages:") || line.starts_with("snapshots:") {
+            in_importers = false;
+            continue;
+        }
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("'@tauri-apps/") {
+            if let Some(name) = rest.strip_suffix("':") {
+                pending_pkg = Some(name.to_string());
+                continue;
+            }
+        }
+        if let Some(v) = t.strip_prefix("version:") {
+            if let Some(name) = pending_pkg.take() {
+                // 去掉 peer 后缀：2.14.7(vue@3.5.43(typescript@6.0.3)) → 2.14.7
+                let ver = v
+                    .trim()
+                    .split('(')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if !ver.is_empty() {
+                    js.push((name, ver));
+                }
+            }
+        }
+    }
+    assert!(
+        !js.is_empty(),
+        "pnpm-lock.yaml 里没解析到任何 @tauri-apps 包：锁文件格式变了，F6 的解析口径需同步更新"
+    );
+
+    let minor_of = |v: &str| -> String {
+        let mut it = v.split('.');
+        format!("{}.{}", it.next().unwrap_or("?"), it.next().unwrap_or("?"))
+    };
+
+    let mut offenders: Vec<String> = Vec::new();
+    for (js_name, js_ver) in &js {
+        // JS 包名 → Rust crate 名：api/cli 对 tauri 本体，plugin-x 对 tauri-plugin-x
+        let crate_name = match js_name.as_str() {
+            "api" | "cli" => "tauri".to_string(),
+            other => format!(
+                "tauri-plugin-{}",
+                other.strip_prefix("plugin-").unwrap_or(other)
+            ),
+        };
+        let Some(rs_ver) = rust.get(&crate_name) else {
+            offenders.push(format!(
+                "@tauri-apps/{js_name} {js_ver}：Cargo.lock 里没有对应 crate `{crate_name}`\
+                 （JS 侧装了插件而 Rust 侧没有，运行期 invoke 必失败）"
+            ));
+            continue;
+        };
+        if minor_of(js_ver) != minor_of(rs_ver) {
+            offenders.push(format!(
+                "@tauri-apps/{js_name} {js_ver}（minor {}） ↔ {crate_name} {rs_ver}（minor {}）：\
+                 两侧 minor 必须一致，升级时同步改 package.json 与 src-tauri/Cargo.toml",
+                minor_of(js_ver),
+                minor_of(rs_ver)
+            ));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "F6 Tauri 插件 Rust↔JS minor 未对齐（编译期不报错，dev 启动/首次 invoke 才炸）:\n{}",
+        offenders.join("\n")
+    );
 }

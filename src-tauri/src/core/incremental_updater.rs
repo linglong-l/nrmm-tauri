@@ -1,7 +1,7 @@
 //! 目录级增量更新模块
 //!
 //! 核心流程：
-//! 1. 收集事件路径到 HashSet<PathBuf>（防抖 300ms）
+//! 1. 收集事件路径到 HashSet<PathBuf>（防抖 200ms）
 //! 2. 路径收敛：找到 HashSet 中所有路径的公共父级（非 group_ 目录级别）
 //! 3. 局部 DFS：只对收敛后的父级目录执行扫描
 //! 4. 子树替换：将局部扫描结果 patch 到 ModCache 和 ScanResult 对应子树
@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 /// 目录级增量更新器，用于防抖合并文件系统变更事件并收敛到最小重扫范围。
 ///
 /// 在 notify 监听线程中持有一个实例，通过 `collect()` 收集事件路径，
-/// 300ms 防抖到期后调用 `consolidate()` 计算需要重新扫描的目录入口列表。
+/// 200ms 防抖到期后调用 `consolidate()` 计算需要重新扫描的目录入口列表。
 pub struct IncrementalUpdater {
     /// 本轮收集到的变更路径集合（来自 notify 回调）。
     ///
@@ -27,7 +27,7 @@ pub struct IncrementalUpdater {
     /// 每次调用 `collect()` 时更新为 `Instant::now()`，
     /// `is_ready()` 据此判断距上次事件是否已超过 `debounce_duration`。
     last_event_at: Option<Instant>,
-    /// 防抖时长（通常 300ms，从 constants 模块传入）。
+    /// 防抖时长（通常 200ms，从 constants 模块传入）。
     debounce_duration: Duration,
 }
 

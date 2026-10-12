@@ -1,107 +1,17 @@
-//! 压缩包导入导出命令域
+//! 压缩包导入命令域
 //!
 //! 从 core/archive_handler.rs 迁出（2026-09-19 Phase 6-4）。
-//! 承载压缩包支持检测、导入（含自动导入/批量导入）与导出、分辨率上限查询命令。
+//! 承载压缩包支持检测与导入（含自动导入/批量导入）命令。
 //! 底层解压/归档逻辑分散于 core/archive_detect|extract|import|export（archive_handler.rs 拆分），此处仅薄适配。
+//! 导出侧暂无 IPC 出口（批次 3 摘除 `export_mod_cmd` 后，`core::archive_export::export_mod` 仍在，随时可再挂）。
 
-use crate::core::archive_detect::{is_supported_archive, ExtractResult};
-use crate::core::archive_export::export_mod;
-use crate::core::archive_import::{import_item, import_mod_auto};
-use crate::core::resolution::{compute_limits, ResolutionLimits};
+use crate::core::archive_detect::ExtractResult;
+use crate::core::archive_import::import_item;
 use crate::core::watcher_core::FileWatcher;
 use crate::core::watcher_ring::WatcherGuard;
 use crate::ipc::typed_paths::{ManagedPath, SourcePath};
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::State;
-
-/// Tauri 命令：检查路径是否为支持的压缩包格式
-///
-/// 前端调用 `isSupportedArchive` 触发。
-/// 使用 `is_supported_archive`（魔数优先 + 扩展名回退）进行鲁棒检测。
-#[tauri::command]
-pub fn is_supported_archive_cmd(path: String) -> bool {
-    is_supported_archive(Path::new(&path))
-}
-
-/// Tauri 命令：导入模组压缩包到指定分组
-///
-/// 前端调用 `importMod` 触发。
-/// 使用 `spawn_blocking` 在后台线程解压，避免阻塞 async 运行时。
-///
-/// # 锁语义（H1 修复）
-/// 委托 [`import_item`]（文件型源路径走 `extract_archive` 路径，行为等价），
-/// 使 `import_mod_cmd` 与 `import_item_cmd` / `import_mod_auto_cmd` 三个导入
-/// 入口共享同一套 AdvisoryLock + OperationGuard 保护：原先本入口无锁，
-/// 并发导入与 `import_item` 竞争时可能在 `unique_mod_dir_name` 的
-/// check-then-act 窗口算出相同唯一名，后完成者的移动兜底会覆盖前者产物。
-///
-/// # Errors
-/// - 解压失败（格式不支持、7z 未找到、密码错误等）
-/// - 跨进程建议锁获取失败（另一 NRMM 实例正在操作该游戏目录）
-#[tauri::command]
-pub async fn import_mod_cmd(
-    archive_path: SourcePath,
-    group_dir: ManagedPath,
-    password: Option<String>,
-) -> Result<ExtractResult, String> {
-    // 路径边界由类型保证：group_dir 已校验落在已登记 Mods 根内且存在；
-    // archive_path 是用户选择的压缩包来源，路径任意但必须存在（SourcePath 语义）
-    let group_dir = group_dir.into_canonical();
-    let archive_path = archive_path.into_canonical();
-    tauri::async_runtime::spawn_blocking(move || -> Result<ExtractResult, String> {
-        import_item(
-            archive_path.as_path(),
-            group_dir.as_path(),
-            password.as_deref(),
-        )
-        .map_err(|e| e.to_string())
-        .map(|result| {
-            // 新导入目录补做 INI 备份（幂等，白名单同样生效，后台线程池队首优先执行）
-            if let ExtractResult::Success { ref mod_path, .. } = result {
-                crate::core::ini_backup_scheduler::enqueue_incremental(mod_path.clone());
-            }
-            result
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Tauri 命令：自动导入模组压缩包（自动选择第一个存在的分组）
-///
-/// 前端调用 `importModAuto` 触发。
-/// 使用 `spawn_blocking` 在后台线程解压。
-///
-/// # Errors
-/// - `mods_path` 不在已登记 Mods 根内或不存在（反序列化期即拒）
-/// - 解压/导入失败
-#[tauri::command]
-pub async fn import_mod_auto_cmd(
-    archive_path: SourcePath,
-    mods_path: ManagedPath,
-    password: Option<String>,
-) -> Result<ExtractResult, String> {
-    let mods_path = mods_path.into_canonical();
-    let archive_path = archive_path.into_canonical();
-    tauri::async_runtime::spawn_blocking(move || -> Result<ExtractResult, String> {
-        import_mod_auto(
-            archive_path.as_path(),
-            mods_path.as_path(),
-            password.as_deref(),
-        )
-        .map_err(|e| e.to_string())
-        .map(|result| {
-            // 新导入目录补做 INI 备份（幂等，白名单同样生效，后台线程池队首优先执行）
-            if let ExtractResult::Success { ref mod_path, .. } = result {
-                crate::core::ini_backup_scheduler::enqueue_incremental(mod_path.clone());
-            }
-            result
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
 
 /// 批量导入的 IPC 入参
 ///
@@ -189,45 +99,6 @@ pub async fn import_item_cmd(
     }
 
     result
-}
-
-/// Tauri 命令：获取当前屏幕分辨率推导出的分组/模组上限及选用整数宽度。
-///
-/// 前端可据此限制「新建分组 / 添加模组」的 UI 上限，对齐 NRMM 的 `group_int` 绑定 xy 轴语义。
-#[tauri::command]
-pub fn get_resolution_limits_cmd() -> ResolutionLimits {
-    compute_limits()
-}
-
-/// Tauri 命令：导出模组目录为压缩包
-///
-/// 前端调用 `exportMod` 触发。三级回退：用户 7z CLI → 打包 7z CLI → 自维护压缩。
-///
-/// # Errors
-/// - 压缩失败（源非目录、7z 未找到、自维护压缩不支持该格式等）
-#[tauri::command]
-pub async fn export_mod_cmd(mod_dir: ManagedPath, archive_path: String) -> Result<(), String> {
-    let dst = validate_export_target(&archive_path)?;
-    let src = mod_dir.into_canonical();
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        export_mod(&src, &dst).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// 校验导出目标路径：绝对、无 `..`、父目录必须已存在。
-///
-/// 导出目标**有意**不受 Mods 根约束（用户可存到任意位置），因此不能用
-/// [`ManagedPath`]；但「父目录必须存在」是必需的——否则前端可传
-/// `X:/不存在/深层/名.7z`，由导出逻辑去创建未知层级。目标文件本身此时
-/// 尚不存在，故也不走 `SourcePath`（它要求已存在）。
-///
-/// # Errors
-/// 相对路径、含 `..`、父目录不存在时返回带前缀的错误串
-fn validate_export_target(raw: &str) -> Result<PathBuf, String> {
-    crate::ipc::typed_paths::validate_write_target(raw)
-        .map_err(|(code, msg)| format!("{code} {msg}"))
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@
 
 use crate::commands::mod_commands_util::{
     build_group_delta, build_removed_group_delta, log_delta, parse_game, resolve_managed_context,
-    trash_delete, UPDATE_LOCK,
+    UPDATE_LOCK,
 };
 use crate::config::settings_store;
 use crate::core::constants;
@@ -163,40 +163,6 @@ pub async fn add_mutex_group(
 
     let _ = game;
     Ok(())
-}
-
-/// 删除分组（移至回收站）
-///
-/// 命令级增量（R1）：分组目录已删除无需磁盘重扫，直接 `subtree_remove`
-/// 裁剪缓存，返回 `new_group = None` 的 [`GroupDelta`]（前端按 oldGroupPath
-/// 剔除该组及其模组条目），不再触发全量失效与全量刷新。
-#[tauri::command]
-pub async fn remove_group(group_path: ManagedPath) -> Result<GroupDelta, String> {
-    // P2：删除分组会移走 _MANAGED_ 下整棵子树，须与选择、更新串行
-    // （否则「删除分组后立刻选择」会出现组已消失但选择仍乐观成功的静默失败）。
-    let _update_guard = UPDATE_LOCK.lock().await;
-    let path = group_path.into_canonical();
-    // 归属由 ManagedPath 反序列化保证；此处只定位缓存/降级所需的上下文
-    let (mods_root, group_dir) = resolve_managed_context(&path).ok_or_else(|| {
-        format!("[NOT_IN_MANAGED_GROUP] Path is not inside a managed group: {path:?}")
-    })?;
-    let game = settings_store::get_settings().target_game;
-
-    let delta = tauri::async_runtime::spawn_blocking(move || -> Result<GroupDelta, String> {
-        // 抑制 watcher 批次在删除/裁剪中途读取中间态（C11：暂停期事件保留，恢复后幂等合并）
-        let _guard = crate::core::watcher_ring::WatcherGuard::new();
-        if !path.exists() {
-            return Err("Group path does not exist".to_string());
-        }
-        trash_delete(&path).map_err(|e| e.to_string())?;
-        let delta = build_removed_group_delta(game, &mods_root, &group_dir);
-        log_delta("remove_group", &delta);
-        Ok(delta)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    Ok(delta)
 }
 
 /// 移除模组

@@ -233,10 +233,10 @@ pub(crate) fn get_system_7z_path() -> Option<PathBuf> {
 /// 因此第一优先探测 `exe_dir/7z/<EXE>`。其余位置覆盖各 bundle 形态：
 /// 1. `exe_dir/7z/<EXE>`            —— portable、NSIS（用户目录）、deb/rpm（`exe_dir`=/usr/lib/<productName>）
 /// 2. `exe_dir/resources/7z/<EXE>`  —— 防御性：资源若落入 `resources/` 子目录
-/// 3. `exe_dir/../Resources/7z/<EXE>` —— macOS
 ///
 /// 注：本项目已取消 AppImage 打包（Tauri 强依赖 WebKit/glibc 等无法静态链接的 C/C++ 库，
 /// AppImage 便携优势不成立，且打包器需联网拉取 runtime）。故不再探测 AppImage 专属路径（$APPDIR 等）。
+/// macOS 不在支持范围，`../Resources` 这类 bundle 路径也不再探测。
 ///
 /// # 返回
 /// `Some(PathBuf)` 表示找到内置 7z，`None` 表示未找到
@@ -247,7 +247,6 @@ pub(crate) fn get_bundled_7z_path() -> Option<PathBuf> {
             let candidates = vec![
                 exe_dir.join(builtin),
                 exe_dir.join("resources").join(builtin),
-                exe_dir.join("../Resources").join(builtin),
             ];
             // 注：已取消 AppImage 打包，不再探测 $APPDIR 等 AppImage 专属路径。
             for candidate in &candidates {

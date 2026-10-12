@@ -7,8 +7,8 @@
 
 use crate::commands::mod_commands::ToggleModResult;
 use crate::commands::mod_commands_util::{
-    build_group_delta, derive_toggled_path, open_path_in_explorer, parse_game,
-    resolve_managed_context, UPDATE_LOCK,
+    build_group_delta, derive_toggled_path, open_path_in_explorer, resolve_managed_context,
+    UPDATE_LOCK,
 };
 use crate::config::settings_store;
 use crate::core::constants;
@@ -116,16 +116,6 @@ pub async fn toggle_favorite(mod_path: ManagedPath) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn is_favorite(mod_path: String) -> bool {
-    // 仍返回布尔（不改变前端契约），但先用 ManagedPath 收口径：
-    // 越出已登记 Mods 根 / 不存在 / 相对路径一律 false，
-    // 使本命令不再充当「本机任意路径是否存在」的探测 oracle
-    ManagedPath::parse(mod_path)
-        .map(|p| p.canonical().join(constants::FAV_MARKER).exists())
-        .unwrap_or(false)
-}
-
-#[tauri::command]
 pub fn open_mod_folder(mod_path: ManagedPath) -> Result<(), String> {
     // 原实现零校验地把前端字符串交给 ShellExecute（opener），指向可执行文件时等价于
     // 双击运行；ManagedPath 保证存在且落在已登记 Mods 根内
@@ -159,30 +149,6 @@ pub fn open_group_folder(group_path: ManagedPath) -> Result<(), String> {
         ));
     }
     open_path_in_explorer(&path).map_err(|e| e.to_string())
-}
-
-/// 恢复所有INI文件备份
-#[tauri::command]
-pub async fn restore_all_inis(
-    mods_path: ManagedPath,
-) -> Result<crate::core::mod_results::RestoredCount, String> {
-    let _busy = crate::window::lifecycle::BusyOpGuard::new();
-    let path = mods_path.into_canonical();
-
-    let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<crate::core::mod_results::RestoredCount, String> {
-            crate::core::mod_restore::restore_all_inis(&path).map_err(|e| e.to_string())
-        },
-    )
-    .await
-    .map_err(|e| e.to_string())??;
-
-    {
-        let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
-
-    Ok(result)
 }
 
 /// 还原模组 INI 到管理前状态（还原区功能）
@@ -221,56 +187,6 @@ pub async fn restore_managed_folder(
     .map_err(|e| e.to_string())?;
 
     Ok(result)
-}
-
-/// Save Mod Customizations：保存用户自定义INI设置到d3dx_user.ini
-#[tauri::command]
-pub async fn save_customizations(
-    game: String,
-    mods_path: ManagedPath,
-) -> Result<crate::core::mod_results::SaveCustomizationsResult, String> {
-    let _busy = crate::window::lifecycle::BusyOpGuard::new();
-    let game = parse_game(&game)?;
-    let path = mods_path.into_canonical();
-
-    let result = tauri::async_runtime::spawn_blocking(
-        move || -> Result<crate::core::mod_results::SaveCustomizationsResult, String> {
-            crate::core::mod_ini_admin::save_customizations(&path, game).map_err(|e| e.to_string())
-        },
-    )
-    .await
-    .map_err(|e| e.to_string())??;
-
-    Ok(result)
-}
-
-/// 批量切换模组启用/禁用状态
-#[tauri::command]
-pub async fn batch_toggle_mods(
-    mod_paths: Vec<ManagedPath>,
-    enable: bool,
-    is_mutex: bool,
-) -> Result<u32, String> {
-    // P2：批量启停会重命名 _MANAGED_ 下多个模组目录，须与选择、更新串行。
-    let _update_guard = UPDATE_LOCK.lock().await;
-    // 逐元素校验：任一越界即整体拒绝，core 层仍收字符串（其签名不在本批变更范围）
-    let mod_paths: Vec<String> = mod_paths
-        .iter()
-        .map(|p| p.canonical().to_string_lossy().into_owned())
-        .collect();
-    let count = tauri::async_runtime::spawn_blocking(move || -> Result<u32, String> {
-        crate::core::mod_toggle::batch_toggle_mods(&mod_paths, enable, is_mutex)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    {
-        let mut cache = crate::core::mod_cache_core::MOD_CACHE.write();
-        cache.invalidate_all();
-    }
-
-    Ok(count)
 }
 
 /// 禁用指定分组下所有一级模组（不含 .ini 的子分组目录不处理）

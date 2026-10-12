@@ -3,7 +3,6 @@
 //! 提供窗口操作的封装函数和 Tauri 命令：
 //! - show/hide/toggle: 显示/隐藏/切换窗口
 //! - minimize/maximize/center: 最小化/最大化/居中窗口
-//! - set_position: 设置窗口位置
 //! - close: 关闭窗口
 //! - hard_quit: 强制退出（绕过关闭拦截，注销热键后退出）
 //! - 主窗口快捷函数（show_main_window 等）
@@ -12,80 +11,6 @@ pub mod lifecycle;
 
 use anyhow::Result;
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Position, WebviewWindow};
-
-/// 显示指定窗口并获取焦点
-///
-/// 通过窗口名称查找窗口，然后依次执行：显示窗口、获取焦点、取消最小化
-///
-/// # 参数
-///
-/// * `app` - Tauri 应用句柄
-/// * `window_name` - 窗口标识名称
-///
-/// # 返回值
-///
-/// 成功返回 `Ok(())`，失败返回错误信息字符串
-#[tauri::command]
-pub fn show_window(app: AppHandle, window_name: String) -> Result<(), String> {
-    if window_name == "main" {
-        show_main_window(&app);
-        return Ok(());
-    }
-    if let Some(w) = app.get_webview_window(&window_name) {
-        w.show().map_err(|e| e.to_string())?;
-        w.set_focus().map_err(|e| e.to_string())?;
-        w.unminimize().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// 隐藏指定窗口
-///
-/// # 参数
-///
-/// * `app` - Tauri 应用句柄
-/// * `window_name` - 窗口标识名称
-///
-/// # 返回值
-///
-/// 成功返回 `Ok(())`，失败返回错误信息字符串
-#[tauri::command]
-pub fn hide_window(app: AppHandle, window_name: String) -> Result<(), String> {
-    if window_name == "main" {
-        hide_main_window(&app);
-        return Ok(());
-    }
-    if let Some(w) = app.get_webview_window(&window_name) {
-        w.hide().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// 设置窗口在屏幕上的位置
-///
-/// # 参数
-///
-/// * `app` - Tauri 应用句柄
-/// * `window_name` - 窗口标识名称
-/// * `x` - 新的 X 坐标（逻辑像素）
-/// * `y` - 新的 Y 坐标（逻辑像素）
-///
-/// # 返回值
-///
-/// 成功返回 `Ok(())`，失败返回错误信息字符串
-#[tauri::command]
-pub fn set_window_position(
-    app: AppHandle,
-    window_name: String,
-    x: i32,
-    y: i32,
-) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window(&window_name) {
-        w.set_position(Position::Logical(LogicalPosition::new(x as f64, y as f64)))
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
 
 /// 关闭指定窗口
 ///
@@ -140,43 +65,6 @@ pub fn toggle_maximize(app: AppHandle, window_name: String) -> Result<(), String
         }
     }
     Ok(())
-}
-
-/// 将窗口居中显示在屏幕上
-///
-/// # 参数
-///
-/// * `app` - Tauri 应用句柄
-/// * `window_name` - 窗口标识名称
-///
-/// # 返回值
-///
-/// 成功返回 `Ok(())`，失败返回错误信息字符串
-#[tauri::command]
-pub fn center_window_cmd(app: AppHandle, window_name: String) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window(&window_name) {
-        w.center().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// 检查窗口是否可见
-///
-/// # 参数
-///
-/// * `app` - Tauri 应用句柄
-/// * `window_name` - 窗口标识名称
-///
-/// # 返回值
-///
-/// 窗口存在且可见返回 `true`，否则返回 `false`
-#[tauri::command]
-pub fn is_window_visible(app: AppHandle, window_name: String) -> bool {
-    if let Some(w) = app.get_webview_window(&window_name) {
-        w.is_visible().unwrap_or(false)
-    } else {
-        false
-    }
 }
 
 /// 在光标位置显示弹出窗口
@@ -306,26 +194,6 @@ pub fn reset_window_position(app: AppHandle, window_name: String) -> Result<(), 
     Ok(())
 }
 
-/// 显示主窗口（作为 Command 导出）
-///
-/// # 参数
-///
-/// * `app` - Tauri 应用句柄
-#[tauri::command]
-pub fn show_main_window_cmd(app: AppHandle) {
-    show_main_window(&app);
-}
-
-/// 切换主窗口显示/隐藏（作为 Command 导出）
-///
-/// # 参数
-///
-/// * `app` - Tauri 应用句柄
-#[tauri::command]
-pub fn toggle_main_window_cmd(app: AppHandle) {
-    toggle_main_window(&app);
-}
-
 /// 统一退出管线：活跃操作检查 → 干净退出记录 → 用户退出标记 → 退出。
 /// 供 `hard_quit_app` 命令与托盘退出共用（行为一致性由路径收敛保证）。
 pub fn quit_pipeline(app: &tauri::AppHandle) {
@@ -372,20 +240,4 @@ pub fn hard_quit_app(app: AppHandle) {
         hotkey_mgr.unregister_all();
     }
     quit_pipeline(&app);
-}
-
-/// 获取当前前台窗口的进程名
-///
-/// 用于热键触发窗口显示时自动检测前台游戏，
-/// 跨平台实现：Windows 使用 Win32 API，Linux 使用 X11/Wayland。
-///
-/// # 返回值
-///
-/// 成功返回进程名字符串（如 "StarRail.exe"），失败返回错误信息
-#[tauri::command]
-pub fn get_foreground_process_name() -> Result<String, String> {
-    let detector = crate::platform::get_foreground_detector();
-    detector
-        .get_foreground_process_name()
-        .map_err(|e| e.to_string())
 }

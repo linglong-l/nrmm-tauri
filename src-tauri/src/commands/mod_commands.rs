@@ -3,7 +3,6 @@
 //! 提供模组管理的前端接口：
 //! - get_mods: 获取模组列表（优先缓存，轻量扫描）
 //! - refresh_mods: 强制刷新模组列表（轻量扫描，更新缓存）
-//! - check_mods_path_status: 检查模组路径有效性
 //! - apply_mods: 应用模组选择（深度扫描+INI注入）
 //! - switch_mod: 切换普通分组选中模组
 //! - deselect_group: 取消选中分组
@@ -12,7 +11,6 @@
 //! - open_mod_folder: 打开模组目录
 //! - import_mod_from_archive: 从压缩包导入模组
 //! - delete_mod: 删除模组
-//! - restore_all_inis: 恢复所有 INI 备份
 //! - select_folder: 系统文件夹选择对话框
 //!
 //! # 性能设计

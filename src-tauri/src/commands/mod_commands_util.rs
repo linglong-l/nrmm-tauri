@@ -286,25 +286,6 @@ pub(crate) fn log_delta(command_name: &str, delta: &GroupDelta) {
     );
 }
 
-/// 删除路径：优先移入系统回收站；失败时**直接报错，不再降级为永久删除**（M6 修复）。
-///
-/// # 行为变更（M6）
-/// 旧实现在回收站不可用（网络盘、部分 Linux 文件系统、权限受限环境）时静默
-/// `remove_dir_all` 永久删除且无任何确认——模组是用户数据，静默永久丢失不可接受。
-/// 现在回收站不可用即返回错误，由前端弹窗告知用户「移入回收站失败，删除已取消」，
-/// 用户可改用资源管理器手动删除，操作权交还用户。
-pub(crate) fn trash_delete(path: &Path) -> Result<()> {
-    trash::delete(path).map_err(|e| {
-        // 永不静默降级为永久删除：带上下文上抛，前端可见
-        anyhow::anyhow!(
-            "Failed to move to trash, deletion cancelled (path not permanently deleted): {} ({}): {}",
-            path.display(),
-            e,
-            "请手动在文件管理器中删除，或检查该路径所在的磁盘是否支持回收站"
-        )
-    })
-}
-
 pub(crate) fn open_path_in_explorer(path: &Path) -> Result<()> {
     tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| anyhow::anyhow!(e.to_string()))
 }

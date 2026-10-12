@@ -89,18 +89,6 @@ pub async fn get_mods(
     Ok(Arc::new(result))
 }
 
-#[tauri::command]
-pub fn check_mods_path_status(
-    game: String,
-    mods_path: String,
-) -> Result<crate::models::enums::ModsPathStatus, String> {
-    let game = parse_game(&game)?;
-    let mods_path = PathBuf::from(mods_path);
-    Ok(crate::core::mod_scan_light::check_mods_path(
-        game, &mods_path,
-    ))
-}
-
 /// 刷新模组列表（轻量扫描，更新缓存）
 #[tauri::command]
 pub async fn refresh_mods(

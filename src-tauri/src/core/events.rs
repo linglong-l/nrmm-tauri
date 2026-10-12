@@ -15,8 +15,6 @@ pub const WINDOW_HIDDEN: &str = "window-hidden";
 pub const WINDOW_HIDDEN_CLEAR_DATA: &str = "window-hidden-clear-data";
 /// 显示主窗口并切换到检测到的游戏（payload: TargetGame）
 pub const WINDOW_SHOW_WITH_GAME: &str = "window-show-with-game";
-/// 热键触发模组列表刷新
-pub const HOTKEY_REFRESH: &str = "hotkey-refresh";
 /// `_MANAGED_` 目录发生变化（全量刷新兜底信号）
 pub const MANAGED_FOLDER_CHANGED: &str = "managed-folder-changed";
 /// `_MANAGED_` 目录增量更新（payload: GroupDelta 批次）
@@ -31,7 +29,6 @@ pub const ALL: &[&str] = &[
     WINDOW_HIDDEN,
     WINDOW_HIDDEN_CLEAR_DATA,
     WINDOW_SHOW_WITH_GAME,
-    HOTKEY_REFRESH,
     MANAGED_FOLDER_CHANGED,
     MANAGED_PARTIAL_UPDATE,
     SHOW_GAME_SELECT,

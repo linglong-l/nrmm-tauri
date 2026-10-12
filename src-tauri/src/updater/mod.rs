@@ -5,7 +5,6 @@
 //!
 //! # 功能
 //! - check_for_updates: 异步检查更新，返回最新版本信息
-//! - compare_versions: 版本号比较（语义化版本）
 //! - get_app_version: 获取当前应用版本
 
 use anyhow::Result;
@@ -197,12 +196,6 @@ pub async fn check_for_updates() -> Result<Option<UpdateInfo>, String> {
     UpdateManager::check_update()
         .await
         .map_err(|e| e.to_string())
-}
-
-/// 比较版本号（Tauri 命令）
-#[tauri::command]
-pub fn compare_versions(current: String, latest: String) -> bool {
-    UpdateManager::needs_update(&current, &latest)
 }
 
 /// 获取当前应用版本（Tauri 命令）

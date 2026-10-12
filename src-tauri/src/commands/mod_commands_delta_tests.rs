@@ -199,7 +199,7 @@ fn remove_group_delta_clears_cache_subtree() {
         .write()
         .set(TargetGame::GenshinImpact, &mods_path, full);
 
-    // 磁盘删除 group_1（模拟 trash_delete 的效果）
+    // 磁盘删除 group_1（模拟移入回收站的效果）
     fs::remove_dir_all(&group1).unwrap();
 
     let delta = build_removed_group_delta(TargetGame::GenshinImpact, &mods_path, &group1);

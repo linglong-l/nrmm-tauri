@@ -3,14 +3,15 @@
 //! 提供应用设置的 CRUD 操作：
 //! - get_settings: 从内存缓存读取设置（同步，无 IO）
 //! - save_settings: 保存设置到磁盘（异步，spawn_blocking）
-//! - reset_settings: 重置为默认设置
-//! - export_settings/import_settings: 设置导入导出（JSON 格式）
 //! - switch_target_game: 切换目标游戏并通知前端
+//!
+//! 设置导入导出暂无 IPC 出口（批次 3 摘除 `export_settings` / `import_settings` 两条
+//! 零调用命令）；实现保留在 `config::settings_store::{export_settings, import_settings}`，
+//! 前端要做「导出/导入配置文件」时在此重新挂命令即可。
 //!
 //! 所有涉及文件 IO 的操作都使用 spawn_blocking 避免阻塞 UI 线程
 
 use crate::config::settings_store;
-use crate::ipc::typed_paths::validate_write_target;
 use crate::ipc::typed_settings::AppSettingsWritable;
 use crate::models::enums::TargetGame;
 use crate::models::settings::AppSettings;
@@ -80,42 +81,6 @@ pub async fn set_game_mods_path(game: String, path: String) -> Result<AppSetting
 
     log::info!("[AUDIT] {game_enum:?} 的 Mods 根已登记：{canon:?}");
     Ok(updated)
-}
-
-/// 重置设置（写文件是阻塞IO，使用spawn_blocking）
-#[tauri::command]
-pub async fn reset_settings() -> Result<AppSettings, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<AppSettings, String> {
-        settings_store::reset_settings().map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// 导出设置（写文件是阻塞IO，使用spawn_blocking）
-#[tauri::command]
-pub async fn export_settings(path: String) -> Result<(), String> {
-    // 导出目标不受 Mods 根约束，但仍须绝对、无 ..、父目录存在（否则可创建未知层级）
-    let path_buf = validate_write_target(&path).map_err(|(code, msg)| format!("{code} {msg}"))?;
-    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        settings_store::export_settings(&path_buf).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// 导入设置（读+写文件是阻塞IO，使用spawn_blocking）
-#[tauri::command]
-pub async fn import_settings(
-    path: crate::ipc::typed_paths::SourcePath,
-) -> Result<AppSettings, String> {
-    // 来源设置文件：绝对、存在（SourcePath 已保证），可为任意位置
-    let path_buf = path.into_canonical();
-    tauri::async_runtime::spawn_blocking(move || -> Result<AppSettings, String> {
-        settings_store::import_settings(&path_buf).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 /// 切换目标游戏（写设置文件是阻塞IO，使用spawn_blocking）

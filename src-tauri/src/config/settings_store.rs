@@ -4,7 +4,6 @@
 //! - 使用 parking_lot::RwLock 实现线程安全的内存缓存
 //! - 启动时从磁盘加载，之后优先从内存读取
 //! - 写入使用临时文件+rename 原子操作，保证配置文件不会损坏
-//! - 支持导入/导出 JSON 格式的设置文件
 //!
 //! # 原子写入流程
 //! - 将 JSON 写入 .tmp 临时文件
@@ -209,45 +208,6 @@ where
     Ok(settings)
 }
 
-/// 重置为默认设置
-pub fn reset_settings() -> Result<AppSettings> {
-    let default = AppSettings::default();
-    save_settings(&default)?;
-    Ok(default)
-}
-
-/// 导出设置到指定路径（JSON 格式）
-pub fn export_settings(path: &Path) -> Result<()> {
-    let settings = get_settings();
-    let json = serde_json::to_string_pretty(&settings)?;
-    crate::utils::atomic_write(path, json.as_bytes())?;
-    Ok(())
-}
-
-/// 从指定路径导入设置
-///
-/// 导入成功后自动保存到配置文件并更新内存缓存
-pub fn import_settings(path: &Path) -> Result<AppSettings> {
-    let content = fs::read_to_string(path)?;
-    let incoming: AppSettings = serde_json::from_str(&content)?;
-    // 锚点不随导入生效：设置文件可被同用户的其他进程改写，若让其中的 game_mods_path
-    // 直接生效，导入动作本身就成为「重定向路径校验锚点」的通道。用户需重新挑选 Mods 根。
-    let current = get_settings();
-    if incoming.game_mods_path != current.game_mods_path {
-        log::warn!(
-            "[AUDIT] import_settings 忽略文件中的 Mods 根（提交 {} 项，保留现有 {} 项），请重新选择游戏模组目录",
-            incoming.game_mods_path.len(),
-            current.game_mods_path.len()
-        );
-    }
-    let settings = AppSettings {
-        game_mods_path: current.game_mods_path,
-        ..incoming
-    };
-    save_settings(&settings)?;
-    Ok(settings)
-}
-
 /// 切换目标游戏
 pub fn set_target_game(game: crate::models::enums::TargetGame) -> Result<AppSettings> {
     update_settings(|s| {
@@ -276,9 +236,6 @@ pub fn fill_defaults(settings: &mut AppSettings) {
     }
     if settings.gamepad_hotkey_toggle.is_empty() {
         settings.gamepad_hotkey_toggle = "LB+RB".to_string();
-    }
-    if settings.search_hotkey.is_empty() {
-        settings.search_hotkey = "Alt+S".to_string();
     }
 
     // 默认进程名映射
